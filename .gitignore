@@ -5,6 +5,10 @@
 samconfig.toml
 *event.json
 *env.json
+*__pycache__*
+
+#vstudio
+.venv*
 
 
 ### Linux ###
