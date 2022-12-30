@@ -61,8 +61,9 @@ with open("presets.csv", mode="r", encoding="utf-8-sig") as presets:
     template = Template()
 
     for row in presets:
+        PresetName = 'MediaConvertPreset'
         if row["type"].lower() == "video":
-            PresetName = row["height"] + row["codec"].upper() + row["bitrate"]
+            PresetName = PresetName + row["height"] + row["codec"].upper() + row["bitrate"]
             preset = mediaconvert.Preset(PresetName)
             preset.Description = "{}x{} resolution at {}Kbit/s in {}".format(
                 row["width"], row["height"], row["bitrate"], row["codec"].upper()
@@ -81,7 +82,7 @@ with open("presets.csv", mode="r", encoding="utf-8-sig") as presets:
             }
 
         if row["type"].lower() == "audio":
-            PresetName = row["codec"].upper() + row["bitrate"]
+            PresetName = PresetName + row["codec"].upper() + row["bitrate"]
             preset = mediaconvert.Preset(PresetName)
             preset.Description = "{}Kbit/s in {}".format(
                 row["bitrate"], row["codec"].upper()
@@ -112,7 +113,7 @@ with open("presets.csv", mode="r", encoding="utf-8-sig") as presets:
                     "M3u8Settings": {},
                 },
             }
-        preset.Name = Sub("${AWS::StackName}_" + PresetName)
+        preset.Name = Sub("${AWS::StackName}-" + PresetName)
         preset.Category = Ref("AWS::StackName")
         template.add_resource(preset)
 

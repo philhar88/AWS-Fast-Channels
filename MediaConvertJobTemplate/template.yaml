@@ -1,339 +1,4 @@
 Resources:
-  1080HEVC5800:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 1920x1080 resolution at 5800Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_1080HEVC5800'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 5800000
-              QvbrSettings:
-                QvbrQualityLevel: 9
-              RateControlMode: QVBR
-          Height: 1080
-          Width: 1920
-    Type: AWS::MediaConvert::Preset
-  234AVC145:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 416x234 resolution at 145Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_234AVC145'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 145000
-              QvbrSettings:
-                QvbrQualityLevel: 4
-              RateControlMode: QVBR
-          Height: 234
-          Width: 416
-    Type: AWS::MediaConvert::Preset
-  360AVC365:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 640x360 resolution at 365Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_360AVC365'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 365000
-              QvbrSettings:
-                QvbrQualityLevel: 4
-              RateControlMode: QVBR
-          Height: 360
-          Width: 640
-    Type: AWS::MediaConvert::Preset
-  360HEVC145:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 640x360 resolution at 145Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_360HEVC145'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 145000
-              QvbrSettings:
-                QvbrQualityLevel: 4
-              RateControlMode: QVBR
-          Height: 360
-          Width: 640
-    Type: AWS::MediaConvert::Preset
-  432AVC1100:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 768x432 resolution at 1100Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_432AVC1100'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 1100000
-              QvbrSettings:
-                QvbrQualityLevel: 5
-              RateControlMode: QVBR
-          Height: 432
-          Width: 768
-    Type: AWS::MediaConvert::Preset
-  432AVC730:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 768x432 resolution at 730Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_432AVC730'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 730000
-              QvbrSettings:
-                QvbrQualityLevel: 5
-              RateControlMode: QVBR
-          Height: 432
-          Width: 768
-    Type: AWS::MediaConvert::Preset
-  432HEVC300:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 768x432 resolution at 300Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_432HEVC300'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 300000
-              QvbrSettings:
-                QvbrQualityLevel: 4
-              RateControlMode: QVBR
-          Height: 432
-          Width: 768
-    Type: AWS::MediaConvert::Preset
-  540AVC2000:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 960x540 resolution at 2000Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_540AVC2000'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 2000000
-              QvbrSettings:
-                QvbrQualityLevel: 6
-              RateControlMode: QVBR
-          Height: 540
-          Width: 960
-    Type: AWS::MediaConvert::Preset
-  540HEVC1600:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 960x540 resolution at 1600Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_540HEVC1600'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 1600000
-              QvbrSettings:
-                QvbrQualityLevel: 5
-              RateControlMode: QVBR
-          Height: 540
-          Width: 960
-    Type: AWS::MediaConvert::Preset
-  540HEVC600:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 960x540 resolution at 600Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_540HEVC600'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 600000
-              QvbrSettings:
-                QvbrQualityLevel: 5
-              RateControlMode: QVBR
-          Height: 540
-          Width: 960
-    Type: AWS::MediaConvert::Preset
-  540HEVC900:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 960x540 resolution at 900Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_540HEVC900'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 900000
-              QvbrSettings:
-                QvbrQualityLevel: 5
-              RateControlMode: QVBR
-          Height: 540
-          Width: 960
-    Type: AWS::MediaConvert::Preset
-  720AVC3000:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 1280x720 resolution at 3000Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_720AVC3000'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 3000000
-              QvbrSettings:
-                QvbrQualityLevel: 7
-              RateControlMode: QVBR
-          Height: 720
-          Width: 1280
-    Type: AWS::MediaConvert::Preset
-  720AVC4500:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 1280x720 resolution at 4500Kbit/s in AVC
-      Name: !Sub '${AWS::StackName}_720AVC4500'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_264
-            H264Settings:
-              MaxBitrate: 4500000
-              QvbrSettings:
-                QvbrQualityLevel: 8
-              RateControlMode: QVBR
-          Height: 720
-          Width: 1280
-    Type: AWS::MediaConvert::Preset
-  720HEVC2400:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 1280x720 resolution at 2400Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_720HEVC2400'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 2400000
-              QvbrSettings:
-                QvbrQualityLevel: 6
-              RateControlMode: QVBR
-          Height: 720
-          Width: 1280
-    Type: AWS::MediaConvert::Preset
-  720HEVC3400:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 1280x720 resolution at 3400Kbit/s in HEVC
-      Name: !Sub '${AWS::StackName}_720HEVC3400'
-      SettingsJson:
-        ContainerSettings:
-          Container: M3U8
-        VideoDescription:
-          CodecSettings:
-            Codec: H_265
-            H265Settings:
-              MaxBitrate: 3400000
-              QvbrSettings:
-                QvbrQualityLevel: 7
-              RateControlMode: QVBR
-          Height: 720
-          Width: 1280
-    Type: AWS::MediaConvert::Preset
-  AAC192:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 192Kbit/s in AAC
-      Name: !Sub '${AWS::StackName}_AAC192'
-      SettingsJson:
-        AudioDescriptions:
-          - AudioSourceName: Audio Selector 1
-            AudioTypeControl: FOLLOW_INPUT
-            CodecSettings:
-              AacSettings:
-                AudioDescriptionBroadcasterMix: NORMAL
-                Bitrate: 192000
-                CodecProfile: LC
-                CodingMode: CODING_MODE_2_0
-                RateControlMode: CBR
-                RawFormat: NONE
-                SampleRate: 48000
-                Specification: MPEG4
-              Codec: AAC
-            LanguageCodeControl: FOLLOW_INPUT
-        ContainerSettings:
-          Container: M3U8
-          M3u8Settings: {}
-    Type: AWS::MediaConvert::Preset
-  AAC64:
-    Properties:
-      Category: !Ref 'AWS::StackName'
-      Description: 64Kbit/s in AAC
-      Name: !Sub '${AWS::StackName}_AAC64'
-      SettingsJson:
-        AudioDescriptions:
-          - AudioSourceName: Audio Selector 1
-            AudioTypeControl: FOLLOW_INPUT
-            CodecSettings:
-              AacSettings:
-                AudioDescriptionBroadcasterMix: NORMAL
-                Bitrate: 64000
-                CodecProfile: LC
-                CodingMode: CODING_MODE_2_0
-                RateControlMode: CBR
-                RawFormat: NONE
-                SampleRate: 48000
-                Specification: MPEG4
-              Codec: AAC
-            LanguageCodeControl: FOLLOW_INPUT
-        ContainerSettings:
-          Container: M3U8
-          M3u8Settings: {}
-    Type: AWS::MediaConvert::Preset
   MediaConvertJobTemplate:
     Properties:
       AccelerationSettings:
@@ -365,39 +30,374 @@ Resources:
               Type: HLS_GROUP_SETTINGS
             Outputs:
               - NameModifier: _1
-                Preset: !Ref '1080HEVC5800'
+                Preset: !Ref 'MediaConvertPreset1080HEVC5800'
               - NameModifier: _2
-                Preset: !Ref '720AVC4500'
+                Preset: !Ref 'MediaConvertPreset720AVC4500'
               - NameModifier: _3
-                Preset: !Ref '720HEVC3400'
+                Preset: !Ref 'MediaConvertPreset720HEVC3400'
               - NameModifier: _4
-                Preset: !Ref '720AVC3000'
+                Preset: !Ref 'MediaConvertPreset720AVC3000'
               - NameModifier: _5
-                Preset: !Ref '720HEVC2400'
+                Preset: !Ref 'MediaConvertPreset720HEVC2400'
               - NameModifier: _6
-                Preset: !Ref '540AVC2000'
+                Preset: !Ref 'MediaConvertPreset540AVC2000'
               - NameModifier: _7
-                Preset: !Ref '540HEVC1600'
+                Preset: !Ref 'MediaConvertPreset540HEVC1600'
               - NameModifier: _8
-                Preset: !Ref '432AVC1100'
+                Preset: !Ref 'MediaConvertPreset432AVC1100'
               - NameModifier: _9
-                Preset: !Ref '540HEVC900'
+                Preset: !Ref 'MediaConvertPreset540HEVC900'
               - NameModifier: _10
-                Preset: !Ref '432AVC730'
+                Preset: !Ref 'MediaConvertPreset432AVC730'
               - NameModifier: _11
-                Preset: !Ref '540HEVC600'
+                Preset: !Ref 'MediaConvertPreset540HEVC600'
               - NameModifier: _12
-                Preset: !Ref '360AVC365'
+                Preset: !Ref 'MediaConvertPreset360AVC365'
               - NameModifier: _13
-                Preset: !Ref '432HEVC300'
+                Preset: !Ref 'MediaConvertPreset432HEVC300'
               - NameModifier: _14
-                Preset: !Ref '234AVC145'
+                Preset: !Ref 'MediaConvertPreset234AVC145'
               - NameModifier: _15
-                Preset: !Ref '360HEVC145'
+                Preset: !Ref 'MediaConvertPreset360HEVC145'
               - NameModifier: _16
-                Preset: !Ref 'AAC192'
+                Preset: !Ref 'MediaConvertPresetAAC192'
               - NameModifier: _17
-                Preset: !Ref 'AAC64'
+                Preset: !Ref 'MediaConvertPresetAAC64'
         TimecodeConfig:
           Source: ZEROBASED
     Type: AWS::MediaConvert::JobTemplate
+  MediaConvertPreset1080HEVC5800:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 1920x1080 resolution at 5800Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset1080HEVC5800'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 5800000
+              QvbrSettings:
+                QvbrQualityLevel: 9
+              RateControlMode: QVBR
+          Height: 1080
+          Width: 1920
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset234AVC145:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 416x234 resolution at 145Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset234AVC145'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 145000
+              QvbrSettings:
+                QvbrQualityLevel: 4
+              RateControlMode: QVBR
+          Height: 234
+          Width: 416
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset360AVC365:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 640x360 resolution at 365Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset360AVC365'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 365000
+              QvbrSettings:
+                QvbrQualityLevel: 4
+              RateControlMode: QVBR
+          Height: 360
+          Width: 640
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset360HEVC145:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 640x360 resolution at 145Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset360HEVC145'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 145000
+              QvbrSettings:
+                QvbrQualityLevel: 4
+              RateControlMode: QVBR
+          Height: 360
+          Width: 640
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset432AVC1100:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 768x432 resolution at 1100Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset432AVC1100'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 1100000
+              QvbrSettings:
+                QvbrQualityLevel: 5
+              RateControlMode: QVBR
+          Height: 432
+          Width: 768
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset432AVC730:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 768x432 resolution at 730Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset432AVC730'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 730000
+              QvbrSettings:
+                QvbrQualityLevel: 5
+              RateControlMode: QVBR
+          Height: 432
+          Width: 768
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset432HEVC300:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 768x432 resolution at 300Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset432HEVC300'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 300000
+              QvbrSettings:
+                QvbrQualityLevel: 4
+              RateControlMode: QVBR
+          Height: 432
+          Width: 768
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset540AVC2000:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 960x540 resolution at 2000Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset540AVC2000'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 2000000
+              QvbrSettings:
+                QvbrQualityLevel: 6
+              RateControlMode: QVBR
+          Height: 540
+          Width: 960
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset540HEVC1600:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 960x540 resolution at 1600Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset540HEVC1600'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 1600000
+              QvbrSettings:
+                QvbrQualityLevel: 5
+              RateControlMode: QVBR
+          Height: 540
+          Width: 960
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset540HEVC600:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 960x540 resolution at 600Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset540HEVC600'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 600000
+              QvbrSettings:
+                QvbrQualityLevel: 5
+              RateControlMode: QVBR
+          Height: 540
+          Width: 960
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset540HEVC900:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 960x540 resolution at 900Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset540HEVC900'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 900000
+              QvbrSettings:
+                QvbrQualityLevel: 5
+              RateControlMode: QVBR
+          Height: 540
+          Width: 960
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset720AVC3000:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 1280x720 resolution at 3000Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset720AVC3000'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 3000000
+              QvbrSettings:
+                QvbrQualityLevel: 7
+              RateControlMode: QVBR
+          Height: 720
+          Width: 1280
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset720AVC4500:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 1280x720 resolution at 4500Kbit/s in AVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset720AVC4500'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_264
+            H264Settings:
+              MaxBitrate: 4500000
+              QvbrSettings:
+                QvbrQualityLevel: 8
+              RateControlMode: QVBR
+          Height: 720
+          Width: 1280
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset720HEVC2400:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 1280x720 resolution at 2400Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset720HEVC2400'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 2400000
+              QvbrSettings:
+                QvbrQualityLevel: 6
+              RateControlMode: QVBR
+          Height: 720
+          Width: 1280
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPreset720HEVC3400:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 1280x720 resolution at 3400Kbit/s in HEVC
+      Name: !Sub '${AWS::StackName}-MediaConvertPreset720HEVC3400'
+      SettingsJson:
+        ContainerSettings:
+          Container: M3U8
+        VideoDescription:
+          CodecSettings:
+            Codec: H_265
+            H265Settings:
+              MaxBitrate: 3400000
+              QvbrSettings:
+                QvbrQualityLevel: 7
+              RateControlMode: QVBR
+          Height: 720
+          Width: 1280
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPresetAAC192:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 192Kbit/s in AAC
+      Name: !Sub '${AWS::StackName}-MediaConvertPresetAAC192'
+      SettingsJson:
+        AudioDescriptions:
+          - AudioSourceName: Audio Selector 1
+            AudioTypeControl: FOLLOW_INPUT
+            CodecSettings:
+              AacSettings:
+                AudioDescriptionBroadcasterMix: NORMAL
+                Bitrate: 192000
+                CodecProfile: LC
+                CodingMode: CODING_MODE_2_0
+                RateControlMode: CBR
+                RawFormat: NONE
+                SampleRate: 48000
+                Specification: MPEG4
+              Codec: AAC
+            LanguageCodeControl: FOLLOW_INPUT
+        ContainerSettings:
+          Container: M3U8
+          M3u8Settings: {}
+    Type: AWS::MediaConvert::Preset
+  MediaConvertPresetAAC64:
+    Properties:
+      Category: !Ref 'AWS::StackName'
+      Description: 64Kbit/s in AAC
+      Name: !Sub '${AWS::StackName}-MediaConvertPresetAAC64'
+      SettingsJson:
+        AudioDescriptions:
+          - AudioSourceName: Audio Selector 1
+            AudioTypeControl: FOLLOW_INPUT
+            CodecSettings:
+              AacSettings:
+                AudioDescriptionBroadcasterMix: NORMAL
+                Bitrate: 64000
+                CodecProfile: LC
+                CodingMode: CODING_MODE_2_0
+                RateControlMode: CBR
+                RawFormat: NONE
+                SampleRate: 48000
+                Specification: MPEG4
+              Codec: AAC
+            LanguageCodeControl: FOLLOW_INPUT
+        ContainerSettings:
+          Container: M3U8
+          M3u8Settings: {}
+    Type: AWS::MediaConvert::Preset
