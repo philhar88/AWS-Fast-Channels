@@ -22,6 +22,7 @@ try:
     logger.info('Endpoint URL: %s', endpoint)
     mediaconvert = boto3.client('mediaconvert', endpoint_url=endpoint)
     mediapackage = boto3.client('mediapackage-vod')
+    mediatailor = boto3.client('mediatailor')
     s3 = boto3.resource('s3')
     pass
 except Exception as e:
@@ -108,6 +109,17 @@ def delete(event, context):
     logger.info("Got Delete")
     # Delete never returns anything. Should not fail if the underlying resources are already deleted.
     # Desired state.
+    try:
+        VodSources = mediatailor.list_vod_sources(SourceLocationName=event['PhysicalResourceId'],MaxResults=100)['Items']
+        for VodSource in VodSources:
+            if 'AdBreakSlate_' in VodSource['VodSourceName']:
+                try: 
+                    mediatailor.delete_vod_source(SourceLocationName=event['PhysicalResourceId'], VodSourceName=VodSource['VodSourceName'])
+                    logger.info('Removed Vod Source: %s', VodSource['VodSourceName'])
+                except Exception:
+                    logger.info(Exception)
+    except Exception:
+        logger.info(Exception)
     if 'MediaPackagePackagingGroup' in event['ResourceProperties']:
         try:
             Assets = mediapackage.list_assets(PackagingGroupId=event['ResourceProperties']['MediaPackagePackagingGroup']['Id'],MaxResults=100)['Assets']

@@ -111,14 +111,6 @@ def delete(event, context):
     # Delete never returns anything. Should not fail if the underlying resources are already deleted.
     # Desired state.
     try:
-        VodSources = client.list_vod_sources(SourceLocationName=event['PhysicalResourceId'],MaxResults=100)['Items']
-        for VodSource in VodSources:
-            if 'AdBreakSlate_' in VodSource['VodSourceName']:
-                try: 
-                    client.delete_vod_source(SourceLocationName=event['PhysicalResourceId'], VodSourceName=VodSource['VodSourceName'])
-                    logger.info('Removed Vod Source: %s', VodSource['VodSourceName'])
-                except Exception:
-                    logger.info(Exception)
         client.delete_source_location(SourceLocationName=event['PhysicalResourceId'])
     except client.exceptions.BadRequestException as error:
         if "referring" in error.response['Error']['Message']:

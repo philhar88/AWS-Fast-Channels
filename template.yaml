@@ -49,10 +49,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/AmazonEventBridgeFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   MediaConvertFunctionRole:
     Type: "AWS::IAM::Role"
@@ -82,11 +79,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/AmazonEventBridgeFullAccess"
-        - "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   MediaConvertTranscodeRole:
     Type: "AWS::IAM::Role"
@@ -101,9 +94,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   MediaPackageFunctionRole:
     Type: "AWS::IAM::Role"
@@ -120,9 +111,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   MediaPackageReadS3Role:
     Type: "AWS::IAM::Role"
@@ -159,11 +148,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/AmazonEventBridgeFullAccess"
-        - "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   MediaTailorFunctionRole:
     Type: "AWS::IAM::Role"
@@ -179,9 +164,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   MediaTailorSourceLocationCustomResourceFunctionRole:
     Type: "AWS::IAM::Role"
@@ -196,11 +179,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-        - "arn:aws:iam::aws:policy/AmazonEventBridgeFullAccess"
-        - "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
-        - "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
   ProcessMediaStateMachineRole:
     Type: "AWS::IAM::Role"
@@ -991,6 +970,7 @@ Resources:
             Action:
               - "mediaconvert:*"
               - "mediapackage-vod:*"
+              - "mediatailor:*"
             Resource:
               - "*"
           - Effect: Allow
