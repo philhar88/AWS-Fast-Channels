@@ -8,6 +8,7 @@ samconfig.toml
 *__pycache__*
 
 #vstudio
+.vscode*
 .venv*
 
 
