@@ -2,7 +2,8 @@ import os
 import boto3
 import re
 from urllib.parse import urlparse, urlunparse
-import time
+from random import randint
+from time import sleep
 import json
 import logging
 
@@ -76,19 +77,19 @@ def lambda_handler(event, context):
             'SourceRoleArn':os.environ['MediaPackageReadS3RoleArn'],
         }
         logger.info('MediaPackage Asset JSON: %s', json.dumps(asset))
+        sleep(randint(10,300)/10)
         try:
             asset = mediapackage.create_asset(**asset)
         except mediapackage.exceptions.UnprocessableEntityException as error:
             if "exists" in error.response['Error']['Message']:
                 logger.info(error.response['Error']['Message'])
+                mediapackage.delete_asset(Id=asset['Id'])
+                sleep(5)
+                asset = mediapackage.create_asset(**asset)
             else:
                 raise error
-            mediapackage.delete_asset(Id=asset['Id'])
-            time.sleep(5)
-            try:
-                asset = mediapackage.create_asset(**asset)
-            except:
-                raise
+        except:
+            raise
         Tag = mediapackage.tag_resource(
             ResourceArn=asset['Arn'],
             Tags={

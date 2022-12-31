@@ -117,12 +117,16 @@ def delete(event, context):
                 try: 
                     client.delete_vod_source(SourceLocationName=event['PhysicalResourceId'], VodSourceName=VodSource['VodSourceName'])
                     logger.info('Removed Vod Source: %s', VodSource['VodSourceName'])
-                except Exception:
-                    logger.info(Exception)
+                except Exception as error:
+                    raise ValueError('Unable to delete AdBreakSlate Vod Sources. Please manually delete from SourceLocation and try again. %s', error)
         client.delete_source_location(SourceLocationName=event['PhysicalResourceId'])
     except client.exceptions.BadRequestException as error:
         if "referring" in error.response['Error']['Message']:
             raise ValueError('SourceLocation must not contain any Vod or Live Sources. Please delete all Sources and try again.')
+        else:
+            raise ValueError(error.response['Error']['Message'])
+    except Exception as error:
+        raise ValueError(error)
 
 def lambda_handler(event, context):
     logger.info('Event: %s', event)

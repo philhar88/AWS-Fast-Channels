@@ -3,6 +3,8 @@ import os
 from urllib.parse import urlparse
 import json
 import logging
+from random import randint
+from time import sleep
 
 logger = logging.getLogger()
 
@@ -60,7 +62,7 @@ def create_package_configuration(manifest_url, packaging_configuration_id):
 def lambda_handler(event, context):
     logger.info('Event: %s', json.dumps(event))
     try:
-        vod_source = {
+        VodSource = {
             'VodSourceName':parse_arn(event['resources'][0])['resource'],
             'SourceLocationName':os.environ['MediaTailorSourceLocation'],
             'HttpPackageConfigurations':[
@@ -69,16 +71,31 @@ def lambda_handler(event, context):
                     event['detail']['packaging_configuration_id'])
             ]
         }
-        print(vod_source)
-        mediatailor.create_vod_source(**vod_source)
-    except mediatailor.exceptions.BadRequestException as BadRequestException:
-        HttpPackageConfiguration = vod_source.pop('HttpPackageConfigurations', [None])[0]
-        response = mediatailor.describe_vod_source(**vod_source)
-        vod_source['HttpPackageConfigurations'] = response['HttpPackageConfigurations']
-        vod_source['HttpPackageConfigurations'].append(HttpPackageConfiguration)
-        vod_source['HttpPackageConfigurations'] = vod_source['HttpPackageConfigurations']
-        mediatailor.update_vod_source(**vod_source)
+        logger.info('VodSource: %s', VodSource)
+        mediatailor.create_vod_source(**VodSource)
+    except mediatailor.exceptions.BadRequestException as error:
+        if "exists" in error.response['Error']['Message']:
+            sleep(randint(10,100)/10) #sleep for a random time to prevent update collisions
+            try:
+                HttpPackageConfiguration = VodSource.pop('HttpPackageConfigurations', [None])[0]
+                response = mediatailor.describe_vod_source(**VodSource)
+                VodSource['HttpPackageConfigurations'] = response['HttpPackageConfigurations']
+                VodSource['HttpPackageConfigurations'].append(HttpPackageConfiguration)
+                VodSource['HttpPackageConfigurations'] = VodSource['HttpPackageConfigurations']
+                logger.info('Vod Source Already exists. Updating with new HttpPackageConfigurations List: %s', json.dumps(VodSource['HttpPackageConfigurations']))
+                mediatailor.update_vod_source(**VodSource)
+                HttpPackageConfiguration = VodSource.pop('HttpPackageConfigurations', [None])[0]
+                sleep(randint(10,20)/10)
+            except:
+                raise
+        else:
+            raise error.response['Error']['Message']
     except Exception as error:
         raise error
 
-    return vod_source
+    try:
+        response = mediatailor.describe_vod_source(VodSourceName=VodSource['VodSourceName'],SourceLocationName=VodSource['SourceLocationName'])
+    except:
+        response = None
+
+    return response

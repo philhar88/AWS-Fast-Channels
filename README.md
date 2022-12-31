@@ -27,6 +27,17 @@ To deploy this project run
 ```
 Make sure you have SAM installed: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html#install-sam-cli-instructions
 
+Once deployed, you can add some video content to the *input* bucket that is created. You can find the name of the bucket in the Ouputs section of the CloudFormation deployment:
+```bash
+  aws s3 cp ${my_movie} s3://${input_bucket_generated}
+```
+
+You will then recieve an email from the SNS topic when the content is available for playback as a VOD, along with the MediaTailor Ad Insertion URLs.
+
+To add `${my_movie}` to a linear channel, find the Channel named `*-MediaTailorSampleChannel` and add a new Program referencing `${my_movie}` in the SourceLocation named `*-MediaTailorSourceLocation`. 
+
+If you would like to insert ad breaks, use the `AdBreakSlates_*` VOD Sources in the same SourceLocation. This slates will be replaced by the MediaTailor Ad Insertion configuration with the Ad Server VAST response. 
+
 ## FAQs
 #### How much will this solution cost?
 

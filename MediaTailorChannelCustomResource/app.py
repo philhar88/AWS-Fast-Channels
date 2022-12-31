@@ -142,8 +142,10 @@ def delete(event, context):
     event['PhysicalResourceId']
     try:
         channel = mediatailor.delete_channel(ChannelName=event['PhysicalResourceId'])
+    except mediatailor.exceptions.BadRequestException as error:
+        raise ValueError(error.response['Error']['Message'])
     except Exception as error:
-        logger.info(error)
+        raise ValueError(error)
 
 def lambda_handler(event, context):
     try:

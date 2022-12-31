@@ -9,7 +9,8 @@ Transform: "AWS::Serverless-2016-10-31"
 Parameters:
   AdServerUrl:
     Type: String
-    Description: The Ad Decision Server Url
+    Default: "https://yb9ebx7p96.execute-api.us-west-2.amazonaws.com/prod/v1?maxd=[session.avail_duration_secs]&[player_params.my_ads_params]"
+    Description: The Ad Decision Server Url. This is used to create a Sample MediaTailor Ad Insertion Configuration. Default is a dummy AdServer that responds with sample ad creatives. 
 
   EmailAddress:
     Type: String
@@ -1295,6 +1296,8 @@ Resources:
       - MediaTailorFunction
       - MediaTailorSourceLocationCustomResourceFunction
       - MediaTailorSourceLocationCustomResourcePolicy
+      - MediaConvertSlatesCustomResourceFunctionPolicy
+      - MediaConvertSlatesCustomResourceRole
       - MediaTailorSourceLocation
       - MediaTailorFunctionTriggerPermission
     Properties:
@@ -1316,6 +1319,8 @@ Resources:
       - MediaTailorFunction
       - MediaTailorSourceLocationCustomResourceFunction
       - MediaTailorSourceLocationCustomResourcePolicy
+      - MediaConvertSlatesCustomResourceFunctionPolicy
+      - MediaConvertSlatesCustomResourceRole
       - MediaTailorSourceLocation
       - MediaTailorFunctionTriggerPermission
     Properties:
@@ -1337,6 +1342,8 @@ Resources:
       - MediaTailorFunction
       - MediaTailorSourceLocationCustomResourceFunction
       - MediaTailorSourceLocationCustomResourcePolicy
+      - MediaConvertSlatesCustomResourceFunctionPolicy
+      - MediaConvertSlatesCustomResourceRole
       - MediaTailorSourceLocation
       - MediaTailorFunctionTriggerPermission
     Properties:
@@ -1358,6 +1365,8 @@ Resources:
       - MediaTailorFunction
       - MediaTailorSourceLocationCustomResourceFunction
       - MediaTailorSourceLocationCustomResourcePolicy
+      - MediaConvertSlatesCustomResourceFunctionPolicy
+      - MediaConvertSlatesCustomResourceRole
       - MediaTailorSourceLocation
       - MediaTailorFunctionTriggerPermission
     Properties:
