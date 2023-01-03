@@ -107,4 +107,9 @@ def lambda_handler(event, context):
     except Exception as error:
         raise error
 
-    return mediapackage.describe_asset(Id=asset['Id'])
+    try:
+        response = mediapackage.describe_asset(Id=asset['Id'])
+    except:
+        response = None
+    
+    return response

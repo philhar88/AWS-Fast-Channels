@@ -113,7 +113,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-
+        
   MediaPackageReadS3Role:
     Type: "AWS::IAM::Role"
     Properties:
@@ -615,6 +615,11 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
+              - "events:PutEvents"
+            Resource:
+              - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+          - Effect: Allow
+            Action:
               - "mediapackage-vod:*"
             Resource:
               - "*"
@@ -745,6 +750,11 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
+              - "events:PutEvents"
+            Resource:
+              - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+          - Effect: Allow
+            Action:
               - "s3:GetObject"
             Resource:
               - "Fn::Sub": "arn:${AWS::Partition}:s3:::${VideoDestinationBucket}/*"
@@ -852,6 +862,11 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
+              - "events:PutEvents"
+            Resource:
+              - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+          - Effect: Allow
+            Action:
               - "s3:GetObject"
             Resource:
               - "Fn::Sub": ${VideoSourceBucket.Arn}/*
@@ -930,6 +945,11 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Effect: Allow
+            Action:
+              - "events:PutEvents"
+            Resource:
+              - !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
           - Effect: Allow
             Action:
               - "s3:GetObject"
