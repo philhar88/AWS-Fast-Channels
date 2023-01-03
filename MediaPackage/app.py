@@ -82,10 +82,7 @@ def lambda_handler(event, context):
             asset = mediapackage.create_asset(**asset)
         except mediapackage.exceptions.UnprocessableEntityException as error:
             if "exists" in error.response['Error']['Message']:
-                logger.info(error.response['Error']['Message'])
-                mediapackage.delete_asset(Id=asset['Id'])
-                sleep(5)
-                asset = mediapackage.create_asset(**asset)
+                logger.info('Ignoring as duplicate exists: %s', error.response['Error']['Message'])
             else:
                 raise error
         except:
