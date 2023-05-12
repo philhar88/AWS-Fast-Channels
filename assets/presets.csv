@@ -1,0 +1,10 @@
+﻿type,width,height,bitrate,qvbr,codec
+Video,1280,720,4500,8,avc
+Video,1280,720,3000,7,avc
+Video,960,540,2000,6,avc
+Video,768,432,1100,5,avc
+Video,768,432,730,5,avc
+Video,640,360,365,4,avc
+Video,416,234,145,4,avc
+Audio,,,192,,aac
+Audio,,,64,,aac

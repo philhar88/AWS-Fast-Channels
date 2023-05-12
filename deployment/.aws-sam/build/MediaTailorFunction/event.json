@@ -1,0 +1,21 @@
+{
+   "version": "0",
+   "id": "0adb1652-f5ca-b5ce-8389-2737849bc390",
+   "detail-type": "MediaPackage Input Notification",
+   "source": "aws.mediapackage",
+   "account": "898676505562",
+   "time": "2023-01-04T18:51:35Z",
+   "region": "us-west-2",
+   "resources": [
+       "arn:aws:mediapackage-vod:us-west-2:898676505562:assets/bbb2",
+       "arn:aws:mediapackage-vod:us-west-2:898676505562:packaging-configurations/fast-on-aws-10-Cmaf"
+   ],
+   "detail": {
+       "event": "VodAssetPlayable",
+       "message": "Asset 'bbb2' is now playable for PackagingConfiguration 'fast-on-aws-10-Cmaf'",
+       "packaging_configuration_id": "fast-on-aws-10-Cmaf",
+       "manifest_urls": [
+           "https://a73822aa12e49dabe9676bdd30a33769.egress.mediapackage-vod.us-west-2.amazonaws.com/out/v1/4677234ac7b943738cb3c3568b68fe9b/a319c216c27f4fb1b712c47d27522f6b/22ad440e28434a469a4bc0bba829f7b4/cmaf.m3u8"
+       ]
+   }
+}

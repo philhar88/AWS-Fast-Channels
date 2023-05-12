@@ -1,0 +1,192 @@
+{
+  "version": "0",
+  "id": "f49882f2-90cf-37e4-fe44-ff4172c98dee",
+  "detail-type": "MediaConvert Job State Change",
+  "source": "aws.mediaconvert",
+  "account": "898676505562",
+  "time": "2023-01-04T00:15:04Z",
+  "region": "us-west-2",
+  "resources": [
+      "arn:aws:mediaconvert:us-west-2:898676505562:jobs/1672791291177-j75u5p"
+  ],
+  "detail": {
+      "timestamp": 1672791304612,
+      "accountId": "898676505562",
+      "queue": "arn:aws:mediaconvert:us-west-2:898676505562:queues/MediaTailorFAST-Queue",
+      "jobId": "1672791291177-j75u5p",
+      "status": "COMPLETE",
+      "userMetadata": {},
+      "outputGroupDetails": [
+          {
+              "outputDetails": [
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_1.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 1920,
+                          "heightInPx": 1080
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_2.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 1280,
+                          "heightInPx": 720
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_3.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 1280,
+                          "heightInPx": 720
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_4.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 1280,
+                          "heightInPx": 720
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_5.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 1280,
+                          "heightInPx": 720
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_6.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 960,
+                          "heightInPx": 540
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_7.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 960,
+                          "heightInPx": 540
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_8.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 768,
+                          "heightInPx": 432
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_9.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 960,
+                          "heightInPx": 540
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_10.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 768,
+                          "heightInPx": 432
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_11.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 960,
+                          "heightInPx": 540
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_12.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 640,
+                          "heightInPx": 360
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_13.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 768,
+                          "heightInPx": 432
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_14.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 416,
+                          "heightInPx": 234
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_15.m3u8"
+                      ],
+                      "durationInMs": 15033,
+                      "videoDetails": {
+                          "widthInPx": 640,
+                          "heightInPx": 360
+                      }
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_16.m3u8"
+                      ],
+                      "durationInMs": 15018
+                  },
+                  {
+                      "outputFilePaths": [
+                          "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000_17.m3u8"
+                      ],
+                      "durationInMs": 15018
+                  }
+              ],
+              "playlistFilePaths": [
+                  "s3://fastchannels-output-6cb73b50/AdBreakSlate_15000.m3u8"
+              ],
+              "type": "HLS_GROUP"
+          }
+      ]
+  }
+}

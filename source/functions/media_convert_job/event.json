@@ -1,0 +1,28 @@
+{
+    "version": "0",
+    "id": "e882afdb-a264-1033-1d24-6866be7104a5",
+    "detail-type": "Object Created",
+    "source": "aws.s3",
+    "account": "898676505562",
+    "time": "2023-05-09T20:50:50Z",
+    "region": "us-west-2",
+    "resources": [
+        "arn:aws:s3:::input-input-ede6eb40"
+    ],
+    "detail": {
+        "version": "0",
+        "bucket": {
+            "name": "input-input-ede6eb40"
+        },
+        "object": {
+            "key": "bbb_sunflower_1080p_30fps_normal.mp4",
+            "size": 276134947,
+            "etag": "338b5e6fd473ea1833968f5caad9ce62-17",
+            "sequencer": "00645AB21B9BF4C8A3"
+        },
+        "request-id": "19BHX4C1402KE72Z",
+        "requester": "898676505562",
+        "source-ip-address": "54.240.196.185",
+        "reason": "CompleteMultipartUpload"
+    }
+}
