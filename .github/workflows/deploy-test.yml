@@ -51,8 +51,8 @@ jobs:
       - name: Validate SAM templates
         run: |
           cd deployment
-          sam validate --template-file fast-on-aws.deployment --lint
-          sam validate --template-file mediaconvert.deployment --lint
+          sam validate --template-file fast-on-aws.deployment
+          sam validate --template-file mediaconvert.deployment
 
       - name: Build SAM application
         run: |

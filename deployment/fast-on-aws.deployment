@@ -570,7 +570,7 @@ Resources:
               AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
             Action: "kms:*"
             Resource: "*"
-          - Sid: Allow access through AWS Secrets Manager for all principals in the account that are authorized to use AWS Secrets Manager
+          - Sid: AllowSecretsManagerDecrypt
             Effect: Allow
             Principal:
               AWS: "*"
@@ -585,7 +585,7 @@ Resources:
               StringEquals:
                 "kms:CallerAccount": !Ref "AWS::AccountId"
                 "kms:ViaService": !Sub "secretsmanager.${AWS::Region}.amazonaws.com"
-          - Sid: Allow access through AWS Secrets Manager for all principals in the account that are authorized to use AWS Secrets Manager
+          - Sid: AllowSecretsManagerGenerateDataKey
             Effect: Allow
             Principal:
               AWS: "*"
@@ -785,9 +785,7 @@ Resources:
     Type: "AWS::MediaPackage::PackagingGroup"
     DependsOn:
       - MediaTailorKMSKey
-      - MediaPackageAccessSecret
       - MediaPackageReadSecretsPolicy
-      - MediaPackageReadSecretsRole
     Properties:
       Authorization:
         CdnIdentifierSecret: !Ref MediaPackageAccessSecret
