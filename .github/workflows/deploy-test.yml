@@ -276,6 +276,7 @@ jobs:
         run: |
           echo "🧹 Emptying S3 buckets..."
           
+          # Use deploy outputs if available, otherwise skip (buckets might not exist)
           INPUT_BUCKET="${{ steps.deploy.outputs.input_bucket }}"
           OUTPUT_BUCKET="${{ steps.deploy.outputs.output_bucket }}"
           
@@ -295,7 +296,8 @@ jobs:
         run: |
           echo "🧹 Cleaning MediaTailor VOD sources..."
           
-          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          # Use deploy output if available, otherwise fall back to input
+          STACK_NAME="${{ steps.deploy.outputs.stack_name || inputs.stack_name }}"
           SOURCE_LOCATION="${STACK_NAME}-MediaTailorSourceLocation"
           
           # List and delete VOD sources
@@ -320,7 +322,8 @@ jobs:
         run: |
           echo "🧹 Cleaning MediaPackage assets..."
           
-          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          # Use deploy output if available, otherwise fall back to input
+          STACK_NAME="${{ steps.deploy.outputs.stack_name || inputs.stack_name }}"
           PACKAGING_GROUP="${STACK_NAME}-PackagingGroup"
           
           # List and delete assets
@@ -343,7 +346,8 @@ jobs:
         run: |
           echo "🧹 Stopping MediaTailor channel..."
           
-          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          # Use deploy output if available, otherwise fall back to input
+          STACK_NAME="${{ steps.deploy.outputs.stack_name || inputs.stack_name }}"
           CHANNEL_NAME="${STACK_NAME}-MediaTailorSampleChannel"
           
           aws mediatailor stop-channel --channel-name "$CHANNEL_NAME" 2>/dev/null || true
@@ -359,10 +363,25 @@ jobs:
         run: |
           echo "🧹 Deleting CloudFormation stack..."
           
-          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          # Use deploy output if available, otherwise fall back to input
+          STACK_NAME="${{ steps.deploy.outputs.stack_name || inputs.stack_name }}"
           
-          # Delete the stack
-          aws cloudformation delete-stack --stack-name "$STACK_NAME"
+          # Delete the stack (with retain-resources for failed deletions)
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          
+          if [[ "$STACK_STATUS" == "DELETE_FAILED" ]] || [[ "$STACK_STATUS" == "ROLLBACK_FAILED" ]]; then
+            echo "Stack in $STACK_STATUS state, using retain-resources..."
+            FAILED_RESOURCES=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || echo "")
+            if [ -n "$FAILED_RESOURCES" ]; then
+              aws cloudformation delete-stack --stack-name "$STACK_NAME" --retain-resources $FAILED_RESOURCES
+            else
+              aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            fi
+          else
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+          fi
           
           echo "⏳ Waiting for stack deletion..."
           aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || true
@@ -375,7 +394,8 @@ jobs:
         run: |
           echo "🔍 Verifying cleanup..."
           
-          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          # Use deploy output if available, otherwise fall back to input
+          STACK_NAME="${{ steps.deploy.outputs.stack_name || inputs.stack_name }}"
           
           # Check if stack still exists
           STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
