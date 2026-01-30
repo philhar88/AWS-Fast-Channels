@@ -68,13 +68,33 @@ jobs:
           STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
             --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
           
-          if [[ "$STACK_STATUS" == *"FAILED"* ]] || [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
+          echo "Current stack status: $STACK_STATUS"
+          
+          if [[ "$STACK_STATUS" == "DELETE_FAILED" ]]; then
+            echo "Stack in DELETE_FAILED state. Getting resources to retain..."
+            
+            # Get failed resources that need to be retained
+            FAILED_RESOURCES=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || echo "")
+            
+            if [ -n "$FAILED_RESOURCES" ]; then
+              echo "Retaining failed resources: $FAILED_RESOURCES"
+              aws cloudformation delete-stack --stack-name "$STACK_NAME" --retain-resources $FAILED_RESOURCES
+            else
+              aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            fi
+            
+            echo "Waiting for stack deletion..."
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --no-paginate || true
+            
+          elif [[ "$STACK_STATUS" == *"FAILED"* ]] || [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
             echo "Found stack in failed state: $STACK_STATUS. Deleting..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             echo "Waiting for stack deletion..."
-            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || true
-            echo "Stack deleted or timeout reached"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --no-paginate || true
           fi
+          
+          echo "Cleanup complete"
 
       - name: Deploy stack
         id: deploy
