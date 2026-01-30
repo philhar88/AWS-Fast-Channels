@@ -59,6 +59,23 @@ jobs:
           cd deployment
           sam build --template-file fast-on-aws.deployment
 
+      - name: Clean up any existing failed stack
+        continue-on-error: true
+        run: |
+          STACK_NAME="${{ inputs.stack_name }}"
+          
+          # Check if stack exists and is in a failed state
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          
+          if [[ "$STACK_STATUS" == *"FAILED"* ]] || [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
+            echo "Found stack in failed state: $STACK_STATUS. Deleting..."
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            echo "Waiting for stack deletion..."
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || true
+            echo "Stack deleted or timeout reached"
+          fi
+
       - name: Deploy stack
         id: deploy
         run: |
