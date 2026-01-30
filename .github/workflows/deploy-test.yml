@@ -70,8 +70,9 @@ jobs:
           
           echo "Current stack status: $STACK_STATUS"
           
-          if [[ "$STACK_STATUS" == "DELETE_FAILED" ]]; then
-            echo "Stack in DELETE_FAILED state. Getting resources to retain..."
+          # Handle any failed state with retain-resources approach
+          if [[ "$STACK_STATUS" == *"FAILED"* ]]; then
+            echo "Stack in $STACK_STATUS state. Getting resources to retain..."
             
             # Get failed resources that need to be retained
             FAILED_RESOURCES=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
@@ -81,14 +82,23 @@ jobs:
               echo "Retaining failed resources: $FAILED_RESOURCES"
               aws cloudformation delete-stack --stack-name "$STACK_NAME" --retain-resources $FAILED_RESOURCES
             else
-              aws cloudformation delete-stack --stack-name "$STACK_NAME"
+              # No specific failed resources found, but stack is in failed state
+              # Get ALL resources and retain them to force deletion
+              ALL_RESOURCES=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+                --query "StackResources[].LogicalResourceId" --output text 2>/dev/null || echo "")
+              if [ -n "$ALL_RESOURCES" ]; then
+                echo "Retaining all remaining resources to force cleanup: $ALL_RESOURCES"
+                aws cloudformation delete-stack --stack-name "$STACK_NAME" --retain-resources $ALL_RESOURCES
+              else
+                aws cloudformation delete-stack --stack-name "$STACK_NAME"
+              fi
             fi
             
             echo "Waiting for stack deletion..."
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --no-paginate || true
             
-          elif [[ "$STACK_STATUS" == *"FAILED"* ]] || [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
-            echo "Found stack in failed state: $STACK_STATUS. Deleting..."
+          elif [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
+            echo "Found stack in rollback state: $STACK_STATUS. Deleting..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             echo "Waiting for stack deletion..."
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --no-paginate || true
