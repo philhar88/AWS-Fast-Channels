@@ -16,7 +16,7 @@
 ### Changed
 - **BREAKING**: Upgraded Python runtime from 3.9 to 3.12
 - **BREAKING**: Updated boto3 layer to 1.35.x (from 1.26.48)
-- Updated crhelper to 2.0.17+ for improved CloudFormation custom resource handling
+- Updated crhelper to 2.0.11+ for improved CloudFormation custom resource handling
 - Updated all Lambda functions with type hints and improved error handling
 - Reduced IAM permissions to follow least-privilege principle
 - Improved CloudFront security with TLS 1.2 minimum and HTTPS redirect
