@@ -1,155 +1,182 @@
-from __future__ import print_function
-from crhelper import CfnResource
-import logging
-import boto3
-import json
-import os
+"""
+MediaTailor Channel Assembly Channel Custom Resource
 
-#set debug level if LogLevel environment variable exists, else set to INFO
-boto_level = os.environ['LogLevel'].upper() if 'LogLevel' in os.environ else 'INFO'
-log_level = os.environ['LogLevel'].upper() if 'LogLevel' in os.environ else 'INFO'
+CloudFormation custom resource for creating and managing MediaTailor channels.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from typing import Any
+
+import boto3
+from botocore.config import Config
+from crhelper import CfnResource
+
+# Configure logging
+boto_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logger = logging.getLogger(__name__)
-# Initialise the helper, all inputs are optional, this example shows the defaults
-helper = CfnResource(json_logging=False, log_level=log_level, boto_level=boto_level, sleep_on_delete=120, ssl_verify=None)
+logger.setLevel(log_level)
 
-#Initialise boto3
-mediatailor = boto3.client('mediatailor')
-mediapackage = boto3.client('mediapackage-vod')
+# Initialize CfnResource helper
+helper = CfnResource(
+    json_logging=False,
+    log_level=log_level,
+    boto_level=boto_level,
+    sleep_on_delete=120,
+    ssl_verify=None,
+)
 
-try:
-    pass
-except Exception as e:
-    helper.init_failure(e)
+# Initialize AWS clients
+config = Config(retries={"max_attempts": 3, "mode": "adaptive"})
+mediatailor = boto3.client("mediatailor", config=config)
+mediapackage = boto3.client("mediapackage-vod", config=config)
 
-def get_channel_outputs_from_mediapackage(PackagingGroupId):
-    Outputs = []
-    try:
-        response = mediapackage.list_packaging_configurations(
-            PackagingGroupId=PackagingGroupId
-        )
-        for PackagingConfiguration in response['PackagingConfigurations']:
-            logger.info(PackagingConfiguration)
-            if "HlsPackage" in PackagingConfiguration:
-                output = {
-                        'HlsPlaylistSettings': {
-                            'ManifestWindowSeconds': 60
-                        },
-                        'ManifestName': PackagingConfiguration['Id'],
-                        'SourceGroup': PackagingConfiguration['Id']
-                    }
-                Outputs.append(output)
-            if "CmafPackage" in PackagingConfiguration:
-                output = {
-                        'HlsPlaylistSettings': {
-                            'ManifestWindowSeconds': 60
-                        },
-                        'ManifestName': PackagingConfiguration['Id'],
-                        'SourceGroup': PackagingConfiguration['Id']
-                    }
-                Outputs.append(output)
-            if "DashPackage" in PackagingConfiguration:
-                output = {
-                        'DashPlaylistSettings': {
-                            'ManifestWindowSeconds': 60,
-                            'MinBufferTimeSeconds': 30,
-                            'MinUpdatePeriodSeconds': 2,
-                            'SuggestedPresentationDelaySeconds': 10
-                        },
-                        'ManifestName': PackagingConfiguration['Id'],
-                        'SourceGroup': PackagingConfiguration['Id']
-                    }
-                Outputs.append(output)
-        logger.info('Outputs %s:', Outputs)
-        return Outputs
+
+def get_channel_outputs_from_mediapackage(packaging_group_id: str) -> list[dict[str, Any]]:
+    """Generate channel outputs from MediaPackage packaging configurations."""
+    outputs = []
+    
+    response = mediapackage.list_packaging_configurations(
+        PackagingGroupId=packaging_group_id
+    )
+    
+    for config in response.get("PackagingConfigurations", []):
+        logger.info("Processing packaging configuration: %s", config.get("Id"))
         
-    except Exception as error:
-        raise ValueError(error)
-        
-@helper.create
-def create(event, context):
-    logger.info("Got Create")
-    # Optionally return an ID that will be used for the resource PhysicalResourceId, 
-    # if None is returned an ID will be generated. If a poll_create function is defined 
-    # return value is placed into the poll event as event['CrHelperData']['PhysicalResourceId']
-    #
-    # To add response data update the helper.Data dict
-    # If poll is enabled data is placed into poll event as event['CrHelperData']
-    PackagingGroupId = event['ResourceProperties']['MediaPackagePackagingGroup']['Id']
-
-    try:
-        outputs = get_channel_outputs_from_mediapackage(event['ResourceProperties']['MediaPackagePackagingGroup']['Id'])
-        channel = mediatailor.create_channel(
-            ChannelName=event['PhysicalResourceId'],
-            Outputs=outputs,
-            PlaybackMode='LOOP',
-            Tags={
-                'stack-id':event['StackId'],
-                'stack-name':event['ResourceProperties']['StackName'],
-            }
-        )
-        logger.info('Created Channel: %s', channel['ChannelName'])
-        policy = {
-            'Version': '2012-10-17', 
-            'Statement': 
-                [
-                    {
-                        'Sid': 'AllowAnonymous', 
-                        'Effect': 'Allow', 
-                        'Principal': '*', 
-                        'Action': 'mediatailor:GetManifest', 
-                        'Resource': channel['Arn']
-                    }
-                ]
+        output_base = {
+            "ManifestName": config["Id"],
+            "SourceGroup": config["Id"],
         }
-        logger.info('Channel Policy: %s', policy)
-        mediatailor.put_channel_policy(
-            ChannelName=event['PhysicalResourceId'],
-            Policy=json.dumps(policy)
-        )
-        PlaybackBaseUrl = channel['Outputs'][0]['PlaybackUrl'].rsplit("/",1)[0]
-        helper.Data['PlaybackBaseUrl'] = PlaybackBaseUrl
-    except Exception as error:
-        raise ValueError(error)
+        
+        if "HlsPackage" in config or "CmafPackage" in config:
+            output = {
+                **output_base,
+                "HlsPlaylistSettings": {"ManifestWindowSeconds": 60},
+            }
+            outputs.append(output)
+        
+        if "DashPackage" in config:
+            output = {
+                **output_base,
+                "DashPlaylistSettings": {
+                    "ManifestWindowSeconds": 60,
+                    "MinBufferTimeSeconds": 30,
+                    "MinUpdatePeriodSeconds": 2,
+                    "SuggestedPresentationDelaySeconds": 10,
+                },
+            }
+            outputs.append(output)
+    
+    logger.info("Generated %d channel outputs", len(outputs))
+    return outputs
 
-    return event['PhysicalResourceId']
+
+@helper.create
+def create(event: dict[str, Any], context: Any) -> str:
+    """Handle CloudFormation Create event."""
+    logger.info("Processing Create request")
+    
+    properties = event["ResourceProperties"]
+    packaging_group_id = properties["MediaPackagePackagingGroup"]["Id"]
+    physical_resource_id = event.get("PhysicalResourceId") or properties.get("Name")
+
+    outputs = get_channel_outputs_from_mediapackage(packaging_group_id)
+    
+    channel = mediatailor.create_channel(
+        ChannelName=physical_resource_id,
+        Outputs=outputs,
+        PlaybackMode="LOOP",
+        Tags={
+            "stack-id": event["StackId"],
+            "stack-name": properties["StackName"],
+        },
+    )
+    logger.info("Created channel: %s", channel["ChannelName"])
+
+    # Create channel policy allowing anonymous manifest access
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "AllowAnonymous",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "mediatailor:GetManifest",
+                "Resource": channel["Arn"],
+            }
+        ],
+    }
+    logger.info("Applying channel policy")
+    mediatailor.put_channel_policy(
+        ChannelName=physical_resource_id,
+        Policy=json.dumps(policy),
+    )
+
+    # Extract playback base URL for CloudFormation outputs
+    playback_base_url = channel["Outputs"][0]["PlaybackUrl"].rsplit("/", 1)[0]
+    helper.Data["PlaybackBaseUrl"] = playback_base_url
+
+    return physical_resource_id
 
 
 @helper.update
-def update(event, context):
-    logger.info("Got Update")
-    # If the update resulted in a new resource being created, return an id for the new resource. 
-    # CloudFormation will send a delete event with the old id when stack update completes
-    PackagingGroupId = event['ResourceProperties']['MediaPackagePackagingGroup']['Id']
-    event['PhysicalResourceId']
-    try:
-        outputs = get_channel_outputs_from_mediapackage(event['ResourceProperties']['MediaPackagePackagingGroup']['Id'])
-        channel = mediatailor.update_channel(
-            ChannelName=event['PhysicalResourceId'],
-            Outputs=outputs,
-        )
-        PlaybackBaseUrl = channel['Outputs'][0]['PlaybackUrl'].rsplit("/",1)[0] + '/'
-        helper.Data['PlaybackBaseUrl'] = PlaybackBaseUrl
-    except Exception as error:
-        raise ValueError(error)    
+def update(event: dict[str, Any], context: Any) -> str:
+    """Handle CloudFormation Update event."""
+    logger.info("Processing Update request")
+    
+    properties = event["ResourceProperties"]
+    packaging_group_id = properties["MediaPackagePackagingGroup"]["Id"]
+    physical_resource_id = event["PhysicalResourceId"]
+
+    outputs = get_channel_outputs_from_mediapackage(packaging_group_id)
+    
+    channel = mediatailor.update_channel(
+        ChannelName=physical_resource_id,
+        Outputs=outputs,
+    )
+    
+    playback_base_url = channel["Outputs"][0]["PlaybackUrl"].rsplit("/", 1)[0] + "/"
+    helper.Data["PlaybackBaseUrl"] = playback_base_url
+
+    return physical_resource_id
+
 
 @helper.delete
-def delete(event, context):
-    logger.info("Got Delete")
-    # Delete never returns anything. Should not fail if the underlying resources are already deleted.
-    # Desired state.
-    PackagingGroupId = event['ResourceProperties']['MediaPackagePackagingGroup']['Id']
-    event['PhysicalResourceId']
-    try:
-        channel = mediatailor.delete_channel(ChannelName=event['PhysicalResourceId'])
-    except mediatailor.exceptions.BadRequestException as error:
-        raise ValueError(error.response['Error']['Message'])
-    except Exception as error:
-        raise ValueError(error)
+def delete(event: dict[str, Any], context: Any) -> None:
+    """Handle CloudFormation Delete event."""
+    logger.info("Processing Delete request")
+    
+    physical_resource_id = event["PhysicalResourceId"]
 
-def lambda_handler(event, context):
     try:
-        event['PhysicalResourceId'] = event['ResourceProperties']['Name']
-    except:
-        logger.info('No Name property detected')
+        # Stop the channel first if running
+        try:
+            mediatailor.stop_channel(ChannelName=physical_resource_id)
+            logger.info("Stopped channel: %s", physical_resource_id)
+        except mediatailor.exceptions.BadRequestException:
+            pass  # Channel might already be stopped or not exist
+
+        mediatailor.delete_channel(ChannelName=physical_resource_id)
+        logger.info("Deleted channel: %s", physical_resource_id)
+
+    except mediatailor.exceptions.BadRequestException as error:
+        error_message = error.response["Error"]["Message"]
+        if "not found" in error_message.lower():
+            logger.info("Channel already deleted: %s", physical_resource_id)
+        else:
+            raise ValueError(error_message) from error
+    except Exception as error:
+        raise ValueError(str(error)) from error
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> None:
+    """Lambda entry point for CloudFormation custom resource."""
+    if "PhysicalResourceId" not in event:
+        event["PhysicalResourceId"] = event["ResourceProperties"].get("Name")
+    
+    logger.info("Received event: %s", json.dumps(event, default=str))
     helper(event, context)

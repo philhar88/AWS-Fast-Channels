@@ -1,171 +1,194 @@
 # AWS-Fast-Channels
 
-This SAM project deploys an end to end FAST channel solution primarily using MediaTailor's Channel Assembly feature to produce linear HLS and DASH streams. Rather than running a Live Encoding processes, this solution prepares the media as if it were VOD and then uses playlist manipulation available through Channel Assembly to create 24x7 live streams.
+[![CI/CD Pipeline](https://github.com/philhar88/AWS-Fast-Channels/actions/workflows/ci.yml/badge.svg)](https://github.com/philhar88/AWS-Fast-Channels/actions/workflows/ci.yml)
 
-At deployment, you will first define two buckets. The input bucket is where you can drop your mezzanine input VODs (such as MP4s, MXF, MOV etc). This will trigger a MediaConvert job to prepare your media into HLS, DASH and CMAF streaming formats. Once the MediaConvert job is complete, the output will be ingested into MediaPackage-Vod and MediaTailor-ChannelAssembly.
+This SAM project deploys an end-to-end FAST (Free Ad-Supported Streaming TV) channel solution using AWS MediaTailor's Channel Assembly feature to produce linear HLS and DASH streams. Rather than running a Live Encoding process, this solution prepares media as VOD and uses playlist manipulation available through Channel Assembly to create 24/7 live streams.
 
-Additionally, a custom resource of the `AdBreakSlates` will be generated upon deployment. This will allow you to insert ad breaks to your channel output. You can configure additional AdBreak times by modifying the `template.yaml` file
+## 🆕 What's New in v2.0 (2026)
 
-A `SampleChannel` is also created. This is where you can start adding Programs to create a schedule. See the MediaTailor Channel Assembly Quickstart guide to adding Programs for more information:
-https://docs.aws.amazon.com/mediatailor/latest/ug/channel-assembly-getting-started.html#ca-getting-started-create-programs
+- **4K & 1080p Support**: Full Ultra HD encoding ladder with HEVC/AVC codecs
+- **Python 3.12 Runtime**: Modern Lambda runtime with improved performance
+- **Enhanced Security**: Least-privilege IAM, KMS encryption, S3 hardening
+- **CI/CD Pipeline**: GitHub Actions with lint, validate, build, and security scanning
+- **Better Observability**: X-Ray tracing and structured logging
+- **Improved Performance**: HTTP/3, optimized segment duration, higher Lambda memory
 
-An AdServer Url can also be defined if you already have an Ad Server. By default a dummy ad server is used that will respond with ads so you can test an end to end workflow
+## Architecture
 
-You may also define add opportunities by adding Tags to the S3 object that is uploaded. By default the tag name is `AdOffsets` but this can be customized in the parameters. Your `AdOffsets` Tag Value should be a space delimited list of millisecond offsets from the start of the media. For example, to place an ad opportunity at 30s, 90s and 120s insert a value of `30000 90000 120000`. This will force MediaConvert to create an i-frame and segment boundary at these positions so that you can use the same offset values when creating Programs in Channel Assembly.
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
+│   S3 Input  │────▶│ MediaConvert │────▶│  S3 Output      │
+│   Bucket    │     │   (Transcode)│     │  (HLS/DASH/CMAF)│
+└─────────────┘     └──────────────┘     └────────┬────────┘
+                                                   │
+                                                   ▼
+┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
+│ MediaTailor │◀────│ MediaPackage │◀────│                 │
+│  (SSAI)     │     │   VOD        │     │                 │
+└──────┬──────┘     └──────────────┘     └─────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│                    CloudFront CDN                        │
+│                  (HTTP/2 + HTTP/3)                       │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## Features
 
-- Fully automated set-up of S3, MediaConvert, MediaPackage, CloudFront and MediaTailor
-- Frame-accurate ad insertion
-- Follows best practice guidelines including securing MediaPackage Origin and Caching configuration
-- Custom Resource to automatically generate AdBreak slates
-- Alerts to media processing via email
+- **Automated Media Pipeline**: S3 → MediaConvert → MediaPackage → MediaTailor
+- **Frame-Accurate Ad Insertion**: ESAM-based SCTE-35 marker placement
+- **Multiple Output Formats**: HLS, DASH, and CMAF packaging
+- **4K/HDR Ready**: Encoding ladder supports up to 3840x2160 with HEVC
+- **Secure by Default**: Encrypted storage, signed origins, least-privilege IAM
+- **Infrastructure as Code**: Fully automated deployment via SAM/CloudFormation
 
-## Diagram
-![System Diagram](assets/diagram.png?raw=true "FAST on AWS diagram")
+## Prerequisites
+
+- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) v1.100.0+
+- Python 3.12+
+- AWS CLI configured with appropriate credentials
 
 ## Deployment
+
+### Quick Start
 
 ```bash
 cd deployment
 sam build --template-file fast-on-aws.deployment
 sam deploy --guided --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND
 ```
-Make sure you have SAM installed: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html#install-sam-cli-instructions
 
-Once deployed, you can add some video content to the *input* bucket that is created. You can find the name of the bucket in the Ouputs section of the CloudFormation deployment:
+### Required Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `EmailAddress` | Email for SNS notifications |
+| `S3BucketName` | Base name for S3 buckets (will create input/output buckets) |
+
+### Optional Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `AdServerUrl` | Demo VAST | Your ad decision server URL |
+| `AdOffsetS3TagKeyName` | `AdOffsets` | S3 tag key for ad break offsets |
+| `LogLevel` | `INFO` | Lambda log level |
+| `Enable4KEncoding` | `true` | Enable 4K output in encoding ladder |
+| `EnableHEVC` | `true` | Enable HEVC codec for 1080p+ |
+
+## Usage
+
+### Upload Content
+
+Upload video files to the input bucket:
+
 ```bash
-aws s3 cp ${my_movie} s3://${input_bucket_generated}
+aws s3 cp my_video.mp4 s3://${INPUT_BUCKET}/
 ```
 
-You will then recieve an email from the SNS topic when the content is available for playback as a VOD, along with the MediaTailor Ad Insertion URLs.
+Supported input formats: MP4, MOV, MXF, MKV, AVI, TS, M2TS
 
-To add `${my_movie}` to a linear channel, find the Channel named `*-MediaTailorSampleChannel` and add a new Program referencing `${my_movie}` in the SourceLocation named `*-MediaTailorSourceLocation`. 
+### Add Ad Breaks
 
-If you would like to insert ad breaks, use the `AdBreakSlates_*` VOD Sources in the same SourceLocation. This slates will be replaced by the MediaTailor Ad Insertion configuration with the Ad Server VAST response.
+Tag your S3 objects with ad break positions (milliseconds):
 
-#### Optional
-Before you build, you can customize the list of bit rate presets you wish to use by running the `generate_presets.py` script.
+```bash
+aws s3api put-object-tagging \
+  --bucket ${INPUT_BUCKET} \
+  --key my_video.mp4 \
+  --tagging 'TagSet=[{Key=AdOffsets,Value="30000 90000 120000"}]'
+```
+
+This places ad opportunities at 30s, 90s, and 120s.
+
+### Access Playback URLs
+
+After processing, you'll receive an email with playback URLs:
+
+- **HLS**: `https://{mediatailor}/v1/master/.../hls.m3u8`
+- **DASH**: `https://{mediatailor}/v1/dash/.../dash.mpd`
+- **CMAF**: `https://{mediatailor}/v1/master/.../cmaf.m3u8`
+
+## Encoding Ladder
+
+| Resolution | Codec | Bitrate | Use Case |
+|------------|-------|---------|----------|
+| 3840x2160 | HEVC | 15 Mbps | 4K Premium |
+| 3840x2160 | AVC | 12 Mbps | 4K Compatible |
+| 1920x1080 | HEVC | 8 Mbps | Full HD Premium |
+| 1920x1080 | AVC | 6 Mbps | Full HD |
+| 1280x720 | AVC | 4.5 Mbps | HD |
+| 1280x720 | AVC | 3 Mbps | HD Low |
+| 960x540 | AVC | 2 Mbps | qHD |
+| 768x432 | AVC | 1.1 Mbps | SD |
+| 640x360 | AVC | 600 Kbps | Mobile |
+| 416x234 | AVC | 300 Kbps | Low Bandwidth |
+
+### Customize Encoding
+
+Edit `assets/presets.csv` and regenerate:
 
 ```bash
 cd source/scripts
+pip install -r requirements.txt
 python3 generate_presets.py
 ```
 
-You can customize the presets generated by modifying the `assets/presets.csv` file. See further instructions in the `SCRIPTS.md` readme.
+## Cost Considerations
 
-## Adding Programs to your Channel
+This solution incurs charges for:
 
-This project will automatically create a sample Channel Assembly channel: `${AWS::StackName}-MediaTailorSampleChannel`. Once an asset is processed it will also be imported as a Channel Assembly Vod Source resource and scheduled to the Sample Channel with the Ad Breaks. You can create Channel Assembly Program resources to schedule a Vod Source to play on a new channel if you wish.
+- **S3**: Storage for input/output media
+- **MediaConvert**: Per-minute transcoding
+- **MediaPackage**: Packaging and egress
+- **MediaTailor**: Channel Assembly hours + Ad insertion
+- **CloudFront**: CDN distribution
 
-Make sure you `start` a channel before trying to playback.
+💡 **Tip**: Output bucket uses Intelligent Tiering to optimize storage costs.
 
-Check the CloudFormation Outputs for the SSAI Url to the Channel.
+## Cleanup
 
-Here is an example to generate programs. You can use the same AdbreakOffsets as defined in the S3 upload.
-```python
-import boto3
+Before deleting the stack, empty these resources:
 
-client = boto3.client('mediatailor')
+1. Delete all VodSources from the MediaTailor SourceLocation
+2. Empty the input and output S3 buckets
+3. Delete all VOD Assets from the MediaPackage PackagingGroup
 
-source_location_name = 'source_location_name'
-channel_name = 'sample_channel_name'
-vod_source_name  = 'my_source'
+Then delete the stack:
 
-def generate_adbreaks(offsets_millis, source_location_name):
-    adbreaks = []
-    count = 0
-
-    for offset_millis in offsets_millis:
-        adbreak = {
-            'Slate': {
-                'SourceLocationName': source_location_name,
-                'VodSourceName': 'AdBreakSlate30000'
-            },
-            'MessageType': 'SPLICE_INSERT',
-            'OffsetMillis': offset_millis,
-            'SpliceInsertMessage': {
-                'AvailNum': count,
-                'AvailsExpected': count,
-                'SpliceEventId': count,
-                'UniqueProgramId': count
-            }
-        }
-        adbreaks.append(adbreak)
-        count += 1
-
-    return adbreaks
-
-adbreaks = generate_adbreaks([0, 30000, 60000, 90000, 120000], source_location_name)
-response = client.create_program(
-    AdBreaks=adbreaks,
-    ChannelName=channel_name,
-    ProgramName=vod_source_name,
-    SourceLocationName=source_location_name,
-    VodSourceName=vod_source_name,
-    ScheduleConfiguration={
-        'Transition': {
-            'RelativePosition': 'BEFORE_PROGRAM',
-            'Type': 'RELATIVE'
-        }
-    },
-)
-print(response)
+```bash
+sam delete --stack-name <your-stack-name>
 ```
 
-## Ad Insertion
+## Troubleshooting
 
-### VOD
-If you add ad break offset values to the `AdOffsets` named Tag to the input S3 media file, MediaConvert will automatically create zero duration Ad Breaks at these locations. In the outputted HLS playlists, the following tags will appears:
+### Channel Won't Delete
 
+Channels must be stopped before deletion. The custom resource handles this automatically, but if manual intervention is needed:
+
+```bash
+aws mediatailor stop-channel --channel-name <channel-name>
+aws mediatailor delete-channel --channel-name <channel-name>
 ```
-#EXT-X-CUE-OUT: 0
-#EXT-X-CUE-IN
-```
 
-If you request the vod source via the `${StackName}-PlaybackConfiguration-Vod` MediaTailor Playback Configuration, dynamically generated ad breaks will be automatically inserted at those add opportunities, based on the VAST response from the ad server. By default, a dummy VAST response is configured to simulate ad playback.
+### MediaConvert Job Fails
 
-For example, if your asset in MediaPackage-Vod has the following URL:
-`https://e3250800c185df7ae473c3fd9c7a91aa.egress.mediapackage-vod.us-west-2.amazonaws.com/out/v1/24247f7e7f2942509058713671dce466/209b7701f2224791a9a44440e6e5b9e0/e2fdd7d6ae5f4e41ac57089be4de2d02/index.m3u8`
+Check the MediaConvert console for detailed error messages. Common issues:
+- Input file format not supported
+- Insufficient IAM permissions
+- Invalid ad offset values
 
-Replace the hostname component with the MediaTailor HLS Playback URL:
-`https://1eba27f282c44ac1a5116e0f33924433.mediatailor.us-west-2.amazonaws.com/v1/master/1bab6b4238868b752a9e9daae3e2a4911f2a2fc9/fast-on-aws5-PlaybackConfiguration-Vod/out/v1/24247f7e7f2942509058713671dce466/209b7701f2224791a9a44440e6e5b9e0/e2fdd7d6ae5f4e41ac57089be4de2d02/index.m3u8`
+### No Playback URL Email
 
-### LIVE
+Verify:
+1. Email subscription is confirmed in SNS
+2. Lambda function logs show successful execution
+3. MediaPackage asset creation completed
 
-The Output of the CloudFormation deployment will contain the URLs of the Channel Assembly channels behind an SSAI playback configuration.
+## Contributing
 
-## Notes:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
- - Currently MediaTailor Ad Insertion does not support CMAF outputs withou a custom transcode profile
- - Currently HEVC only works in CMAF ouputs when using HLS in Apple iOS
- - Ergo, HEVC and CMAF with SSAI is not currently advisable.
- - The CloudFormation resources will take some time to deploy due to sequentially creating MediaConvert Presets. This is to avoid hitting TPS limits on creation.
-    - CloudFront distribution also takes some time to create
+## License
 
-## FAQs
-#### How much will this solution cost?
-
-This solution will incur the following costs as per your AWS usage rates:
- - S3 Storage
- - MediaPackage Packaged Bytes Out
- - MediaConvert Transcode Minutes
- - MediaTailor Channel Assembly Hours
- - MediaTailor Ad Insertion
- - MediaTailor Ad Delivery Bytes Out
- - CloudFront CDN Bytes Out
-
-#### How can I change the bit rate ladder?
-
-within the template.yaml you can configure the Presets with `Type: AWS::MediaConvert::Preset`. Make sure to also update the job template (`Type: AWS::MediaConvert::JobTemplate`) if you remove or add presets. Included in the repo is a script in the `MediaConvertJobTemplate` directory which will generate Presets and associated Template for you. Simply modify the included `presets.csv` and execute `generate_presets.py`. You will need the python3 package `troposphere` installed. 
-
-#### How can I delete the resources created by this SAM?
-
-firstly make sure the following resources are empty (i.e. contain no resources but still exist)
- - SourceLocation (i.e delete all VodSources)
- - input and output s3 buckets (i.e. delete all objects in the bucket)
- - MediaPackage PackagingGroup (i.e. delete all VOD Assets associated with the given Packaging Group)
-
-#### How can I access the streams?
-
-The SAM project will emit an Output with the prefix URLs to the `SampleChannel` Ad Insertion hostname. Make sure the channel is in running before you request the stream.
+This project is licensed under the MIT License - see the LICENSE file for details.

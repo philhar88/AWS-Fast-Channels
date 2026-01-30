@@ -1,172 +1,178 @@
-import os
-import re
-from urllib.parse import urlparse, urlunparse
-from random import randint
-from time import sleep
+"""
+MediaPackage VOD Asset Lambda Function
+
+Creates MediaPackage VOD assets from MediaConvert job outputs
+and generates playback URLs for MediaTailor SSAI.
+"""
+from __future__ import annotations
+
 import json
 import logging
+import os
+import re
+from random import randint
+from time import sleep
+from typing import Any
+from urllib.parse import urlparse, urlunparse
+
 import boto3
+from botocore.config import Config
 
-# define clients required for script
-mediapackage = boto3.client('mediapackage-vod')
-s3 = boto3.client("s3")
-events = boto3.client("events")
-logger = logging.getLogger()
-logger.setLevel(os.environ.get('LOG_LEVEL', logging.INFO))
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+
+# Initialize AWS clients
+config = Config(retries={"max_attempts": 3, "mode": "adaptive"})
+mediapackage = boto3.client("mediapackage-vod", config=config)
+s3 = boto3.client("s3", config=config)
+events = boto3.client("events", config=config)
 
 
-def generate_playback_urls(egress_endpoints, asset_id, asset_tags):
-    """
-    generates the MediaTailor SSAI playback urls dict
-    for a given asset_id and its egress_endpoints
-    """
+def generate_playback_urls(
+    egress_endpoints: list[dict[str, Any]],
+    asset_id: str,
+    asset_tags: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Generate MediaTailor SSAI playback URLs for a given asset."""
     playback_urls = []
+
     try:
         mediatailor_playback_endpoints = {
-            'Hls': urlparse(os.environ['MediaTailorPlaybackConfigurationVodHls']),
-            'Dash': urlparse(os.environ['MediaTailorPlaybackConfigurationVodDash'])
+            "Hls": urlparse(os.environ.get("MediaTailorPlaybackConfigurationVodHls", "")),
+            "Dash": urlparse(os.environ.get("MediaTailorPlaybackConfigurationVodDash", "")),
         }
     except KeyError:
-        logger.info("No MediaTailor environment variables")
-        mediatailor_playback_endpoints = {
-            'Hls': '',
-            'Dash': ''
-        }
-    try:
-        for egress_endpoint in egress_endpoints:
-            url = urlparse(egress_endpoint['Url'])
-            packaging_configuration_id = egress_endpoint['PackagingConfigurationId']
-            if os.path.splitext(urlparse(egress_endpoint['Url']).path)[1] == '.m3u8':
-                url = url._replace(netloc=mediatailor_playback_endpoints['Hls'].netloc,
-                                   path=mediatailor_playback_endpoints['Hls'].path.rstrip("/")+url.path)
-                url = urlunparse(url)
-            if os.path.splitext(urlparse(egress_endpoint['Url']).path)[1] == '.mpd':
-                url = url._replace(netloc=mediatailor_playback_endpoints['Dash'].netloc,
-                                   path=mediatailor_playback_endpoints['Dash'].path.rstrip("/")+url.path)
-                url = urlunparse(url)
-            playback_urls.append(
-                {
-                    'assetId': asset_id,
-                    'packagingConfigurationId': packaging_configuration_id,
-                    'vodPlaybackUrl': url,
-                    'adOffsets': asset_tags.get('AdOffsets', None)
-                }
-            )
-        logger.info('playback_urls: %s', json.dumps(
-            playback_urls, default=list))
-    except Exception as unknown_error:
-        playback_urls = None
-        raise unknown_error
+        logger.warning("MediaTailor environment variables not configured")
+        mediatailor_playback_endpoints = {"Hls": "", "Dash": ""}
 
+    for egress_endpoint in egress_endpoints:
+        url = urlparse(egress_endpoint["Url"])
+        packaging_configuration_id = egress_endpoint["PackagingConfigurationId"]
+        
+        extension = os.path.splitext(url.path)[1]
+        
+        if extension == ".m3u8" and mediatailor_playback_endpoints["Hls"]:
+            hls_endpoint = mediatailor_playback_endpoints["Hls"]
+            url = url._replace(
+                netloc=hls_endpoint.netloc,
+                path=hls_endpoint.path.rstrip("/") + url.path,
+            )
+        elif extension == ".mpd" and mediatailor_playback_endpoints["Dash"]:
+            dash_endpoint = mediatailor_playback_endpoints["Dash"]
+            url = url._replace(
+                netloc=dash_endpoint.netloc,
+                path=dash_endpoint.path.rstrip("/") + url.path,
+            )
+
+        playback_urls.append({
+            "assetId": asset_id,
+            "packagingConfigurationId": packaging_configuration_id,
+            "vodPlaybackUrl": urlunparse(url),
+            "adOffsets": asset_tags.get("AdOffsets"),
+        })
+
+    logger.info("Generated playback URLs: %s", json.dumps(playback_urls, default=str))
     return playback_urls
 
 
-def get_object_arn_from_url(url):
-    """returns the s3 object ARN from HTTPS URL"""
-    try:
-        url = urlparse(url)
-        bucket = url.netloc
-        key = url.path
-        arn = f'arn:aws:s3:::{bucket+key}'
-    except Exception as unknown_error:
-        arn = None
-        raise Exception(unknown_error) from unknown_error
-
-    return arn
+def get_object_arn_from_url(url: str) -> str:
+    """Convert an S3 HTTPS URL to an S3 object ARN."""
+    parsed = urlparse(url)
+    bucket = parsed.netloc
+    key = parsed.path
+    return f"arn:aws:s3:::{bucket}{key}"
 
 
-def create_resource_id_from_mediaconvert_job_output(job_output):
-    """Returns resource id used in MediaPackage as the Asset ID based on MediaConvert job output"""
-    job_output = urlparse(job_output)
-    pattern = r'[^a-zA-Z0-9-]'
-    try:
-        asset_id = re.sub(pattern, '', os.path.splitext(
-            job_output.path.lstrip("/"))[0])
-    except Exception as unknown_error:
-        asset_id = None
-        raise Exception(unknown_error) from unknown_error
+def create_resource_id_from_mediaconvert_job_output(job_output: str) -> str:
+    """Create a MediaPackage-compliant resource ID from a MediaConvert job output path."""
+    parsed = urlparse(job_output)
+    # Remove non-alphanumeric characters except hyphens
+    pattern = r"[^a-zA-Z0-9-]"
+    asset_id = re.sub(pattern, "", os.path.splitext(parsed.path.lstrip("/"))[0])
     return asset_id
 
 
-def update_asset(asset):
-    """
-    Deletes and re-creates an existing MediaPackage-vod Asset
-    """
+def update_asset(asset: dict[str, Any]) -> dict[str, Any]:
+    """Delete and recreate an existing MediaPackage VOD asset."""
     try:
-        mediapackage.delete_asset(Id=asset['Id'])
-        logger.info('Deleted AssetId: %s', asset['Id'])
+        mediapackage.delete_asset(Id=asset["Id"])
+        logger.info("Deleted existing asset: %s", asset["Id"])
         sleep(10)
-        asset = mediapackage.create_asset(**asset)
-        logger.info('Created Asset: %s',
-                    json.dumps(
-                        {
-                            asset['Id']: asset['EgressEndpoints']
-                        }
-                    )
-                    )
-    except mediapackage.exceptions.NotFoundException as not_found_exception:
-        raise ValueError(
-            not_found_exception.response['Error']['Message']) from not_found_exception
-
-    return asset
+        new_asset = mediapackage.create_asset(**asset)
+        logger.info("Recreated asset: %s", json.dumps({"Id": new_asset["Id"]}))
+        return new_asset
+    except mediapackage.exceptions.NotFoundException as error:
+        raise ValueError(error.response["Error"]["Message"]) from error
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: dict[str, Any], context: Any) -> str:
     """
-    Main function. Takes Job Change Complete event from MediaConvert and
-    creates a MediaPackage-vod Asset along with Tags for the current CloudFormation Stack
+    Lambda handler for MediaPackage VOD asset creation.
+    
+    Triggered by MediaConvert COMPLETE status events via EventBridge.
+    Creates MediaPackage VOD assets and emits playback URL events.
     """
-
-    logger.debug('Event: %s', json.dumps(event))
+    logger.debug("Received event: %s", json.dumps(event))
 
     asset_tags = {
-        'stack-id': os.environ['StackId'],
-        'stack-name': os.environ['StackName'],
+        "stack-id": os.environ.get("StackId", ""),
+        "stack-name": os.environ.get("StackName", ""),
     }
-    if event['detail'].get('userMetadata', False):
-        asset_tags.update(event['detail']['userMetadata'])
+
+    if event["detail"].get("userMetadata"):
+        asset_tags.update(event["detail"]["userMetadata"])
 
     try:
-        job_output = event['detail']['outputGroupDetails'][0]['playlistFilePaths'][0]
+        output_details = event["detail"]["outputGroupDetails"]
+        if not output_details or not output_details[0].get("playlistFilePaths"):
+            logger.warning("No playlist file paths in event")
+            return json.dumps({"status": "NO_OUTPUT"})
+
+        job_output = output_details[0]["playlistFilePaths"][0]
+        
         asset = {
-            'PackagingGroupId': os.environ['MediaPackagePackagingGroupId'],
-            'Id': create_resource_id_from_mediaconvert_job_output(job_output),
-            'SourceArn': get_object_arn_from_url(job_output),
-            'SourceRoleArn': os.environ['MediaPackageReadS3RoleArn'],
-            'Tags': asset_tags
+            "PackagingGroupId": os.environ["MediaPackagePackagingGroupId"],
+            "Id": create_resource_id_from_mediaconvert_job_output(job_output),
+            "SourceArn": get_object_arn_from_url(job_output),
+            "SourceRoleArn": os.environ["MediaPackageReadS3RoleArn"],
+            "Tags": asset_tags,
         }
-        logger.info('MediaPackage Asset JSON: %s', json.dumps(asset))
+        logger.info("Creating MediaPackage asset: %s", json.dumps(asset))
 
-        # randomize delay to minimize asset create collisions.
-        sleep(randint(10, 30)/10)
+        # Randomize delay to minimize asset creation collisions
+        sleep(randint(10, 30) / 10)
 
-        asset = mediapackage.create_asset(**asset)
+        asset_response = mediapackage.create_asset(**asset)
 
-    except mediapackage.exceptions.UnprocessableEntityException as entity_exception:
-        error_message = entity_exception.response['Error']['Message']
+    except mediapackage.exceptions.UnprocessableEntityException as error:
+        error_message = error.response["Error"]["Message"]
         if "exists" in error_message:
-            # if MediaPackage already has this asset ingested, delete and re-ingest.
-            logger.info(error_message)
-            asset = update_asset(asset)
+            logger.info("Asset already exists, recreating: %s", error_message)
+            asset_response = update_asset(asset)
         else:
-            raise entity_exception
+            raise
 
-    # Send Event describing MediaTailor Playback URLs for VoD.
+    # Emit playback URL event
     playback_url_event = events.put_events(
         Entries=[
             {
-                'Detail': json.dumps(
-                    {'playbackUrls': generate_playback_urls(
-                        asset['EgressEndpoints'], asset['Id'], asset_tags)}
-                , default=str),
-                'DetailType':'Playback URLs',
-                'Source':os.environ['StackName']
+                "Detail": json.dumps(
+                    {
+                        "playbackUrls": generate_playback_urls(
+                            asset_response["EgressEndpoints"],
+                            asset_response["Id"],
+                            asset_tags,
+                        )
+                    },
+                    default=str,
+                ),
+                "DetailType": "Playback URLs",
+                "Source": os.environ.get("StackName", "fast-channels"),
             }
         ]
     )
-    logger.info("EventId Sent: %s", json.dumps(
-        playback_url_event, default=str))
+    logger.info("Emitted playback URL event: %s", json.dumps(playback_url_event, default=str))
 
-    response = mediapackage.describe_asset(Id=asset['Id'])
-
+    response = mediapackage.describe_asset(Id=asset_response["Id"])
     return json.dumps(response, default=str)
