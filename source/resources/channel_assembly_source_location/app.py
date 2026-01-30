@@ -154,10 +154,12 @@ def delete(event: dict[str, Any], context: Any) -> None:
             logger.info("Source location already deleted: %s", physical_resource_id)
         else:
             raise ValueError(error_message) from error
-    except client.exceptions.NotFoundException:
-        logger.info("Source location already deleted: %s", physical_resource_id)
     except Exception as error:
-        raise ValueError(str(error)) from error
+        error_str = str(error).lower()
+        if "not found" in error_str or "does not exist" in error_str:
+            logger.info("Source location already deleted: %s", physical_resource_id)
+        else:
+            raise ValueError(str(error)) from error
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> None:

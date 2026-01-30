@@ -338,6 +338,8 @@ Resources:
               - "mediatailor:UpdateChannel"
               - "mediatailor:DeleteChannel"
               - "mediatailor:DescribeChannel"
+              - "mediatailor:StartChannel"
+              - "mediatailor:StopChannel"
               - "mediatailor:PutChannelPolicy"
               - "mediatailor:TagResource"
             Resource:
