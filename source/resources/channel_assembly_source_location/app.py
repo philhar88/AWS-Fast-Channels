@@ -1,133 +1,166 @@
-from __future__ import print_function
-from crhelper import CfnResource
+"""
+MediaTailor Source Location Custom Resource
+
+CloudFormation custom resource for creating and managing MediaTailor source locations.
+"""
+from __future__ import annotations
+
+import json
 import logging
 import os
-import botocore
-import boto3
-import json
+from typing import Any
 
-#set debug level if LogLevel environment variable exists, else set to INFO
-boto_level = os.environ['LogLevel'].upper() if 'LogLevel' in os.environ else 'INFO'
-log_level = os.environ['LogLevel'].upper() if 'LogLevel' in os.environ else 'INFO'
+import boto3
+from botocore.config import Config
+from crhelper import CfnResource
+
+# Configure logging
+boto_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logger = logging.getLogger(__name__)
-# Initialise the helper, all inputs are optional, this example shows the defaults
-helper = CfnResource(json_logging=False, log_level=log_level, boto_level=boto_level, sleep_on_delete=120, ssl_verify=None)
+logger.setLevel(log_level)
 
-#Initialise boto3
-client = boto3.client('mediatailor')
+# Initialize CfnResource helper
+helper = CfnResource(
+    json_logging=False,
+    log_level=log_level,
+    boto_level=boto_level,
+    sleep_on_delete=120,
+    ssl_verify=None,
+)
 
-try:
-    pass
-except Exception as e:
-    helper.init_failure(e)
+# Initialize AWS client
+config = Config(retries={"max_attempts": 3, "mode": "adaptive"})
+client = boto3.client("mediatailor", config=config)
+
+
+def build_source_location_config(
+    event: dict[str, Any],
+    physical_resource_id: str,
+    include_tags: bool = True,
+) -> dict[str, Any]:
+    """Build the source location configuration from event properties."""
+    properties = event["ResourceProperties"]
+    
+    config = {
+        "AccessConfiguration": {
+            "AccessType": "SECRETS_MANAGER_ACCESS_TOKEN",
+            "SecretsManagerAccessTokenConfiguration": {
+                "HeaderName": "X-MediaPackage-CDNIdentifier",
+                "SecretArn": properties["MediaPackageAccessSecretArn"],
+                "SecretStringKey": "MediaPackageCDNIdentifier",
+            },
+        },
+        "DefaultSegmentDeliveryConfiguration": {
+            "BaseUrl": f"https://{properties['CloudFrontDistribution']['DomainName']}"
+        },
+        "HttpConfiguration": {
+            "BaseUrl": properties["MediaPackagePackagingGroup"]["DomainName"]
+        },
+        "SourceLocationName": physical_resource_id,
+    }
+    
+    if include_tags:
+        config["Tags"] = {
+            "stack-id": event["StackId"],
+            "stack-name": properties["StackName"],
+        }
+    
+    return config
 
 
 @helper.create
-def create(event, context):
-    logger.info("Got Create")
-    # Optionally return an ID that will be used for the resource PhysicalResourceId, 
-    # if None is returned an ID will be generated. If a poll_create function is defined 
-    # return value is placed into the poll event as event['CrHelperData']['PhysicalResourceId']
-    #
-    # To add response data update the helper.Data dict
-    # If poll is enabled data is placed into poll event as event['CrHelperData']
+def create(event: dict[str, Any], context: Any) -> str:
+    """Handle CloudFormation Create event."""
+    logger.info("Processing Create request")
     
-    if event['ResourceProperties']['Name']:
-        PhysicalResourceId = event['ResourceProperties']['Name']
-    else:
-        PhysicalResourceId = helper.generate_physical_id(event)
+    properties = event["ResourceProperties"]
+    physical_resource_id = properties.get("Name") or helper.generate_physical_id(event)
 
-    try:
-        create_source_location_request = {
-            'AccessConfiguration': {
-                'AccessType':'SECRETS_MANAGER_ACCESS_TOKEN',
-                'SecretsManagerAccessTokenConfiguration':{
-                    'HeaderName':'X-MediaPackage-CDNIdentifier',
-                    'SecretArn':event['ResourceProperties']['MediaPackageAccessSecretArn'],
-                    'SecretStringKey':'MediaPackageCDNIdentifier'
-                }
-            },
-            'DefaultSegmentDeliveryConfiguration':{
-                'BaseUrl': 'https://' + event['ResourceProperties']['CloudFrontDistribution']['DomainName']
-            },
-            'HttpConfiguration':{
-                'BaseUrl': event['ResourceProperties']['MediaPackagePackagingGroup']['DomainName']
-            },
-            'SourceLocationName': PhysicalResourceId,
-            'Tags': {
-                'stack-id':event['StackId'],
-                'stack-name':event['ResourceProperties']['StackName'],
-            }
-        }
-        logger.info('SourceLocation: %s', create_source_location_request)
-        response = client.create_source_location(**create_source_location_request)
-    except client.exceptions.BadRequestException as error:
-        if "exists" in error.response['Error']['Message']:
-            logger.info('SourceLocation: %s already exists', PhysicalResourceId)
-        else:
-            logger.info('Error: %s', error)
-            raise ValueError(error) 
+    source_location_config = build_source_location_config(event, physical_resource_id)
     
-    return PhysicalResourceId
+    logger.info("Creating source location: %s", json.dumps(source_location_config, default=str))
+    
+    try:
+        client.create_source_location(**source_location_config)
+        logger.info("Created source location: %s", physical_resource_id)
+    except client.exceptions.BadRequestException as error:
+        if "exists" in error.response["Error"]["Message"]:
+            logger.info("Source location already exists: %s", physical_resource_id)
+        else:
+            raise ValueError(error.response["Error"]["Message"]) from error
+
+    return physical_resource_id
 
 
 @helper.update
-def update(event, context):
-    logger.info("Got Update")
-    # If the update resulted in a new resource being created, return an id for the new resource. 
-    # CloudFormation will send a delete event with the old id when stack update completes
+def update(event: dict[str, Any], context: Any) -> str:
+    """Handle CloudFormation Update event."""
+    logger.info("Processing Update request")
+    
+    physical_resource_id = event["PhysicalResourceId"]
+    source_location_config = build_source_location_config(
+        event, physical_resource_id, include_tags=False
+    )
 
     try:
-        create_source_location_request = {
-            'AccessConfiguration': {
-                'AccessType':'SECRETS_MANAGER_ACCESS_TOKEN',
-                'SecretsManagerAccessTokenConfiguration':{
-                    'HeaderName':'X-MediaPackage-CDNIdentifier',
-                    'SecretArn':event['ResourceProperties']['MediaPackageSecretArn'],
-                    'SecretStringKey':'MediaPackageCDNIdentifier'
-                }
-            },
-            'DefaultSegmentDeliveryConfiguration':{
-                'BaseUrl': 'https://' + event['ResourceProperties']['CloudFrontDistribution']['DomainName']
-            },
-            'HttpConfiguration':{
-                'BaseUrl': event['ResourceProperties']['MediaPackagePackagingGroup']['DomainName']
-            },
-            'SourceLocationName': event['PhysicalResourceId']
-        }
-        response = client.update_source_location(**create_source_location_request)
-    except botocore.exceptions.ClientError as error:
-        if error.response['Error']['Code'] == 'NotFoundException':
-            response = client.create_source_location(**create_source_location_request)
-        else:
-            raise ValueError(error)
-    except error:
-        raise ValueError(error)
+        client.update_source_location(**source_location_config)
+        logger.info("Updated source location: %s", physical_resource_id)
+    except client.exceptions.NotFoundException:
+        client.create_source_location(**source_location_config)
+        logger.info("Source location not found, created: %s", physical_resource_id)
+
+    return physical_resource_id
+
 
 @helper.delete
-def delete(event, context):
-    logger.info("Got Delete")
-    # Delete never returns anything. Should not fail if the underlying resources are already deleted.
-    # Desired state.
-    try:
-        VodSources = client.list_vod_sources(SourceLocationName=event['PhysicalResourceId'],MaxResults=100)['Items']
-        for VodSource in VodSources:
-            if 'AdBreakSlate_' in VodSource['VodSourceName']:
-                try: 
-                    client.delete_vod_source(SourceLocationName=event['PhysicalResourceId'], VodSourceName=VodSource['VodSourceName'])
-                    logger.info('Removed Vod Source: %s', VodSource['VodSourceName'])
-                except Exception as error:
-                    raise ValueError('Unable to delete AdBreakSlate Vod Sources. Please manually delete from SourceLocation and try again. %s', error)
-        client.delete_source_location(SourceLocationName=event['PhysicalResourceId'])
-    except client.exceptions.BadRequestException as error:
-        if "referring" in error.response['Error']['Message']:
-            raise ValueError('SourceLocation must not contain any Vod or Live Sources. Please delete all Sources and try again.')
-        else:
-            raise ValueError(error.response['Error']['Message'])
-    except Exception as error:
-        raise ValueError(error)
+def delete(event: dict[str, Any], context: Any) -> None:
+    """Handle CloudFormation Delete event."""
+    logger.info("Processing Delete request")
+    
+    physical_resource_id = event["PhysicalResourceId"]
 
-def lambda_handler(event, context):
-    logger.info('Event: %s', event)
+    try:
+        # Delete all VOD sources from the source location first
+        vod_sources = client.list_vod_sources(
+            SourceLocationName=physical_resource_id,
+            MaxResults=100,
+        )
+        
+        for vod_source in vod_sources.get("Items", []):
+            vod_source_name = vod_source["VodSourceName"]
+            if "AdBreakSlate_" in vod_source_name:
+                try:
+                    client.delete_vod_source(
+                        SourceLocationName=physical_resource_id,
+                        VodSourceName=vod_source_name,
+                    )
+                    logger.info("Deleted VOD source: %s", vod_source_name)
+                except Exception as error:
+                    logger.warning("Failed to delete VOD source %s: %s", vod_source_name, error)
+
+        client.delete_source_location(SourceLocationName=physical_resource_id)
+        logger.info("Deleted source location: %s", physical_resource_id)
+
+    except client.exceptions.BadRequestException as error:
+        error_message = error.response["Error"]["Message"]
+        if "referring" in error_message:
+            raise ValueError(
+                "Source location still has VOD or Live sources. "
+                "Please delete all sources and try again."
+            ) from error
+        elif "not found" in error_message.lower():
+            logger.info("Source location already deleted: %s", physical_resource_id)
+        else:
+            raise ValueError(error_message) from error
+    except client.exceptions.NotFoundException:
+        logger.info("Source location already deleted: %s", physical_resource_id)
+    except Exception as error:
+        raise ValueError(str(error)) from error
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> None:
+    """Lambda entry point for CloudFormation custom resource."""
+    logger.info("Received event: %s", json.dumps(event, default=str))
     helper(event, context)

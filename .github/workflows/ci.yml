@@ -1,0 +1,143 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  SAM_CLI_TELEMETRY: 0
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy boto3-stubs[essential]
+
+      - name: Lint with Ruff
+        run: ruff check source/
+
+      - name: Type check with mypy
+        run: mypy source/functions/ --ignore-missing-imports --no-error-summary || true
+
+  validate:
+    name: Validate SAM Template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate SAM templates
+        run: |
+          cd deployment
+          sam validate --template-file fast-on-aws.deployment --lint
+          sam validate --template-file mediaconvert.deployment --lint
+
+  build:
+    name: Build SAM Application
+    runs-on: ubuntu-latest
+    needs: [lint, validate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Build SAM application
+        run: |
+          cd deployment
+          sam build --template-file fast-on-aws.deployment
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build
+          path: deployment/.aws-sam/build/
+          retention-days: 7
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sam-build
+          path: deployment/.aws-sam/build/
+
+      - name: Deploy to Dev
+        run: |
+          cd deployment
+          sam deploy \
+            --stack-name fast-channels-dev \
+            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              EmailAddress=${{ secrets.NOTIFICATION_EMAIL }} \
+              S3BucketName=fast-channels-dev \
+              LogLevel=DEBUG

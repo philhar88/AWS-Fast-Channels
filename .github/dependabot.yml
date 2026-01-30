@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/source/layers/boto3"
+    schedule:
+      interval: "weekly"
+    groups:
+      aws-sdk:
+        patterns:
+          - "boto*"
+
+  - package-ecosystem: "pip"
+    directory: "/source/layers/crhelper"
+    schedule:
+      interval: "monthly"
+
+  - package-ecosystem: "pip"
+    directory: "/source/scripts"
+    schedule:
+      interval: "monthly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

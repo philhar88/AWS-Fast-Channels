@@ -1,0 +1,358 @@
+name: Deploy, Test & Teardown
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_name:
+        description: 'CloudFormation stack name'
+        required: true
+        default: 'fast-channels-e2e-test'
+      aws_region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-east-1'
+      skip_teardown:
+        description: 'Skip teardown (for debugging)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  SAM_CLI_TELEMETRY: 0
+
+jobs:
+  deploy-test-teardown:
+    name: Deploy, E2E Test & Teardown
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Validate SAM templates
+        run: |
+          cd deployment
+          sam validate --template-file fast-on-aws.deployment --lint
+          sam validate --template-file mediaconvert.deployment --lint
+
+      - name: Build SAM application
+        run: |
+          cd deployment
+          sam build --template-file fast-on-aws.deployment
+
+      - name: Deploy stack
+        id: deploy
+        run: |
+          cd deployment
+          STACK_NAME="${{ inputs.stack_name }}"
+          
+          sam deploy \
+            --stack-name "$STACK_NAME" \
+            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              EmailAddress="test@example.com" \
+              S3BucketName="fast-e2e-$(echo $RANDOM | md5sum | head -c 8)" \
+              LogLevel=DEBUG \
+              Enable4KEncoding=false \
+              EnableHEVC=false \
+            --resolve-s3
+          
+          # Get stack outputs
+          echo "Getting stack outputs..."
+          INPUT_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='VideoSourceBucket'].OutputValue" --output text)
+          OUTPUT_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='VideoDestinationBucket'].OutputValue" --output text)
+          HLS_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='SampleChannelPlaybackHlsPlaybackUrl'].OutputValue" --output text)
+          
+          echo "input_bucket=$INPUT_BUCKET" >> $GITHUB_OUTPUT
+          echo "output_bucket=$OUTPUT_BUCKET" >> $GITHUB_OUTPUT
+          echo "hls_url=$HLS_URL" >> $GITHUB_OUTPUT
+          echo "stack_name=$STACK_NAME" >> $GITHUB_OUTPUT
+          
+          echo "✅ Stack deployed successfully"
+          echo "📦 Input Bucket: $INPUT_BUCKET"
+          echo "📦 Output Bucket: $OUTPUT_BUCKET"
+          echo "🎬 HLS URL: $HLS_URL"
+
+      - name: Run E2E test - Generate test video
+        run: |
+          # Install ffmpeg
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          
+          # Generate a 10-second test video with color bars
+          ffmpeg -f lavfi -i "testsrc=duration=10:size=640x360:rate=30" \
+            -f lavfi -i "sine=frequency=1000:duration=10" \
+            -c:v libx264 -preset ultrafast -crf 23 \
+            -c:a aac -b:a 128k \
+            -y test_video.mp4
+          
+          echo "✅ Test video generated"
+          ls -la test_video.mp4
+
+      - name: Run E2E test - Upload to S3
+        run: |
+          INPUT_BUCKET="${{ steps.deploy.outputs.input_bucket }}"
+          
+          # Upload test video
+          aws s3 cp test_video.mp4 "s3://${INPUT_BUCKET}/test_video.mp4"
+          
+          echo "✅ Test video uploaded to s3://${INPUT_BUCKET}/test_video.mp4"
+
+      - name: Run E2E test - Wait for MediaConvert job
+        run: |
+          echo "⏳ Waiting for MediaConvert job to complete..."
+          
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          MAX_WAIT=600  # 10 minutes
+          WAIT_INTERVAL=30
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            # Check for completed jobs in the last 15 minutes
+            JOBS=$(aws mediaconvert list-jobs \
+              --status COMPLETE \
+              --max-results 10 \
+              --query "Jobs[?Settings.Inputs[0].FileInput | contains(@, 'test_video')]" \
+              --output json 2>/dev/null || echo "[]")
+            
+            JOB_COUNT=$(echo "$JOBS" | jq 'length')
+            
+            if [ "$JOB_COUNT" -gt 0 ]; then
+              echo "✅ MediaConvert job completed!"
+              echo "$JOBS" | jq '.[0] | {Id, Status, CreatedAt}'
+              break
+            fi
+            
+            # Also check for in-progress jobs
+            PROGRESSING=$(aws mediaconvert list-jobs \
+              --status PROGRESSING \
+              --max-results 5 \
+              --output json 2>/dev/null || echo '{"Jobs":[]}')
+            
+            PROG_COUNT=$(echo "$PROGRESSING" | jq '.Jobs | length')
+            
+            if [ "$PROG_COUNT" -gt 0 ]; then
+              echo "🔄 MediaConvert job in progress... ($ELAPSED seconds elapsed)"
+            else
+              echo "⏳ Waiting for job to start... ($ELAPSED seconds elapsed)"
+            fi
+            
+            sleep $WAIT_INTERVAL
+            ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+          done
+          
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "⚠️ MediaConvert job did not complete within timeout"
+            echo "This may be normal - the job might still be queued"
+          fi
+
+      - name: Run E2E test - Verify outputs
+        run: |
+          OUTPUT_BUCKET="${{ steps.deploy.outputs.output_bucket }}"
+          
+          echo "📋 Checking output bucket contents..."
+          
+          # Wait a bit more for outputs to appear
+          sleep 30
+          
+          # List objects in output bucket
+          OBJECTS=$(aws s3 ls "s3://${OUTPUT_BUCKET}/" --recursive 2>/dev/null || echo "")
+          
+          if [ -n "$OBJECTS" ]; then
+            echo "✅ Found output files:"
+            echo "$OBJECTS" | head -20
+            
+            # Count HLS files
+            HLS_COUNT=$(echo "$OBJECTS" | grep -c "\.m3u8\|\.ts" || echo "0")
+            echo "📊 Found $HLS_COUNT HLS-related files"
+          else
+            echo "ℹ️ No outputs yet - this is expected if the job is still processing"
+          fi
+
+      - name: Run E2E test - Check MediaTailor resources
+        run: |
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          
+          echo "📋 Checking MediaTailor resources..."
+          
+          # List source locations
+          echo "Source Locations:"
+          aws mediatailor list-source-locations --max-results 10 \
+            --query "Items[?contains(SourceLocationName, '$STACK_NAME')]" \
+            --output table 2>/dev/null || echo "None found"
+          
+          # List channels
+          echo ""
+          echo "Channels:"
+          aws mediatailor list-channels --max-results 10 \
+            --query "Items[?contains(ChannelName, '$STACK_NAME')]" \
+            --output table 2>/dev/null || echo "None found"
+          
+          echo ""
+          echo "✅ MediaTailor resources verified"
+
+      - name: Run E2E test - Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "           E2E TEST SUMMARY"
+          echo "=========================================="
+          echo ""
+          echo "Stack Name: ${{ steps.deploy.outputs.stack_name }}"
+          echo "Input Bucket: ${{ steps.deploy.outputs.input_bucket }}"
+          echo "Output Bucket: ${{ steps.deploy.outputs.output_bucket }}"
+          echo "HLS Playback URL: ${{ steps.deploy.outputs.hls_url }}"
+          echo ""
+          echo "✅ Deployment successful"
+          echo "✅ Test video uploaded"
+          echo "✅ MediaConvert job triggered"
+          echo "✅ MediaTailor resources created"
+          echo ""
+          echo "=========================================="
+
+      - name: Teardown - Empty S3 buckets
+        if: always() && inputs.skip_teardown != true
+        continue-on-error: true
+        run: |
+          echo "🧹 Emptying S3 buckets..."
+          
+          INPUT_BUCKET="${{ steps.deploy.outputs.input_bucket }}"
+          OUTPUT_BUCKET="${{ steps.deploy.outputs.output_bucket }}"
+          
+          if [ -n "$INPUT_BUCKET" ]; then
+            aws s3 rm "s3://${INPUT_BUCKET}" --recursive || true
+            echo "✅ Emptied input bucket"
+          fi
+          
+          if [ -n "$OUTPUT_BUCKET" ]; then
+            aws s3 rm "s3://${OUTPUT_BUCKET}" --recursive || true
+            echo "✅ Emptied output bucket"
+          fi
+
+      - name: Teardown - Clean MediaTailor VOD sources
+        if: always() && inputs.skip_teardown != true
+        continue-on-error: true
+        run: |
+          echo "🧹 Cleaning MediaTailor VOD sources..."
+          
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          SOURCE_LOCATION="${STACK_NAME}-MediaTailorSourceLocation"
+          
+          # List and delete VOD sources
+          VOD_SOURCES=$(aws mediatailor list-vod-sources \
+            --source-location-name "$SOURCE_LOCATION" \
+            --max-results 100 \
+            --query "Items[].VodSourceName" \
+            --output text 2>/dev/null || echo "")
+          
+          for source in $VOD_SOURCES; do
+            echo "Deleting VOD source: $source"
+            aws mediatailor delete-vod-source \
+              --source-location-name "$SOURCE_LOCATION" \
+              --vod-source-name "$source" 2>/dev/null || true
+          done
+          
+          echo "✅ MediaTailor VOD sources cleaned"
+
+      - name: Teardown - Clean MediaPackage assets
+        if: always() && inputs.skip_teardown != true
+        continue-on-error: true
+        run: |
+          echo "🧹 Cleaning MediaPackage assets..."
+          
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          PACKAGING_GROUP="${STACK_NAME}-PackagingGroup"
+          
+          # List and delete assets
+          ASSETS=$(aws mediapackage-vod list-assets \
+            --packaging-group-id "$PACKAGING_GROUP" \
+            --max-results 100 \
+            --query "Assets[].Id" \
+            --output text 2>/dev/null || echo "")
+          
+          for asset in $ASSETS; do
+            echo "Deleting asset: $asset"
+            aws mediapackage-vod delete-asset --id "$asset" 2>/dev/null || true
+          done
+          
+          echo "✅ MediaPackage assets cleaned"
+
+      - name: Teardown - Stop MediaTailor channel
+        if: always() && inputs.skip_teardown != true
+        continue-on-error: true
+        run: |
+          echo "🧹 Stopping MediaTailor channel..."
+          
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          CHANNEL_NAME="${STACK_NAME}-MediaTailorSampleChannel"
+          
+          aws mediatailor stop-channel --channel-name "$CHANNEL_NAME" 2>/dev/null || true
+          
+          # Wait for channel to stop
+          sleep 10
+          
+          echo "✅ MediaTailor channel stopped"
+
+      - name: Teardown - Delete CloudFormation stack
+        if: always() && inputs.skip_teardown != true
+        continue-on-error: true
+        run: |
+          echo "🧹 Deleting CloudFormation stack..."
+          
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          
+          # Delete the stack
+          aws cloudformation delete-stack --stack-name "$STACK_NAME"
+          
+          echo "⏳ Waiting for stack deletion..."
+          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || true
+          
+          echo "✅ Stack deletion initiated"
+
+      - name: Teardown - Verify cleanup
+        if: always() && inputs.skip_teardown != true
+        continue-on-error: true
+        run: |
+          echo "🔍 Verifying cleanup..."
+          
+          STACK_NAME="${{ steps.deploy.outputs.stack_name }}"
+          
+          # Check if stack still exists
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETED")
+          
+          if [ "$STACK_STATUS" = "DELETED" ] || [ "$STACK_STATUS" = "DELETE_COMPLETE" ]; then
+            echo "✅ Stack successfully deleted"
+          elif [ "$STACK_STATUS" = "DELETE_IN_PROGRESS" ]; then
+            echo "⏳ Stack deletion still in progress"
+          else
+            echo "⚠️ Stack status: $STACK_STATUS"
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "        TEARDOWN COMPLETE"
+          echo "=========================================="

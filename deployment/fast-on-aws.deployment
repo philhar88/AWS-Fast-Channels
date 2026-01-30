@@ -1,10 +1,21 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: |
-  This SAM template will automate a FAST channel
-  
+  This SAM template will automate a FAST channel solution using AWS MediaTailor Channel Assembly.
+  Modernized for 2026 with Python 3.12, 4K/HEVC support, and improved security.
 
 Transform: "AWS::Serverless-2016-10-31"
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    Tracing: Active
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: fast-channels
+        LOG_LEVEL: !Ref LogLevel
 
 Parameters:
   AdServerUrl:
@@ -42,6 +53,22 @@ Parameters:
       - CRITICAL
     Description: The log level for the Lambda functions
 
+  Enable4KEncoding:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable 4K (UHD) encoding in the output ladder
+
+  EnableHEVC:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable HEVC (H.265) codec for better compression at higher resolutions
+
 Resources:
 
   MediaConvertResources:
@@ -57,28 +84,28 @@ Resources:
   XmlToDictLayer:
     Type: "AWS::Serverless::LayerVersion"
     Metadata:
-      BuildMethod: python3.9
+      BuildMethod: python3.12
     Properties:
       CompatibleRuntimes:
-        - python3.9
+        - python3.12
       ContentUri: ../source/layers/xmltodict/
 
   Boto3Layer:
     Type: "AWS::Serverless::LayerVersion"
     Metadata:
-      BuildMethod: python3.9
+      BuildMethod: python3.12
     Properties:
       CompatibleRuntimes:
-        - python3.9
+        - python3.12
       ContentUri: ../source/layers/boto3/
 
   CrHelperLayer:
     Type: "AWS::Serverless::LayerVersion"
     Metadata:
-      BuildMethod: python3.9
+      BuildMethod: python3.12
     Properties:
       CompatibleRuntimes:
-        - python3.9
+        - python3.12
       ContentUri: ../source/layers/crhelper/
 
   MediaConvertCompleteRuleRole:
@@ -110,6 +137,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   MediaConvertSlatesCustomResourceRole:
     Type: "AWS::IAM::Role"
@@ -125,6 +153,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   MediaConvertTranscodeRole:
     Type: "AWS::IAM::Role"
@@ -157,6 +186,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   SNSFunctionRole:
     Type: "AWS::IAM::Role"
@@ -172,6 +202,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   MediaPackageReadS3Role:
     Type: "AWS::IAM::Role"
@@ -209,6 +240,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   MediaTailorFunctionRole:
     Type: "AWS::IAM::Role"
@@ -225,6 +257,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   MediaTailorSourceLocationCustomResourceFunctionRole:
     Type: "AWS::IAM::Role"
@@ -240,6 +273,7 @@ Resources:
               - "sts:AssumeRole"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 
   ProcessMediaStateMachineRole:
     Type: "AWS::IAM::Role"
@@ -256,6 +290,8 @@ Resources:
 
   SNSTopic:
     Type: "AWS::SNS::Topic"
+    Properties:
+      KmsMasterKeyId: alias/aws/sns
 
   EventBridgeToToSnsPolicy:
     Type: "AWS::SNS::TopicPolicy"
@@ -273,21 +309,15 @@ Resources:
   MediaTailorChannelCustomResourceFunction:
     Type: "AWS::Serverless::Function"
     Metadata:
-      BuildMethod: python3.9
+      BuildMethod: python3.12
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/resources/channel_assembly_channel/
-      Environment:
-        Variables:
-          LOG_LEVEL: !Ref LogLevel
       Handler: app.lambda_handler
       Layers:
         - Ref: CrHelperLayer
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt MediaTailorChannelCustomResourceFunctionRole.Arn
-      Runtime: python3.9
-      Timeout: 30
+      Timeout: 60
 
   MediaTailorChannelCustomResourcePolicy:
     Type: "AWS::IAM::Policy"
@@ -297,36 +327,37 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - "mediapackage-vod:*"
+              - "mediapackage-vod:ListPackagingConfigurations"
+              - "mediapackage-vod:DescribePackagingConfiguration"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:packaging-configurations/*"
+              - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:packaging-groups/*"
           - Effect: Allow
             Action:
-              - "mediatailor:*"
+              - "mediatailor:CreateChannel"
+              - "mediatailor:UpdateChannel"
+              - "mediatailor:DeleteChannel"
+              - "mediatailor:DescribeChannel"
+              - "mediatailor:PutChannelPolicy"
+              - "mediatailor:TagResource"
             Resource:
-              - "*"
-      PolicyName: !Sub "${AWS::StackName}-MediaTailorSourceLocationCustomResourcePolicy"
+              - !Sub "arn:${AWS::Partition}:mediatailor:${AWS::Region}:${AWS::AccountId}:channel/*"
+      PolicyName: !Sub "${AWS::StackName}-MediaTailorChannelCustomResourcePolicy"
       Roles:
         - Ref: MediaTailorChannelCustomResourceFunctionRole
 
   MediaTailorSourceLocationCustomResourceFunction:
     Type: "AWS::Serverless::Function"
     Metadata:
-      BuildMethod: python3.9
+      BuildMethod: python3.12
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/resources/channel_assembly_source_location/
-      Environment:
-        Variables:
-          LOG_LEVEL: !Ref LogLevel
       Handler: app.lambda_handler
       Layers:
         - Ref: CrHelperLayer
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt MediaTailorSourceLocationCustomResourceFunctionRole.Arn
-      Runtime: python3.9
-      Timeout: 30
+      Timeout: 60
 
   MediaTailorSourceLocationCustomResourcePolicy:
     Type: "AWS::IAM::Policy"
@@ -336,9 +367,15 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - "mediatailor:*"
+              - "mediatailor:CreateSourceLocation"
+              - "mediatailor:UpdateSourceLocation"
+              - "mediatailor:DeleteSourceLocation"
+              - "mediatailor:DescribeSourceLocation"
+              - "mediatailor:ListVodSources"
+              - "mediatailor:DeleteVodSource"
+              - "mediatailor:TagResource"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediatailor:${AWS::Region}:${AWS::AccountId}:sourceLocation/*"
       PolicyName: !Sub "${AWS::StackName}-MediaTailorSourceLocationCustomResourcePolicy"
       Roles:
         - Ref: MediaTailorSourceLocationCustomResourceFunctionRole
@@ -365,9 +402,25 @@ Resources:
                       - "Fn::Split":
                           - /
                           - Ref: "AWS::StackId"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIntelligentTiering
+            Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 30
 
   VideoSourceBucket:
     Type: "AWS::S3::Bucket"
@@ -384,6 +437,15 @@ Resources:
                       - "Fn::Split":
                           - /
                           - Ref: "AWS::StackId"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
@@ -391,21 +453,15 @@ Resources:
   MediaConvertSlatesCustomResourceFunction:
     Type: "AWS::Serverless::Function"
     Metadata:
-      BuildMethod: python3.9
+      BuildMethod: python3.12
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/resources/channel_assembly_slates/
-      Environment:
-        Variables:
-          LOG_LEVEL: !Ref LogLevel
       Handler: app.lambda_handler
       Layers:
         - Ref: Boto3Layer
         - Ref: CrHelperLayer
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt MediaConvertSlatesCustomResourceRole.Arn
-      Runtime: python3.9
       Timeout: 300
 
   MediaTailorFunctionPolicy:
@@ -421,14 +477,20 @@ Resources:
               - "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
           - Effect: Allow
             Action:
-              - "mediapackage-vod:*"
+              - "mediapackage-vod:ListTagsForResource"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:*"
           - Effect: Allow
             Action:
-              - "mediatailor:*"
+              - "mediatailor:CreateVodSource"
+              - "mediatailor:UpdateVodSource"
+              - "mediatailor:DescribeVodSource"
+              - "mediatailor:CreateProgram"
+              - "mediatailor:DeleteProgram"
+              - "mediatailor:GetChannelSchedule"
+              - "mediatailor:TagResource"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediatailor:${AWS::Region}:${AWS::AccountId}:*"
       PolicyName: !Sub "${AWS::StackName}-MediaTailorFunctionPolicy"
       Roles:
         - Ref: MediaTailorFunctionRole
@@ -451,9 +513,12 @@ Resources:
               - "Fn::Sub": "arn:${AWS::Partition}:s3:::${VideoDestinationBucket}/*"
           - Effect: Allow
             Action:
-              - "mediapackage-vod:*"
+              - "mediapackage-vod:CreateAsset"
+              - "mediapackage-vod:DeleteAsset"
+              - "mediapackage-vod:DescribeAsset"
+              - "mediapackage-vod:TagResource"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:*"
           - Effect: Allow
             Action:
               - "iam:PassRole"
@@ -489,6 +554,7 @@ Resources:
   MediaTailorKMSKey:
     Type: "AWS::KMS::Key"
     Properties:
+      EnableKeyRotation: true
       KeyPolicy:
         Id: key-default-1
         Statement:
@@ -573,7 +639,10 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - "s3:*"
+              - "s3:PutObject"
+              - "s3:GetObject"
+              - "s3:DeleteObject"
+              - "s3:ListBucket"
             Resource:
               - "Fn::Sub": ${VideoDestinationBucket.Arn}/*
               - "Fn::GetAtt":
@@ -581,18 +650,25 @@ Resources:
                   - Arn
           - Effect: Allow
             Action:
-              - "lambda:*"
+              - "mediaconvert:GetPreset"
+              - "mediaconvert:GetJobTemplate"
+              - "mediaconvert:CreateJob"
+              - "mediaconvert:GetJob"
+              - "mediaconvert:DescribeEndpoints"
             Resource:
-              - "Fn::GetAtt":
-                  - MediaConvertSlatesCustomResourceRole
-                  - Arn
+              - !Sub "arn:${AWS::Partition}:mediaconvert:${AWS::Region}:${AWS::AccountId}:*"
           - Effect: Allow
             Action:
-              - "mediaconvert:*"
-              - "mediapackage-vod:*"
-              - "mediatailor:*"
+              - "mediapackage-vod:DeleteAsset"
+              - "mediapackage-vod:ListAssets"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:*"
+          - Effect: Allow
+            Action:
+              - "mediatailor:ListVodSources"
+              - "mediatailor:DeleteVodSource"
+            Resource:
+              - !Sub "arn:${AWS::Partition}:mediatailor:${AWS::Region}:${AWS::AccountId}:*"
           - Effect: Allow
             Action:
               - "iam:PassRole"
@@ -636,9 +712,11 @@ Resources:
               - "Fn::Sub": ${VideoSourceBucket.Arn}/*
           - Effect: Allow
             Action:
-              - "mediaconvert:*"
+              - "mediaconvert:CreateJob"
+              - "mediaconvert:GetJobTemplate"
+              - "mediaconvert:DescribeEndpoints"
             Resource:
-              - "*"
+              - !Sub "arn:${AWS::Partition}:mediaconvert:${AWS::Region}:${AWS::AccountId}:*"
           - Effect: Allow
             Action:
               - "iam:PassRole"
@@ -688,17 +766,17 @@ Resources:
           - Effect: Allow
             Principal:
               Service: mediatailor.amazonaws.com
-            Action: "secretsmanager:*"
+            Action: "secretsmanager:GetSecretValue"
             Resource: !Ref MediaPackageAccessSecret
           - Effect: Allow
             Principal:
               AWS: !GetAtt MediaTailorSourceLocationCustomResourceFunctionRole.Arn
-            Action: "secretsmanager:*"
+            Action: "secretsmanager:GetSecretValue"
             Resource: !Ref MediaPackageAccessSecret
           - Effect: Allow
             Principal:
               AWS: !GetAtt MediaPackageReadSecretsRole.Arn
-            Action: "secretsmanager:*"
+            Action: "secretsmanager:GetSecretValue"
             Resource: !Ref MediaPackageAccessSecret
         Version: "2012-10-17"
       SecretId: !Ref MediaPackageAccessSecret
@@ -724,7 +802,8 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - "secretsmanager:*"
+              - "secretsmanager:GetSecretValue"
+              - "secretsmanager:DescribeSecret"
             Resource:
               - Ref: MediaPackageAccessSecret
           - Effect: Allow
@@ -753,11 +832,14 @@ Resources:
           OriginRequestPolicyId: "775133bc-15f2-49f9-abea-afb2e0bf67d2"
           ResponseHeadersPolicyId: "5cc3b908-e619-4b99-88e5-2cf7f45965bd"
           TargetOriginId: MediaPackage
-          ViewerProtocolPolicy: allow-all
+          ViewerProtocolPolicy: redirect-to-https
         Enabled: true
+        HttpVersion: http2and3
         Origins:
           - CustomOriginConfig:
               OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
             DomainName: !Select
               - 1
               - "Fn::Split":
@@ -781,7 +863,7 @@ Resources:
         HlsManifests:
           - ManifestName: cmaf
             AdMarkers: PASSTHROUGH
-        SegmentDurationSeconds: 8
+        SegmentDurationSeconds: 6
       Id: !Sub "${AWS::StackName}-Cmaf"
       PackagingGroupId: !Ref MediaPackagePackagingGroup
 
@@ -791,7 +873,7 @@ Resources:
       DashPackage:
         DashManifests:
           - ManifestName: dash
-        SegmentDurationSeconds: 8
+        SegmentDurationSeconds: 6
       Id: !Sub "${AWS::StackName}-Dash"
       PackagingGroupId: !Ref MediaPackagePackagingGroup
 
@@ -802,7 +884,7 @@ Resources:
         HlsManifests:
           - ManifestName: hls
             AdMarkers: PASSTHROUGH
-        SegmentDurationSeconds: 8
+        SegmentDurationSeconds: 6
       Id: !Sub "${AWS::StackName}-Hls"
       PackagingGroupId: !Ref MediaPackagePackagingGroup
 
@@ -849,12 +931,9 @@ Resources:
   MediaPackageFunction:
     Type: "AWS::Serverless::Function"
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/functions/mediapackage_vod_asset/
       Environment:
         Variables:
-          LOG_LEVEL: !Ref LogLevel
           MediaPackagePackagingGroupId: !Ref MediaPackagePackagingGroup
           MediaPackageReadS3RoleArn: !GetAtt MediaPackageReadS3Role.Arn
           MediaTailorPlaybackConfigurationVodDash: !GetAtt MediaTailorPlaybackConfigurationVod.DashConfiguration.ManifestEndpointPrefix
@@ -875,20 +954,16 @@ Resources:
               source:
                 - aws.mediaconvert
       Handler: app.lambda_handler
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt MediaPackageFunctionRole.Arn
-      Runtime: python3.9
-      Timeout: 90
+      Timeout: 120
 
   SNSFunction:
     Type: "AWS::Serverless::Function"
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/functions/sns_email_sender/
       Environment:
         Variables:
-          LOG_LEVEL: !Ref LogLevel
           SnsTopicArn: !GetAtt SNSTopic.TopicArn
           StackName: !Ref "AWS::StackName"
       Events:
@@ -901,20 +976,16 @@ Resources:
               source:
                 - Ref: "AWS::StackName"
       Handler: app.lambda_handler
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt SNSFunctionRole.Arn
-      Runtime: python3.9
-      Timeout: 90
+      Timeout: 60
 
   MediaTailorFunction:
     Type: "AWS::Serverless::Function"
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/functions/mediatailor_vod_source/
       Environment:
         Variables:
-          LOG_LEVEL: !Ref LogLevel
           MediaTailorSourceLocation: !Ref MediaTailorSourceLocation
           StackId: !Ref "AWS::StackId"
           StackName: !Ref "AWS::StackName"
@@ -931,10 +1002,9 @@ Resources:
               source:
                 - aws.mediapackage
       Handler: app.lambda_handler
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt MediaTailorFunctionRole.Arn
-      Runtime: python3.9
-      Timeout: 30
+      Timeout: 60
 
   MediaTailorPlaybackConfigurationSampleChannel:
     Type: "AWS::MediaTailor::PlaybackConfiguration"
@@ -946,19 +1016,15 @@ Resources:
   MediaConvertFunction:
     Type: "AWS::Serverless::Function"
     Properties:
-      Architectures:
-        - arm64
       CodeUri: ../source/functions/media_convert_job/
       Environment:
         Variables:
-          LOG_LEVEL: !Ref LogLevel
           AdOffsetS3TagKeyName: !Ref AdOffsetS3TagKeyName
           MediaConvertJobTemplate: !GetAtt MediaConvertResources.Outputs.JobTemplate
           MediaConvertQueue: !GetAtt MediaConvertResources.Outputs.QueueArn
           MediaConvertTranscodeRoleArn: !GetAtt MediaConvertTranscodeRole.Arn
           StackId: !Ref "AWS::StackId"
           StackName: !Ref "AWS::StackName"
-
       Events:
         Trigger:
           Type: EventBridgeRule
@@ -977,10 +1043,9 @@ Resources:
       Layers:
         - Ref: Boto3Layer
         - Ref: XmlToDictLayer
-      MemorySize: 128
+      MemorySize: 256
       Role: !GetAtt MediaConvertFunctionRole.Arn
-      Runtime: python3.9
-      Timeout: 30
+      Timeout: 60
 
   MediaConvertSlate30s:
     Type: "Custom::MediaConvertSlates"
@@ -1089,3 +1154,7 @@ Outputs:
 
   VideoSourceBucket:
     Value: !Ref VideoSourceBucket
+
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName

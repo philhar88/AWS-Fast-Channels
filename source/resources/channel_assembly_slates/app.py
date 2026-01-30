@@ -1,147 +1,212 @@
-from __future__ import print_function
-from crhelper import CfnResource
-import logging
-import boto3
-import json
-import os
-import time
-import random
+"""
+MediaConvert Slates Custom Resource
 
-#set debug level if LogLevel environment variable exists, else set to INFO
-boto_level = os.environ['LogLevel'].upper() if 'LogLevel' in os.environ else 'INFO'
-log_level = os.environ['LogLevel'].upper() if 'LogLevel' in os.environ else 'INFO'
+CloudFormation custom resource for creating ad break slate videos using MediaConvert.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import random
+import time
+from typing import Any
+
+import boto3
+from botocore.config import Config
+from crhelper import CfnResource
+
+# Configure logging
+boto_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logger = logging.getLogger(__name__)
-# Initialise the helper, all inputs are optional, this example shows the defaults
-helper = CfnResource(json_logging=False, log_level=log_level, boto_level=boto_level, sleep_on_delete=120, ssl_verify=None)
+logger.setLevel(log_level)
 
-logger.info(boto3.__version__)
+# Initialize CfnResource helper
+helper = CfnResource(
+    json_logging=False,
+    log_level=log_level,
+    boto_level=boto_level,
+    sleep_on_delete=120,
+    ssl_verify=None,
+)
+
+# Initialize AWS clients
+config = Config(retries={"max_attempts": 3, "mode": "adaptive"})
 
 try:
-    endpoint = boto3.client('mediaconvert').describe_endpoints()['Endpoints'][0]['Url']
-    logger.info('Endpoint URL: %s', endpoint)
-    mediaconvert = boto3.client('mediaconvert', endpoint_url=endpoint)
-    mediapackage = boto3.client('mediapackage-vod')
-    mediatailor = boto3.client('mediatailor')
-    s3 = boto3.resource('s3')
-    pass
+    mediaconvert_client = boto3.client("mediaconvert", config=config)
+    endpoint = mediaconvert_client.describe_endpoints()["Endpoints"][0]["Url"]
+    logger.info("MediaConvert endpoint URL: %s", endpoint)
+    mediaconvert = boto3.client("mediaconvert", endpoint_url=endpoint, config=config)
+    mediapackage = boto3.client("mediapackage-vod", config=config)
+    mediatailor = boto3.client("mediatailor", config=config)
+    s3 = boto3.resource("s3")
 except Exception as e:
     helper.init_failure(e)
 
-def generate_settings_from_preset(preset):
-    preset = mediaconvert.get_preset(Name=preset)['Preset']['Settings']
-    logger.info('Preset Settings: %s', json.dumps(preset))
-    if 'VideoDescription' in preset:
-        if preset['VideoDescription']['CodecSettings']['Codec'] == 'H_265':
-            preset['VideoDescription']['CodecSettings']['H265Settings']['FramerateControl'] = 'SPECIFIED'
-            preset['VideoDescription']['CodecSettings']['H265Settings']['FramerateNumerator'] = 30
-            preset['VideoDescription']['CodecSettings']['H265Settings']['FramerateDenominator'] = 1
-        elif preset['VideoDescription']['CodecSettings']['Codec'] == 'H_264':
-            preset['VideoDescription']['CodecSettings']['H264Settings']['FramerateControl'] = 'SPECIFIED'
-            preset['VideoDescription']['CodecSettings']['H264Settings']['FramerateNumerator'] = 30
-            preset['VideoDescription']['CodecSettings']['H264Settings']['FramerateDenominator'] = 1
+
+def generate_settings_from_preset(preset_name: str) -> dict[str, Any]:
+    """Generate output settings from a MediaConvert preset."""
+    preset = mediaconvert.get_preset(Name=preset_name)["Preset"]["Settings"]
+    logger.info("Preset settings: %s", json.dumps(preset, default=str))
+    
+    if "VideoDescription" in preset:
+        codec_settings = preset["VideoDescription"]["CodecSettings"]
+        codec = codec_settings.get("Codec")
+        
+        framerate_settings = {
+            "FramerateControl": "SPECIFIED",
+            "FramerateNumerator": 30,
+            "FramerateDenominator": 1,
+        }
+        
+        if codec == "H_265":
+            codec_settings["H265Settings"].update(framerate_settings)
+        elif codec == "H_264":
+            codec_settings["H264Settings"].update(framerate_settings)
         else:
-            raise ValueError('Unknown Codec. Must be either H_264 or H_265')
+            raise ValueError(f"Unknown codec: {codec}. Must be H_264 or H_265")
+    
     return preset
 
-def format_template_for_slate(template, input, SlateName, MediaConvertTranscodeRoleArn):
 
-    try:
-        template['Role'] = MediaConvertTranscodeRoleArn
-        template['Settings']['Inputs'][0] = {
-            'VideoGenerator': {
-                'Duration': input
-            },
-            "AudioSelectors": {
-            "Audio Selector 1": {
-                "DefaultSelection": "DEFAULT"
-            }
-            }
-        }
-        template['Settings']['OutputGroups'][0]['OutputGroupSettings']['HlsGroupSettings']['Destination'] += SlateName
-        template['Settings']['OutputGroups'][0]['OutputGroupSettings']['HlsGroupSettings']['SegmentLength'] = 2
-        for Output in template['Settings']['OutputGroups'][0]['Outputs']:
-            logger.info('Output: %s', json.dumps(Output))
-            Output.update(generate_settings_from_preset(Output['Preset']))
-        del template['Description'],template['Category'],template['Name'],template['Arn'],template['CreatedAt'],template['LastUpdated'],template['Type']
-    except Exception as error:
-        raise error
-    logger.info('Job JSON: %s', json.dumps(template))
-    return template
+def format_template_for_slate(
+    template: dict[str, Any],
+    duration_millis: int,
+    slate_name: str,
+    transcode_role_arn: str,
+) -> dict[str, Any]:
+    """Format a MediaConvert job template for slate video generation."""
+    job_settings = {
+        "Role": transcode_role_arn,
+        "Settings": {
+            **template["Settings"],
+            "Inputs": [
+                {
+                    "VideoGenerator": {"Duration": duration_millis},
+                    "AudioSelectors": {
+                        "Audio Selector 1": {"DefaultSelection": "DEFAULT"}
+                    },
+                }
+            ],
+        },
+    }
+    
+    # Update output group settings
+    output_group = job_settings["Settings"]["OutputGroups"][0]
+    hls_settings = output_group["OutputGroupSettings"]["HlsGroupSettings"]
+    hls_settings["Destination"] += slate_name
+    hls_settings["SegmentLength"] = 2
+    
+    # Update outputs with preset settings
+    for output in output_group["Outputs"]:
+        logger.info("Processing output: %s", json.dumps(output, default=str))
+        output.update(generate_settings_from_preset(output["Preset"]))
+
+    logger.info("Formatted job settings: %s", json.dumps(job_settings, default=str))
+    return job_settings
+
 
 @helper.create
 @helper.update
-def create(event, context):
-    logger.info("Got Create")
-    # Optionally return an ID that will be used for the resource PhysicalResourceId, 
-    # if None is returned an ID will be generated. If a poll_create function is defined 
-    # return value is placed into the poll event as event['CrHelperData']['PhysicalResourceId']
-    #
-    # To add response data update the helper.Data dict
-    # If poll is enabled data is placed into poll event as event['CrHelperData']
+def create(event: dict[str, Any], context: Any) -> str:
+    """Handle CloudFormation Create/Update event."""
+    logger.info("Processing Create/Update request")
+    
+    properties = event["ResourceProperties"]
+    physical_resource_id = properties.get("Name", f"AdBreakSlate_{properties['SlateDurationInMillis']}")
 
-    if 'Name' in event['ResourceProperties']:
-        PhysicalResourceId = event['ResourceProperties']['Name']
-    else:
-        PhysicalResourceId = 'AdBreakSlate_'+str(event['ResourceProperties']['SlateDurationInMillis'])
+    slate_duration_millis = int(properties["SlateDurationInMillis"])
+    transcode_role_arn = properties["MediaConvertTranscodeRoleArn"]
+    
+    template = mediaconvert.get_job_template(
+        Name=properties["MediaConvertJobTemplate"]["Name"]
+    )["JobTemplate"]
+    
+    job_settings = format_template_for_slate(
+        template, slate_duration_millis, physical_resource_id, transcode_role_arn
+    )
+    
+    job = mediaconvert.create_job(**job_settings)["Job"]
+    result = {"Status": job["Status"], "Id": job["Id"]}
+    logger.info("Created job: %s", json.dumps(result))
+    
+    # Wait for job completion
+    while result["Status"] in ("SUBMITTED", "PROGRESSING"):
+        time.sleep(5)
+        result["Status"] = mediaconvert.get_job(Id=result["Id"])["Job"]["Status"]
+        logger.info("Job status: %s", result["Status"])
+    
+    if result["Status"] == "ERROR":
+        raise ValueError(f"MediaConvert job {result['Id']} failed. Check MediaConvert console.")
 
-    try:
-        SlateDurationInMillis = int(event['ResourceProperties']['SlateDurationInMillis'])
-        MediaConvertTranscodeRoleArn = event['ResourceProperties']['MediaConvertTranscodeRoleArn']
-        template = mediaconvert.get_job_template(Name=event['ResourceProperties']['MediaConvertJobTemplate']['Name'])['JobTemplate']
-        job = mediaconvert.create_job(**format_template_for_slate(template, SlateDurationInMillis, PhysicalResourceId, MediaConvertTranscodeRoleArn))['Job']
-        result = {'Status': job['Status'],'Id': job['Id']}
-        logger.info('Result: %s', json.dumps(result))
-        while result['Status'] == 'SUBMITTED' or result['Status'] == 'PROGRESSING':
-            time.sleep(5)
-            result['Status'] = mediaconvert.get_job(Id=result['Id'])['Job']['Status']
-            logger.info('Result: %s', result)
-        if result['Status'] == 'ERROR':
-            raise ValueError('MediaConvert {} Job failed. Check MediaConvert console.', format(result['Id']))   
-    except Exception as error:
-        raise error
-
-    return PhysicalResourceId
+    return physical_resource_id
 
 
 @helper.delete
-def delete(event, context):
-    logger.info("Got Delete")
-    # Delete never returns anything. Should not fail if the underlying resources are already deleted.
-    # Desired state.
+def delete(event: dict[str, Any], context: Any) -> None:
+    """Handle CloudFormation Delete event."""
+    logger.info("Processing Delete request")
+    
+    physical_resource_id = event["PhysicalResourceId"]
+    properties = event["ResourceProperties"]
+
+    # Delete VOD sources from MediaTailor
     try:
-        VodSources = mediatailor.list_vod_sources(SourceLocationName=event['PhysicalResourceId'],MaxResults=100)['Items']
-        for VodSource in VodSources:
-            if 'AdBreakSlate_' in VodSource['VodSourceName']:
-                try: 
-                    mediatailor.delete_vod_source(SourceLocationName=event['PhysicalResourceId'], VodSourceName=VodSource['VodSourceName'])
-                    logger.info('Removed Vod Source: %s', VodSource['VodSourceName'])
-                except Exception:
-                    logger.info(Exception)
-    except Exception:
-        logger.info(Exception)
-    if 'MediaPackagePackagingGroup' in event['ResourceProperties']:
+        vod_sources = mediatailor.list_vod_sources(
+            SourceLocationName=physical_resource_id,
+            MaxResults=100,
+        )
+        
+        for vod_source in vod_sources.get("Items", []):
+            if "AdBreakSlate_" in vod_source["VodSourceName"]:
+                try:
+                    mediatailor.delete_vod_source(
+                        SourceLocationName=physical_resource_id,
+                        VodSourceName=vod_source["VodSourceName"],
+                    )
+                    logger.info("Deleted VOD source: %s", vod_source["VodSourceName"])
+                except Exception as error:
+                    logger.warning("Failed to delete VOD source: %s", error)
+    except Exception as error:
+        logger.warning("Error listing VOD sources: %s", error)
+
+    # Delete assets from MediaPackage
+    if "MediaPackagePackagingGroup" in properties:
         try:
-            Assets = mediapackage.list_assets(PackagingGroupId=event['ResourceProperties']['MediaPackagePackagingGroup']['Id'],MaxResults=100)['Assets']
-            for Asset in Assets:
-                if 'AdBreakSlate_' in Asset['Id']:
-                    try: 
-                        mediapackage.delete_asset(Id=Asset['Id'])
-                        logger.info('Deleted Asset: %s', Asset['Id'])
-                    except Exception:
-                        raise Exception
-        except mediapackage.exceptions.NotFoundException as error:
-            logger.info(error)
-        except Exception:
-            raise Exception
+            assets = mediapackage.list_assets(
+                PackagingGroupId=properties["MediaPackagePackagingGroup"]["Id"],
+                MaxResults=100,
+            )
+            
+            for asset in assets.get("Assets", []):
+                if "AdBreakSlate_" in asset["Id"]:
+                    try:
+                        mediapackage.delete_asset(Id=asset["Id"])
+                        logger.info("Deleted asset: %s", asset["Id"])
+                    except Exception as error:
+                        logger.warning("Failed to delete asset %s: %s", asset["Id"], error)
+        except mediapackage.exceptions.NotFoundException:
+            logger.info("Packaging group not found")
+        except Exception as error:
+            logger.warning("Error deleting MediaPackage assets: %s", error)
 
+    # Delete S3 objects
     try:
-        bucket = s3.Bucket(event['ResourceProperties']['VideoDestinationBucket'])
-        bucket.objects.filter(Prefix=event['PhysicalResourceId']).delete()
-    except Exception:
-        raise Exception
+        bucket = s3.Bucket(properties["VideoDestinationBucket"])
+        bucket.objects.filter(Prefix=physical_resource_id).delete()
+        logger.info("Deleted S3 objects with prefix: %s", physical_resource_id)
+    except Exception as error:
+        logger.warning("Error deleting S3 objects: %s", error)
 
-def lambda_handler(event, context):
-    logger.info('Event: %s', json.dumps(event))
-    time.sleep(random.randint(1, 10)) #sleep for a random time between 1-10s to stagger completion of adbreak slate resources.
+
+def lambda_handler(event: dict[str, Any], context: Any) -> None:
+    """Lambda entry point for CloudFormation custom resource."""
+    logger.info("Received event: %s", json.dumps(event, default=str))
+    
+    # Stagger completion to avoid resource conflicts
+    time.sleep(random.randint(1, 10))
+    
     helper(event, context)
