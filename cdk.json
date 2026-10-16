@@ -37,7 +37,7 @@
       "channels": {
         "iac": [
           {
-            "name": "fast-demo",
+            "name": "{prefix}-demo",
             "ladder": "standard",
             "outputs": [
               "hls",
@@ -72,8 +72,7 @@
           "global.anthropic.claude-haiku-5-5",
           "global.anthropic.claude-sonnet-5-5"
         ],
-        "admin_email": null,
-        "guardrail_checks": false
+        "admin_email": null
       },
       "observability": {
         "transaction_search": "off",

@@ -45,11 +45,12 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_E2E_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked --all-packages && npm ci && (cd console && npm ci && npm run build)
       - name: Deploy
-        run: npx cdk deploy --all --require-approval never -c fast-channels.prefix=${{ inputs.prefix }}
+        run: npx cdk deploy '**' --require-approval never --concurrency 2 -c fast-channels.prefix=${{ inputs.prefix }}
       - name: End-to-end tests
         run: uv run pytest tests/e2e -m e2e --prefix ${{ inputs.prefix }} -v
       - name: Destroy
         if: always() && !inputs.keep
-        run: npx cdk destroy --all --force -c fast-channels.prefix=${{ inputs.prefix }}
+        run: npx cdk destroy '**' --force -c fast-channels.prefix=${{ inputs.prefix }}

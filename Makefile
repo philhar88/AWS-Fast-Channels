@@ -35,16 +35,16 @@ test: ## Unit and infrastructure tests (Python + console)
 check: lint typecheck test synth ## Everything CI runs
 
 synth: console ## Synthesize all stacks (runs cdk-nag); PREFIX=name to override the deployment prefix
-	$(CDK) synth --all --quiet $(PREFIX_ARG)
+	$(CDK) synth --quiet $(PREFIX_ARG)
 
 diff: console ## Show pending changes against the deployed stacks
-	$(CDK) diff --all $(PREFIX_ARG)
+	$(CDK) diff '**' $(PREFIX_ARG)
 
 deploy: console ## Deploy every stack (about 25 minutes the first time)
-	$(CDK) deploy --all --require-approval never $(PREFIX_ARG)
+	$(CDK) deploy '**' --require-approval never --concurrency 2 $(PREFIX_ARG)
 
 destroy: ## Delete every stack and the runtime resources the pipeline and agent created
-	$(CDK) destroy --all --force $(PREFIX_ARG)
+	$(CDK) destroy '**' --force $(PREFIX_ARG)
 
 model-access: ## Check (and optionally request) Amazon Bedrock model access for the agent
 	uv run python scripts/check_model_access.py

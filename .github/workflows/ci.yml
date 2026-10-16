@@ -79,7 +79,7 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: npm ci
       # cdk-nag and the CloudFormation validation rules run during synth and fail the build on findings.
-      - run: npx cdk synth --all --quiet
+      - run: npx cdk synth --quiet
         env:
           CDK_DEFAULT_ACCOUNT: "123456789012"
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
