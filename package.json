@@ -1,0 +1,10 @@
+{
+  "name": "fast-channels-on-aws",
+  "private": true,
+  "description": "Pins the AWS CDK CLI used to synthesize and deploy the Python CDK app (see cdk.json).",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "devDependencies": {
+    "aws-cdk": "2.1145.0"
+  }
+}

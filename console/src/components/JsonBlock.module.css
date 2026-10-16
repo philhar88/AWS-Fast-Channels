@@ -1,0 +1,9 @@
+.json {
+  margin: 0;
+  max-block-size: 240px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -1,0 +1,455 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD availabilityStartTime="2026-10-16T00:32:09.977Z" minBufferTime="PT12S" minimumUpdatePeriod="PT6S" profiles="urn:mpeg:dash:profile:isoff-live:2011" publishTime="2026-10-16T00:35:36.839Z" suggestedPresentationDelay="PT18S" timeShiftBufferDepth="PT2M" type="dynamic" xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2013:xml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:mpeg:dash:schema:mpd:2011 http://standards.iso.org/ittf/PubliclyAvailableStandards/MPEG-DASH_schema_files/DASH-MPD.xsd">
+    <BaseURL>https://d3pzfwsg0kjqjs.cloudfront.net/</BaseURL>
+    <Period id="1792110859977_1" start="PT2M10S" xmlns="urn:mpeg:dash:schema:mpd:2011">
+        <BaseURL>https://d3pzfwsg0kjqjs.cloudfront.net/vod/slate/cmaf/</BaseURL>
+        <AdaptationSet bitstreamSwitching="false" frameRate="30/1" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" subsegmentStartsWithSAP="1">
+            <SegmentTemplate startNumber="1" timescale="90000"/>
+            <Representation bandwidth="98240" codecs="avc1.640028" height="1080" id="1" width="1920">
+                <SegmentTemplate initialization="index_avc_1080pinit.cmfv" media="index_avc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="66328" codecs="hvc1.2.4.L120.B0" height="1080" id="2" width="1920">
+                <SegmentTemplate initialization="index_hevc_1080pinit.cmfv" media="index_hevc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="40635" codecs="av01.0.08M.10" height="1080" id="3" width="1920">
+                <SegmentTemplate initialization="index_av1_1080pinit.cmfv" media="index_av1_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="60595" codecs="avc1.64001f" height="720" id="4" width="1280">
+                <SegmentTemplate initialization="index_avc_720pinit.cmfv" media="index_avc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="50006" codecs="hvc1.2.4.L93.B0" height="720" id="5" width="1280">
+                <SegmentTemplate initialization="index_hevc_720pinit.cmfv" media="index_hevc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="31579" codecs="av01.0.05M.10" height="720" id="6" width="1280">
+                <SegmentTemplate initialization="index_av1_720pinit.cmfv" media="index_av1_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="34292" codecs="avc1.64001e" height="360" id="7" width="640">
+                <SegmentTemplate initialization="index_avc_360pinit.cmfv" media="index_avc_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="20823" codecs="av01.0.01M.10" height="360" id="8" width="640">
+                <SegmentTemplate initialization="index_av1_360pinit.cmfv" media="index_av1_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="2" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+        </AdaptationSet>
+        <AdaptationSet lang="eng" mimeType="audio/mp4" segmentAlignment="false">
+            <SegmentTemplate startNumber="1" timescale="48000"/>
+            <Representation audioSamplingRate="48000" bandwidth="128000" codecs="mp4a.40.2" id="9">
+                <Label>English LC</Label>
+                <SegmentTemplate initialization="index_aac-lc-128kinit.cmfa" media="index_aac-lc-128k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="2" timescale="48000">
+                    <SegmentTimeline>
+                        <S d="190464" t="289792"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+            <Representation audioSamplingRate="48000" bandwidth="64000" codecs="mp4a.40.5" id="10">
+                <Label>English HEV1</Label>
+                <SegmentTemplate initialization="index_he-aac-64kinit.cmfa" media="index_he-aac-64k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="2" timescale="24000">
+                    <SegmentTimeline>
+                        <S d="95232" t="146432"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+        </AdaptationSet>
+    </Period>
+    <Period id="1792110869977_1" start="PT2M20S" xmlns="urn:mpeg:dash:schema:mpd:2011">
+        <BaseURL>https://d3pzfwsg0kjqjs.cloudfront.net/vod/slate/cmaf/</BaseURL>
+        <AdaptationSet bitstreamSwitching="false" frameRate="30/1" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" subsegmentStartsWithSAP="1">
+            <SegmentTemplate startNumber="1" timescale="90000"/>
+            <Representation bandwidth="98240" codecs="avc1.640028" height="1080" id="1" width="1920">
+                <SegmentTemplate initialization="index_avc_1080pinit.cmfv" media="index_avc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="66328" codecs="hvc1.2.4.L120.B0" height="1080" id="2" width="1920">
+                <SegmentTemplate initialization="index_hevc_1080pinit.cmfv" media="index_hevc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="40635" codecs="av01.0.08M.10" height="1080" id="3" width="1920">
+                <SegmentTemplate initialization="index_av1_1080pinit.cmfv" media="index_av1_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="60595" codecs="avc1.64001f" height="720" id="4" width="1280">
+                <SegmentTemplate initialization="index_avc_720pinit.cmfv" media="index_avc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="50006" codecs="hvc1.2.4.L93.B0" height="720" id="5" width="1280">
+                <SegmentTemplate initialization="index_hevc_720pinit.cmfv" media="index_hevc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="31579" codecs="av01.0.05M.10" height="720" id="6" width="1280">
+                <SegmentTemplate initialization="index_av1_720pinit.cmfv" media="index_av1_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="34292" codecs="avc1.64001e" height="360" id="7" width="640">
+                <SegmentTemplate initialization="index_avc_360pinit.cmfv" media="index_avc_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="20823" codecs="av01.0.01M.10" height="360" id="8" width="640">
+                <SegmentTemplate initialization="index_av1_360pinit.cmfv" media="index_av1_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+        </AdaptationSet>
+        <AdaptationSet lang="eng" mimeType="audio/mp4" segmentAlignment="false">
+            <SegmentTemplate startNumber="1" timescale="48000"/>
+            <Representation audioSamplingRate="48000" bandwidth="128000" codecs="mp4a.40.2" id="9">
+                <Label>English LC</Label>
+                <SegmentTemplate initialization="index_aac-lc-128kinit.cmfa" media="index_aac-lc-128k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="1" timescale="48000">
+                    <SegmentTimeline>
+                        <S d="289792" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+            <Representation audioSamplingRate="48000" bandwidth="64000" codecs="mp4a.40.5" id="10">
+                <Label>English HEV1</Label>
+                <SegmentTemplate initialization="index_he-aac-64kinit.cmfa" media="index_he-aac-64k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="1" timescale="24000">
+                    <SegmentTimeline>
+                        <S d="146432" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+        </AdaptationSet>
+    </Period>
+    <Period id="1792110875977_1" start="PT2M26S" xmlns="urn:mpeg:dash:schema:mpd:2011">
+        <BaseURL>https://d3pzfwsg0kjqjs.cloudfront.net/vod/fastv3-test-source/cmaf/</BaseURL>
+        <AdaptationSet bitstreamSwitching="false" frameRate="30/1" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" subsegmentStartsWithSAP="1">
+            <SegmentTemplate presentationTimeOffset="0" startNumber="1" timescale="90000"/>
+            <Representation bandwidth="6198246" codecs="avc1.640028" height="1080" id="1" width="1920">
+                <SegmentTemplate initialization="index_avc_1080pinit.cmfv" media="index_avc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="5219118" codecs="hvc1.2.4.L120.B0" height="1080" id="2" width="1920">
+                <SegmentTemplate initialization="index_hevc_1080pinit.cmfv" media="index_hevc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="4138009" codecs="av01.0.08M.10" height="1080" id="3" width="1920">
+                <SegmentTemplate initialization="index_av1_1080pinit.cmfv" media="index_av1_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="1757843" codecs="avc1.64001f" height="720" id="4" width="1280">
+                <SegmentTemplate initialization="index_avc_720pinit.cmfv" media="index_avc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="1399506" codecs="hvc1.2.4.L93.B0" height="720" id="5" width="1280">
+                <SegmentTemplate initialization="index_hevc_720pinit.cmfv" media="index_hevc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="823477" codecs="av01.0.05M.10" height="720" id="6" width="1280">
+                <SegmentTemplate initialization="index_av1_720pinit.cmfv" media="index_av1_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="472471" codecs="avc1.64001e" height="360" id="7" width="640">
+                <SegmentTemplate initialization="index_avc_360pinit.cmfv" media="index_avc_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="190499" codecs="av01.0.01M.10" height="360" id="8" width="640">
+                <SegmentTemplate initialization="index_av1_360pinit.cmfv" media="index_av1_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" r="2" t="0"/>
+                        <S d="180000" t="1620000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+        </AdaptationSet>
+        <AdaptationSet lang="eng" mimeType="audio/mp4" segmentAlignment="false">
+            <SegmentTemplate presentationTimeOffset="0" startNumber="1" timescale="48000"/>
+            <Representation audioSamplingRate="48000" bandwidth="128000" codecs="mp4a.40.2" id="9">
+                <Label>English LC</Label>
+                <SegmentTemplate initialization="index_aac-lc-128kinit.cmfa" media="index_aac-lc-128k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="1" timescale="48000">
+                    <SegmentTimeline>
+                        <S d="289792" t="0"/>
+                        <S d="288768" t="289792"/>
+                        <S d="287744" t="578560"/>
+                        <S d="96256" t="866304"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+            <Representation audioSamplingRate="48000" bandwidth="64000" codecs="mp4a.40.5" id="10">
+                <Label>English HEV1</Label>
+                <SegmentTemplate initialization="index_he-aac-64kinit.cmfa" media="index_he-aac-64k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="1" timescale="24000">
+                    <SegmentTimeline>
+                        <S d="146432" t="0"/>
+                        <S d="143360" t="146432"/>
+                        <S d="144384" t="289792"/>
+                        <S d="48128" t="434176"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+        </AdaptationSet>
+    </Period>
+    <Period id="1792110895977_1" start="PT2M46S" xmlns="urn:mpeg:dash:schema:mpd:2011">
+        <BaseURL>https://d3pzfwsg0kjqjs.cloudfront.net/vod/slate/cmaf/</BaseURL>
+        <EventStream schemeIdUri="urn:scte:scte35:2013:xml" timescale="90000">
+            <Event duration="900000">
+                <scte35:SpliceInfoSection protocolVersion="0" ptsAdjustment="0" tier="4095">
+                    <scte35:SpliceInsert availNum="1" availsExpected="2" outOfNetworkIndicator="true" spliceEventCancelIndicator="false" spliceEventId="11" spliceImmediateFlag="false" uniqueProgramId="1">
+                        <scte35:Program>
+                            <scte35:SpliceTime ptsTime="0"/>
+                        </scte35:Program>
+                        <scte35:BreakDuration autoReturn="true" duration="900000"/>
+                    </scte35:SpliceInsert>
+                </scte35:SpliceInfoSection>
+            </Event>
+        </EventStream>
+        <AdaptationSet bitstreamSwitching="false" frameRate="30/1" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" subsegmentStartsWithSAP="1">
+            <SegmentTemplate startNumber="1" timescale="90000"/>
+            <Representation bandwidth="98240" codecs="avc1.640028" height="1080" id="1" width="1920">
+                <SegmentTemplate initialization="index_avc_1080pinit.cmfv" media="index_avc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="66328" codecs="hvc1.2.4.L120.B0" height="1080" id="2" width="1920">
+                <SegmentTemplate initialization="index_hevc_1080pinit.cmfv" media="index_hevc_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="40635" codecs="av01.0.08M.10" height="1080" id="3" width="1920">
+                <SegmentTemplate initialization="index_av1_1080pinit.cmfv" media="index_av1_1080p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="60595" codecs="avc1.64001f" height="720" id="4" width="1280">
+                <SegmentTemplate initialization="index_avc_720pinit.cmfv" media="index_avc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="50006" codecs="hvc1.2.4.L93.B0" height="720" id="5" width="1280">
+                <SegmentTemplate initialization="index_hevc_720pinit.cmfv" media="index_hevc_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="31579" codecs="av01.0.05M.10" height="720" id="6" width="1280">
+                <SegmentTemplate initialization="index_av1_720pinit.cmfv" media="index_av1_720p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="34292" codecs="avc1.64001e" height="360" id="7" width="640">
+                <SegmentTemplate initialization="index_avc_360pinit.cmfv" media="index_avc_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="20823" codecs="av01.0.01M.10" height="360" id="8" width="640">
+                <SegmentTemplate initialization="index_av1_360pinit.cmfv" media="index_av1_360p_$Number%09d$.cmfv" presentationTimeOffset="0" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                        <S d="360000" t="540000"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+        </AdaptationSet>
+        <AdaptationSet lang="eng" mimeType="audio/mp4" segmentAlignment="false">
+            <SegmentTemplate startNumber="1" timescale="48000"/>
+            <Representation audioSamplingRate="48000" bandwidth="128000" codecs="mp4a.40.2" id="9">
+                <Label>English LC</Label>
+                <SegmentTemplate initialization="index_aac-lc-128kinit.cmfa" media="index_aac-lc-128k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="1" timescale="48000">
+                    <SegmentTimeline>
+                        <S d="289792" t="0"/>
+                        <S d="190464" t="289792"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+            <Representation audioSamplingRate="48000" bandwidth="64000" codecs="mp4a.40.5" id="10">
+                <Label>English HEV1</Label>
+                <SegmentTemplate initialization="index_he-aac-64kinit.cmfa" media="index_he-aac-64k_$Number%09d$.cmfa" presentationTimeOffset="0" startNumber="1" timescale="24000">
+                    <SegmentTimeline>
+                        <S d="146432" t="0"/>
+                        <S d="95232" t="146432"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+        </AdaptationSet>
+    </Period>
+    <Period id="1792110925977_1_1" start="PT3M16S">
+        <BaseURL>https://manifests.mediatailor.us-east-1.amazonaws.com/v1/dashsegment/1bab6b4238868b752a9e9daae3e2a4911f2a2fc9/fastv3-exp-e2e-pre/6d591f7b-3262-4fd9-b567-02e76c92c395/1792110925977_1/1792110925977_1_1/</BaseURL>
+        <AdaptationSet bitstreamSwitching="false" frameRate="30/1" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" subsegmentAlignment="true" subsegmentStartsWithSAP="1">
+            <SegmentTemplate startNumber="1" timescale="90000"/>
+            <Representation bandwidth="456645" codecs="avc1.640028" height="1080" id="1" width="1920">
+                <SegmentTemplate initialization="index_avc_1080pinit.cmfv" media="index_avc_1080p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="246648" codecs="hvc1.2.4.L120.B0" height="1080" id="2" width="1920">
+                <SegmentTemplate initialization="index_hevc_1080pinit.cmfv" media="index_hevc_1080p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="118504" codecs="av01.0.08M.10" height="1080" id="3" width="1920">
+                <SegmentTemplate initialization="index_av1_1080pinit.cmfv" media="index_av1_1080p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="245289" codecs="avc1.64001f" height="720" id="4" width="1280">
+                <SegmentTemplate initialization="index_avc_720pinit.cmfv" media="index_avc_720p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="158544" codecs="hvc1.2.4.L93.B0" height="720" id="5" width="1280">
+                <SegmentTemplate initialization="index_hevc_720pinit.cmfv" media="index_hevc_720p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="81541" codecs="av01.0.05M.10" height="720" id="6" width="1280">
+                <SegmentTemplate initialization="index_av1_720pinit.cmfv" media="index_av1_720p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="129613" codecs="avc1.64001e" height="360" id="7" width="640">
+                <SegmentTemplate initialization="index_avc_360pinit.cmfv" media="index_avc_360p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+            <Representation bandwidth="59294" codecs="av01.0.01M.10" height="360" id="8" width="640">
+                <SegmentTemplate initialization="index_av1_360pinit.cmfv" media="index_av1_360p_$Number%09d$.cmfv" startNumber="1" timescale="90000">
+                    <SegmentTimeline>
+                        <S d="540000" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+            </Representation>
+        </AdaptationSet>
+        <AdaptationSet lang="eng" mimeType="audio/mp4" segmentAlignment="false">
+            <SegmentTemplate startNumber="1" timescale="48000"/>
+            <Representation audioSamplingRate="48000" bandwidth="128000" codecs="mp4a.40.2" id="9">
+                <Label>English LC</Label>
+                <SegmentTemplate initialization="index_aac-lc-128kinit.cmfa" media="index_aac-lc-128k_$Number%09d$.cmfa" startNumber="1" timescale="48000">
+                    <SegmentTimeline>
+                        <S d="288768" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+            <Representation audioSamplingRate="48000" bandwidth="64000" codecs="mp4a.40.5" id="10">
+                <Label>English HEV1</Label>
+                <SegmentTemplate initialization="index_he-aac-64kinit.cmfa" media="index_he-aac-64k_$Number%09d$.cmfa" startNumber="1" timescale="24000">
+                    <SegmentTimeline>
+                        <S d="145408" t="0"/>
+                    </SegmentTimeline>
+                </SegmentTemplate>
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+            </Representation>
+        </AdaptationSet>
+    </Period>
+</MPD>

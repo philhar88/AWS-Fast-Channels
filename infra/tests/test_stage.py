@@ -1,0 +1,230 @@
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+from aws_cdk import App, Environment, Stack
+from aws_cdk import aws_iam as iam
+from aws_cdk import aws_ssm as ssm
+from aws_cdk.assertions import Template
+
+from fast_channels.infra.app import build
+from fast_channels.infra.config import ConfigError, FastChannelsConfig
+from fast_channels.infra.stage import FastChannelsStage, stage_id
+
+type GetDeployment = Callable[..., Any]
+
+CDK_JSON = Path(__file__).resolve().parents[2] / "cdk.json"
+
+# A single global profile: one model id whatever the deployment region.
+GLOBAL_MODELS = {
+    "agent.model": "global.anthropic.claude-haiku-5-5",
+    "agent.allowed_models": ["global.anthropic.claude-haiku-5-5"],
+}
+EVERYTHING = {**GLOBAL_MODELS, "observability.transaction_search": "enable"}
+
+
+def names(deployment: Any) -> dict[str, str]:
+    return {stack.node.id: stack.stack_name for stack in deployment.stacks}
+
+
+def test_default_stacks(default: Any) -> None:
+    assert names(default) == {
+        "Data": "FastChannels-Data",
+        "Media": "FastChannels-Media",
+        "Operator": "FastChannels-Operator",
+    }
+    assert (default.stage.edge, default.stage.baseline) == (None, None)
+
+
+def test_operator_stack_only_with_the_agent(deployment: GetDeployment) -> None:
+    assert set(names(deployment({"agent.enabled": False}))) == {"Data", "Media"}
+
+
+def test_edge_stack_in_us_east_1_when_deploying_elsewhere(deployment: GetDeployment) -> None:
+    d = deployment(GLOBAL_MODELS, region="eu-west-1")
+
+    assert d.stage.edge is not None
+    assert (d.stage.edge.stack_name, d.stage.edge.region) == ("FastChannels-Edge-eu-west-1", "us-east-1")
+    assert {stack.region for stack in d.stacks if stack is not d.stage.edge} == {"eu-west-1"}
+
+
+def test_edge_stacks_of_one_prefix_in_two_regions_do_not_collide(deployment: GetDeployment) -> None:
+    edges = [deployment(GLOBAL_MODELS, region=region).stage.edge for region in ("eu-west-1", "ap-northeast-1")]
+
+    assert [edge.stack_name for edge in edges] == ["FastChannels-Edge-eu-west-1", "FastChannels-Edge-ap-northeast-1"]
+
+
+def test_account_baseline_only_when_enabling_transaction_search(deployment: GetDeployment) -> None:
+    for mode in ("off", "existing"):
+        assert deployment({"observability.transaction_search": mode}).stage.baseline is None
+    baseline = deployment({"observability.transaction_search": "enable"}).stage.baseline
+
+    assert baseline is not None
+    assert (baseline.stack_name, baseline.termination_protection) == ("FastChannels-AccountBaseline", True)
+
+
+def test_stack_dependencies(deployment: GetDeployment) -> None:
+    stage = deployment(EVERYTHING, region="eu-west-1").stage
+
+    def deps(stack: Stack) -> set[str]:
+        return {d.node.id for d in stack.dependencies}
+
+    assert deps(stage.data) == set()
+    assert deps(stage.media) == {"Data"}
+    assert deps(stage.operator) == {"Data", "Media", "AccountBaseline"}
+    assert deps(stage.edge) == {"Data", "Media"}
+
+
+def test_memory_is_created_before_any_operator_resource(default: Any) -> None:
+    assert default.stage.data in default.stage.operator.dependencies
+    assert default.stage.data.memory is not None
+
+
+@pytest.mark.parametrize(("removal", "protected"), [("destroy", False), ("retain", True)])
+def test_termination_protection_follows_removal(deployment: GetDeployment, removal: str, protected: bool) -> None:
+    d = deployment({**EVERYTHING, "removal": removal}, region="eu-west-1")
+
+    assert {s.node.id: s.termination_protection for s in d.stacks} == {
+        "Data": protected,
+        "Media": protected,
+        "Operator": protected,
+        "Edge": protected,
+        "AccountBaseline": True,
+    }
+
+
+def test_every_resource_and_stack_is_tagged(default: Any) -> None:
+    for stack in default.stacks:
+        assert stack.tags.tag_values() == {"fast:app": "fast", "fast:owner": "iac"}
+    for bucket in default.template(default.stage.data).find_resources("AWS::S3::Bucket").values():
+        assert {"Key": "fast:app", "Value": "fast"} in bucket["Properties"]["Tags"]
+        assert {"Key": "fast:owner", "Value": "iac"} in bucket["Properties"]["Tags"]
+
+
+def test_other_prefixes_get_their_own_stack_names(deployment: GetDeployment) -> None:
+    d = deployment({"prefix": "acme", "channels.iac": []})
+
+    assert stage_id("fast") == "FastChannels"
+    assert names(d) == {
+        "Data": "FastChannels-acme-Data",
+        "Media": "FastChannels-acme-Media",
+        "Operator": "FastChannels-acme-Operator",
+    }
+    d.template(d.stage.data).has_resource_properties("AWS::BedrockAgentCore::Memory", {"Name": "acme_memory"})
+
+
+def test_consumers_get_weak_references_also_across_regions(fresh_deployment: Callable[..., Any]) -> None:
+    d = fresh_deployment(GLOBAL_MODELS, region="eu-west-1")
+    exports = d.stage.data.exports
+    role = iam.Role(d.stage.media, "Consumer", assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"))
+    exports.media_bucket.grant_read(role)
+    exports.library_table.grant_read_write_data(role)
+    assert exports.memory is not None
+    exports.memory.grant_read(role)
+    ssm.StringParameter(d.stage.edge, "LogsBucket", string_value=exports.logs_bucket.bucket_arn)
+
+    media = json.dumps(d.template(d.stage.media).to_json())
+    edge = d.template(d.stage.edge).to_json()
+
+    assert "Fn::ImportValue" not in media
+    assert media.count('"Fn::GetStackOutput": {"StackName": "FastChannels-Data", "Region": "eu-west-1"') >= 3
+    [parameter] = (r for r in edge["Resources"].values() if r["Type"] == "AWS::SSM::Parameter")
+    reference = parameter["Properties"]["Value"]["Fn::GetStackOutput"]
+    assert (reference["StackName"], reference["Region"]) == ("FastChannels-Data", "eu-west-1")
+    assert "BucketPolicy" not in media  # grants never touch DataStack's resource policies
+
+
+TOPOLOGIES = {"us-east-1": ({}, "us-east-1"), "everything-elsewhere": (EVERYTHING, "eu-west-1")}
+
+
+@pytest.mark.parametrize(("overrides", "region"), TOPOLOGIES.values(), ids=TOPOLOGIES.keys())
+def test_no_account_level_logs_resource_policy_outside_the_baseline(
+    deployment: GetDeployment, overrides: dict[str, Any], region: str
+) -> None:
+    d = deployment(overrides, region=region)
+
+    for stack in d.stacks:
+        expected = 1 if stack is d.stage.baseline else 0
+        d.template(stack).resource_count_is("AWS::Logs::ResourcePolicy", expected)
+
+
+@pytest.mark.parametrize(("overrides", "region"), TOPOLOGIES.values(), ids=TOPOLOGIES.keys())
+def test_no_public_function_urls_or_invoke_permissions(
+    deployment: GetDeployment, overrides: dict[str, Any], region: str
+) -> None:
+    d = deployment(overrides, region=region)
+
+    for stack in d.stacks:
+        template = d.template(stack)
+        template.resource_count_is("AWS::Lambda::Url", 0)
+        for permission in template.find_resources("AWS::Lambda::Permission").values():
+            props = permission["Properties"]
+            assert props["Principal"] != "*" and "FunctionUrlAuthType" not in props, stack.stack_name
+
+
+def test_region_is_required() -> None:
+    with pytest.raises(ConfigError, match="cannot determine the deployment region"):
+        build(App(), account=None, region=None)
+    with pytest.raises(ValueError, match="region must be known at synth time"):
+        FastChannelsStage(App(), "Stage", config=FastChannelsConfig(), env=Environment())
+
+
+def test_unresolved_account_still_synthesizes_across_regions(fresh_deployment: Callable[..., Any]) -> None:
+    d = fresh_deployment(GLOBAL_MODELS, region="eu-west-1", account=None)
+    ssm.StringParameter(d.stage.edge, "LogsBucket", string_value=d.stage.data.exports.logs_bucket.bucket_arn)
+
+    resources = d.template(d.stage.edge).to_json()["Resources"].values()
+    [parameter] = (r for r in resources if r["Type"] == "AWS::SSM::Parameter")
+    assert parameter["Properties"]["Value"]["Fn::GetStackOutput"]["Region"] == "eu-west-1"
+
+
+def test_other_cdns_reach_the_channels_tool(deployment: GetDeployment) -> None:
+    cdns = [{"name": "cdn-b", "manifest_base": "https://b.example.com", "content_base": "https://b.example.com/c"}]
+    d = deployment({"delivery.cdns": cdns})
+
+    [variables] = [
+        fn["Properties"]["Environment"]["Variables"]
+        for fn in d.template(d.stage.operator).find_resources("AWS::Lambda::Function").values()
+        if "CDN_ENDPOINTS" in fn["Properties"].get("Environment", {}).get("Variables", {})
+    ]
+    assert json.loads(variables["CDN_ENDPOINTS"]) == cdns
+
+
+def runtime_environment(deployment: Any) -> dict[str, str]:
+    [runtime] = deployment.template(deployment.stage.operator).find_resources("AWS::BedrockAgentCore::Runtime").values()
+    return dict(runtime["Properties"]["EnvironmentVariables"])
+
+
+@pytest.mark.parametrize(
+    ("region", "geo"), [("us-east-1", "us"), ("eu-west-1", "eu"), ("ap-southeast-2", "au"), ("sa-east-1", "global")]
+)
+def test_shipped_configuration_deploys_in_every_agentcore_geography(
+    deployment: GetDeployment, region: str, geo: str
+) -> None:
+    environment = runtime_environment(deployment(region=region))  # no model overrides: cdk.json uses {geo}
+
+    assert environment["DEFAULT_MODEL_ID"] == f"{geo}.anthropic.claude-haiku-5-5"
+    assert "{geo}" not in environment["ALLOWED_MODELS"]
+
+
+def test_stage_resolves_a_configuration_validated_without_a_region() -> None:
+    flags = {k: v for k, v in json.loads(CDK_JSON.read_text())["context"].items() if k != "fast-channels"}
+    app = App(context={**flags, "aws:cdk:bundling-stacks": []})
+    stage = FastChannelsStage(
+        app, "S", config=FastChannelsConfig(), env=Environment(account="123456789012", region="eu-west-1")
+    )
+    assert stage.operator is not None
+    [runtime] = Template.from_stack(stage.operator).find_resources("AWS::BedrockAgentCore::Runtime").values()
+
+    assert runtime["Properties"]["EnvironmentVariables"]["DEFAULT_MODEL_ID"] == "eu.anthropic.claude-haiku-5-5"
+
+
+def test_stage_checks_the_region_of_a_configuration_built_in_code() -> None:
+    config = FastChannelsConfig.model_validate(
+        {"agent": {"model": "us.anthropic.claude-haiku-5-5", "allowed_models": ["us.anthropic.claude-haiku-5-5"]}}
+    )
+
+    with pytest.raises(ConfigError, match="which eu-west-1 cannot invoke"):
+        FastChannelsStage(App(), "S", config=config, env=Environment(account="123456789012", region="eu-west-1"))

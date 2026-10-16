@@ -1,0 +1,89 @@
+.timeline {
+  position: relative;
+  padding-block-start: 22px;
+}
+
+.axis {
+  position: absolute;
+  inset: 0 0 auto 0;
+  block-size: 18px;
+}
+
+.tick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--epg-muted);
+  white-space: nowrap;
+}
+
+.track {
+  position: relative;
+  block-size: 56px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-block: 1px solid var(--epg-border);
+  overflow: hidden;
+}
+
+.program {
+  position: absolute;
+  inset-block: 4px;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  overflow: hidden;
+  border: 1px solid var(--epg-border);
+  border-radius: var(--epg-radius);
+  background: var(--epg-block);
+}
+
+.onAir {
+  background: var(--epg-on-air);
+  border-color: var(--epg-on-air-border);
+}
+
+/* Never aired: hatched, with a dashed warning border, so it reads as a hole in the schedule. */
+.skipped {
+  border-style: dashed;
+  border-color: var(--epg-skipped);
+  background: repeating-linear-gradient(135deg, var(--epg-block) 0 6px, transparent 6px 12px);
+}
+
+.skipped .title {
+  text-decoration: line-through;
+  color: var(--epg-muted);
+}
+
+.title,
+.time {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.title {
+  font-weight: 700;
+}
+
+.time {
+  color: var(--epg-muted);
+}
+
+.break {
+  position: absolute;
+  inset-block-end: 0;
+  inline-size: 3px;
+  block-size: 6px;
+  background: var(--epg-break);
+}
+
+.now {
+  position: absolute;
+  inset-block: 18px 0;
+  inline-size: 2px;
+  background: var(--epg-on-air-border);
+}
