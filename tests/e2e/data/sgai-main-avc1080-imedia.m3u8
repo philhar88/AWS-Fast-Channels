@@ -1,0 +1,16 @@
+#EXTM3U
+#EXT-X-VERSION:8
+#EXT-X-DEFINE:IMPORT="awsSessionData"
+#EXT-X-DEFINE:IMPORT="awsContentSegmentPrefix"
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:21
+...
+#EXT-X-PROGRAM-DATE-TIME:2026-10-16T00:34:53.977Z
+#EXTINF:2.0,
+https://d3pzfwsg0kjqjs.cloudfront.net/vod/fastv3-test-source/cmaf/index_avc_1080p_000000004.cmfv
+#EXT-X-DISCONTINUITY
+#EXT-X-DATERANGE:ID="1792110895977-101-B",CLASS="com.apple.hls.interstitial",START-DATE="2026-10-16T00:34:55.977Z",DURATION=10.0,PLANNED-DURATION=10.0,SCTE35-OUT=0xFC302500000000000000FFF014050000000B7FEFFE00000000FE000DBBA000010102000069CBDF60,X-ASSET-LIST="https://interstitials.mediatailor.us-east-1.amazonaws.com/v1/interstitials/1bab6b4238868b752a9e9daae3e2a4911f2a2fc9/fastv3-exp-e2e-ssai?aws.availData=<blob>&aws.sessionData={$awsSessionData}&_HLS_interstitial_id=1792110895977-101-B",X-SNAP="OUT,IN"
+#EXT-X-PROGRAM-DATE-TIME:2026-10-16T00:34:55.977Z
+#EXT-X-MAP:URI="https://d3pzfwsg0kjqjs.cloudfront.net/vod/slate/cmaf/index_avc_1080pinit.cmfv"
+#EXTINF:6.0,
+https://d3pzfwsg0kjqjs.cloudfront.net/vod/slate/cmaf/index_avc_1080p_000000001.cmfv

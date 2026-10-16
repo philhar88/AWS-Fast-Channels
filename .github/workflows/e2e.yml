@@ -1,0 +1,66 @@
+name: End-to-end (deploy, test, destroy)
+
+# Manual: deploys a throwaway stage into the AWS account behind the OIDC role, runs tests/e2e against it and tears it
+# down. Required before tagging a release (see CONTRIBUTING.md). Costs a few US dollars per run.
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: Deployment prefix (resource names start with it)
+        default: fastci
+        required: true
+      keep:
+        description: Keep the stage after the tests (for debugging)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: e2e-${{ inputs.prefix }}
+
+env:
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "24"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # The input reaches the shell only through this variable, never interpolated into a script.
+  PREFIX: ${{ inputs.prefix }}
+  # The agent test signs in as the autopilot's machine client, which exists only for a channel with an autopilot
+  # schedule. This one fires once a year (1 January, 00:00 UTC), not during a test run.
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04-arm
+    environment: e2e
+    timeout-minutes: 120
+    steps:
+      - name: Check the prefix
+        run: |
+          pattern='^[a-z][a-z0-9-]{0,14}[a-z0-9]$'  # FastChannelsConfig.prefix
+          [[ "$PREFIX" =~ $pattern ]] || { echo "::error::the prefix input must match $pattern"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_E2E_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: uv sync --locked --all-packages && npm ci && (cd console && npm ci && npm run build)
+      - name: Deploy
+        run: >-
+          npx cdk deploy '**' --require-approval never --concurrency 2
+          -c "fast-channels.prefix=$PREFIX" -c fast-channels.agent.machine_client=true
+      - name: End-to-end tests
+        run: uv run pytest tests/e2e -m e2e --prefix "$PREFIX" -v
+      - name: Destroy
+        if: always() && !inputs.keep
+        run: npx cdk destroy '**' --force -c "fast-channels.prefix=$PREFIX"

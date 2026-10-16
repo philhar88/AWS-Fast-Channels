@@ -1,143 +1,95 @@
-name: CI/CD Pipeline
+name: CI
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
-    branches: [main]
+  push:
+    branches: [main, develop, "release/**"]
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.12"
-  SAM_CLI_TELEMETRY: 0
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "24"
+  AWS_REGION: us-east-1
 
 jobs:
-  lint:
-    name: Lint & Type Check
-    runs-on: ubuntu-latest
+  python:
+    name: Python (lint, types, tests)
+    runs-on: ubuntu-24.04-arm # arm64, like the Lambda functions and the AgentCore runtime
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      # The offline tests of tests/e2e render the release gate's synthetic source with ffmpeg.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: uv sync --locked --all-packages
+      - run: uv run ruff format --check
+      - run: uv run ruff check
+      - run: uv run mypy core/src functions/src agent/src infra/src
+      - name: mypy scripts tests/e2e
+        run: uv run mypy scripts tests/e2e
+        env:
+          MYPYPATH: scripts:tests/e2e # their modules import scripts/_stack.py and tests/e2e/harness.py by name
+      # Every package's tests, plus the offline tests of tests/e2e and scripts/ (pytest testpaths; marker "not e2e").
+      - run: uv run pytest --cov=fast_channels --cov-report=term-missing:skip-covered
+      - name: No unfilled release placeholders in the docs
+        run: "! git grep -nE '\\{\\{[A-Z_]+\\}\\}' -- '*.md'"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff mypy boto3-stubs[essential]
-
-      - name: Lint with Ruff
-        run: ruff check source/
-
-      - name: Type check with mypy
-        run: mypy source/functions/ --ignore-missing-imports --no-error-summary || true
-
-  validate:
-    name: Validate SAM Template
-    runs-on: ubuntu-latest
+  console:
+    name: Console (lint, types, tests, build)
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: console
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Set up SAM CLI
-        uses: aws-actions/setup-sam@v2
-
-      - name: Validate SAM templates
-        run: |
-          cd deployment
-          sam validate --template-file fast-on-aws.deployment --lint
-          sam validate --template-file mediaconvert.deployment --lint
-
-  build:
-    name: Build SAM Application
-    runs-on: ubuntu-latest
-    needs: [lint, validate]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium && npm run test:e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Set up SAM CLI
-        uses: aws-actions/setup-sam@v2
-
-      - name: Build SAM application
-        run: |
-          cd deployment
-          sam build --template-file fast-on-aws.deployment
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sam-build
-          path: deployment/.aws-sam/build/
+          name: console-dist
+          path: console/dist
           retention-days: 7
 
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
+  synth:
+    name: CDK synth (cdk-nag)
+    runs-on: ubuntu-24.04-arm
+    needs: [console]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
-          severity: "CRITICAL,HIGH"
-
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          sarif_file: "trivy-results.sarif"
-
-  deploy-dev:
-    name: Deploy to Dev
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-    environment: development
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up SAM CLI
-        uses: aws-actions/setup-sam@v2
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: sam-build
-          path: deployment/.aws-sam/build/
-
-      - name: Deploy to Dev
-        run: |
-          cd deployment
-          sam deploy \
-            --stack-name fast-channels-dev \
-            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              EmailAddress=${{ secrets.NOTIFICATION_EMAIL }} \
-              S3BucketName=fast-channels-dev \
-              LogLevel=DEBUG
+          name: console-dist
+          path: console/dist
+      - run: uv sync --locked --all-packages
+      - run: npm ci
+      # cdk-nag and the CloudFormation validation rules run during synth and fail the build on findings of the
+      # selected stacks: without '**' no stage stack is selected and findings pass silently.
+      - run: npx cdk synth '**' --quiet
+        env:
+          CDK_DEFAULT_ACCOUNT: "123456789012"
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
