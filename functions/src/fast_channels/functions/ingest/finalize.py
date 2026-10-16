@@ -14,9 +14,10 @@ Every kind:
 
 Ads additionally get an SGAI-ready copy of their manifests under ``ads/<ladder>/<creative id>/``: MediaTailor
 re-hosts only the manifests of preconditioned ads, so media playlists need absolute segment and EXT-X-MAP URIs on
-the content host while the multivariant's child URIs stay relative (e2e.md §5.4-5.5). The DASH manifest gets an
-absolute ``BaseURL``. Segments are not copied, and the creative id embeds the host, so a new host gets a new
-directory instead of rewriting manifests MediaTailor has cached (_review.md, FinalizeAd).
+the content host while the multivariant's child URIs stay relative (e2e.md §5.4-5.5). The DASH manifest gets
+absolute segment templates: MediaTailor resolves them against the copy's location and ignores ``BaseURL``. Segments
+are not copied, and the creative id embeds the host, so a new host gets a new directory instead of rewriting
+manifests MediaTailor has cached (_review.md, FinalizeAd).
 """
 
 import re
@@ -24,15 +25,16 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
-from xml.sax.saxutils import escape
 
 from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import Attr
 
+from fast_channels.core.captions import CaptionPlan
 from fast_channels.core.ingest import AssetKind
 from fast_channels.core.ladder import Ladder, VideoCodec, VideoRendition
 from fast_channels.core.manifests import (
     absolutize_media_playlist,
+    absolutize_mpd,
     attributes,
     bump_iframe_version,
     expected_signature,
@@ -246,7 +248,7 @@ def sgai_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str
     for p in applicable(encode.ladder):
         if p.format is ManifestFormat.DASH:
             mpd = _text(store, p.manifest_key(encode.prefix))
-            _write_text(store, f"{ad_prefix}{_file(p)}", with_base_url(mpd, segments))
+            _write_text(store, f"{ad_prefix}{_file(p)}", absolutize_mpd(mpd, segments))
     return Creative(
         creative_id=creative,
         ad_prefix=ad_prefix,
@@ -255,24 +257,16 @@ def sgai_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str
     )
 
 
-def with_base_url(mpd: str, base_url: str) -> str:
-    """``mpd`` with an MPD-level ``BaseURL`` (before the first Period, as the schema orders it) so its relative
-    segment templates resolve against ``base_url``."""
-    match = re.search(r"^([ \t]*)<Period\b", mpd, flags=re.MULTILINE)
-    if match is None:
-        raise InvalidOutputsError("the DASH manifest has no Period")
-    indent = match.group(1)
-    return f"{mpd[: match.start()]}{indent}<BaseURL>{escape(base_url)}</BaseURL>\n{mpd[match.start() :]}"
-
-
 def _record(asset: Mapping[str, Any], result: Finalized, *, job_id: str) -> None:
     updated_at = now_iso()
+    captions = CaptionPlan.model_validate(asset.get("captions") or {}).provenance()
     values: dict[str, Any] = {
         "status": AssetStatus.ENCODED.value,
         **asset_index(asset["kind"], asset["ladder_version"], AssetStatus.ENCODED, updated_at),
         "duration_ms": result.duration_ms,
         "break_offsets_ms": result.break_offsets_ms,
         "signature": result.signature,
+        "captions": [c.model_dump(mode="json", exclude_none=True) for c in captions],
         "job_id": job_id,
         "updated_at": updated_at,
     }

@@ -9,7 +9,7 @@ call, so ``scripts/trace.py <run id>`` shows the whole run.
 import json
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -33,10 +33,15 @@ from harness import (  # noqa: E402
     LEAD,
     PATTERN_SECONDS,
     PROGRAMS,
+    SPEECH,
+    SPOKEN_ASSET_ID,
+    SPOKEN_SECONDS,
     Channel,
     Observation,
     Player,
     Tools,
+    render_captions,
+    render_speech,
     render_test_pattern,
     until,
     wait_for,
@@ -141,9 +146,11 @@ def player() -> Iterator[Player]:
 def ingested(
     stage: Stage, library: Table, channel: Channel, run_id: str, tmp_path_factory: pytest.TempPathFactory
 ) -> Asset:
-    """The synthetic source, uploaded to the ingest bucket after its sidecar, once its encode is READY."""
-    source = render_test_pattern(tmp_path_factory.mktemp("source") / f"{ASSET_ID}.mp4", seconds=PATTERN_SECONDS)
-    bucket, key = stage.output(Plane.DATA, "IngestBucketName"), f"e2e/{ASSET_ID}.mp4"
+    """The synthetic source with its caption file (a drop-folder sibling, ``<asset>.en.vtt``), uploaded to the
+    ingest bucket after its sidecar, once its encode is READY."""
+    folder = tmp_path_factory.mktemp("source")
+    source = render_test_pattern(folder / f"{ASSET_ID}.mp4", seconds=PATTERN_SECONDS)
+    captions = render_captions(folder / f"{ASSET_ID}.en.vtt", seconds=PATTERN_SECONDS)
     sidecar = {
         "asset_id": ASSET_ID,
         "content_id": CONTENT_ID,
@@ -152,37 +159,72 @@ def ingested(
         "correlation_id": run_id,
         "metadata": {"title": "End-to-end test pattern"},
     }
+    return upload_and_wait(stage, library, source, sidecar, siblings=[captions])
+
+
+@pytest.fixture(scope="session")
+def spoken(
+    stage: Stage, library: Table, channel: Channel, run_id: str, tmp_path_factory: pytest.TempPathFactory
+) -> Asset:
+    """A test pattern that speaks (Amazon Polly) without captions, once its encode is READY: the captioner made
+    its English track. Skipped on stages that never generate captions (output ``CaptionEngine`` ``none``)."""
+    if stage.output(Plane.MEDIA, "CaptionEngine") == "none":
+        pytest.skip(f"stage {stage.prefix} does not generate captions (fast-channels.captions.engine=none)")
+    folder = tmp_path_factory.mktemp("spoken")
+    polly = stage.session.client("polly", region_name=stage.region)
+    speech = polly.synthesize_speech(Engine="neural", VoiceId="Joanna", OutputFormat="mp3", Text=SPEECH)
+    (audio := folder / "speech.mp3").write_bytes(speech["AudioStream"].read())
+    source = render_speech(folder / f"{SPOKEN_ASSET_ID}.mp4", audio, seconds=SPOKEN_SECONDS)
+    sidecar = {
+        "asset_id": SPOKEN_ASSET_ID,
+        "content_id": f"{CONTENT_ID}-spoken",
+        "ladder_version": channel.ladder_version,
+        "correlation_id": f"{run_id}-spoken",
+        "captions": {"spoken_language": "en"},
+        "metadata": {"title": "End-to-end speaking test pattern"},
+    }
+    return upload_and_wait(stage, library, source, sidecar)
+
+
+def upload_and_wait(
+    stage: Stage, library: Table, source: Path, sidecar: dict[str, Any], *, siblings: Sequence[Path] = ()
+) -> Asset:
+    """Upload ``siblings`` and the JSON sidecar, then ``source`` under ``e2e/``; the asset once READY."""
+    bucket, key = stage.output(Plane.DATA, "IngestBucketName"), f"e2e/{source.name}"
+    asset_id, ladder_version, correlation_id = sidecar["asset_id"], sidecar["ladder_version"], sidecar["correlation_id"]
     s3 = stage.session.client("s3", region_name=stage.region)
+    for sibling in siblings:
+        s3.upload_file(str(sibling), bucket, f"e2e/{sibling.name}")
     s3.put_object(Bucket=bucket, Key=f"{key}.json", Body=json.dumps(sidecar).encode(), ContentType="application/json")
     s3.upload_file(str(source), bucket, key)
 
     sfn = stage.session.client("stepfunctions", region_name=stage.region)
-    execution = execution_arn(stage.output(Plane.MEDIA, "IngestStateMachineArn"), run_id)
+    execution = execution_arn(stage.output(Plane.MEDIA, "IngestStateMachineArn"), correlation_id)
     uploaded = time.monotonic()
     last: dict[str, Any] = {}
 
     def ready() -> Asset | None:
-        item = library.get_item(Key=asset_key(ASSET_ID, channel.ladder_version)).get("Item")
+        item = library.get_item(Key=asset_key(asset_id, ladder_version)).get("Item")
         asset = Asset.from_item(item) if item else None
-        if asset is not None and asset.correlation_id == run_id:
+        if asset is not None and asset.correlation_id == correlation_id:
             last["asset"] = asset.status
             if asset.status is AssetStatus.READY:
                 return asset
             if asset.status is AssetStatus.FAILED:
-                pytest.fail(f"ingest {run_id} FAILED: {asset.error} (scripts/trace.py {run_id})")
+                pytest.fail(f"ingest {correlation_id} FAILED: {asset.error} (scripts/trace.py {correlation_id})")
         try:
             described = sfn.describe_execution(executionArn=execution)
         except sfn.exceptions.ExecutionDoesNotExist:
             if time.monotonic() - uploaded > EXECUTION_GRACE_S:
-                pytest.fail(f"no ingest execution {run_id} for s3://{bucket}/{key}: was the request rejected?")
+                pytest.fail(f"no ingest execution {correlation_id} for s3://{bucket}/{key}: was it rejected?")
             return None
         last["execution"] = described["status"]
         if described["status"] in FAILED_EXECUTION:
             cause = f"{described.get('error', '')}: {described.get('cause', '')}"[:500]
-            pytest.fail(f"ingest execution {run_id} {described['status']} ({cause}; scripts/trace.py {run_id})")
+            pytest.fail(f"ingest {correlation_id} {described['status']} ({cause}; scripts/trace.py {correlation_id})")
         return None
 
-    return wait_for(ready, timeout=INGEST_TIMEOUT_S, interval=15, what=f"{ASSET_ID} READY", state=lambda: last)
+    return wait_for(ready, timeout=INGEST_TIMEOUT_S, interval=15, what=f"{asset_id} READY", state=lambda: last)
 
 
 @pytest.fixture(scope="session")

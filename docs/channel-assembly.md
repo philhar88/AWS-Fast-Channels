@@ -46,8 +46,10 @@ Every content asset and slate becomes one VOD source, named `<asset_id>-<ladder 
 | `dash-avc` | DASH | `/assets/<asset>/<ladder>/main_avc.mpd` |
 
 A channel output reads the source group of the same name. Channel Assembly requires every program, filler slate and
-ad slate of a channel to serve every output's source group with identical renditions, which the shared ladder
-guarantees ([encoding.md](encoding.md#rendition-profiles)). Registration runs one VOD source at a time (the API
+ad slate of a channel to serve every output's source group with identical renditions, subtitle renditions included,
+which the shared ladder guarantees ([encoding.md](encoding.md#rendition-profiles)). It has no caption settings of its
+own: it passes the ladder's IMSC tracks through, renamed by position (`sub_1.m3u8`), and a source whose tracks differ
+silently loses its ad breaks ([captions.md](captions.md#why-imsc1-and-why-caption-tracks-belong-to-the-ladder)). Registration runs one VOD source at a time (the API
 allows 1 TPS) and then checks the source's alerts. Ads are not registered: MediaTailor reads them from the VAST pod.
 
 ## Channels
@@ -115,7 +117,7 @@ console's Start button) starts it and creates a one-time EventBridge Scheduler s
 | Break slates | 15, 30, 45, 60 GOPs (30.03, 60.06, 90.09, 120.12 s) | Each ad break names one; **the break lasts exactly as long as its slate** |
 
 When MediaTailor fills an avail only partly, or not at all, viewers see the rest of the break slate. All slates come
-from the ladder's [kit](encoding.md#ladder-kits) and are encoded on the channel's ladder.
+from the ladder's [kit](encoding.md#ladder-kits) and are encoded on the channel's ladder, with empty caption tracks.
 
 ## Programs and ad breaks
 

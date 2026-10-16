@@ -7,7 +7,8 @@ boundary (channel-assembly.md §5.3):
 
 * renditions of one video codec share their GOP and segment grid, so the first variant of each codec stands for
   its codec, and the first variant overall is the reference timeline (offsets are in video time);
-* audio segments end on codec frame boundaries that differ by codec and profile, so every audio rendition counts.
+* audio segments end on codec frame boundaries that differ by codec and profile, so every audio rendition counts;
+* IMSC subtitle segments follow the video grid, but they are tracks too, so every subtitle rendition counts.
 """
 
 from collections.abc import Callable
@@ -27,13 +28,13 @@ class Timeline:
 
 def timeline_uris(multivariant: str) -> list[str]:
     """The media playlists that stand for every track, reference first: the first variant, the first variant of
-    each other video codec, then every audio rendition (URIs as written in ``multivariant``)."""
+    each other video codec, then every audio and subtitle rendition (URIs as written in ``multivariant``)."""
     by_codec: dict[str | None, str] = {}
     for variant in parse_multivariant(multivariant):
         by_codec.setdefault(variant.video_codec, variant.uri)
-    media = (attributes(line) for line in multivariant.splitlines() if line.startswith("#EXT-X-MEDIA:"))
-    audio = [a["URI"] for a in media if a.get("TYPE") == "AUDIO" and "URI" in a]
-    return list(dict.fromkeys([*by_codec.values(), *audio]))
+    media = [attributes(line) for line in multivariant.splitlines() if line.startswith("#EXT-X-MEDIA:")]
+    renditions = [a["URI"] for kind in ("AUDIO", "SUBTITLES") for a in media if a.get("TYPE") == kind and "URI" in a]
+    return list(dict.fromkeys([*by_codec.values(), *renditions]))
 
 
 def duration_ms(media_playlist: str) -> int:

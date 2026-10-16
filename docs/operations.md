@@ -56,6 +56,11 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `observability.log_retention_days` | int | `7` | Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs). |
 | `observability.mediatailor_log_percent` | int | `100` | Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production). |
 | `observability.capture_prompts` | bool or null | `null` | Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation. Default: only when `transaction_search` is not `off`, because the online evaluations score that content. |
+| `captions.enabled` | bool | `true` | Encode the caption tracks the built-in ladders define (`[[captions]]` in `ladders/<name>.toml`, IMSC1 text), with each asset's captions from its provided files, else from the source, else generated. `false` deploys the ladders without caption tracks (their caption-less versions). |
+| `captions.required` | bool | `false` | Refuse to encode an asset whose spoken-language caption track would be empty (regulated distribution). |
+| `captions.engine` | `elemental-inference` or `none` | `"elemental-inference"` | Generates the spoken language's captions when an asset has none: `elemental-inference` (AWS Elemental Inference smart subtitles) or `none` (the track stays empty, or the asset is refused when captions are required). |
+| `captions.max_feeds` | int | `2` | Elemental Inference feeds the captioner uses at once (one per 10-minute chunk of a title). The account's `Active feeds per account` quota (2 by default, adjustable) is shared with every other use of the service. |
+| `captions.dictionary_id` | str or null | `null` | Elemental Inference custom dictionary (names, brands, jargon) every captioner feed uses. |
 | `notifications.email` | str or null | `null` | Email subscribed to alarms and asset/ladder failure events. |
 
 `channels.iac[]`:
@@ -298,6 +303,7 @@ us-east-1 list prices, rounded. Your bill is authoritative.
 | Encoding, `standard` ladder | about $0.56 per content minute ($33.60 per hour) | [encoding.md](encoding.md#cost) |
 | Encoding, `uhd` ladder | about $1.36 per content minute | |
 | Ladder kit | about $3.56 (`standard`), $8.63 (`uhd`) | Once per ladder version |
+| Captions | caption outputs free; a caption scan about $0.012 per content minute; generated captions about $0.18 per content minute (Elemental Inference $0.15 plus its proxy) | The scan only runs without provided captions, generation only without captions in the source ([captions.md](captions.md#cost)) |
 | Sample content (`make seed`) | about $22 | About 39 minutes of open movies on `standard`; the script prints the estimate and asks first |
 | Channel Assembly | $0.10 per running channel-hour (BASIC), $0.35 (STANDARD) | Billed only while `RUNNING`, per minute; auto-stop after 4 hours by default |
 | Ad insertion | $0.25 per 1,000 ads (VOD rate) or $0.50 per 1,000 ads (live rate) | Which rate applies to Channel Assembly sources is not confirmed; budget for the live rate |
@@ -388,6 +394,10 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | `library___ingest` returns `CONFLICT` (`ExecutionAlreadyExists`) | The same asset was re-ingested in the same agent session | Use another asset id, or a new conversation |
 | Ingest `FAILED` at Finalize (`InvalidOutputsError`) | A manifest is missing or its signature differs from the ladder | Inspect the job in MediaConvert; re-ingest |
 | Colour-space warnings 230001/230005 | Untagged source | Harmless |
+| `Asset Failed` with `IngestRefusedError … captions are required` | `captions.required` and the spoken-language track would be empty: no file, none in the source, and no generated captions (no engine, an unsupported language, or a captioner failure) | Provide a caption file, or check `CaptionGenerationFailed` and the captioner's execution (`/aws/vendedlogs/states/<prefix>-captioner`); `UnsupportedLanguageError` means smart subtitles has no such language |
+| `IngestRefusedError … caption file … must be in the ingest bucket` | An `s3://` caption file in another bucket | Copy it into the ingest bucket, or serve it over https |
+| A provided SCC file gives an empty track | Its timecodes start after the content (authored against a start timecode the source lacks) | Set `offset_ms` on the file (for example `-3600000` for `01:00:00;00`) |
+| Captions show `<font>` or `<b>` text | SRT markup, which MediaConvert does not interpret | Provide WebVTT or TTML instead |
 
 ### Schedules and playback
 

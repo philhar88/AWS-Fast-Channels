@@ -33,6 +33,7 @@ AS_RUN_LOG_GROUP: Final = "MediaTailor/Channel/AsRunLog"
 """Channel Assembly's as-run log group (fixed name, shared by the account's channels in the region)."""
 LEAD: Final = timedelta(minutes=3)
 LATE_BY: Final = timedelta(seconds=30)
+AFTER_SCHEDULED: Final = timedelta(seconds=30)
 BREAK_POLICY: Final = {"cadence_minutes": 0.5, "min_gap_minutes": 0.25, "max_breaks": 1, "slate_gops": 60}
 """One 2-minute break per program at the test pattern's cue point: the first program airs for about 3 minutes, so
 the channel is running well before the second one is due."""
@@ -57,7 +58,11 @@ def _at(iso: str) -> datetime:
 def late_start(tools: Tools, channel: Channel, ingested: Asset) -> Iterator[LateStart]:
     """The block published while the channel is stopped, and the channel started 30 s into its first program."""
     tools("channels___stop_channel", channel=channel.name)  # stopped by test_06 already; a no-op then
-    start = (datetime.now(UTC) + LEAD).replace(microsecond=0)
+    start = datetime.now(UTC) + LEAD
+    # After whatever is still scheduled: test_04 stops watching once its ads are seen, before its block may end.
+    if scheduled_end := tools("schedule___get_schedule", channel=channel.name).get("end"):
+        start = max(start, _at(scheduled_end) + AFTER_SCHEDULED)
+    start = start.replace(microsecond=0)
     plan = tools(
         "schedule___plan",
         channel=channel.name,

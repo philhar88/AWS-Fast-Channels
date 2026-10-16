@@ -53,6 +53,7 @@ const ASSET_COLUMNS: TableProps.ColumnDefinition<Asset>[] = [
   { id: "status", header: "Status", cell: (a) => <StatusIndicator type={ASSET_STATUS[a.status]}>{titleCase(a.status)}</StatusIndicator>, sortingField: "status" },
   { id: "duration", header: "Duration", cell: (a) => (a.duration_ms ? formatDuration(a.duration_ms) : "-") },
   { id: "breaks", header: "Break points", cell: (a) => (a.kind === "content" ? a.break_offset_count : "-") },
+  { id: "captions", header: "Captions", cell: (a) => (a.kind === "content" ? a.captioned.join(", ") || "None" : "-") },
   { id: "ladder", header: "Ladder", cell: (a) => a.ladder_version },
   { id: "updated", header: "Updated", cell: (a) => formatDateTime(a.updated_at), sortingField: "updated_at" },
 ];

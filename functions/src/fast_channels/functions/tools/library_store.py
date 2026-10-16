@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Self
 from boto3.dynamodb.conditions import Attr, ConditionBase, Key
 from pydantic import BaseModel, ConfigDict, Field
 
+from fast_channels.core.captions import CaptionProvenance  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.ingest import AssetKind  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.timeline import PlannedProgram, ProgrammingBrief
@@ -184,6 +185,9 @@ class Asset(Record):
         "only these when set.",
     )
     signature: list[list[str]] = Field([], description="core.manifests.ladder_signature of its HLS manifest.")
+    captions: list[CaptionProvenance] = Field(
+        [], description="Where each caption track came from (provided, embedded, generated or none), in ladder order."
+    )
     vod_source: str | None = Field(None, description="Channel Assembly VOD source name (none for ads).")
     source_location: str | None = Field(None, description="Source location of the VOD source; None = the deployment's.")
     packages: dict[str, str] = Field({}, description="Source group -> manifest path relative to the source location.")

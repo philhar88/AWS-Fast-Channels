@@ -865,6 +865,7 @@ version = "3.0.0"
 source = { editable = "functions" }
 dependencies = [
     { name = "aws-lambda-powertools", extra = ["parser"] },
+    { name = "boto3" },
     { name = "fast-channels-core" },
     { name = "httpx" },
 ]
@@ -872,6 +873,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aws-lambda-powertools", extras = ["parser"], specifier = ">=3.36,<4" },
+    { name = "boto3", specifier = ">=1.43.114" },
     { name = "fast-channels-core", editable = "core" },
     { name = "httpx", specifier = ">=0.28,<1" },
 ]

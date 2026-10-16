@@ -61,14 +61,17 @@ variant exactly, in SSAI and SGAI sessions ([ADR-0005](adr/0005-preconditioned-a
 
 ### How
 
-1. Each ladder version's [kit](encoding.md#ladder-kits) includes two house ads (7 and 15 GOPs, about 14 and 30 s)
-   encoded with the ladder's job template.
+1. Each ladder version's [kit](encoding.md#ladder-kits) includes two house ads of 15 GOPs (30.03 s each), encoded
+   with the ladder's job template, its caption tracks included (empty).
 2. Finalize writes an **SGAI-ready copy** of each ad's manifests under `ads/<ladder>/<creative_id>/`: media playlists
-   with absolute segment and `EXT-X-MAP` URIs on the content host, multivariant child URIs kept relative, and a DASH
-   MPD with an absolute `BaseURL`. MediaTailor re-hosts only the multivariant playlist of a preconditioned ad (under
-   `/preconditioned-ads/` on the ad segment prefix), so relative segment URIs would resolve against MediaTailor's host
-   and fail. CloudFront routes `/preconditioned-ads/*` to MediaTailor's segment origin.
-3. The kit writes a static **VAST 4.2 pod** to `ads/<ladder>/vast.xml`. Each `<Ad>` has two streaming `MediaFile`s:
+   with absolute segment and `EXT-X-MAP` URIs on the content host, multivariant child URIs kept relative, and DASH
+   MPDs with absolute segment templates. MediaTailor re-hosts only the multivariant playlist of a preconditioned ad
+   (under `/preconditioned-ads/` on the ad segment prefix), so relative segment URIs would resolve against
+   MediaTailor's host and fail; for DASH it resolves the templates against the copy's location and ignores `BaseURL`
+   (v3.0.0 wrote a `BaseURL`, and DASH ad segments then redirected to init segments that did not exist).
+   CloudFront routes `/preconditioned-ads/*` to MediaTailor's segment origin.
+3. The kit writes a static **VAST 4.2 pod** to `ads/<ladder>/vast.xml`, repeating the house ads until the pod covers
+   the longest break slate, so every break length is a whole number of ads. Each `<Ad>` has two streaming `MediaFile`s:
    the HLS multivariant of the SGAI-ready copy and the per-codec DASH MPD. There is deliberately no progressive MP4:
    with conditioning `NONE`, MediaTailor would transcode one when it cannot use the streaming files, which is the
    path that failed.
@@ -158,6 +161,14 @@ from the per-codec ad MPDs. DASH ad-segment requests used for server-side beacon
 `manifests.mediatailor.<region>.amazonaws.com/v1/dashsegment/…` (MediaTailor writes that absolute `BaseURL` even
 behind a CDN) and end in a 301 to the CDN. The default package profiles include `dash-avc`; add `dash-hevc` or
 `dash-av1` if your DASH devices need them.
+
+## Captions during ads
+
+House ads carry the ladder's caption tracks (empty), so every stream keeps one rendition set through a break. During
+an SSAI HLS ad MediaTailor serves one blank WebVTT (`/v1/webvtt/…/web.vtt`) in every subtitle rendition; SGAI
+interstitials show the ad's own (empty) tracks while the primary keeps the slate's; DASH ad periods carry the ad's
+IMSC AdaptationSet. Your own preconditioned creatives must be encoded with the channel's ladder, caption tracks
+included. Details in [captions.md](captions.md#through-channel-assembly-ad-insertion-and-players).
 
 ## Monitoring and troubleshooting
 

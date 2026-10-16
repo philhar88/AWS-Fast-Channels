@@ -2,9 +2,10 @@
 
 from typing import TYPE_CHECKING
 
-from aws_cdk import ArnFormat, Stack
+from aws_cdk import ArnFormat, Fn, Stack
 
 if TYPE_CHECKING:
+    from aws_cdk import aws_stepfunctions as sfn
     from constructs import IConstruct
 
 
@@ -20,4 +21,12 @@ def arn(scope: IConstruct, service: str, resource: str, name: str, *, colon: boo
         resource=resource,
         resource_name=name,
         arn_format=ArnFormat.COLON_RESOURCE_NAME if colon else ArnFormat.SLASH_RESOURCE_NAME,
+    )
+
+
+def executions(state_machine: sfn.IStateMachine) -> str:
+    """``arn:...:execution:<state machine name>``, as the CDK Step Functions grants write it (append ``*`` for its
+    executions)."""
+    return arn(
+        state_machine, "states", "execution", Fn.select(6, Fn.split(":", state_machine.state_machine_arn)), colon=True
     )

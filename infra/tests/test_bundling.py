@@ -39,12 +39,14 @@ def test_bundle_holds_the_current_workspace_sources(bundle: tuple[Path, str]) ->
     assert (directory / "fast_channels/core/ladders/standard.toml").is_file()
 
 
-def test_bundle_has_arm64_wheels_and_no_boto3(bundle: tuple[Path, str]) -> None:
+def test_bundle_has_arm64_wheels_and_its_own_sdk(bundle: tuple[Path, str]) -> None:
     directory, _ = bundle
 
     assert list((directory / "pydantic_core").glob("*aarch64-linux-gnu.so"))
     assert (directory / "aws_lambda_powertools").is_dir()
-    assert not (directory / "boto3").exists()  # the Lambda runtime provides it
+    # The locked boto3, not the runtime's: that one knows Elemental Inference without smart subtitles.
+    models = list((directory / "botocore/data/elementalinference").glob("*/service-2.json*"))
+    assert (directory / "boto3").is_dir() and models
 
 
 def test_asset_hash_is_the_fingerprint_of_the_bundle(bundle: tuple[Path, str]) -> None:

@@ -10,6 +10,7 @@ from decimal import Decimal
 from itertools import accumulate
 from typing import Final
 from urllib.parse import urljoin
+from xml.sax.saxutils import escape, unescape
 
 from fast_channels.core.ladder import Ladder, VideoCodec
 from fast_channels.core.profiles import CATALOGUE, RenditionProfile
@@ -93,23 +94,42 @@ def _signature_row(
     return (codec or "", f"{size[0]}x{size[1]}" if size else "", f"{fps:.3f}" if fps else "", audio or "")
 
 
-def ladder_signature(text: str) -> Signature:
-    """Ordered (codec family, WxH, frame rate to 3 decimals, audio group) of every variant.
+def subtitle_renditions(text: str) -> list[dict[str, str]]:
+    """Attributes of every ``EXT-X-MEDIA:TYPE=SUBTITLES`` of a multivariant playlist, in order."""
+    media = (attributes(line) for line in text.splitlines() if line.startswith("#EXT-X-MEDIA:"))
+    return [a for a in media if a.get("TYPE") == "SUBTITLES"]
 
-    Channel Assembly matches variants by position, so VOD sources in one source group must share this exactly.
+
+def _subtitle_row(language: str, name: str) -> tuple[str, ...]:
+    return (SUBTITLES_ROW, language, name, "")
+
+
+SUBTITLES_ROW: Final = "subtitles"
+"""First field of a signature row that stands for a subtitle rendition instead of a variant."""
+
+
+def ladder_signature(text: str) -> Signature:
+    """Ordered (codec family, WxH, frame rate to 3 decimals, audio group) of every variant, then
+    (``subtitles``, LANGUAGE, NAME, ``""``) of every subtitle rendition.
+
+    Channel Assembly matches variants and subtitle renditions by position, so VOD sources in one source group must
+    share this exactly; a difference in subtitles drops ad breaks silently (docs/captions.md).
     """
-    return tuple(
+    variants = (
         _signature_row(v.video_codec, v.resolution, v.frame_rate, v.audio_group) for v in parse_multivariant(text)
     )
+    subtitles = (_subtitle_row(a.get("LANGUAGE", ""), a.get("NAME", "")) for a in subtitle_renditions(text))
+    return (*variants, *subtitles)
 
 
 def expected_signature(ladder: Ladder, profile: RenditionProfile = CATALOGUE[0]) -> Signature:
     """The :func:`ladder_signature` that ``ladder``'s manifest for ``profile`` (default: ``hls``) must have."""
-    return tuple(
+    variants = (
         _signature_row(r.codec.value, (r.width, r.height), ladder.frame_rate.fps, r.audio_group)
         for r in ladder.video
         if profile.selects(r)
     )
+    return (*variants, *(_subtitle_row(c.language, c.label) for c in ladder.captions))
 
 
 def media_segment_durations(text: str) -> list[float]:
@@ -212,6 +232,23 @@ def _media_findings(text: str) -> Iterator[str]:
             yield f"audio group {group}: exactly one rendition must be DEFAULT=YES"
 
 
+def _subtitle_findings(text: str) -> Iterator[str]:
+    renditions = subtitle_renditions(text)
+    groups = {a.get("GROUP-ID", "") for a in renditions}
+    for a in renditions:
+        name = a.get("NAME", "")
+        if not name or not a.get("URI"):
+            yield f"subtitles {a.get('GROUP-ID', '')}: NAME and URI are required"
+        if len(a.get("LANGUAGE", "").split("-")[0]) != 2:
+            yield f"subtitles {name}: LANGUAGE {a.get('LANGUAGE', '')!r} should be a 2-letter BCP-47 code"
+        if sum(b.get("NAME") == name and b.get("GROUP-ID") == a.get("GROUP-ID") for b in renditions) > 1:
+            yield f"subtitles {name}: NAME must be unique in group {a.get('GROUP-ID', '')}"
+    for _, line, uri in _stream_infs(text):
+        group = attributes(line).get("SUBTITLES")
+        if group is not None and group not in groups:
+            yield f"{uri}: SUBTITLES group {group!r} has no rendition"
+
+
 def _variant_findings(text: str, variants: list[Variant]) -> Iterator[str]:
     required = ("BANDWIDTH", "AVERAGE-BANDWIDTH", "CODECS", "RESOLUTION", "FRAME-RATE", "VIDEO-RANGE")
     for _, line, uri in _stream_infs(text):
@@ -263,4 +300,24 @@ def check_hls(multivariant: str) -> list[str]:
         *_variant_findings(multivariant, variants),
         *_iframe_findings(multivariant, variants),
         *_media_findings(multivariant),
+        *_subtitle_findings(multivariant),
     ]
+
+
+_SEGMENT_TEMPLATE: Final = re.compile(r"<SegmentTemplate\b[^>]*>")
+_TEMPLATE_URL: Final = re.compile(r'\b(initialization|media)="([^"]+)"')
+
+
+def absolutize_mpd(mpd: str, base_url: str) -> str:
+    """Make every ``SegmentTemplate`` ``initialization`` and ``media`` URL absolute against ``base_url``.
+
+    MediaTailor resolves the segments of a preconditioned DASH ad against the location of the MPD it fetched and
+    ignores ``BaseURL`` elements (verified at MPD and Period level, docs/captions.md), so an ad MPD
+    stored apart from its segments needs absolute templates. ``$Number%09d$`` identifiers are kept.
+    """
+
+    def absolute(attribute: re.Match[str]) -> str:
+        name, url = attribute.groups()
+        return f'{name}="{escape(urljoin(base_url, unescape(url)))}"'
+
+    return _SEGMENT_TEMPLATE.sub(lambda tag: _TEMPLATE_URL.sub(absolute, tag.group(0)), mpd)

@@ -7,8 +7,11 @@
 * :class:`LadderProvisioner` (``kits``) - the state machine that encodes a ladder's kit (filler, break slates,
   house ads and their VAST pod) as IngestPipeline child executions.
 * :class:`LadderKit` (``kits``) - a deploy-time custom resource that provisions a built-in ladder's kit.
+* :class:`Captioner` (``pipeline``) - the captioner contract's infrastructure side, and :class:`InferenceCaptioner`
+  (``captioners``) - AWS Elemental Inference smart subtitles for files.
 """
 
+from fast_channels.infra.constructs.encoding.captioners import InferenceCaptioner
 from fast_channels.infra.constructs.encoding.kits import (
     BRAND_DIR,
     BRAND_PREFIX,
@@ -23,6 +26,7 @@ from fast_channels.infra.constructs.encoding.pipeline import (
     STEP_TIMEOUT,
     TRANSCODE_TIMEOUT,
     VIDEO_EXTENSIONS,
+    Captioner,
     IngestPipeline,
 )
 
@@ -34,7 +38,9 @@ __all__ = [
     "STEP_TIMEOUT",
     "TRANSCODE_TIMEOUT",
     "VIDEO_EXTENSIONS",
+    "Captioner",
     "EncodingLadder",
+    "InferenceCaptioner",
     "IngestPipeline",
     "LadderKit",
     "LadderProvisioner",

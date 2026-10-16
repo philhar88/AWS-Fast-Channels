@@ -7,6 +7,7 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field
 
+from fast_channels.core.captions import CaptionProvenance  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.ingest import AssetKind, IngestRequest
 
 
@@ -19,6 +20,7 @@ class AssetReady(BaseModel):
     vod_source: str | None = Field(description="Channel Assembly VOD source name; null for ads.")
     duration_ms: int
     correlation_id: str
+    captions: list[CaptionProvenance] = Field([], description="Where each caption track came from, in ladder order.")
 
 
 class AssetFailed(BaseModel):

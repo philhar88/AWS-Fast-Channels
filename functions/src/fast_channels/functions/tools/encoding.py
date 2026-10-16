@@ -19,6 +19,7 @@ from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field
 
+from fast_channels.core.captions import CaptionTrack  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ladder import AudioRendition, Ladder, LadderOps, LadderOptions, VideoRendition, propose
 from fast_channels.core.mediaconvert import job_template_props
@@ -44,6 +45,9 @@ describe_fields(
     quality_shift="Added to every rendition's QVBR quality level (1-10, clamped); higher is better quality and "
     "more bits.",
     drop_rungs="Video rendition names to drop, e.g. avc-234p (encoding___get_ladder lists them).",
+    captions="Replace the caption tracks (IMSC1, one per language, in order), e.g. "
+    '[{"language": "en", "label": "English"}, {"language": "es", "label": "Spanish"}]; [] removes them; omit '
+    "to keep the base's.",
     new_id="Ladder id of the result (its version is <id>@<fingerprint>); omit to keep the base id.",
 )
 
@@ -128,6 +132,9 @@ class LadderDetail(LadderSummary):
     pricing_tier: str = Field(description="MediaConvert pricing tier (BASIC or PROFESSIONAL).")
     video: list[VideoRendition] = Field(description="Video renditions in multivariant order.")
     audio: list[AudioRendition]
+    captions: list[CaptionTrack] = Field(
+        [], description="Caption tracks (IMSC1) every asset of the ladder carries, empty when it has no captions."
+    )
     options: LadderOptions
     profiles: list[str] = Field(description="Rendition profiles (manifests) every encode on this ladder writes.")
     break_slate_gops: list[int] = Field(description="Ad-break slate lengths (GOPs) the kit provides.")
@@ -153,6 +160,7 @@ def get_ladder(payload: LadderInput, ctx: ToolContext) -> LadderDetail:
         pricing_tier=ladder.pricing_tier(),
         video=list(ladder.video),
         audio=list(ladder.audio),
+        captions=list(ladder.captions),
         options=ladder.options,
         profiles=[p.name for p in applicable(ladder)],
         break_slate_gops=sorted(record.kit.break_slates),
@@ -182,6 +190,7 @@ class ProposeLadderOutput(BaseModel):
     warnings: list[str]
     video: list[str] = Field(description="Video renditions of the proposal, in order.")
     audio: list[str]
+    captions: list[str] = Field([], description="Caption track languages of the proposal, in order.")
     pricing_tier: str | None
     cost_per_minute_usd: float = Field(description="Encode cost per content-minute of the proposal (estimate).")
     base_cost_per_minute_usd: float
@@ -255,6 +264,7 @@ def propose_ladder(payload: ProposeLadderInput, ctx: ToolContext) -> ProposeLadd
         warnings=proposal.warnings,
         video=[r.name for r in ladder.video] if ladder else [],
         audio=[a.group_id for a in ladder.audio] if ladder else [],
+        captions=[c.language for c in ladder.captions] if ladder else [],
         pricing_tier=ladder.pricing_tier() if ladder else None,
         cost_per_minute_usd=proposal.cost_per_minute_usd,
         base_cost_per_minute_usd=encode_cost_per_minute(base),

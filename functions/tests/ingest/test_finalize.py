@@ -8,7 +8,7 @@ from fast_channels.core.manifests import ladder_signature, parse_multivariant
 from fast_channels.core.mp4 import AV1C_PATH, find_boxes
 from fast_channels.core.naming import creative_id, ladder_path
 from fast_channels.functions.ingest import finalize
-from fast_channels.functions.ingest.finalize import InvalidOutputsError, child_uris, duration_ms, with_base_url
+from fast_channels.functions.ingest.finalize import InvalidOutputsError, child_uris, duration_ms
 
 STANDARD = Ladder.builtin("standard")
 CONTENT_BASE = "https://media.example.com"
@@ -153,7 +153,9 @@ def test_ad_gets_an_sgai_ready_copy(store: Any, encode: Any) -> None:
     assert f"{ads}main_aac-he2-32.m3u8" in s.objects
     assert not any(k.startswith(ads) and k.endswith((".cmfv", ".cmfa")) for k in s.writes)
     mpd = s.objects[f"{ads}main_avc.mpd"].decode()
-    assert f"<BaseURL>{CONTENT_BASE}/{prefix}</BaseURL>" in mpd
+    # MediaTailor ignores BaseURL and resolves templates against the copy's location: they must be absolute.
+    assert "<BaseURL>" not in mpd
+    assert f'initialization="{CONTENT_BASE}/{prefix}main_avc-540pinit.cmfv"' in mpd
     assert {f"{ads}main_hevc.mpd", f"{ads}main_av1.mpd", f"{ads}main_sd.m3u8"} <= s.objects.keys()
 
 
@@ -165,17 +167,6 @@ def test_dash_profile_of_the_vast_follows_the_package_profiles(store: Any, encod
 
     assert result.creative is not None
     assert result.creative.dash_uri.endswith("/main_hevc.mpd")
-
-
-def test_with_base_url_goes_before_the_first_period() -> None:
-    mpd = '<?xml version="1.0"?>\n<MPD type="static">\n  <Period id="1">\n  </Period>\n</MPD>\n'
-
-    assert with_base_url(mpd, "https://cdn/a&b/") == (
-        '<?xml version="1.0"?>\n<MPD type="static">\n  <BaseURL>https://cdn/a&amp;b/</BaseURL>\n'
-        '  <Period id="1">\n  </Period>\n</MPD>\n'
-    )
-    with pytest.raises(InvalidOutputsError):
-        with_base_url("<MPD/>", "https://cdn/")
 
 
 def test_duration_is_exact() -> None:

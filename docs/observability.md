@@ -23,7 +23,8 @@ log-group-scoped policy.
 | Service | Logs | Where | Tracing and metrics |
 |---|---|---|---|
 | Lambda functions | Powertools JSON (Lambda JSON log format, INFO): `correlation_id`, `service` (e.g. `ingest.prepare`), `xray_trace_id`, plus `asset_id`, `ladder_version`, `tool` or `channel` where relevant | One explicit log group per function (CloudFormation-named, e.g. `FastChannels-Media-…`) | Active tracing (service segments, no X-Ray SDK; [ADR-0004](adr/0004-tracing-without-the-xray-sdk.md)); custom metrics in `FastChannels` |
-| Step Functions | `ALL` events with execution data | `/aws/vendedlogs/states/<prefix>-ingest`, `-ladder-provisioner`, `-ladder-kit-waiter`, `-reaper`, `-channel-census` | X-Ray tracing |
+| Step Functions | `ALL` events with execution data | `/aws/vendedlogs/states/<prefix>-ingest`, `-captioner`, `-ladder-provisioner`, `-ladder-kit-waiter`, `-reaper`, `-channel-census` | X-Ray tracing |
+| AWS Elemental Inference | Feeds named `<captioner execution>-<chunk>`, tagged `fast:app`, `fast:correlation-id`, `fast:execution`, deleted after each chunk; the relay function logs speed and words per chunk | The words of each chunk (`work/<asset>/<correlation id>/inference/chunk-<n>.json`) and the captions (`captions/…/<language>.ttml`) in the ingest bucket; metrics `PutMediaRequestCount`, `ProcessingLatency` in `AWS/ElementalInference` | The captioner's state machine and function spans |
 | MediaConvert | Job state changes of this deployment's jobs (filtered on `userMetadata.app`), including warnings | `/aws/vendedlogs/events/<prefix>-mediaconvert` | `AWS/MediaConvert` per queue |
 | EventBridge bus | `INFO` logs with event details; an archive of every event | `/aws/vendedlogs/events/<prefix>-fast-channels` | |
 | Channel Assembly | `AS_RUN` events (`VodProgramStart`, ad breaks, filler) | `MediaTailor/Channel/AsRunLog` (shared by the account and region) | `AWS/MediaTailor` channel metrics (requests, 4xx, 5xx) |
@@ -141,6 +142,8 @@ every one: Powertools adds `service`, the function's handler module, to each met
 | Metric | Dimensions | Emitted by |
 |---|---|---|
 | `AssetReady`, `AssetFailed` | `service` = `ingest.publish`, `kind` (`content`, `slate`, `ad`) | Ingest pipeline |
+| `CaptionScans`, `CaptionsGenerated`, `CaptionGenerationFailed` | `service` = `ingest.captions` | Caption resolution after Prepare ([captions.md](captions.md)) |
+| `InferenceMediaSeconds`, `InferenceCaptions` | `service` = `captioners.inference` | Seconds relayed to Elemental Inference (what it bills), captions written |
 | `LadderProvisioningStarted`, `LadderReady`, `LadderFailed` | `service` = `ingest.kit` | Ladder provisioner |
 | `ToolSucceeded`, `ToolFailed` | `service` = `tools.<target>`, `tool` (`<target>___<tool>`) | Every agent tool call |
 | `ProgramsAired` | `service` = `as_run_reconciler` | As-run reconciler |

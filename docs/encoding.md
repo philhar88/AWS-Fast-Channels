@@ -84,6 +84,11 @@ kbps = 128
 group_id = "aac-he1-64"
 profile = "he1"
 kbps = 64
+
+[[captions]]                # IMSC1 text tracks every asset carries (empty when it has none): docs/captions.md
+language = "en"
+label = "English"
+kind = "captions"           # captions (closed captions, SDH) | subtitles (dialogue only)
 ```
 
 ### Identity: the ladder version
@@ -91,7 +96,8 @@ kbps = 64
 `ladder.version` is `<id>@<fingerprint>`, for example `standard@86bf8088e0`. The fingerprint is the first ten hex
 digits of the SHA-256 of the canonical JSON of everything that affects the encode (all fields except `id` and
 `description`). Change one rung and you get a new version, a new job template and a new kit; edit the description and
-nothing changes. In S3 keys and resource names the `@` becomes `_`.
+nothing changes. In S3 keys and resource names the `@` becomes `_`. Caption tracks count too, except that a ladder
+without any leaves them out of the fingerprint, so it keeps the version it had before ladders carried captions.
 
 ### Validation rules
 
@@ -109,6 +115,7 @@ nothing changes. In S3 keys and resource names the `@` becomes `_`.
 | AVC is 8-bit; HEVC Main (8-bit) or Main10; AV1 Main 8- or 10-bit | Codec profiles MediaConvert supports |
 | AAC bitrates from MediaConvert's stereo 48 kHz list; HE-AAC at most 64 kbit/s | Apple HLS 2.4 |
 | `film_grain` only with AV1 renditions | Option applies to AV1 only |
+| One caption track per language; labels of letters, digits and spaces | One subtitle rendition per language; MediaConvert's LanguageDescription |
 
 ## Built-in ladders
 
@@ -255,8 +262,8 @@ the editor put them. Plain segment boundaries must also keep the break policy's 
 The `Finalize` step runs after every encode:
 
 - **Every applicable profile manifest exists**, and every HLS multivariant has exactly the ladder's signature (ordered
-  codec family, resolution, frame rate and audio group per variant). Anything else fails the ingest, because Channel
-  Assembly matches variants by position.
+  codec family, resolution, frame rate and audio group per variant, then language and name per caption track).
+  Anything else fails the ingest, because Channel Assembly matches variants and subtitle renditions by position.
 - **AV1 `av1C` patch.** MediaConvert writes every AV1 init segment with level 2.0 and 8-bit in the `av1C` box,
   regardless of the rendition. Finalize rewrites the level (computed from resolution and frame rate per AV1 Annex A)
   and the bit depth so that the box matches the `CODECS` attribute (for example `av01.0.08M.10`). Patched inits
@@ -267,8 +274,8 @@ The `Finalize` step runs after every encode:
 - **I-frame playlists** are raised to `EXT-X-VERSION:5` when a ladder enables them.
 - **Duration and break offsets** are computed from the media playlists.
 - **Ads** get an SGAI-ready copy under `ads/<ladder>/<creative_id>/`: media playlists with absolute segment and
-  `EXT-X-MAP` URIs on the content host, and an MPD with an absolute `BaseURL` (MediaTailor re-hosts only the manifests
-  of preconditioned ads; see [ad-insertion.md](ad-insertion.md#preconditioned-ads)).
+  `EXT-X-MAP` URIs on the content host, and MPDs with absolute segment templates (MediaTailor re-hosts only the
+  manifests of preconditioned ads; see [ad-insertion.md](ad-insertion.md#preconditioned-ads)).
 
 Content and slates are then registered as Channel Assembly VOD sources named `<asset_id>-<ladder key>` with one
 package configuration per `package_profiles` entry; ads are not registered.
@@ -290,7 +297,7 @@ Assembly break lasts exactly as long as its slate) and ad creatives encoded on t
 |---|---|---|
 | Filler slate | 15 GOPs (30.03 s) | `FillerSlate` of every channel on the ladder; loops through gaps |
 | Break slates | 15, 30, 45, 60 GOPs (30.03, 60.06, 90.09, 120.12 s) | `AdBreaks[].Slate`; fixes the break length, shows when an avail is not filled |
-| House ads | 7 and 15 GOPs (14.01 and 30.03 s) | Preconditioned creatives of the static VAST pod |
+| House ads | 2 x 15 GOPs (30.03 s) | Preconditioned creatives of the static VAST pod, which repeats them to fill the longest break |
 | VAST pod | | `ads/<ladder>/vast.xml` (`max-age=300`) and the beacon `ads/b.gif` |
 
 At deploy time the `LadderKit` custom resource runs the provisioner for the default ladder and every ladder an IaC
@@ -383,4 +390,5 @@ before a channel can switch.
   against 35 min 40 s (the full `standard` ladder: 16 video renditions including AV1, 3 audio). A job's `AccelerationStatus` stays
   `IN_PROGRESS` until it finishes.
 - **Untagged sources** raise MediaConvert colour-space warnings 230001/230005. They are harmless.
-- **Captions** are not part of v3.0 ([ADR-0013](adr/0013-captions-roadmap.md)).
+- **Captions** are IMSC1 text tracks in the CMAF group, segmented on the video grid and listed in every manifest; the
+  ladder declares them and every asset carries them ([Captions](captions.md), [ADR-0014](adr/0014-captions-as-ladder-tracks.md)).

@@ -254,3 +254,9 @@ kbps = 64
 group_id = "aac-he2-32"
 profile = "he2"
 kbps = 32
+
+# --- Captions (IMSC1 text in the CMAF group; every asset carries every track, empty when it has no captions) ----
+[[captions]]
+language = "en"
+label = "English"
+kind = "captions"

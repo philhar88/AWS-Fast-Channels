@@ -125,3 +125,33 @@ def av1_level_idx(width: int, height: int, fps: float) -> int:
         if pixels <= max_pic and width <= max_h and height <= max_v and rate <= max_display and rate <= max_decode:
             return idx
     raise ValueError(f"{width}x{height}@{fps} exceeds AV1 level 6.3")
+
+
+def with_compatible_brand(segment: bytes, brand: str) -> bytes:
+    """Copy of a media segment whose ``styp`` lists ``brand`` (four characters) among its compatible brands.
+
+    Idempotent. Nothing else moves relative to its box: ``sidx`` references and ``trun`` data offsets are relative to
+    boxes after ``styp``. CMAF Ingest marks the last segment of a session with ``lmsg``. Raises ValueError without a
+    leading ``styp``.
+    """
+    code = brand.encode("latin-1")
+    if len(code) != 4:
+        raise ValueError(f"a brand has four characters, not {brand!r}")
+    first = next(iter_boxes(segment), None)
+    if first is None or first.type != "styp" or first.header_size != 8:
+        raise ValueError("the segment does not start with a styp box")
+    compatible = segment[first.payload_offset + 8 : first.end]
+    if any(compatible[i : i + 4] == code for i in range(0, len(compatible), 4)):
+        return segment
+    header = struct.pack(">I4s", first.size + 4, b"styp")
+    return header + segment[first.payload_offset : first.end] + code + segment[first.end :]
+
+
+def sample_entries(init_segment: bytes) -> list[str]:
+    """The sample entry type of every track of an init segment (``avc1``, ``mp4a``, ``stpp``...): a CMAF track file
+    has exactly one."""
+    entries = []
+    for stsd in find_boxes(init_segment, ("moov", "trak", "mdia", "minf", "stbl", "stsd")):
+        entry = next(iter_boxes(init_segment, stsd.payload_offset + 8, stsd.end), None)
+        entries.append(entry.type if entry else "")
+    return entries

@@ -19,6 +19,7 @@ SOURCE_LOCATION_SUFFIX: Final = "media"
 """The IaC Channel Assembly source location of the media bucket is ``<prefix>-media``."""
 
 MEDIATAILOR_NAME_MAX: Final = 64  # PlaybackConfiguration Name: ^[a-zA-Z0-9_-]+$, 1-64 (ad-insertion.md §1)
+VOD_SOURCE_NAME_MAX: Final = 50  # VodSourceName: at most 50 (DescribeVodSource BadRequestException)
 AGENTCORE_NAME_MAX: Final = 48  # Runtime/Memory names: [a-zA-Z][a-zA-Z0-9_]{0,47} (agentcore.md §2)
 _HASH_LEN: Final = 6
 
@@ -110,8 +111,18 @@ def source_location_name(prefix: str) -> str:
 
 
 def vod_source_name(asset_id: str, ladder_version: str) -> str:
-    """Channel Assembly VOD source of an asset encode: unique per asset and ladder within its source location."""
-    return mediatailor_name(asset_id, ladder_path(ladder_version))
+    """Channel Assembly VOD source of an asset encode: unique per asset and ladder within its source location.
+
+    VOD source names allow at most :data:`VOD_SOURCE_NAME_MAX` characters (``DescribeVodSource``: "The length cannot
+    exceed 50"); a longer one is cut and ends in a hash of the whole name.
+    """
+    return _fit(mediatailor_name(asset_id, ladder_path(ladder_version)), VOD_SOURCE_NAME_MAX, "-")
+
+
+def agent_vod_source_name(prefix: str, asset_id: str, ladder_version: str) -> str:
+    """VOD source of content the agent registers: ``<prefix>-agent-<asset>-<fingerprint>``, at most
+    :data:`VOD_SOURCE_NAME_MAX` characters (the agent namespace is kept)."""
+    return _fit(agent_owned_name(prefix, asset_id, ladder_version.partition("@")[2]), VOD_SOURCE_NAME_MAX, "-")
 
 
 def host_hash(url: str) -> str:

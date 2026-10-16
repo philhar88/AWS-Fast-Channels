@@ -1,6 +1,6 @@
 # 0013 — Captions are on the roadmap, not in v3.0
 
-**Status:** Accepted
+**Status:** Superseded by [0014](0014-captions-as-ladder-tracks.md)
 
 ## Context
 Production FAST distribution usually requires captions (CEA-608/708 or WebVTT). Channel Assembly needs caption tracks to be
