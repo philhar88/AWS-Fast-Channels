@@ -392,6 +392,13 @@ before a channel can switch.
   23 min 53 s `NOT_ACCELERATED` with the earlier `ADAPTIVE` deinterlacer, and Elephants Dream (10:54) in 3 min 47 s
   against 35 min 40 s (the full `standard` ladder: 16 video renditions including AV1, 3 audio). A job's `AccelerationStatus` stays
   `IN_PROGRESS` until it finishes.
+- **HE-AACv2 `CODECS`.** For an `HEV2` output, MediaConvert writes `mp4a.40.5` (HE-AAC) in the HLS multivariant and
+  `mp4a.40.29` (HE-AACv2, RFC 6381 and CMAF) in the DASH manifest of the same job. The track is HE-AACv2: an AAC-LC
+  mono core with explicit SBR and PS signalling. mediastreamvalidator therefore reports 535060 (Must) and 235057 on
+  the `avc-234p` variant (audio group `aac-he2-32`). Channel Assembly and MediaTailor copy the value into every channel
+  and session. The audio settings are a supported MediaConvert AAC combination (`HEV2`, 2.0, 48 kHz, 32 kbit/s CBR),
+  so this is a MediaConvert defect. Finalize does not change `CODECS`. A decoder without PS support plays this
+  rendition as mono.
 - **Untagged sources** raise MediaConvert colour-space warnings 230001/230005. They are harmless.
 - **Captions** are IMSC1 text tracks in the CMAF group, segmented on the video grid and listed in every manifest; the
   ladder declares them and every asset carries them ([Captions](captions.md), [ADR-0014](adr/0014-captions-as-ladder-tracks.md)).
