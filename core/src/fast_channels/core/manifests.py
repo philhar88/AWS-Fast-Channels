@@ -4,7 +4,7 @@ Text in, text out: callers fetch and store objects. Rewrites keep every other by
 """
 
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import accumulate
@@ -214,6 +214,28 @@ def absolutize_media_playlist(text: str, base_url: str) -> str:
     return "\n".join(rewrite(line) for line in text.splitlines()) + "\n"
 
 
+def segment_uris(text: str) -> list[str]:
+    """Segment URIs of a media playlist, in order."""
+    return [line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")]
+
+
+def retarget_media_playlist(reference: str, *, map_uri: str, segments: Sequence[str]) -> str:
+    """``reference`` with ``map_uri`` as its ``EXT-X-MAP`` URI and ``segments`` as its segment URIs: another track of
+    the same encode cut on exactly the reference's segments (Finalize re-cuts caption tracks on the video's)."""
+    if len(segments) != len(segment_uris(reference)):
+        raise ValueError(f"{len(segments)} segment URIs for a playlist of {len(segment_uris(reference))} segments")
+    names = iter(segments)
+
+    def rewrite(line: str) -> str:
+        if line.startswith("#EXT-X-MAP:"):
+            return re.sub(r'URI="[^"]*"', lambda _: f'URI="{map_uri}"', line, count=1)
+        if line.strip() and not line.startswith("#"):
+            return next(names)
+        return line
+
+    return "\n".join(rewrite(line) for line in reference.splitlines()) + "\n"
+
+
 def _media_findings(text: str) -> Iterator[str]:
     groups: dict[str, list[dict[str, str]]] = {}
     for line in text.splitlines():
@@ -321,3 +343,49 @@ def absolutize_mpd(mpd: str, base_url: str) -> str:
         return f'{name}="{escape(urljoin(base_url, unescape(url)))}"'
 
     return _SEGMENT_TEMPLATE.sub(lambda tag: _TEMPLATE_URL.sub(absolute, tag.group(0)), mpd)
+
+
+_PERIOD: Final = re.compile(r"<Period\b.*?</Period>", re.DOTALL)
+_ADAPTATION_SET: Final = re.compile(r"<AdaptationSet\b[^>]*>.*?</AdaptationSet>", re.DOTALL)
+_SEGMENT_TIMELINE: Final = re.compile(r"<SegmentTimeline>.*?</SegmentTimeline>", re.DOTALL)
+_START_NUMBER: Final = re.compile(r'\bstartNumber="\d+"')
+_TIMESCALE: Final = re.compile(r'\btimescale="(\d+)"')
+
+
+def _is_video(adaptation_set: str) -> bool:
+    tag = adaptation_set[: adaptation_set.index(">")]
+    return 'mimeType="video/' in tag or 'contentType="video"' in tag
+
+
+def _is_text(adaptation_set: str) -> bool:
+    return 'codecs="stpp' in adaptation_set or 'contentType="text"' in adaptation_set[: adaptation_set.index(">")]
+
+
+def align_text_timelines(mpd: str) -> str:
+    """Give the text (``stpp``) adaptation sets of every period the segment timeline and start number of the
+    period's first video representation, once their segments are cut on the video's (Finalize).
+
+    Raises ValueError when a period with text has no video timeline, or the two timescales differ.
+    """
+
+    def align(period: re.Match[str]) -> str:
+        sets = [s[0] for s in _ADAPTATION_SET.finditer(period[0])]
+        if not any(_is_text(s) for s in sets):
+            return period[0]
+        video = next((s for s in sets if _is_video(s)), "")
+        timeline, start, scale = _SEGMENT_TIMELINE.search(video), _START_NUMBER.search(video), _TIMESCALE.search(video)
+        if timeline is None or start is None or scale is None:
+            raise ValueError("a period with captions has no video segment timeline")
+
+        def aligned(adaptation_set: re.Match[str]) -> str:
+            text = adaptation_set[0]
+            if not _is_text(text):
+                return text
+            if (own := _TIMESCALE.search(text)) is None or own[1] != scale[1]:
+                raise ValueError("caption and video timescales differ")
+            text = _SEGMENT_TIMELINE.sub(lambda _: timeline[0], text)
+            return _START_NUMBER.sub(lambda _: start[0], text)
+
+        return _ADAPTATION_SET.sub(aligned, period[0])
+
+    return _PERIOD.sub(align, mpd)

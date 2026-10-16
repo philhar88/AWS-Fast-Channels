@@ -31,4 +31,6 @@ Turning captions on is a new ladder version: its kit is re-provisioned, and titl
 Outlets that require 608/708 need an extra TS output (not included). Players must render IMSC1 (hls.js, AVPlayer,
 ExoPlayer, dash.js and Shaka do; some TV stacks need WebVTT, an extension point). During SSAI ads MediaTailor puts a
 blank WebVTT into every subtitle rendition. A caption scan costs one small AVC and one AAC output per asset that has
-no provided captions.
+no provided captions. After an ESAM split MediaConvert cuts the caption track on the plain segment grid, unlike the
+video, so Finalize re-cuts it on the video's segments. hls.js 1.7.3 needs a patch to keep loading IMSC1 across
+discontinuities and SSAI breaks.

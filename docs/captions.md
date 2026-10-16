@@ -169,7 +169,8 @@ are no sound or music descriptions or speaker labels, which is why every generat
 ## Why IMSC1, and why caption tracks belong to the ladder
 
 - **IMSC1 text** (`stpp.ttml.im1t`) is the only caption output MediaConvert writes in CMAF segmented on the video
-  grid: the same 6.006 s segments as video, so every ad-break offset is a boundary of every track, and one track
+  grid: the same 6.006 s segments as video (after an ESAM split, once Finalize re-cuts it; see *Same segments*
+  below), so every ad-break offset is a boundary of every track, and one track
   serves HLS (`EXT-X-MEDIA TYPE=SUBTITLES`) and DASH (an `application/mp4` `stpp` AdaptationSet). Each track is its
   own CMAF track file (`main_cc-en.m3u8`, `main_cc-eninit.cmft` with one `stpp` sample entry and `.cmft` segments);
   no video or audio track carries caption data, as CMAF requires one track per file. It is a profile of
@@ -186,6 +187,15 @@ are no sound or music descriptions or speaker labels, which is why every generat
   house ads are encoded with empty tracks (`NULL_SOURCE`), uncaptioned titles too, and Finalize and
   `origins___register_vod_source` refuse an encode whose subtitle renditions differ from the ladder's
   (`core.manifests.ladder_signature` lists them after the variants).
+- **Same segments.** Channel Assembly and MediaTailor number every track's segments separately. At an ESAM split
+  (an off-grid cue point) MediaConvert cuts the caption track like the video, but then returns to the plain 6.006 s
+  grid while the video carries on from the split: Tears of Steel came out with 124 video and 125 caption segments.
+  Each airing then moved the subtitle media sequence one further from the video's, MediaTailor turned that into a
+  different discontinuity sequence, and players timed captions with another discontinuity's timestamps or stopped
+  loading them. Finalize re-cuts such a track on the video's segments (`core.imsc`, `core.mp4.write_fragment`): the
+  video's durations and count, every cue clipped to its new segments (pieces of a cue split at the old boundaries
+  joined first), MediaConvert's boxes and document head kept, and the media playlist and the DASH text timelines
+  copied from the video's. Encodes without ESAM are left as they are.
 
 ## Through Channel Assembly, ad insertion and players
 
@@ -196,6 +206,16 @@ are no sound or music descriptions or speaker labels, which is why every generat
 | SGAI (HLS Interstitials) | The primary stream keeps the slate's (empty) track under the interstitial; the house ad's own multivariant lists the same tracks. |
 | SSAI DASH | Every period, ad periods included, has the `stpp` AdaptationSet: house ads carry the empty track. |
 | Console | Both players show a CC toggle (on by default) when the stream has caption tracks; hls.js renders IMSC1 as text tracks. |
+
+hls.js 1.7.3 (and its canary in October 2026) needs two fixes to play live IMSC1. The console applies them when
+it bundles hls.js (`hlsSubtitleFixes` in `console/vite.config.ts`); other hls.js players need the same:
+
+- A subtitle fragment that fails to parse stalled subtitle loading for the rest of the session: it stayed loaded but
+  never buffered, so the controller waited on it. SSAI's blank WebVTT ad segments in the IMSC1 rendition fail to
+  parse at every break. The patch counts such a fragment as buffered (it has no cues).
+- An IMSC1 fragment that arrived before the video's timestamps of its discontinuity read `initPTS.baseTime` of
+  undefined, which also stalled loading, at programme and slate boundaries. The patch defers it until those
+  timestamps are known, as hls.js already does for WebVTT.
 
 The deployed suite checks all of this (`tests/e2e`: the provided track, its grid and its separate CMAF track,
 subtitle continuity through SSAI breaks, SGAI ad tracks, DASH text periods, and a speaking clip captioned by

@@ -58,7 +58,8 @@ def test_profile_manifests_written(stage: Stage, ingested: Asset, ladder: Ladder
 
 
 def test_break_offsets_include_the_cue_point(ingested: Asset, ladder: Ladder) -> None:
-    """The sidecar's cue point, snapped to the GOP grid (30030 ms at 29.97 fps), is a valid break offset."""
+    """The sidecar's cue point, snapped to the GOP grid (32032 ms at 29.97 fps, an ESAM split), is a valid break
+    offset."""
     snapped = ladder.grid.snap_to_gop(CUE_POINT_MS)
     nearest = min(ingested.break_offsets_ms, key=lambda offset: abs(offset - snapped), default=None)
     assert nearest is not None and abs(nearest - snapped) <= BOUNDARY_TOLERANCE_MS, (snapped, ingested.break_offsets_ms)

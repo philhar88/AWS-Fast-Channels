@@ -83,3 +83,38 @@ def test_box_sizes() -> None:
     assert [(b.type, b.size, b.header_size) for b in boxes] == [("free", 20, 16), ("mdat", 11, 8)]
     with pytest.raises(ValueError, match="truncated"):
         list(mp4.iter_boxes(struct.pack(">I4s", 100, b"moov")))
+
+
+def test_a_text_segment_round_trips() -> None:
+    segment = (DATA / "captions/tos-cc-en_000000001.cmft").read_bytes()
+    fragment = mp4.read_fragment(segment)
+    assert (fragment.start, fragment.duration) == (0, 540540)  # 6.006 s at 90 kHz
+    assert fragment.sample.startswith(b'<?xml version="1.0" encoding="UTF-8"?><tt ')
+    assert mp4.write_fragment(segment, fragment, sequence=1) == segment
+    assert mp4.track_timescale((DATA / "captions/tos-cc-eninit.cmft").read_bytes()) == 90000
+
+
+def test_a_text_segment_is_restamped_with_the_templates_boxes() -> None:
+    template = (DATA / "captions/tos-cc-en_000000001.cmft").read_bytes()
+    fragment = mp4.Fragment(start=22_882_860, duration=180_180, sample=b"<tt/>")
+
+    segment = mp4.write_fragment(template, fragment, sequence=44)
+
+    assert mp4.read_fragment(segment) == fragment
+    boxes = [(b.type, b.size) for b in mp4.iter_boxes(segment)]
+    assert boxes == [("styp", 24), ("sidx", 52), ("moof", 104), ("mdat", 13)]
+    assert segment[:24] == template[:24]
+    sidx = next(b for b in mp4.iter_boxes(segment) if b.type == "sidx")
+    earliest, first_offset, _, count, size, duration = struct.unpack_from(">QQHHII", segment, sidx.payload_offset + 12)
+    assert (earliest, first_offset, count, size, duration) == (22_882_860, 0, 1, 104 + 13, 180_180)
+    (sequence,) = struct.unpack_from(">I", segment, segment.index(b"mfhd") + 8)
+    assert sequence == 44
+
+
+def test_other_layouts_are_not_text_fragments() -> None:
+    init = (DATA / "captions/tos-cc-eninit.cmft").read_bytes()
+    with pytest.raises(ValueError, match="one moof"):
+        mp4.read_fragment(init)
+    segment = (DATA / "captions/tos-cc-en_000000001.cmft").read_bytes()
+    with pytest.raises(ValueError, match="one moof"):
+        mp4.read_fragment(segment + segment[24:])

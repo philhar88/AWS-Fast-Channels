@@ -56,8 +56,52 @@ function mockCdn(): Plugin {
   };
 }
 
+/**
+ * Two subtitle fixes for hls.js 1.7.3, applied to the module the console bundles (README, "hls.js patch"). Without
+ * them, captions on a live channel stop for good at the first SSAI break or discontinuity. Each edit must match
+ * exactly once, so another hls.js version fails the build until the fixes are reviewed.
+ */
+const HLS_SUBTITLE_FIXES: readonly (readonly [string, string])[] = [
+  [
+    // A fragment that fails to parse (SSAI's blank WebVTT in an IMSC1 rendition) has no cues: count it as buffered.
+    // Returning left it loaded but never buffered, and the controller waited on it for the rest of the session.
+    "      part,\n      success\n    } = data;\n    if (!success) {\n      return;\n    }\n",
+    "      part\n    } = data;\n",
+  ],
+  [
+    // Like WebVTT, defer an IMSC1 fragment until the main stream has its discontinuity's initial PTS (onInitPtsFound
+    // parses it then); parseIMSC1 read initPTS.baseTime of undefined and stalled subtitle loading.
+    "    const hls = this.hls;\n    parseIMSC1(payload, this.initPTS[frag.cc], cues => {",
+    "    const hls = this.hls;\n    if (!this.initPTS[frag.cc]) {\n      this.unparsedVttFrags.push(data);\n      return;\n    }\n" +
+      "    parseIMSC1(payload, this.initPTS[frag.cc], cues => {",
+  ],
+];
+
+function hlsSubtitleFixes(): Plugin {
+  return {
+    name: "fast-hls-subtitle-fixes",
+    enforce: "pre",
+    transform(code, id) {
+      const [path = id] = id.split("?", 1);
+      if (!path.endsWith(`${sep}hls.js${sep}dist${sep}hls.mjs`)) {
+        return null;
+      }
+      let fixed = code;
+      for (const [before, after] of HLS_SUBTITLE_FIXES) {
+        if (fixed.split(before).length !== 2) {
+          this.error(`hls.js does not match a subtitle fix any more (README, "hls.js patch"): ${before.trim()}`);
+        }
+        fixed = fixed.replace(before, after);
+      }
+      return { code: fixed, map: null };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), mockCdn()],
+  plugins: [react(), mockCdn(), hlsSubtitleFixes()],
+  // Serve hls.js through the plugin pipeline in dev as well (pre-bundled dependencies skip transforms).
+  optimizeDeps: { exclude: ["hls.js"] },
   build: {
     target: "es2023",
     // Emit every asset as a file: data: URIs would need a looser font-src/img-src.

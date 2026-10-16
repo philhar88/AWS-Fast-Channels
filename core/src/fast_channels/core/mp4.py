@@ -1,4 +1,5 @@
-"""Minimal ISO-BMFF reader and the AV1 ``av1C`` fix-up for MediaConvert init segments.
+"""Minimal ISO-BMFF reader, the AV1 ``av1C`` fix-up for MediaConvert init segments and the movie fragment of a
+CMAF text segment (read, and re-stamped when Finalize re-cuts a caption track).
 
 MediaConvert writes the same ``av1C`` (``81 00 0c 00``: level 2.0, 8-bit) for every AV1 rendition while the
 bitstream and HLS ``CODECS`` say e.g. 10-bit level 4.0 (ladders.md §3.3 item 1). The AV1-ISOBMFF binding (§2.3)
@@ -17,8 +18,25 @@ from dataclasses import dataclass
 from typing import Final
 
 # Bytes between a box header and its first child box (FullBox header, entry count, sample entry fields).
-_CHILD_OFFSET: Final = {"moov": 0, "trak": 0, "mdia": 0, "minf": 0, "stbl": 0, "stsd": 8, "av01": 78}
+_CHILD_OFFSET: Final = {
+    "moov": 0,
+    "trak": 0,
+    "mdia": 0,
+    "minf": 0,
+    "stbl": 0,
+    "stsd": 8,
+    "av01": 78,
+    "moof": 0,
+    "traf": 0,
+}
 AV1C_PATH: Final = ("moov", "trak", "mdia", "minf", "stbl", "stsd", "av01", "av1C")
+MDHD_PATH: Final = ("moov", "trak", "mdia", "mdhd")
+
+# trun flags (ISO/IEC 14496-12 §8.8.8).
+_DATA_OFFSET: Final = 0x000001
+_FIRST_SAMPLE_FLAGS: Final = 0x000004
+_SAMPLE_DURATION: Final = 0x000100
+_SAMPLE_SIZE: Final = 0x000200
 
 # AV1 spec Annex A.3: (seq_level_idx, MaxPicSize, MaxHSize, MaxVSize, MaxDisplayRate, MaxDecodeRate)
 _AV1_LEVELS: Final = (
@@ -155,3 +173,121 @@ def sample_entries(init_segment: bytes) -> list[str]:
         entry = next(iter_boxes(init_segment, stsd.payload_offset + 8, stsd.end), None)
         entries.append(entry.type if entry else "")
     return entries
+
+
+def track_timescale(init_segment: bytes) -> int:
+    """Media timescale (``mdhd``) of a single-track init segment."""
+    boxes = list(find_boxes(init_segment, MDHD_PATH))
+    if len(boxes) != 1:
+        raise ValueError(f"expected one track, found {len(boxes)}")
+    at = boxes[0].payload_offset
+    version = init_segment[at]
+    (timescale,) = struct.unpack_from(">I", init_segment, at + 4 + (16 if version == 1 else 8))
+    return int(timescale)
+
+
+@dataclass(frozen=True, slots=True)
+class Fragment:
+    """The one sample of a media segment's movie fragment, as MediaConvert writes CMAF text tracks: its decode time
+    and duration in the track timescale, and its data (one IMSC1 document)."""
+
+    start: int
+    duration: int
+    sample: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _Layout:
+    """Where the fields :func:`write_fragment` changes sit in a segment."""
+
+    sequence: int
+    """Byte offset of mfhd sequence_number."""
+    decode_time: int
+    """Byte offset of tfdt baseMediaDecodeTime (64-bit when ``wide``)."""
+    wide: bool
+    sample_duration: int
+    """Byte offset of the trun sample_duration (sample_size follows)."""
+    sidx: Box | None
+    mdat: Box
+
+
+def _layout(segment: bytes) -> _Layout:
+    boxes = list(iter_boxes(segment))
+    kinds = [b.type for b in boxes]
+    if kinds.count("moof") != 1 or kinds.count("mdat") != 1 or kinds.count("sidx") > 1 or kinds[-1] != "mdat":
+        raise ValueError(f"expected one moof, at most one sidx and a final mdat, not {kinds}")
+    moof, mdat = boxes[kinds.index("moof")], boxes[-1]
+    sidx = boxes[kinds.index("sidx")] if "sidx" in kinds else None
+    mfhd = [b for b in iter_boxes(segment, moof.payload_offset, moof.end) if b.type == "mfhd"]
+    trafs = list(find_boxes(segment, ("moof", "traf")))
+    if len(mfhd) != 1 or len(trafs) != 1:
+        raise ValueError("expected a movie fragment of one track")
+    children = {b.type: b for b in iter_boxes(segment, trafs[0].payload_offset, trafs[0].end)}
+    if "tfdt" not in children or "trun" not in children:
+        raise ValueError("the track fragment has no tfdt or trun")
+    tfdt, trun = children["tfdt"], children["trun"]
+    flags, count, data_offset = struct.unpack_from(">IIi", segment, trun.payload_offset)
+    required = _DATA_OFFSET | _SAMPLE_DURATION | _SAMPLE_SIZE
+    if count != 1 or flags & required != required:
+        raise ValueError("expected a trun of one sample with its data offset, duration and size")
+    if moof.offset + data_offset != mdat.payload_offset:
+        raise ValueError("the sample data is not the mdat payload")
+    first_sample_flags = 4 if flags & _FIRST_SAMPLE_FLAGS else 0
+    return _Layout(
+        sequence=mfhd[0].payload_offset + 4,
+        decode_time=tfdt.payload_offset + 4,
+        wide=segment[tfdt.payload_offset] == 1,
+        sample_duration=trun.payload_offset + 12 + first_sample_flags,
+        sidx=sidx,
+        mdat=mdat,
+    )
+
+
+def read_fragment(segment: bytes) -> Fragment:
+    """The sample of a media segment with one movie fragment of one sample (``styp``, optional ``sidx``, ``moof``,
+    ``mdat``). Raises ValueError for any other layout."""
+    layout = _layout(segment)
+    (start,) = struct.unpack_from(">Q" if layout.wide else ">I", segment, layout.decode_time)
+    duration, size = struct.unpack_from(">II", segment, layout.sample_duration)
+    sample = segment[layout.mdat.payload_offset : layout.mdat.end]
+    if size != len(sample):
+        raise ValueError("the sample is not the whole mdat")
+    return Fragment(start=start, duration=duration, sample=sample)
+
+
+def write_fragment(template: bytes, fragment: Fragment, *, sequence: int) -> bytes:
+    """``template`` (a segment :func:`read_fragment` accepts) carrying ``fragment`` as movie fragment ``sequence``.
+
+    Every box and flag of the template is kept; only the sequence number, decode time, sample duration and size, the
+    ``sidx`` reference (earliest presentation time, size, duration) and the ``mdat`` change. The template's ``sidx``
+    must use the track timescale, as MediaConvert's does.
+    """
+    layout = _layout(template)
+    if not layout.wide and fragment.start >= 1 << 32:
+        raise ValueError("the decode time does not fit the template's 32-bit tfdt")
+    out = bytearray(template[: layout.mdat.offset])
+    struct.pack_into(">I", out, layout.sequence, sequence)
+    struct.pack_into(">Q" if layout.wide else ">I", out, layout.decode_time, fragment.start)
+    struct.pack_into(">II", out, layout.sample_duration, fragment.duration, len(fragment.sample))
+    mdat = struct.pack(">I4s", 8 + len(fragment.sample), b"mdat") + fragment.sample
+    if layout.sidx is not None:
+        referenced = layout.mdat.offset - layout.sidx.end + len(mdat)
+        _restamp_sidx(template, out, layout, layout.sidx, fragment, referenced=referenced)
+    return bytes(out + mdat)
+
+
+def _restamp_sidx(
+    template: bytes, out: bytearray, layout: _Layout, sidx: Box, fragment: Fragment, *, referenced: int
+) -> None:
+    at = sidx.payload_offset
+    times = ">QQ" if template[at] == 1 else ">II"
+    earliest, first_offset = struct.unpack_from(times, template, at + 12)
+    reference = at + 12 + struct.calcsize(times) + 4
+    (count,) = struct.unpack_from(">H", template, reference - 2)
+    kind_size, duration = struct.unpack_from(">II", template, reference)
+    (start,) = struct.unpack_from(">Q" if layout.wide else ">I", template, layout.decode_time)
+    (sample_duration,) = struct.unpack_from(">I", template, layout.sample_duration)
+    if count != 1 or first_offset != 0 or (earliest, duration) != (start, sample_duration):
+        raise ValueError("expected a sidx of one reference in the track timescale, right before the fragment")
+    struct.pack_into(times, out, at + 12, fragment.start, 0)
+    struct.pack_into(">II", out, reference, kind_size & 0x8000_0000 | referenced, fragment.duration)

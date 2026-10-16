@@ -184,6 +184,23 @@ stops. A missing feed (403/404 from S3) means "nothing published yet".
 - *On air* marks the program scheduled now only while the channel runs, and never a skipped one, since filler plays
   in its slot.
 
+### hls.js patch
+
+`vite.config.ts` (`hlsSubtitleFixes`) edits `hls.js/dist/hls.mjs` as Vite bundles or serves it, in two places. They
+fix two subtitle bugs that stopped captions on a live channel, still present in the hls.js canary in October 2026
+([captions.md](../docs/captions.md#through-channel-assembly-ad-insertion-and-players)):
+
+- `onSubtitleFragProcessed` returned on a failed fragment, which then stayed loaded but never buffered, so subtitle
+  loading stalled for the session. SSAI's blank WebVTT ad segments in IMSC1 renditions fail at every break. The fix
+  counts a failed fragment as buffered.
+- `_parseIMSC1` parsed a fragment before the main stream had the initial PTS of its discontinuity
+  (`initPTS.baseTime` of undefined). The fix queues it as `_parseVTTs` does for WebVTT.
+
+Each edit must match exactly once, so another hls.js version fails the build until they are reviewed; drop them
+once hls.js ships equivalent fixes. A plugin rather than patch-package keeps the console free of new dependencies
+(patch-package's dependency tree carried a high-severity npm advisory in October 2026). `optimizeDeps.exclude` makes
+the dev server serve hls.js through the plugin too.
+
 ### Known player caveat
 
 hls.js 1.7.3 starts an append-in-place interstitial only once the buffered A/V range reaches within 10 ms of the

@@ -272,6 +272,9 @@ The `Finalize` step runs after every encode:
   values (formula above). Measured values of a static slate or house ad would otherwise advertise a fraction of the
   content bitrate, and Channel Assembly copies them into the channel.
 - **I-frame playlists** are raised to `EXT-X-VERSION:5` when a ladder enables them.
+- **Caption tracks on the video's segments.** After an ESAM split MediaConvert cuts IMSC1 tracks on the plain segment
+  grid, unlike the video; Finalize re-cuts them on the video's segments, since Channel Assembly numbers every
+  track's segments separately ([captions.md](captions.md#why-imsc1-and-why-caption-tracks-belong-to-the-ladder)).
 - **Duration and break offsets** are computed from the media playlists.
 - **Ads** get an SGAI-ready copy under `ads/<ladder>/<creative_id>/`: media playlists with absolute segment and
   `EXT-X-MAP` URIs on the content host, and MPDs with absolute segment templates (MediaTailor re-hosts only the

@@ -6,6 +6,7 @@ with an off-grid cue point. channel-assembly/: the CA channel multivariant, an S
 MediaTailor-rehosted preconditioned ad from the e2e run.
 """
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -216,3 +217,43 @@ def test_absolutize_mpd_points_ad_templates_at_the_segments() -> None:
     assert '<SegmentTemplate timescale="90000" startNumber="1"/>' in fixed  # no URLs: unchanged
     assert m.absolutize_mpd(fixed, "https://elsewhere/") == fixed  # absolute URLs stay
     assert fixed.count("https://cdn.example/") == mpd.count('initialization="') + mpd.count('media="')
+
+
+def test_retarget_media_playlist_puts_another_track_on_the_references_segments() -> None:
+    reference = read("golden-job/index_avc_1080p.m3u8")
+    count = len(m.segment_uris(reference))
+    names = [f"main_cc-en_{n:09d}.cmft" for n in range(1, count + 1)]
+
+    retargeted = m.retarget_media_playlist(reference, map_uri="main_cc-eninit.cmft", segments=names)
+
+    assert m.segment_uris(retargeted) == names
+    assert m.media_segment_durations(retargeted) == m.media_segment_durations(reference)
+    assert '#EXT-X-MAP:URI="main_cc-eninit.cmft"' in retargeted
+    with pytest.raises(ValueError, match="segment URIs"):
+        m.retarget_media_playlist(reference, map_uri="x", segments=names[1:])
+
+
+def test_align_text_timelines_copies_each_periods_video_timeline() -> None:
+    """tos-esam-main.mpd: Tears of Steel with ESAM splits at 254.254 s and 488.488 s (three periods), trimmed to one
+    video representation and the IMSC track; MediaConvert cut the text on the plain 6.006 s grid after each split."""
+    mpd = read("captions/tos-esam-main.mpd")
+
+    def timelines(text: str) -> list[tuple[str, str]]:
+        pairs = []
+        for period in re.findall(r"<Period\b.*?</Period>", text, re.DOTALL):
+            video, caption = re.findall(r"<SegmentTimeline>.*?</SegmentTimeline>", period, re.DOTALL)
+            pairs.append((" ".join(video.split()), " ".join(caption.split())))
+        return pairs
+
+    assert [v == c for v, c in timelines(mpd)] == [True, False, False]
+
+    aligned = m.align_text_timelines(mpd)
+
+    assert all(v == c for v, c in timelines(aligned))
+    text_sets = re.findall(r'<AdaptationSet[^>]*codecs="stpp">.*?</AdaptationSet>', aligned, re.DOTALL)
+    # The adaptation set's and the representation's SegmentTemplate, per period.
+    assert [re.findall(r'startNumber="(\d+)"', s) for s in text_sets] == [["1", "1"], ["44", "44"], ["84", "84"]]
+    assert m.align_text_timelines(aligned) == aligned
+    text_template = '<SegmentTemplate timescale="90000" presentationTimeOffset="0" media="main_cc'
+    with pytest.raises(ValueError, match="timescales differ"):
+        m.align_text_timelines(mpd.replace(text_template, text_template.replace("90000", "1000")))

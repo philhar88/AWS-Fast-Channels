@@ -37,7 +37,9 @@ CONTENT_ID: Final = "e2e-pattern"
 ASSET_ID: Final = f"{CONTENT_ID}-{datetime.now(UTC):%Y%m%d%H%M%S}"
 """A new asset per run: the pipeline refuses to re-encode a READY asset in place (its VOD source serves that media)."""
 PATTERN_SECONDS: Final = 70
-CUE_POINT_MS: Final = 30_000
+CUE_POINT_MS: Final = 32_000
+"""Snaps to GOP 16 (32032 ms at 29.97 fps), between segment boundaries: the encode takes the ESAM path, and Finalize
+re-cuts its caption track on the video's segments (docs/captions.md)."""
 PROGRAMS: Final = 3
 LEAD: Final = timedelta(minutes=2, seconds=30)
 """From planning to the first program: publishing and starting the channel fit in it."""
