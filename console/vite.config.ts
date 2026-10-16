@@ -57,8 +57,8 @@ function mockCdn(): Plugin {
 }
 
 /**
- * Two subtitle fixes for hls.js 1.7.3, applied to the module the console bundles (README, "hls.js patch"). Without
- * them, captions on a live channel stop for good at the first SSAI break or discontinuity. Each edit must match
+ * Three subtitle fixes for hls.js 1.7.3, applied to the module the console bundles (README, "hls.js patch"). Without
+ * them, captions on a live channel stop for good at the first ad break or discontinuity. Each edit must match
  * exactly once, so another hls.js version fails the build until the fixes are reviewed.
  */
 const HLS_SUBTITLE_FIXES: readonly (readonly [string, string])[] = [
@@ -74,6 +74,15 @@ const HLS_SUBTITLE_FIXES: readonly (readonly [string, string])[] = [
     "    const hls = this.hls;\n    parseIMSC1(payload, this.initPTS[frag.cc], cues => {",
     "    const hls = this.hls;\n    if (!this.initPTS[frag.cc]) {\n      this.unparsedVttFrags.push(data);\n      return;\n    }\n" +
       "    parseIMSC1(payload, this.initPTS[frag.cc], cues => {",
+  ],
+  [
+    // An SGAI interstitial borrows the media element (transferMedia). Detaching dropped every track's buffered list,
+    // which only new subtitle tracks recreate, so the first fragment after the break was never buffered and loading
+    // stalled. Start each list over and forget the subtitle fragments, as for new tracks.
+    "    this.tracksBuffered = [];\n    super.onMediaDetaching(event, data);\n",
+    "    this.tracksBuffered = this.tracksBuffered.map(() => []);\n" +
+      "    this.fragmentTracker.removeFragmentsInRange(0, Number.POSITIVE_INFINITY, PlaylistLevelType.SUBTITLE);\n" +
+      "    super.onMediaDetaching(event, data);\n",
   ],
 ];
 

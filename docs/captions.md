@@ -207,7 +207,7 @@ are no sound or music descriptions or speaker labels, which is why every generat
 | SSAI DASH | Every period, ad periods included, has the `stpp` AdaptationSet: house ads carry the empty track. |
 | Console | Both players show a CC toggle (on by default) when the stream has caption tracks; hls.js renders IMSC1 as text tracks. |
 
-hls.js 1.7.3 (and its canary in October 2026) needs two fixes to play live IMSC1. The console applies them when
+hls.js 1.7.3 (and its canary in October 2026) needs three fixes to play live IMSC1. The console applies them when
 it bundles hls.js (`hlsSubtitleFixes` in `console/vite.config.ts`); other hls.js players need the same:
 
 - A subtitle fragment that fails to parse stalled subtitle loading for the rest of the session: it stayed loaded but
@@ -216,6 +216,9 @@ it bundles hls.js (`hlsSubtitleFixes` in `console/vite.config.ts`); other hls.js
 - An IMSC1 fragment that arrived before the video's timestamps of its discontinuity read `initPTS.baseTime` of
   undefined, which also stalled loading, at programme and slate boundaries. The patch defers it until those
   timestamps are known, as hls.js already does for WebVTT.
+- An SGAI interstitial borrows the media element from the primary player. Handing it over dropped the primary's
+  record of buffered subtitles, which only new subtitle tracks recreate, so the first caption fragment after every
+  break was never buffered and loading stalled. The patch starts that record over, as for new tracks.
 
 The deployed suite checks all of this (`tests/e2e`: the provided track, its grid and its separate CMAF track,
 subtitle continuity through SSAI breaks, SGAI ad tracks, DASH text periods, and a speaking clip captioned by

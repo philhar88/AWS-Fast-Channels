@@ -186,8 +186,8 @@ stops. A missing feed (403/404 from S3) means "nothing published yet".
 
 ### hls.js patch
 
-`vite.config.ts` (`hlsSubtitleFixes`) edits `hls.js/dist/hls.mjs` as Vite bundles or serves it, in two places. They
-fix two subtitle bugs that stopped captions on a live channel, still present in the hls.js canary in October 2026
+`vite.config.ts` (`hlsSubtitleFixes`) edits `hls.js/dist/hls.mjs` as Vite bundles or serves it, in three places.
+They fix three subtitle bugs that stopped captions on a live channel, still present in the hls.js canary in October 2026
 ([captions.md](../docs/captions.md#through-channel-assembly-ad-insertion-and-players)):
 
 - `onSubtitleFragProcessed` returned on a failed fragment, which then stayed loaded but never buffered, so subtitle
@@ -195,6 +195,10 @@ fix two subtitle bugs that stopped captions on a live channel, still present in 
   counts a failed fragment as buffered.
 - `_parseIMSC1` parsed a fragment before the main stream had the initial PTS of its discontinuity
   (`initPTS.baseTime` of undefined). The fix queues it as `_parseVTTs` does for WebVTT.
+- `onMediaDetaching` reset `tracksBuffered` to an empty array, which only `onSubtitleTracksUpdated` refills. After an
+  SGAI interstitial borrowed the media element (`transferMedia`), `onSubtitleFragProcessed` found no buffered list
+  for the track and returned, so loading stalled at the first fragment after the break. The fix keeps an empty list
+  per track and removes the subtitle fragments from the fragment tracker, as `onSubtitleTracksUpdated` does.
 
 Each edit must match exactly once, so another hls.js version fails the build until they are reviewed; drop them
 once hls.js ships equivalent fixes. A plugin rather than patch-package keeps the console free of new dependencies

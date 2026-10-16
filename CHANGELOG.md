@@ -129,9 +129,9 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - Caption tracks of titles with off-grid cue points are re-cut on the video's segments in Finalize. MediaConvert cut
   them differently after an ESAM split, so their subtitle sequence numbers drifted from the video's on every airing
   and players lost the captions.
-- Console players keep loading captions across discontinuities and SSAI breaks: the console build fixes hls.js 1.7.3
-  where a subtitle fragment that failed to parse, or arrived before the video's timestamps, stalled subtitle loading
-  for the session.
+- Console players keep loading captions across discontinuities and ad breaks: the console build fixes hls.js 1.7.3
+  where a subtitle fragment that failed to parse, arrived before the video's timestamps, or followed an SGAI
+  interstitial stalled subtitle loading for the session.
 
 ## [2.0.0] - 2026-01-30
 
