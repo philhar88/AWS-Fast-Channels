@@ -258,9 +258,11 @@ remain, because the agent forwards it to the Gateway for every tool call of a ru
   `channels___start_channel`. A started channel stops itself after `channels.max_runtime_hours` (default 4) through a
   one-time EventBridge Scheduler schedule in `<prefix>-auto-stop`, which is created before the channel starts;
   starting it again moves the stop time.
-- **Start a channel before its next block begins.** A block's first program is `ABSOLUTE` and the rest follow it.
-  When the channel starts after that first program's start time, Channel Assembly skips it and airs the rest of the
-  block at once, earlier than the EPG says.
+- **A channel can start at any time.** Every program is `ABSOLUTE` at its planned start (a not-before time), so
+  each one airs at that time, within one segment. Starting a stopped channel late removes the programs whose start
+  has passed, which would otherwise air late or replay: they are `SKIPPED` in the guide and listed in the tool's
+  `skipped` output (the agent reports them), and filler plays until the next program
+  ([channel-assembly.md](channel-assembly.md#starting-a-channel-late)).
 - Stop it the same way, or directly: `aws mediatailor stop-channel --channel-name fast-demo`.
 - A running channel without a schedule plays its filler slate. Publish at least 10 minutes ahead of air time; later
   inserts work on a best-effort basis.
@@ -390,11 +392,12 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `PLAN_STALE` on publish | The live schedule changed since planning (another publish, a removal, aired programs) | Plan again |
+| `PLAN_STALE` on publish | The live schedule changed since planning (another publish, a removal, a late channel start, aired programs) | Plan again |
 | `CONFLICT` (retryable) on publish | Another publish holds the channel's lease | Retry after it finishes |
 | Publish fails with `published <k> of <n> programs of <plan id>, then: …` | A program could not be created (a Channel Assembly error, or the function ran out of time) after the first `k` were published; they are in the library and the guide | Publish the same `plan_id` again to add the rest, or remove the published ones with `schedule___remove_programs` |
-| Programs air earlier than the EPG says, and the block's first program never airs | The channel was started after the block's first (`ABSOLUTE`) program began, so Channel Assembly skipped it and aired the rest at once | Start channels before their next block begins |
-| A block starts about a second late | `ABSOLUTE` starts snap to the next filler segment | Expected |
+| `channels___start_channel` returns `skipped` programs, `SKIPPED` in the guide | The channel started after their planned start; they were removed so that they would not air late or replay | Expected: the rest airs at its planned times. Plan a block to fill the gap if it is long |
+| `channels___start_channel` fails retryably with `removed <k> of the <n> programs … ran out of time` | Too many missed programs to remove in one call; the channel was not started | Call it again: it removes the rest, then starts the channel |
+| A program starts a few seconds late | `ABSOLUTE` starts snap to the next segment boundary of the filler or of the program before (at most one segment) | Expected |
 | Programs vanish from Channel Assembly | It deletes LINEAR programs 13–15 minutes after airing | Expected; the EPG and `schedule___get_schedule` read the library |
 | `SCHEDULING_ERROR` alert | A program or slate lacks a source group of an output, or its renditions differ | `origins___list_alerts`; re-register package configurations; check ladder versions |
 | Filler plays instead of programs | No program at that time, or a block started in the past | `schedule___get_schedule` shows the gaps; plan from now + 10 minutes |

@@ -14,6 +14,7 @@ import Table, { type TableProps } from "@cloudscape-design/components/table";
 import { useCallback, useState } from "react";
 import { ChannelActions, ChannelStateIndicator } from "../components/ChannelActions";
 import { EventLog, type LoggedEvent } from "../components/EventLog";
+import { OffAirScreen } from "../components/OffAirScreen";
 import { ProgramGuide } from "../components/ProgramGuide";
 import { useBackend } from "../lib/backend";
 import type { ChannelPlayback } from "../lib/config";
@@ -22,14 +23,19 @@ import { href } from "../lib/router";
 import { formatDateTime } from "../lib/format";
 import { getChannel, listChannels, type CdnPlayback, type ChannelSummary } from "../lib/tools";
 import { useAsync } from "../lib/useAsync";
+import { useInterval } from "../lib/useInterval";
 import { canPlayProfile, PROFILE_LABELS } from "../players/codecs";
+import { playerGate, type PlayerGate } from "../players/gate";
 import { HlsPlayer } from "../players/HlsPlayer";
 import type { PlayerEvent } from "../players/telemetry";
 
 const MAX_LOGGED_EVENTS = 200;
+/** How often an open channel page reads the channel's state: players follow a start or stop made elsewhere. */
+const STATE_POLL_MS = 15_000;
 
 export function ChannelsView({ channel }: { channel?: string | undefined }) {
-  return channel ? <ChannelDetail name={channel} /> : <ChannelList />;
+  // One instance per channel: its state, players and event log never carry over to another channel.
+  return channel ? <ChannelDetail key={channel} name={channel} /> : <ChannelList />;
 }
 
 /** A channel row; `state` is unknown until the Gateway answers. */
@@ -85,6 +91,9 @@ function ChannelDetail({ name }: { name: string }) {
   const { config, gateway } = useBackend();
   const configured = config.channels.find((c) => c.name === name);
   const detail = useAsync(useCallback(() => getChannel(gateway, name), [gateway, name]));
+  useInterval(detail.reload, STATE_POLL_MS);
+  const state = detail.data?.state;
+  const gate = playerGate(state, detail.error !== undefined);
   const live = detail.data?.playback;
   // An agent channel is known only to the Gateway; a channel without a playback configuration has no live URLs.
   const playback: ChannelPlayback = live && Object.keys(live).length > 0 ? live : (configured?.playback ?? {});
@@ -109,9 +118,9 @@ function ChannelDetail({ name }: { name: string }) {
       header={
         <Header
           variant="h1"
-          info={detail.data && <ChannelStateIndicator state={detail.data.state} />}
+          info={state && <ChannelStateIndicator state={state} />}
           description={`Ladder ${ladder ?? "unknown"} · outputs ${Object.keys(playback).join(", ") || "none"}${autoStop}`}
-          actions={<ChannelActions name={name} state={detail.data?.state} loading={detail.loading} onChanged={detail.reload} />}
+          actions={<ChannelActions name={name} state={state} loading={detail.loading} onChanged={detail.reload} />}
         >
           {name}
         </Header>
@@ -123,20 +132,30 @@ function ChannelDetail({ name }: { name: string }) {
             {errorMessage(detail.error)}
           </Alert>
         )}
-        <Playback playback={playback} otherCdns={detail.data?.cdn_playback?.slice(1) ?? []} cdnBaseUrl={config.cdnBaseUrl} onEvent={onEvent} />
+        <Playback
+          channel={name}
+          gate={gate}
+          playback={playback}
+          otherCdns={detail.data?.cdn_playback?.slice(1) ?? []}
+          cdnBaseUrl={config.cdnBaseUrl}
+          onEvent={onEvent}
+        />
         <EventLog
           events={events}
           onClear={() => {
             setEvents([]);
           }}
         />
-        <ProgramGuide channel={name} />
+        <ProgramGuide channel={name} onAir={state === undefined ? undefined : state === "RUNNING"} />
       </SpaceBetween>
     </ContentLayout>
   );
 }
 
 interface PlaybackProps {
+  readonly channel: string;
+  /** Whether the players may open sessions (players/gate.ts). */
+  readonly gate: PlayerGate;
   readonly playback: ChannelPlayback;
   /** The same URLs through the deployment's other CDNs (`delivery.cdns`), listed for copying. */
   readonly otherCdns: readonly CdnPlayback[];
@@ -144,8 +163,11 @@ interface PlaybackProps {
   readonly onEvent: (event: PlayerEvent) => void;
 }
 
-/** SSAI (stitched) and SGAI (HLS Interstitials) sessions of the same output, side by side. */
-function Playback({ playback, otherCdns, cdnBaseUrl, onEvent }: PlaybackProps) {
+/**
+ * SSAI (stitched) and SGAI (HLS Interstitials) sessions of the same output, side by side. The players mount when
+ * the channel runs, so a Start (here or by the agent) brings them up without a reload, and unmount when it stops.
+ */
+function Playback({ channel, gate, playback, otherCdns, cdnBaseUrl, onEvent }: PlaybackProps) {
   const hlsOutputs = Object.keys(playback).filter((output) => playback[output]?.ssai);
   const dashOutputs = Object.entries(playback).flatMap(([output, urls]) => (urls.dash ? [{ output, url: urls.dash }] : []));
   const [chosen, setChosen] = useState<string>();
@@ -184,14 +206,20 @@ function Playback({ playback, otherCdns, cdnBaseUrl, onEvent }: PlaybackProps) {
           <ColumnLayout columns={2}>
             <SpaceBetween size="xs">
               <Box variant="h3">Server-side ad insertion (stitched)</Box>
-              <HlsPlayer key={ssai} src={ssai} mode="ssai" cdnBaseUrl={cdnBaseUrl} label="SSAI player" onEvent={onEvent} />
+              {gate.kind === "play" ? (
+                <HlsPlayer key={ssai} src={ssai} mode="ssai" cdnBaseUrl={cdnBaseUrl} label="SSAI player" onEvent={onEvent} />
+              ) : (
+                <OffAirScreen channel={channel} gate={gate} />
+              )}
             </SpaceBetween>
             <SpaceBetween size="xs">
               <Box variant="h3">Server-guided ad insertion (HLS Interstitials)</Box>
-              {sgai ? (
+              {!sgai ? (
+                <Box color="text-body-secondary">No SGAI URL for this output.</Box>
+              ) : gate.kind === "play" ? (
                 <HlsPlayer key={sgai} src={sgai} mode="sgai" cdnBaseUrl={cdnBaseUrl} label="SGAI player" onEvent={onEvent} />
               ) : (
-                <Box color="text-body-secondary">No SGAI URL for this output.</Box>
+                <OffAirScreen channel={channel} gate={gate} />
               )}
             </SpaceBetween>
           </ColumnLayout>

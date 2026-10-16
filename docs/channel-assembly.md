@@ -158,9 +158,11 @@ schedule:
 
 1. Takes a per-channel lease (a conditional DynamoDB item with a TTL): Channel Assembly rejects concurrent schedule
    edits with `ConflictException`, so there is one writer per channel.
-2. Re-anchors the block after the live program that precedes it *in time*. The first program is `ABSOLUTE` at its
-   planned start and the rest are `RELATIVE` (`AFTER_PROGRAM`). List order beats wall-clock time for `ABSOLUTE`
-   programs, so the anchor matters; a block before the whole schedule is placed `BEFORE_PROGRAM`.
+2. Re-anchors the block after the live program that precedes it *in time*. Every program is `ABSOLUTE` at its
+   planned start: the first is linked `AFTER_PROGRAM` that live program and each other one after its predecessor in
+   the block. List order beats wall-clock time for `ABSOLUTE` programs, so the anchor matters; a block before the
+   whole schedule is placed `BEFORE_PROGRAM` its first program. `ABSOLUTE` starts must be in the future when they
+   are created, which the re-validation below enforces (`START_IN_PAST`).
 3. Fails with `PLAN_STALE` when the live schedule from the anchor on changed since planning, or when re-validation
    finds new errors (including an asset that is no longer `READY`). Plan again.
 4. Calls `CreateProgram` strictly in sequence at 3 TPS or less, writing each program's `PROGRAM#` item as soon as
@@ -174,12 +176,41 @@ If a program cannot be created (an error, or the function nearing its timeout), 
 for what was published and fails with the error's code and `published <k> of <n> programs of <plan id>`. Publishing
 the same `plan_id` again adds the rest; `schedule___remove_programs` takes the published ones off instead.
 
-An `ABSOLUTE` start snaps to the next filler segment boundary, so a block can start up to about one second late.
-Start the channel before the block's first program: when a channel starts after that program's start time, Channel
-Assembly skips it and airs the block's `RELATIVE` programs at once, earlier than the guide says.
+**Timing.** An `ABSOLUTE` start is a not-before time. A gap before it plays filler slate, and a program still airing
+at that time is cut at a common segment boundary. A program therefore starts at its planned time or up to one
+segment (about 6 s) later: after filler it waits for the next filler segment boundary, and after a program that runs
+late it waits for that program's next segment boundary, so the late program loses at most its last segment. The
+delay never accumulates across a block, because every program re-anchors on its own start.
 
-`schedule___remove_programs` (approval required) removes programs that have not started. Later programs of the same
-block move up, like Channel Assembly re-links them; the next block keeps its start and filler plays in between.
+`schedule___remove_programs` (approval required) removes programs that have not started. Every other program keeps
+its `ABSOLUTE` start, so filler plays in their place.
+
+### Starting a channel late
+
+A channel can be started at any time; the guide stays true. Channel Assembly plays a stopped channel's schedule from
+its head when it starts: a program whose start has passed would start with the channel, late, and be cut at the next
+program's start, and an aired program it has not deleted yet (about 15 minutes after it ends) would play again. So
+`channels___start_channel` on a stopped channel first removes every program whose planned start has passed (missed,
+on air, or aired), within the schedule lease, at 3 `DeleteProgram` calls per second with conflict retries, and
+within the function's time budget (a call that runs out of time fails retryably before starting the channel; calling
+again resumes). Then:
+
+- the removed programs that had not aired become `SKIPPED` in the media library: the JSON guide keeps them with that
+  status and the XMLTV guide leaves them out;
+- the tool returns them in `skipped` (name, title, planned start and end) with a `hint` the agent relays to the
+  operator;
+- every later program is untouched and airs at its planned time; filler slate plays until the next one.
+
+Planned starts come from the media library. A program the library does not know counts by Channel Assembly's start,
+except a `RELATIVE` one, which a stopped channel lists at 1970: its air time is unknown, so it stays. A program that
+aired is never marked `SKIPPED`, but that relies on the as-run reconciliation (see below); without it, an aired program
+removed to stop it replaying is marked `SKIPPED` too. Starting a running channel only moves its auto-stop.
+
+Observed on 2026-10-16 without the removal: with an `ABSOLUTE` program planned 09:03:11-09:06:21 and the next one at
+09:06:21.123, a channel started at 09:03:43 played the first program from its beginning at 09:03:43 (no
+`VodProgramStart` in the as-run log) and cut it at 09:06:25.454, where the second program started: 4.3 s late,
+within one 6.006 s segment. The end-to-end suite (`tests/e2e/test_07_late_start.py`) checks the behaviour with the
+removal: the program on air at the start is reported skipped and never airs, and the next one airs on time.
 
 ## The schedule of record and the EPG
 
@@ -191,6 +222,8 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   `<CdnBaseUrl>/epg/<channel>.json`.
 - Channel Assembly writes `VodProgramStart` events to the account's as-run log group `MediaTailor/Channel/AsRunLog`.
   A subscription filter sends this deployment's events to a reconciler that marks programs `AIRED` with `aired_at`.
+- Programs removed unaired when a channel starts late are `SKIPPED` ([Starting a channel late](#starting-a-channel-late)):
+  listed with that status in the JSON feed, left out of the XMLTV feed.
 - `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow
   without bound; the guide shows the last 6 hours.
 

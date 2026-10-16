@@ -5,7 +5,7 @@ tools, airs it on the channel, plays it through the CDN, and asks the agent a qu
 gate (CONTRIBUTING.md). The manual GitHub workflow `.github/workflows/e2e.yml` runs it between a deploy and a destroy.
 
 ```bash
-uv run pytest tests/e2e -m e2e --prefix <prefix> -v      # against FastChannels-<prefix>-* (about 30 minutes)
+uv run pytest tests/e2e -m e2e --prefix <prefix> -v      # against FastChannels-<prefix>-* (about 40 minutes)
 uv run pytest tests/e2e -m e2e -v                        # the prefix in cdk.json (fast-channels.prefix)
 uv run pytest tests/e2e -m e2e --prefix <prefix> -k agent   # one part only
 uv run pytest tests/e2e -m "not e2e"                     # offline unit tests of the helpers and scripts
@@ -28,14 +28,16 @@ given. The report header prints the run id. That id is the correlation id of the
   - read the stacks (`cloudformation:DescribeStacks`);
   - put objects into the ingest bucket, and read the media bucket and the media library table;
   - call `states:DescribeExecution`, `lambda:InvokeFunction` on the tool functions,
-    `mediatailor:Describe*`/`ListAlerts` and `cognito-idp:DescribeUserPoolClient`.
+    `mediatailor:Describe*`/`ListAlerts`, `cognito-idp:DescribeUserPoolClient`, and `logs:FilterLogEvents` on
+    Channel Assembly's as-run log group `MediaTailor/Channel/AsRunLog`.
 
   The deploying role has all of these.
 - `ffmpeg` on the `PATH`, to render the synthetic source.
 - Outbound HTTPS to the CDN, Cognito and Amazon Bedrock AgentCore.
 
 A run costs about one US dollar. Most of that is the MediaConvert encode (about $0.65 for 70 s with the standard
-ladder). The rest is about ten minutes of a BASIC channel, one agent turn, and cents of CloudFront, S3 and logs.
+ladder). The rest is about fifteen minutes of a BASIC channel, one agent turn, and cents of CloudFront, S3 and
+logs.
 
 ## What runs, in order
 
@@ -49,6 +51,7 @@ Session fixtures (`conftest.py`) do each slow step once, when a test first needs
 | `test_04_channel` | Call `schedule___plan` and `schedule___publish` for three programs, starting in about 2.5 minutes, with one 30 s break each. Then `channels___start_channel`. The tool Lambdas are invoked the way AgentCore Gateway invokes them (`bedrockAgentCoreToolName` in the client context). One SSAI, one SGAI and one DASH session then watch the breaks air. | The SSAI multivariant lists every codec family (`avc1`, `hvc1`, `av01`). A media playlist per family and per audio group plays. Each single-codec output carries only its codec. SSAI stitches ads from the second break on. SGAI shows an `com.apple.hls.interstitial` DATERANGE, and its asset lists carry ads that are readable via `/preconditioned-ads/*`. The DASH MPD is dynamic, uses its output's codec, and gets ad periods. Neither the channel nor the VOD source has a `SCHEDULING_ERROR`. |
 | `test_05_agent` | Get a client-credentials token for the autopilot app client. Send one AG-UI `RunAgentInput`, "List the channels.", to the runtime. | `RUN_STARTED` … `RUN_FINISHED`, a `channels___list_channels` tool call, and no `RUN_ERROR`. |
 | `test_06_stop` | `channels___stop_channel` | The channel is STOPPED. The session teardown stops it again, whatever failed before. |
+| `test_07_late_start` | With the channel stopped, publish two programs starting in 3 minutes, with one 2-minute break each. Start the channel 30 s after the first program's start. Stop it at the end of the module. | `channels___start_channel` reports the first program in `skipped` (and only programs whose start had passed), the media library marks it `SKIPPED`, and the as-run log shows the second program starting at its planned time, within one segment, and no start of the first. |
 
 Timing and behaviour worth knowing:
 
@@ -68,8 +71,8 @@ Timing and behaviour worth knowing:
   `e2e/e2e-pattern.mp4` (with `.json`) in the ingest bucket. The pipeline refuses to encode a `READY` asset again
   in place (it would overwrite the media its VOD source serves), so a second run against the same stage fails at
   ingest with `IngestRefusedError … is already READY`. Run the suite against a fresh stage, as the workflow does.
-- Its three programs. Channel Assembly deletes aired programs about 15 minutes later. Their EPG entries stay in the
-  media library and in `epg/<channel>.json`.
+- Its five programs (the late start's first one `SKIPPED`). Channel Assembly deletes aired programs about 15
+  minutes later. Their EPG entries stay in the media library and in `epg/<channel>.json`.
 - The channel, stopped.
 
 `make destroy` removes all of it. If a destroy fails, `uv run python scripts/cleanup.py --prefix <prefix>` lists

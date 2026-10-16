@@ -203,11 +203,18 @@ export const summary = ({ name, state, owner, ladder_version, outputs, tier }: C
 const programName = (startMs: number, asset: string) =>
   `${new Date(startMs).toISOString().replaceAll(/[-:]/g, "").slice(0, 15)}-${asset}`;
 
-function epgProgram(item: Title, startMs: number, now: number): EpgProgram {
+/**
+ * fast-demo was started this long ago, after its schedule had begun. Starting a channel skips every program planned
+ * to start before then (channels.start_channel), so the in-progress program and the ones before it are SKIPPED.
+ */
+const STARTED_AGO_MS: Readonly<Record<string, number>> = { "fast-demo": 20 * 60_000 };
+
+function epgProgram(item: Title, startMs: number, now: number, startedAt: number, skipped: ReadonlySet<string>): EpgProgram {
   const breaks: EpgBreak[] = breakOffsets(item.duration_ms).map((offset_ms) => ({ offset_ms, duration_ms: BREAK_MS }));
   const endMs = startMs + item.duration_ms + breaks.length * BREAK_MS;
+  const name = programName(startMs, assetId(item.content_id));
   return {
-    name: programName(startMs, assetId(item.content_id)),
+    name,
     title: item.title,
     content_id: item.content_id,
     asset_id: assetId(item.content_id),
@@ -216,13 +223,17 @@ function epgProgram(item: Title, startMs: number, now: number): EpgProgram {
     rating: item.rating,
     genres: item.genres,
     breaks,
-    status: endMs < now ? "AIRED" : "PUBLISHED",
+    status: startMs < startedAt || skipped.has(name) ? "SKIPPED" : endMs < now ? "AIRED" : "PUBLISHED",
   };
 }
 
-/** A schedule from the top of the previous hour to four hours ahead, back to back. */
-export function mockEpg(channel: string, now = Date.now()): Epg {
+/**
+ * A schedule from the top of the previous hour to four hours ahead, back to back. `skipped`: programs a start in
+ * this mock session skipped (mockGateway).
+ */
+export function mockEpg(channel: string, now = Date.now(), skipped: ReadonlySet<string> = new Set()): Epg {
   const hour = 3_600_000;
+  const startedAt = now - (STARTED_AGO_MS[channel] ?? Infinity);
   const programs: EpgProgram[] = [];
   let start = Math.floor(now / hour) * hour - hour;
   for (let i = channel === "fast-kids" ? 4 : 0; start < now + 4 * hour; i++) {
@@ -230,7 +241,7 @@ export function mockEpg(channel: string, now = Date.now()): Epg {
     if (!item) {
       break;
     }
-    const program = epgProgram(item, start, now);
+    const program = epgProgram(item, start, now, startedAt, skipped);
     programs.push(program);
     start = Date.parse(program.end);
   }

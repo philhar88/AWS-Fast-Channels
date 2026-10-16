@@ -261,6 +261,33 @@ def test_get_schedule_lists_upcoming_programs_and_gaps(aws_stubs: SimpleNamespac
     assert (gap.start_ms, gap.end_ms, gap.duration_ms) == (first.end_ms, second.start_ms, 600_000)
 
 
+def test_get_schedule_lists_skipped_programs_but_not_as_scheduled(aws_stubs: SimpleNamespace) -> None:
+    skipped = program("skipped", NOW - 600_000).model_copy(update={"status": store.ProgramStatus.SKIPPED})
+    get_item(aws_stubs.ddb, store.channel_key(CHANNEL), channel().to_item())
+    query(aws_stubs.ddb, skipped.to_item())
+
+    result = schedule.get_schedule(schedule.ChannelInput(channel=CHANNEL), CTX)
+
+    assert [(p.name, p.status) for p in result.programs] == [("skipped", "SKIPPED")]
+    assert (result.end_ms, result.end, result.gaps) == (None, None, [])  # filler airs: nothing is scheduled
+
+
+def test_plan_ignores_skipped_programs(aws_stubs: SimpleNamespace) -> None:
+    skipped = program("skipped", NOW + 300_000).model_copy(update={"status": store.ProgramStatus.SKIPPED})
+    ddb = aws_stubs.ddb
+    get_item(ddb, store.channel_key(CHANNEL), channel(brief=None).to_item())
+    get_item(ddb, store.ladder_key(LV), ladder().to_item())
+    query(ddb, skipped.to_item())
+    get_item(ddb, store.asset_key("bbb", LV), asset("bbb", content_id=None).to_item())
+    ddb.add_response("put_item", {})
+    aws_stubs.mt.add_response("get_channel_schedule", {"Items": []}, schedule_request())
+
+    result = schedule.plan(schedule.PlanInput(channel=CHANNEL, picks=["bbb"]), CTX)
+
+    assert result.start_ms == NOW + timeline.LEAD_TIME_MS  # an empty schedule: it does not append to the skipped one
+    assert result.publishable and not [v for v in result.violations if v.code == "OVERLAP"]
+
+
 def test_unknown_channel_is_not_found(aws_stubs: SimpleNamespace) -> None:
     get_item(aws_stubs.ddb, store.channel_key("nope"))
     with pytest.raises(ToolError) as raised:
@@ -411,7 +438,12 @@ def test_a_block_before_the_whole_schedule_goes_in_front_of_its_first_program() 
         "RelativeProgram": "later",
         "ScheduledStartTimeMillis": plan.start_ms,
     }
-    assert second["ScheduleConfiguration"]["Transition"]["RelativeProgram"] == plan.programs[0].name
+    assert second["ScheduleConfiguration"]["Transition"] == {
+        "Type": "ABSOLUTE",
+        "RelativePosition": "AFTER_PROGRAM",
+        "RelativeProgram": plan.programs[0].name,
+        "ScheduledStartTimeMillis": plan.programs[1].start_ms,
+    }
     resumed = schedule._requests(
         record, slates={30: "slate-30"}, source_location="fast-origin", position=position, live=[first["ProgramName"]]
     )
@@ -480,7 +512,12 @@ def test_publish_links_the_block_after_the_preceding_program(aws_stubs: SimpleNa
         "ScheduledStartTimeMillis": plan.start_ms,
         "RelativeProgram": "prev",
     }
-    assert second["ScheduleConfiguration"]["Transition"]["RelativeProgram"] == plan.programs[0].name
+    assert second["ScheduleConfiguration"]["Transition"] == {
+        "Type": "ABSOLUTE",
+        "RelativePosition": "AFTER_PROGRAM",
+        "ScheduledStartTimeMillis": plan.programs[1].start_ms,
+        "RelativeProgram": plan.programs[0].name,
+    }
     assert first["SourceLocationName"] == "fast-origin" and first["VodSourceName"] == "fast-bbb"
     ad_break = first["AdBreaks"][0]
     assert ad_break["MessageType"] == "TIME_SIGNAL"
@@ -758,36 +795,24 @@ def test_a_lease_taken_over_after_expiry_is_not_released(aws_stubs: SimpleNamesp
 # --- remove_programs ------------------------------------------------------------------------------------------------
 
 
-def test_reflow_moves_relative_successors_like_channel_assembly() -> None:
-    a1, a2 = program("a1", 1_000, 100, "A"), program("a2", 1_100, 100, "A")
-    b1, b2 = program("b1", 2_000, 100, "B"), program("b2", 2_100, 100, "B")
-    assert [p.start_ms for p in schedule.reflow([a1, a2, b1, b2], {"a1"})] == [1_100, 2_000, 2_100]
-    assert [p.start_ms for p in schedule.reflow([a1, a2, b1, b2], {"a2"})] == [1_000, 2_000, 2_100]
-    assert [p.start_ms for p in schedule.reflow([a1, a2, b1, b2], {"b1"})] == [1_000, 1_100, 1_200]
-
-
-def test_remove_programs_deletes_and_moves_up_the_rest_of_the_block(aws_stubs: SimpleNamespace) -> None:
+def test_remove_programs_leaves_every_other_program_at_its_start(aws_stubs: SimpleNamespace) -> None:
     a, b, c = (program(name, NOW + 600_000 + i * 1_200_000, plan_id="blk") for i, name in enumerate("abc"))
-    moved_c = c.model_copy(update={"start_ms": b.start_ms})
+    on_air = program("on-air", NOW - 60_000)
     ddb = aws_stubs.ddb
     get_item(ddb, store.channel_key(CHANNEL), channel().to_item())
     ddb.add_response("put_item", {})  # lease
-    query(ddb, a.to_item(), b.to_item(), c.to_item())
+    query(ddb, on_air.to_item(), a.to_item(), b.to_item(), c.to_item())
     aws_stubs.mt.add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": "b"})
     ddb.add_response("delete_item", {}, {"TableName": TABLE, "Key": b.key()})
-    ddb.add_response("delete_item", {}, {"TableName": TABLE, "Key": c.key()})
-    ddb.add_response("put_item", {})
-    query(ddb, a.to_item(), moved_c.to_item())
-    aws_stubs.s3.add_response("put_object", {})
-    aws_stubs.s3.add_response("put_object", {})
+    guide_written(aws_stubs, on_air, a, c)
     ddb.add_response("delete_item", {})  # lease
 
-    result = schedule.remove_programs(schedule.RemoveProgramsInput(channel=CHANNEL, programs=["b", "zz"]), CTX)
+    payload = schedule.RemoveProgramsInput(channel=CHANNEL, programs=["b", "on-air", "zz", "b"])
+    result = schedule.remove_programs(payload, CTX)
 
-    assert result.removed == ["b"] and result.not_found == ["zz"]
-    assert [(p.name, p.start) for p in result.moved] == [("c", store.iso(b.start_ms))]
-    moved_item = aws_stubs.calls.of("PutItem")[1]["Item"]
-    assert (moved_item["sk"], moved_item["name"]) == (moved_c.key()["sk"], "c")
+    assert result.removed == ["b"] and result.not_found == ["on-air", "zz"]
+    assert [put["Item"]["sk"] for put in aws_stubs.calls.of("PutItem")] == ["LEASE"]  # c keeps its ABSOLUTE start
+    assert "moved" not in result.model_dump()
 
 
 # --- briefs ---------------------------------------------------------------------------------------------------------

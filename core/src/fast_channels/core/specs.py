@@ -124,22 +124,36 @@ def ad_breaks(
 
 
 def program_requests(
-    plan: Plan, *, source_location: str, slate_vod_sources: Mapping[int, str], after_program: str | None
+    plan: Plan,
+    *,
+    source_location: str,
+    slate_vod_sources: Mapping[int, str],
+    after_program: str | None = None,
+    before_program: str | None = None,
 ) -> list[dict[str, Any]]:
-    """CreateProgram requests for a plan, in creation order.
+    """CreateProgram requests for a plan, in creation order: every program ``ABSOLUTE`` at its planned start.
 
-    The first program is ABSOLUTE at its planned start and the rest RELATIVE after their predecessor. The list
-    order defines play order even for ABSOLUTE programs, so ``after_program`` must be the scheduled program that
-    precedes the block in time (``None`` on an empty schedule; channel-assembly.md §5.3).
+    An ``ABSOLUTE`` start is a not-before time: Channel Assembly fills a gap before it with filler slate and truncates
+    an overrunning predecessor at a common segment boundary, so every program airs at its planned time (within one
+    segment) however late the channel starts. The list order still defines play order (channel-assembly.md §5.3):
+    each program goes after its predecessor in the plan, and the first one after ``after_program``, the scheduled
+    program that precedes the block in time, or before ``before_program``, the first scheduled program, when
+    nothing precedes the block. Give neither on an empty schedule.
     """
+    if after_program is not None and before_program is not None:
+        raise ValueError("give after_program or before_program, not both")
+    position, relative = (
+        ("AFTER_PROGRAM", after_program) if before_program is None else ("BEFORE_PROGRAM", before_program)
+    )
     requests = []
-    previous = after_program
-    for i, p in enumerate(plan.programs):
-        transition: dict[str, Any] = {"Type": "RELATIVE", "RelativePosition": "AFTER_PROGRAM"}
-        if i == 0:
-            transition |= {"Type": "ABSOLUTE", "ScheduledStartTimeMillis": p.start_ms}
-        if previous is not None:
-            transition["RelativeProgram"] = previous
+    for p in plan.programs:
+        transition: dict[str, Any] = {
+            "Type": "ABSOLUTE",
+            "RelativePosition": position,
+            "ScheduledStartTimeMillis": p.start_ms,
+        }
+        if relative is not None:
+            transition["RelativeProgram"] = relative
         requests.append(
             {
                 "ChannelName": plan.channel,
@@ -150,7 +164,7 @@ def program_requests(
                 "AdBreaks": ad_breaks(p, source_location=source_location, slate_vod_sources=slate_vod_sources),
             }
         )
-        previous = p.name
+        position, relative = "AFTER_PROGRAM", p.name
     return requests
 
 

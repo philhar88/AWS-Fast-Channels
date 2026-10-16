@@ -5,9 +5,9 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useState } from "react";
 import { useBackend } from "../lib/backend";
-import { formatDateTime } from "../lib/format";
+import { formatClock, formatDateTime } from "../lib/format";
 import { errorNotice, useNotifications, type Notice } from "../lib/notifications";
-import { startChannel, stopChannel, type ChannelState, type ChannelStateChange } from "../lib/tools";
+import { startChannel, stopChannel, type ChannelState, type StartChannelResult } from "../lib/tools";
 
 export function ChannelStateIndicator({ state }: { state: ChannelState | undefined }) {
   switch (state) {
@@ -25,15 +25,21 @@ export function ChannelStateIndicator({ state }: { state: ChannelState | undefin
 
 type Action = "start" | "stop";
 
-/** Success, or a warning when the channel reports SCHEDULING_ERROR alerts (they break playback). */
-function stateChangeNotice(name: string, result: ChannelStateChange): Notice {
+/**
+ * Success, or a warning when the start skipped programs whose planned start had passed, or the channel reports
+ * SCHEDULING_ERROR alerts (they break playback).
+ */
+function stateChangeNotice(name: string, result: StartChannelResult): Notice {
   const [first, ...more] = result.alerts.filter((alert) => alert.category === "SCHEDULING_ERROR");
+  const skipped = result.skipped ?? [];
   const lines = [
     result.auto_stop_at && `It stops automatically at ${formatDateTime(result.auto_stop_at)}.`,
+    skipped.length > 0 &&
+      `Skipped because their start had passed: ${skipped.map((p) => `${p.title} (${formatClock(p.start)})`).join(", ")}. Filler plays until the next program.`,
     first && `Scheduling error ${first.code}: ${first.message}${more.length > 0 ? ` (and ${more.length} more)` : ""}`,
   ];
   return {
-    type: first ? "warning" : "success",
+    type: first || skipped.length > 0 ? "warning" : "success",
     header: `${name} is ${result.state === "RUNNING" ? "running" : "stopped"}`,
     content: lines.filter(Boolean).join(" ") || undefined,
   };

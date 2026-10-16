@@ -1,3 +1,4 @@
+import io
 import json
 import time
 from collections.abc import Iterator
@@ -296,22 +297,87 @@ def test_get_channel_without_live_channel_or_playback_configuration(
 
 # --- start / stop ---------------------------------------------------------------------------------------------------
 
+NOW = 1_792_152_000_000
+"""2026-10-16T12:00:00Z."""
+
+
+def program(name: str, start_ms: int, status: str = "PUBLISHED", duration_ms: int = 1_200_000) -> store.ProgramRecord:
+    return store.ProgramRecord(
+        channel="fast-demo",
+        status=status,
+        name=name,
+        asset_id=f"asset-{name}",
+        vod_source=f"fast-{name}",
+        content_id=None,
+        start_ms=start_ms,
+        duration_ms=duration_ms,
+        breaks=[],
+        ladder_version=LV,
+        plan_id="blk",
+        title=name.title(),
+    )
+
+
+def live(*entries: tuple[str, int]) -> dict[str, Any]:
+    """GetChannelSchedule of a stopped channel: its programs in list order (RELATIVE ones at 1970)."""
+    return {
+        "Items": [
+            {
+                "Arn": f"arn:aws:mediatailor:us-east-1:{ACCOUNT}:program/fast-demo/{name}",
+                "ChannelName": "fast-demo",
+                "ProgramName": name,
+                "SourceLocationName": "fast-origin",
+                "ScheduleEntryType": "PROGRAM",
+                "ApproximateStartTime": datetime.fromtimestamp(start / 1000, UTC),
+            }
+            for name, start in entries
+        ]
+    }
+
+
+def body(put_object: dict[str, Any]) -> bytes:
+    """The body of a recorded PutObject (botocore wraps it in a file object after the call is recorded)."""
+    content = put_object["Body"]
+    return content.getvalue() if isinstance(content, io.BytesIO) else bytes(content)
+
+
+@pytest.fixture(autouse=True)
+def clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(channels, "now_ms", lambda: NOW)
+
+
+def nothing_missed(aws_stubs: SimpleNamespace, *programs: store.ProgramRecord) -> None:
+    """The lease, the library and the live schedule of a stopped channel whose programs all start later."""
+    aws_stubs.ddb.add_response("put_item", {})  # lease
+    query(aws_stubs.ddb, *(p.to_item() for p in programs))
+    aws_stubs.mt.add_response("get_channel_schedule", live(*((p.name, p.start_ms) for p in programs)))
+    aws_stubs.ddb.add_response("delete_item", {})  # lease
+
+
+def started(aws_stubs: SimpleNamespace) -> None:
+    """``channel_ops.start_channel`` of a stopped channel, then the alerts."""
+    mt = aws_stubs.mt
+    mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
+    mt.add_response("start_channel", {}, {"ChannelName": "fast-demo"})
+    mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
+    mt.add_response("list_alerts", {"Items": []}, {"ResourceArn": described("fast-demo", "RUNNING")["Arn"]})
+
 
 def test_start_channel_schedules_the_auto_stop(aws_stubs: SimpleNamespace) -> None:
     mt, scheduler = aws_stubs.mt, aws_stubs.scheduler
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
     mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
-    mt.add_response("start_channel", {}, {"ChannelName": "fast-demo"})
-    mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
+    nothing_missed(aws_stubs, program("later", NOW + 600_000))
     scheduler.add_client_error("create_schedule", "ConflictException", "Schedule fast-demo-auto-stop already exists.")
     scheduler.add_response("update_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
-    mt.add_response("list_alerts", {"Items": []}, {"ResourceArn": described("fast-demo", "RUNNING")["Arn"]})
+    started(aws_stubs)
 
     before = datetime.now(UTC)
     result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
 
     names = aws_stubs.calls.names()
     assert names.index("UpdateSchedule") < names.index("StartChannel")  # never running without a pending stop
+    assert "DeleteProgram" not in names  # the schedule starts later: nothing missed
     [created], [request] = aws_stubs.calls.of("CreateSchedule"), aws_stubs.calls.of("UpdateSchedule")
     assert {k: v for k, v in created.items() if k != "ClientToken"} == {
         k: v for k, v in request.items() if k != "ClientToken"
@@ -330,6 +396,117 @@ def test_start_channel_schedules_the_auto_stop(aws_stubs: SimpleNamespace) -> No
     stop_at = datetime.fromisoformat(request["ScheduleExpression"].removeprefix("at(").removesuffix(")"))
     assert abs(stop_at.replace(tzinfo=UTC) - before - timedelta(hours=4)) < timedelta(seconds=5)
     assert result.state == "RUNNING" and result.auto_stop_at == f"{stop_at:%Y-%m-%dT%H:%M:%S}Z"
+    assert (result.skipped, result.hint) == (None, None)
+    assert "skipped" not in result.model_dump(exclude_none=True)  # the wire format omits it
+
+
+def test_starting_a_stopped_channel_late_skips_the_programs_it_missed(aws_stubs: SimpleNamespace) -> None:
+    # Channel Assembly still holds an aired program (deleted ~15 min after it ends), one missed while the channel was
+    # stopped, one that should be on air now, a foreign ABSOLUTE program from before now, foreign RELATIVE programs
+    # (listed from 1970: their air time is unknown) and the rest of the schedule.
+    aired = program("aired", NOW - 2_400_000, status="AIRED")
+    missed, on_air, later = (
+        program("missed", NOW - 1_200_000),
+        program("on-air", NOW - 30_000),
+        program("later", NOW + 1_170_000),
+    )
+    ddb, mt = aws_stubs.ddb, aws_stubs.mt
+    get_item(ddb, store.channel_key("fast-demo"), channel().to_item())
+    mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
+    ddb.add_response("put_item", {})  # lease
+    query(ddb, aired.to_item(), missed.to_item(), on_air.to_item(), later.to_item())
+    schedule = live(
+        ("foreign-absolute", NOW - 7_200_000),
+        (aired.name, 0),
+        (missed.name, 0),
+        (on_air.name, on_air.start_ms),
+        ("foreign-relative", 0),
+        ("foreign-relative-2", 1_200_000),  # the stopped channel's RELATIVE chain runs from 1970
+        (later.name, later.start_ms),
+    )
+    mt.add_response("get_channel_schedule", schedule)
+    for name in ("foreign-absolute", aired.name, missed.name, on_air.name):
+        mt.add_response("delete_program", {}, {"ChannelName": "fast-demo", "ProgramName": name})
+    ddb.add_response("put_item", {})  # missed: SKIPPED
+    ddb.add_response("put_item", {})  # on air: SKIPPED
+    skipped = [p.model_copy(update={"status": store.ProgramStatus.SKIPPED}) for p in (missed, on_air)]
+    query(ddb, aired.to_item(), *(p.to_item() for p in skipped), later.to_item())  # the guide
+    aws_stubs.s3.add_response("put_object", {})
+    aws_stubs.s3.add_response("put_object", {})
+    ddb.add_response("delete_item", {})  # lease
+    aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
+    started(aws_stubs)
+
+    result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
+
+    names = aws_stubs.calls.names()
+    assert [d["ProgramName"] for d in aws_stubs.calls.of("DeleteProgram")] == [
+        "foreign-absolute",
+        "aired",
+        "missed",
+        "on-air",
+    ]
+    deletes = [i for i, n in enumerate(names) if n == "DeleteProgram"]
+    assert [i for i, n in enumerate(names) if n == "PutItem"][-1] < deletes[0]  # marked SKIPPED first
+    assert deletes[-1] < names.index("StartChannel")
+    lease, *marked = aws_stubs.calls.of("PutItem")
+    assert lease["Item"]["sk"] == "LEASE" and lease["Item"]["owner"] == f"start.{CTX.correlation_id}"
+    assert [(m["Item"]["name"], m["Item"]["status"]) for m in marked] == [("missed", "SKIPPED"), ("on-air", "SKIPPED")]
+    assert all("ConditionExpression" in m for m in marked)  # never over an AIRED status
+    feed, xmltv = (body(put) for put in aws_stubs.calls.of("PutObject"))
+    statuses = {p["name"]: p["status"] for p in json.loads(feed)["programs"]}
+    assert statuses == {"aired": "AIRED", "missed": "SKIPPED", "on-air": "SKIPPED", "later": "PUBLISHED"}
+    assert b"Missed" not in xmltv and b"On-Air" not in xmltv and b"Later" in xmltv
+    assert result.skipped == [
+        channels.SkippedProgram(name=p.name, title=p.title or "", start=store.iso(p.start_ms), end=store.iso(p.end_ms))
+        for p in (missed, on_air)
+    ]
+    assert (
+        result.hint is not None and "2 program(s)" in result.hint and "On-Air (2026-10-16T11:59:30.000Z)" in result.hint
+    )
+
+
+def test_a_program_that_aired_meanwhile_is_not_marked_skipped(aws_stubs: SimpleNamespace) -> None:
+    aws_stubs.ddb.add_client_error("put_item", "ConditionalCheckFailedException")
+    assert channels._mark_skipped(program("raced", NOW - 60_000)) is None
+    assert channels._mark_skipped(program("aired", NOW - 60_000, status="AIRED")) is None
+    assert len(aws_stubs.calls.of("PutItem")) == 1
+
+
+def test_a_late_start_out_of_time_does_not_start_the_channel(aws_stubs: SimpleNamespace) -> None:
+    ddb, mt = aws_stubs.ddb, aws_stubs.mt
+    get_item(ddb, store.channel_key("fast-demo"), channel().to_item())
+    mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
+    ddb.add_response("put_item", {})  # lease
+    query(ddb)
+    mt.add_response("get_channel_schedule", live(("a", NOW - 60_000), ("b", NOW - 30_000)))
+    query(ddb)  # the guide
+    aws_stubs.s3.add_response("put_object", {})
+    aws_stubs.s3.add_response("put_object", {})
+    ddb.add_response("delete_item", {})  # lease
+    ending = ToolContext(
+        tool="channels___start_channel",
+        correlation_id="s",
+        invocation=SimpleNamespace(get_remaining_time_in_millis=lambda: channels.START_TIME_MARGIN_MS - 1),
+    )
+
+    with pytest.raises(ToolError) as raised:
+        channels.start_channel(ChannelInput(channel="fast-demo"), ending)
+
+    assert (raised.value.code, raised.value.retryable) == ("UPSTREAM", True)
+    assert "removed 0 of the 2 programs" in raised.value.message and "channels___start_channel" in raised.value.hint
+    assert not {"DeleteProgram", "CreateSchedule", "StartChannel"} & set(aws_stubs.calls.names())
+
+
+def test_starting_a_running_channel_only_moves_the_auto_stop(aws_stubs: SimpleNamespace) -> None:
+    get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    for _ in range(2):  # the tool, then channel_ops.start_channel
+        aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
+    aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
+    aws_stubs.mt.add_response("list_alerts", {"Items": []}, {"ResourceArn": ANY})
+    result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
+    assert result.auto_stop_at is not None and result.skipped is None
+    assert not {"GetChannelSchedule", "StartChannel", "PutItem"} & set(aws_stubs.calls.names())
 
 
 def test_start_channel_without_auto_stop_leaves_a_running_channel_alone(
@@ -338,7 +515,8 @@ def test_start_channel_without_auto_stop_leaves_a_running_channel_alone(
     monkeypatch.setenv("AUTO_STOP_HOURS", "0")
     settings.cache_clear()
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
-    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
+    for _ in range(2):
+        aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
     aws_stubs.mt.add_response("list_alerts", {"Items": []}, {"ResourceArn": ANY})
     result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
     assert result.auto_stop_at is None and "StartChannel" not in aws_stubs.calls.names()
@@ -346,6 +524,15 @@ def test_start_channel_without_auto_stop_leaves_a_running_channel_alone(
 
 def test_start_channel_missing_in_channel_assembly(aws_stubs: SimpleNamespace) -> None:
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.mt.add_client_error("describe_channel", "NotFoundException", http_status_code=404)
+    with pytest.raises(ToolError) as raised:
+        channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
+    assert raised.value.code == "NOT_FOUND" and "CreateSchedule" not in aws_stubs.calls.names()
+
+
+def test_start_channel_deleted_meanwhile_cancels_its_auto_stop(aws_stubs: SimpleNamespace) -> None:
+    get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
     aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
     aws_stubs.mt.add_client_error("describe_channel", "NotFoundException", http_status_code=404)
     aws_stubs.mt.add_client_error("start_channel", "NotFoundException", http_status_code=404)
@@ -360,6 +547,8 @@ def test_a_start_that_is_still_under_way_is_retryable_and_already_capped(
     aws_stubs: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
+    nothing_missed(aws_stubs)
     aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
     aws_stubs.mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
     aws_stubs.mt.add_response("start_channel", {}, {"ChannelName": "fast-demo"})
@@ -377,8 +566,9 @@ def test_a_start_that_is_still_under_way_is_retryable_and_already_capped(
 
 def test_start_channel_succeeds_when_its_alerts_cannot_be_read(aws_stubs: SimpleNamespace) -> None:
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    for _ in range(2):
+        aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
     aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
-    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
     aws_stubs.mt.add_client_error("list_alerts", "TooManyRequestsException", http_status_code=429)
 
     result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)

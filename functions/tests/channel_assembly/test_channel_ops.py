@@ -57,6 +57,7 @@ def test_drain_skips_the_epg_history_that_channel_assembly_has_deleted(
     # range from a day ago is read at all (older history never is).
     monkeypatch.setattr(time, "time_ns", lambda: NOW * 1_000_000)
     aired = [program(f"aired-{n:04d}", "AIRED", NOW - DAY + n * 1_000, duration_ms=1_000) for n in range(3_000)]
+    aired.append(program("skipped", "SKIPPED", NOW - 10 * 60_000))  # deleted when the channel started late
     held = [
         program("aired-just-now", "AIRED", NOW - 20 * 60_000),  # ended 10 minutes ago: maybe not deleted yet
         program("in-three-weeks", "PUBLISHED", NOW + 21 * DAY),  # beyond the schedule's 14-day look-ahead
@@ -152,3 +153,10 @@ def test_delete_programs_retries_conflicts(stub: Stub, client_error: Callable[..
     mediatailor.add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": "p2"})
 
     assert channel_ops.delete_programs(CHANNEL, ["p1", "p2"]) == ["p1", "p2"]
+
+
+def test_delete_programs_stops_when_out_of_time(stub: Stub) -> None:
+    stub("mediatailor").add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": "p1"})
+    checks = iter([False, True])
+
+    assert channel_ops.delete_programs(CHANNEL, ["p1", "p2", "p3"], out_of_time=lambda: next(checks)) == ["p1"]

@@ -124,7 +124,7 @@
     },
     {
       "name": "schedule___get_schedule",
-      "description": "Get a channel's published schedule from now on: programs with UTC start/end, title, rating and ad breaks, the end of the schedule (end; schedule___plan appends there by default) and the filler gaps between programs.",
+      "description": "Get a channel's published schedule from now on: programs with UTC start/end, title, rating, ad breaks and status (SKIPPED: removed unaired because the channel started late), the end of the schedule (end; schedule___plan appends there by default) and the filler gaps between programs.",
       "inputSchema": {
         "required": [
           "channel"

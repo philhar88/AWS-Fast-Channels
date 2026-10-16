@@ -1,6 +1,6 @@
 """A channel's guide from the media library's ``PROGRAM`` items: guide entries, the published EPG feeds and gaps."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from itertools import pairwise
 from typing import Final
 
@@ -44,6 +44,11 @@ def guide_entry(program: store.ProgramRecord) -> epg.EpgProgram:
 def recent_programs(channel: str, at_ms: int) -> list[store.ProgramRecord]:
     """Programs of ``channel`` that end after ``at_ms``, in start order."""
     return [p for p in store.programs(channel, start_ms=max(0, at_ms - PROGRAM_LOOKBACK_MS)) if p.end_ms > at_ms]
+
+
+def scheduled(programs: Iterable[store.ProgramRecord]) -> list[store.ProgramRecord]:
+    """``programs`` without the ``SKIPPED`` ones: those are no longer in Channel Assembly and never air."""
+    return [p for p in programs if p.status is not store.ProgramStatus.SKIPPED]
 
 
 def write_guide(channel: store.ChannelRecord, at_ms: int) -> epg.Epg:

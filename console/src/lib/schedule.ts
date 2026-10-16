@@ -63,6 +63,14 @@ export interface EpgBreak {
   readonly duration_ms: number;
 }
 
+/**
+ * `epg.ProgramStatus`. PLANNED and PUBLISHED: in the schedule; AIRED: in the as-run log; SKIPPED: never aired,
+ * because the channel started after the program's planned start (channels.start_channel removes it from Channel
+ * Assembly rather than let it push the rest of the schedule late).
+ */
+export const PROGRAM_STATUSES = ["PLANNED", "PUBLISHED", "AIRED", "SKIPPED"] as const;
+export type ProgramStatus = (typeof PROGRAM_STATUSES)[number];
+
 /** `epg.EpgProgram`. The feed file writes `null` for a missing content id or rating; tool results omit them. */
 export interface EpgProgram {
   readonly name: string;
@@ -74,7 +82,30 @@ export interface EpgProgram {
   readonly rating?: string | null;
   readonly genres: readonly string[];
   readonly breaks: readonly EpgBreak[];
-  readonly status: "PLANNED" | "PUBLISHED" | "AIRED";
+  readonly status: ProgramStatus;
+}
+
+/** The past the program guide shows: the timeline's first half hour, and how long it lists a skipped program. */
+export const GUIDE_PAST_MS = 30 * 60_000;
+
+/**
+ * What the guide shows for `program`: ON_AIR while it runs at `onAirAt`, else its status. Pass `onAirAt` only
+ * while the channel is running; a skipped program is never on air, filler slate plays in its place.
+ */
+export function guideStatus(program: EpgProgram, onAirAt: number | undefined): ProgramStatus | "ON_AIR" {
+  const airing = onAirAt !== undefined && Date.parse(program.start) <= onAirAt && onAirAt < Date.parse(program.end);
+  return airing && program.status !== "SKIPPED" ? "ON_AIR" : program.status;
+}
+
+/**
+ * The guide's rows at `now`: every program that has not ended, and the programs skipped in the last
+ * {@link GUIDE_PAST_MS}, which an operator who just started the channel needs to see.
+ */
+export function guidePrograms(programs: readonly EpgProgram[], now: number): EpgProgram[] {
+  return programs.filter((p) => {
+    const end = Date.parse(p.end);
+    return end > now || (p.status === "SKIPPED" && end > now - GUIDE_PAST_MS);
+  });
 }
 
 /** `2 × 1:00` when a program's breaks are equally long, else their count and total length: `3, 2:30 in all`. */

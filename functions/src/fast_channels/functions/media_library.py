@@ -100,6 +100,9 @@ class ProgramStatus(StrEnum):
     PLANNED = "PLANNED"
     PUBLISHED = "PUBLISHED"
     AIRED = "AIRED"
+    SKIPPED = "SKIPPED"
+    """Does not air: its start had passed when the stopped channel was started, which removes it from Channel
+    Assembly."""
 
 
 # --- time ------------------------------------------------------------------------------------------------------------

@@ -56,8 +56,10 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - **Schedules**: deterministic planning with programming briefs (ratings, genres, dayparts and a break policy whose
   minimum gap defaults to half the cadence, with start and end margins and a minimum program length that editorial
   cue points are exempt from), SCTE-35 `TIME_SIGNAL` breaks with deterministic ids, idempotent and resumable
-  publishing with leases and stale-plan detection, the schedule of record in DynamoDB (kept 30 days after each
-  program ends), EPG feeds in JSON and XMLTV, as-run reconciliation.
+  publishing with leases and stale-plan detection, every program `ABSOLUTE` at its planned start, the schedule of
+  record in DynamoDB (kept 30 days after each program ends), EPG feeds in JSON and XMLTV, as-run reconciliation.
+  Starting a stopped channel late removes the programs whose start has passed (reported as `skipped`, `SKIPPED` in
+  the guide) and airs the rest at their planned times.
 - **SGAI** (HLS Interstitials) next to SSAI, including preconditioned ads re-hosted for asset lists.
 - **Bring-your-own content**: agent tools to create SigV4 source locations for your buckets, register pre-encoded
   content after a ladder-signature check, and update package configurations.

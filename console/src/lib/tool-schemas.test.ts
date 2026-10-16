@@ -5,9 +5,20 @@
  */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { AgentSnapshot } from "./agui";
-import type { Epg, EpgProgram, Plan, PlannedBreak, PlannedProgram, Violation } from "./schedule";
+import { PROGRAM_STATUSES, type Epg, type EpgProgram, type Plan, type PlannedBreak, type PlannedProgram, type Violation } from "./schedule";
 import schemas from "./tool-schemas.json";
-import type { Asset, CdnPlayback, ChannelAlert, ChannelDetail, ChannelStateChange, ChannelSummary, Ladder, LadderKit } from "./tools";
+import type {
+  Asset,
+  CdnPlayback,
+  ChannelAlert,
+  ChannelDetail,
+  ChannelStateChange,
+  ChannelSummary,
+  Ladder,
+  LadderKit,
+  SkippedProgram,
+  StartChannelResult,
+} from "./tools";
 
 // The mock modules read `window` when they load.
 vi.hoisted(() => {
@@ -110,6 +121,14 @@ describe("mock agent snapshots are real schedule tool results", () => {
   });
 });
 
+describe("console statuses", () => {
+  it.each<ToolName>(["schedule___publish", "schedule___get_schedule"])("cover every EPG program status %s returns", (tool) => {
+    const status = TOOLS[tool].properties?.programs?.items?.properties?.status;
+    expect(status?.enum?.length).toBeGreaterThan(0);
+    expect(PROGRAM_STATUSES).toEqual(expect.arrayContaining([...(status?.enum ?? [])]));
+  });
+});
+
 describe("problems", () => {
   const schema = TOOLS.library___find_assets;
   const [asset] = ASSETS;
@@ -142,6 +161,7 @@ type Undeclared<T, S> = Exclude<keyof T, keyof Props<S>>;
 type ListedChannel = Items<Field<Tools["channels___list_channels"], "channels">>;
 type GetChannel = Tools["channels___get_channel"];
 type StartChannel = Tools["channels___start_channel"];
+type StopChannel = Tools["channels___stop_channel"];
 type ListedAsset = Items<Field<Tools["library___find_assets"], "assets">>;
 type ListedLadder = Items<Field<Tools["encoding___list_ladders"], "ladders">>;
 type PlanResult = Tools["schedule___plan"];
@@ -155,7 +175,9 @@ describe("console types", () => {
     expectTypeOf<Undeclared<ChannelSummary, ListedChannel>>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<ChannelDetail, GetChannel>>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<CdnPlayback, Items<Field<GetChannel, "cdn_playback">>>>().toEqualTypeOf<never>();
-    expectTypeOf<Undeclared<ChannelStateChange, StartChannel>>().toEqualTypeOf<never>();
+    expectTypeOf<Undeclared<ChannelStateChange, StopChannel>>().toEqualTypeOf<never>();
+    expectTypeOf<Undeclared<StartChannelResult, StartChannel>>().toEqualTypeOf<never>();
+    expectTypeOf<Undeclared<SkippedProgram, Items<Field<StartChannel, "skipped">>>>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<ChannelAlert, Items<Field<StartChannel, "alerts">>>>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<Asset, ListedAsset>>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<Ladder, ListedLadder>>().toEqualTypeOf<never>();

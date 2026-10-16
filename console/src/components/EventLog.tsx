@@ -18,6 +18,7 @@ const LEVEL: Record<PlayerEventLevel, StatusIndicatorProps.Type> = {
   info: "info",
   ad: "in-progress",
   beacon: "success",
+  warning: "warning",
   error: "error",
 };
 
@@ -28,7 +29,7 @@ const COLUMNS: TableProps.ColumnDefinition<LoggedEvent>[] = [
   { id: "detail", header: "Detail", cell: (e) => e.detail },
 ];
 
-/** Ad, interstitial and beacon events from both players, newest first. */
+/** Ad, interstitial and beacon events from both players, and their reloads after a lost stream, newest first. */
 export function EventLog({ events, onClear }: { events: readonly LoggedEvent[]; onClear: () => void }) {
   const { items, paginationProps } = useCollection([...events], { pagination: { pageSize: 10 } });
   return (
@@ -38,7 +39,7 @@ export function EventLog({ events, onClear }: { events: readonly LoggedEvent[]; 
         <Header
           variant="h2"
           counter={`(${events.length})`}
-          description="SSAI ads appear as stitched segments; SGAI ads as HLS Interstitials events with client-side beacons."
+          description="SSAI ads appear as stitched segments; SGAI ads as HLS Interstitials events with client-side beacons. A player that loses the stream reloads it with backoff."
           actions={
             <Button onClick={onClear} disabled={events.length === 0}>
               Clear

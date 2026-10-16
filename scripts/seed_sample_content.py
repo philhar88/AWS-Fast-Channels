@@ -9,7 +9,8 @@ For each title of assets/sample-catalog.json the script writes the ReferenceCata
 serves, then streams the mezzanine from its publisher into the ingest bucket (``samples/<content id>.<ext>``) after
 its JSON sidecar, which is exactly how a CMS hands content over: the upload triggers the ingest pipeline, which
 encodes it, registers the VOD source and marks the asset READY in the media library. (MediaConvert can read HTTPS
-inputs directly, but the Blender Foundation's servers refuse its fetcher.) Titles that are already READY with the
+inputs directly, but the Blender Foundation's servers refuse its fetcher, so the catalog item's ``mezzanine_uri`` is
+the staged ``s3://`` copy and the publisher's URL is kept as ``source_url``.) Titles that are already READY with the
 ladder, or being ingested, are not encoded again, so the script can be re-run. MediaConvert bills per output
 minute: the estimate is printed first and has to be confirmed unless ``--yes`` is given. Each request's
 correlation id is printed; ``scripts/trace.py <id>`` follows it.
@@ -118,12 +119,12 @@ def main() -> int:
         print("Nothing changed.")
         return 1
 
-    write_catalog(catalog, titles)
+    bucket = stage.output(Plane.DATA, "IngestBucketName")
+    write_catalog(catalog, titles, ingest_bucket=bucket)
     print(f"\nWrote {len(titles)} items to {catalog.name}.")
     if not pending:
         return 0
     s3 = stage.session.client("s3", region_name=stage.region)
-    bucket = stage.output(Plane.DATA, "IngestBucketName")
     print("Uploading to the ingest bucket (trace one with: uv run python scripts/trace.py <correlation id>):")
     with httpx.Client(follow_redirects=True, timeout=60) as http:
         for title in pending:
@@ -201,11 +202,22 @@ def confirm(prompt: str) -> bool:
         return False
 
 
-def write_catalog(catalog: Table, titles: list[Title]) -> None:
-    """Put each title's ReferenceCatalog item (exactly what the catalog tool reads), linked to its asset."""
+def staged_key(content: ContentItem) -> str:
+    """Ingest-bucket key of a title's staged mezzanine: ``samples/<content id><extension of the publisher's file>``."""
+    return f"{SAMPLES_PREFIX}{content.content_id}{Path(urlparse(str(content.mezzanine_uri)).path).suffix.lower()}"
+
+
+def write_catalog(catalog: Table, titles: list[Title], *, ingest_bucket: str) -> None:
+    """Put each title's ReferenceCatalog item (exactly what the catalog tool reads), linked to its asset.
+
+    The item's ``mezzanine_uri`` is the staged copy in ``ingest_bucket``, which MediaConvert can read, and the
+    publisher's URL stays on the item as ``source_url`` (metadata that ``ContentItem`` and the tools ignore).
+    """
     with catalog.batch_writer() as batch:
         for title in titles:
-            batch.put_item(Item=catalog_item(title.content.model_copy(update={"asset_ids": [title.asset_id]})))
+            staged = f"s3://{ingest_bucket}/{staged_key(title.content)}"
+            linked = title.content.model_copy(update={"asset_ids": [title.asset_id], "mezzanine_uri": staged})
+            batch.put_item(Item={**catalog_item(linked), "source_url": str(title.content.mezzanine_uri)})
 
 
 def upload(s3: S3Client, http: httpx.Client, bucket: str, title: Title) -> str:
@@ -214,8 +226,7 @@ def upload(s3: S3Client, http: httpx.Client, bucket: str, title: Title) -> str:
     The sidecar carries the request (asset and content ids, cue points, ladder, correlation id), so the upload's
     ``Object Created`` event becomes exactly this ingest request.
     """
-    uri = str(title.request.source_uri)
-    key = f"{SAMPLES_PREFIX}{title.content.content_id}{Path(urlparse(uri).path).suffix.lower()}"
+    uri, key = str(title.request.source_uri), staged_key(title.content)
     sidecar = title.request.model_dump(mode="json", exclude={"source_uri", "generator"}, exclude_none=True)
     s3.put_object(Bucket=bucket, Key=f"{key}.json", Body=json.dumps(sidecar).encode(), ContentType="application/json")
     with http.stream("GET", uri) as response:

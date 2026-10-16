@@ -5,6 +5,7 @@
 import type Hls from "hls.js";
 import { Events } from "hls.js";
 import { attachBeaconEmitter } from "./beacons";
+import { describeError, isRetryable } from "./retry";
 
 export type InsertionMode = "ssai" | "sgai";
 
@@ -13,7 +14,8 @@ export type AdState =
   | { readonly kind: "stitched" }
   | { readonly kind: "guided"; readonly asset: number; readonly of: number };
 
-export type PlayerEventLevel = "info" | "ad" | "beacon" | "error";
+/** `warning`: the player lost the stream and reloads it (players/retry.ts). */
+export type PlayerEventLevel = "info" | "ad" | "beacon" | "warning" | "error";
 
 export interface PlayerEvent {
   readonly mode: InsertionMode;
@@ -98,7 +100,10 @@ export function attachSgaiTelemetry(hls: Hls, sink: TelemetrySink, media: HTMLMe
   });
 }
 
-/** Both modes: what was loaded and which rendition plays (the codec selector's effect), and fatal errors. */
+/**
+ * Both modes: what was loaded and which rendition plays (the codec selector's effect), and fatal errors the player
+ * does not recover from. Retryable ones are logged with their reload (`superviseSession`).
+ */
 export function attachPlaybackTelemetry(hls: Hls, sink: TelemetrySink): void {
   hls.on(Events.MANIFEST_PARSED, (_event, { levels }) => {
     const codecs = [...new Set(levels.map((level) => level.videoCodec?.split(".")[0]).filter(Boolean))];
@@ -112,9 +117,9 @@ export function attachPlaybackTelemetry(hls: Hls, sink: TelemetrySink): void {
       sink.event("info", "LEVEL_SWITCHED", `${size}${variant.videoCodec ?? "video"}${rate}`);
     }
   });
-  hls.on(Events.ERROR, (_event, { fatal, details, type }) => {
-    if (fatal) {
-      sink.event("error", "ERROR", `${type}: ${details}`);
+  hls.on(Events.ERROR, (_event, error) => {
+    if (error.fatal && !isRetryable(error)) {
+      sink.event("error", "ERROR", `${error.type}: ${describeError(error)}`);
     }
   });
 }

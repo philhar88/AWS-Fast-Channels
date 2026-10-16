@@ -74,7 +74,7 @@ def plan(standard: Ladder) -> Plan:
     )
 
 
-def test_program_requests(plan: Plan) -> None:
+def test_program_requests_are_absolute_at_every_planned_start(plan: Plan) -> None:
     slates = {30: "fast-slate-30"}
     first, second = specs.program_requests(
         plan, source_location="fast-origin", slate_vod_sources=slates, after_program="20261016T110000-earlier"
@@ -86,10 +86,12 @@ def test_program_requests(plan: Plan) -> None:
         "RelativeProgram": "20261016T110000-earlier",
     }
     assert second["ScheduleConfiguration"]["Transition"] == {
-        "Type": "RELATIVE",
+        "Type": "ABSOLUTE",
         "RelativePosition": "AFTER_PROGRAM",
+        "ScheduledStartTimeMillis": plan.programs[1].start_ms,
         "RelativeProgram": plan.programs[0].name,
     }
+    assert plan.programs[1].start_ms == plan.programs[0].end_ms
     assert (first["ChannelName"], first["VodSourceName"]) == ("fast-demo", "fast-ep-1")
     (ad_break,) = first["AdBreaks"]
     b = plan.programs[0].breaks[0]
@@ -110,8 +112,30 @@ def test_program_requests(plan: Plan) -> None:
             ]
         },
     }
-    (alone, _) = specs.program_requests(plan, source_location="o", slate_vod_sources=slates, after_program=None)
-    assert "RelativeProgram" not in alone["ScheduleConfiguration"]["Transition"]
+
+
+def _positions(requests: list[dict[str, object]]) -> list[tuple[object, object]]:
+    transitions = [r["ScheduleConfiguration"]["Transition"] for r in requests]  # type: ignore[index]
+    return [(t["RelativePosition"], t.get("RelativeProgram")) for t in transitions]
+
+
+def test_program_requests_anchor_the_block_and_chain_its_programs(plan: Plan) -> None:
+    first, second = (p.name for p in plan.programs)
+    slates = {30: "fast-slate-30"}
+
+    def positions(**anchor: str) -> list[tuple[object, object]]:
+        return _positions(specs.program_requests(plan, source_location="o", slate_vod_sources=slates, **anchor))
+
+    assert positions() == [("AFTER_PROGRAM", None), ("AFTER_PROGRAM", first)]  # an empty schedule
+    assert positions(after_program="earlier") == [("AFTER_PROGRAM", "earlier"), ("AFTER_PROGRAM", first)]
+    assert positions(before_program="later") == [("BEFORE_PROGRAM", "later"), ("AFTER_PROGRAM", first)]
+    requests = specs.program_requests(plan, source_location="o", slate_vod_sources=slates)
+    assert [r["ProgramName"] for r in requests] == [first, second]
+    assert {r["ScheduleConfiguration"]["Transition"]["Type"] for r in requests} == {"ABSOLUTE"}
+    with pytest.raises(ValueError, match="not both"):
+        specs.program_requests(
+            plan, source_location="o", slate_vod_sources=slates, after_program="a", before_program="b"
+        )
 
 
 def test_channel_policy_is_sigv4_only() -> None:

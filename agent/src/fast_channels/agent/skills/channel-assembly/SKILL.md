@@ -33,6 +33,9 @@ description: MediaTailor Channel Assembly rules for FAST channels - creating, st
   24/7 BASIC is about $73 per month.
 - `channels___start_channel` needs approval and schedules an automatic stop after the deployment's maximum
   runtime (`auto_stop_at`). `channels___stop_channel` (approval) stops playback for every viewer.
+- Programs are published at absolute start times. Starting a stopped channel removes programs whose start has
+  already passed (they would otherwise air late and be cut); the result lists them in `skipped`. Tell the
+  operator which programs were skipped and offer to plan that window again; everything later airs on time.
 - A running channel cannot change its outputs or tier.
 
 ## Programs and timing

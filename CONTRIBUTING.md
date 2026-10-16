@@ -99,7 +99,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
   programs published through the tools, then SSAI, SGAI and DASH sessions watching the breaks air with ads from the
   second break on; the agent over AG-UI with the autopilot's token; and stopping the channel (also done at teardown,
   whatever failed). One run id is the correlation id of everything, so `scripts/trace.py <run id>` shows the run.
-  Run them with `uv run pytest tests/e2e -m e2e --prefix <prefix>` against a fresh stage (about 30 minutes; see
+  Run them with `uv run pytest tests/e2e -m e2e --prefix <prefix>` against a fresh stage (about 40 minutes; see
   [tests/e2e/README.md](tests/e2e/README.md)), or through the manual **End-to-end** workflow
   (`.github/workflows/e2e.yml`, AWS access through an OIDC role), which deploys a throwaway stage, runs the tests and
   destroys it. A run costs a few US dollars. Their offline tests (`-m "not e2e"`) run with `uv run pytest`.

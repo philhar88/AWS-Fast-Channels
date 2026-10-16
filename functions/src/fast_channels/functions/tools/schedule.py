@@ -5,6 +5,8 @@ minutes after they finish, channel-assembly.md §5.6). Planning is pure arithmet
 publishing replays a stored plan against the live schedule:
 
 * one writer per channel: a conditional ``LEASE`` item with a TTL (concurrent edits raise ConflictException);
+* every program ABSOLUTE at its planned start (``core.specs.program_requests``), a not-before time: a channel
+  started late airs the rest of the schedule on time, after ``channels___start_channel`` removed what it missed;
 * re-anchoring: the block is linked after the live program that precedes it *in time*, because list order beats
   wall-clock time for ABSOLUTE programs (channel-assembly.md §5.3);
 * ``PLAN_STALE`` when the live schedule from the anchor on changed since planning (fingerprint of that tail), or an
@@ -19,8 +21,7 @@ import json
 import math
 import secrets
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, Self
@@ -54,14 +55,14 @@ from fast_channels.functions.channel_ops import (
     channel_arn,
     create_programs,
     delete_programs,
-    error_code,
     live_programs,
 )
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import dispatch
 from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools._alerts import Alert, after_change
-from fast_channels.functions.tools._guide import Gap, gaps, guide_entry, recent_programs, write_guide
+from fast_channels.functions.tools._guide import Gap, gaps, guide_entry, recent_programs, scheduled, write_guide
+from fast_channels.functions.tools._lease import lease
 from fast_channels.functions.tools.library_store import ChannelInput, require_channel
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, describe_fields, tool
 
@@ -96,8 +97,6 @@ describe_fields(
 )
 
 PLAN_TTL_S: Final = 3600
-LEASE_TTL_S: Final = 360
-"""Longer than the schedule function's 5-minute timeout, so a crashed publish frees the channel by itself."""
 GC_WINDOW_MS: Final = 15 * 60_000  # aired programs linger in Channel Assembly ~15 min (channel-assembly.md §5.6)
 MAX_PICKS: Final = 100
 PUBLISH_TIME_MARGIN_MS: Final = 30_000
@@ -155,38 +154,6 @@ def anchor(live: Sequence[LiveProgram], start_ms: int, *, exclude: Iterable[str]
     return Anchor(after=others[index].name, before=None, fingerprint=digest)
 
 
-# --- MediaLibrary helpers --------------------------------------------------------------------------------------------
-
-
-@contextmanager
-def lease(channel: str, owner: str) -> Iterator[None]:
-    """Exclusive schedule-write lease on ``channel`` for the duration of the block."""
-    key = store.lease_key(channel)
-    now_s = int(time.time())
-    try:
-        store.put_item(
-            {**key, "owner": owner, "expires_at": now_s + LEASE_TTL_S},
-            condition=Attr("pk").not_exists() | Attr("expires_at").lt(now_s),
-        )
-    except ClientError as error:
-        if error_code(error) != "ConditionalCheckFailedException":
-            raise
-        raise ToolError(
-            "CONFLICT",
-            f"another schedule change on {channel} is in progress",
-            retryable=True,
-            hint="Wait a minute, then plan again from the fresh schedule.",
-        ) from None
-    try:
-        yield
-    finally:
-        try:
-            store.table().delete_item(Key=key, ConditionExpression=Attr("owner").eq(owner))
-        except ClientError as error:
-            if error_code(error) != "ConditionalCheckFailedException":
-                raise
-
-
 # --- get_schedule ----------------------------------------------------------------------------------------------------
 
 
@@ -195,18 +162,19 @@ class ScheduleOutput(epg.Epg):
 
     end_ms: int | None = Field(description="End of the last published program; null when nothing is scheduled.")
     end: str | None
-    gaps: list[Gap] = Field(description="Filler slate between published programs.")
+    gaps: list[Gap] = Field(description="Filler slate between published programs (SKIPPED ones leave a gap).")
 
 
 @tool("schedule", access=Access.READ)
 def get_schedule(payload: ChannelInput, ctx: ToolContext) -> ScheduleOutput:
-    """Get a channel's published schedule from now on: programs with UTC start/end, title, rating and ad breaks,
-    the end of the schedule (end; schedule___plan appends there by default) and the filler gaps between
-    programs."""
+    """Get a channel's published schedule from now on: programs with UTC start/end, title, rating, ad breaks and
+    status (SKIPPED: removed unaired because the channel started late), the end of the schedule (end;
+    schedule___plan appends there by default) and the filler gaps between programs."""
     channel = require_channel(payload.channel)
     at = now_ms()
     upcoming = recent_programs(channel.name, at)
-    last = upcoming[-1].end_ms if upcoming else None
+    airing = scheduled(upcoming)
+    last = airing[-1].end_ms if airing else None
     return ScheduleOutput(
         channel=channel.name,
         generated_at=store.iso(at),
@@ -214,7 +182,7 @@ def get_schedule(payload: ChannelInput, ctx: ToolContext) -> ScheduleOutput:
         programs=[guide_entry(p) for p in upcoming],
         end_ms=last,
         end=store.iso(last) if last is not None else None,
-        gaps=gaps(upcoming, at),
+        gaps=gaps(airing, at),
     )
 
 
@@ -445,7 +413,7 @@ def plan(payload: PlanInput, ctx: ToolContext) -> PlanOutput:
     channel = require_channel(payload.channel)
     at = now_ms()
     ladder = store.ladder_definition(channel.ladder_version)
-    upcoming = recent_programs(channel.name, at - GC_WINDOW_MS)
+    upcoming = scheduled(recent_programs(channel.name, at - GC_WINDOW_MS))
     start = _block_start(payload, [p for p in upcoming if p.end_ms > at], at)
     assets, metadata, problems = resolve_picks(payload.picks, channel.ladder_version)
     brief = channel.brief or ProgrammingBrief()
@@ -529,18 +497,17 @@ def _requests(
 ) -> list[dict[str, Any]]:
     """CreateProgram requests for the programs not yet in the ``live`` schedule (a retried publish resumes).
 
-    The first program is ABSOLUTE and the rest RELATIVE (``core.specs.program_requests``). Channel Assembly checks
-    RelativeProgram before duplicate names, so existing programs are skipped rather than re-created (verified live).
+    Every program is ABSOLUTE at its planned start, the first linked at ``position`` and each other after its
+    predecessor (``core.specs.program_requests``). Channel Assembly checks RelativeProgram before duplicate names,
+    so existing programs are skipped rather than re-created (verified live).
     """
     requests = specs.program_requests(
-        stored.plan, source_location=source_location, slate_vod_sources=slates, after_program=position.after
+        stored.plan,
+        source_location=source_location,
+        slate_vod_sources=slates,
+        after_program=position.after,
+        before_program=position.before,
     )
-    if requests and position.before is not None:
-        # Nothing airs before the block: it goes in front of the first program of a non-empty schedule.
-        requests[0]["ScheduleConfiguration"]["Transition"] |= {
-            "RelativePosition": "BEFORE_PROGRAM",
-            "RelativeProgram": position.before,
-        }
     for request, program in zip(requests, stored.plan.programs, strict=True):
         request["SourceLocationName"] = stored.metadata[program.asset_id].source_location or source_location
     present = set(live)
@@ -648,7 +615,7 @@ def publish(payload: PublishInput, ctx: ToolContext) -> PublishOutput:
     config.require("source_location")
     with lease(channel.name, stored.plan_id):
         at = now_ms()
-        upcoming = recent_programs(channel.name, at - GC_WINDOW_MS)
+        upcoming = scheduled(recent_programs(channel.name, at - GC_WINDOW_MS))
         _revalidate(stored, upcoming, at)
         names = [p.name for p in stored.plan.programs]
         live = live_programs(channel.name, known_starts={p.name: p.start_ms for p in upcoming})
@@ -719,53 +686,24 @@ class RemoveProgramsOutput(BaseModel):
     channel: str
     removed: list[str]
     not_found: list[str] = Field(description="Names that are not programs of the channel starting in the future.")
-    moved: list[epg.EpgProgram] = Field(description="Later programs of the same blocks, now airing earlier.")
-
-
-def reflow(programs: Sequence[store.ProgramRecord], removed: set[str]) -> list[store.ProgramRecord]:
-    """The programs left after removing ``removed``, re-timed the way Channel Assembly re-links its schedule.
-
-    A block's first program is ABSOLUTE and keeps its start; the rest of a block is RELATIVE and follows its
-    predecessor in air order (deleting a program re-links its successor, verified live).
-    """
-    first_of_block: dict[str | None, str] = {}
-    for p in programs:
-        first_of_block.setdefault(p.plan_id, p.name)
-    kept: list[store.ProgramRecord] = []
-    for p in programs:
-        if p.name in removed:
-            continue
-        relative = first_of_block[p.plan_id] != p.name and p.plan_id is not None and bool(kept)
-        kept.append(p.model_copy(update={"start_ms": kept[-1].end_ms}) if relative else p)
-    return kept
 
 
 @tool("schedule", access=Access.WRITE, approval=Approval.CONFIRM)
 def remove_programs(payload: RemoveProgramsInput, ctx: ToolContext) -> RemoveProgramsOutput:
-    """Remove programs that have not started yet from a channel's live schedule and guide. Later programs of the
-    same block move up to close the hole; the next block keeps its start, so filler airs in between. Programs that
-    are on air or over are reported in not_found."""
+    """Remove programs that have not started yet from a channel's live schedule and guide. Every other program keeps
+    its planned start, so filler slate airs in their place. Programs that are on air or over are reported in
+    not_found."""
     channel = require_channel(payload.channel)
     with lease(channel.name, f"remove.{ctx.correlation_id}"):
         at = now_ms()
-        upcoming = recent_programs(channel.name, at - GC_WINDOW_MS)
-        future = {p.name for p in upcoming if p.start_ms > at}
+        future = {p.name: p for p in recent_programs(channel.name, at) if p.start_ms > at}
         wanted = list(dict.fromkeys(payload.programs))
         removed = delete_programs(channel.name, [name for name in wanted if name in future])
-        before = {p.name: p for p in upcoming}
-        moved = [p for p in reflow(upcoming, set(removed)) if p.start_ms != before[p.name].start_ms]
-        for name in [*removed, *(p.name for p in moved)]:
-            store.delete_item(before[name].key())
-        for program in moved:
-            store.put(program)
+        for name in removed:
+            store.delete_item(future[name].key())
         write_guide(channel, at)
-    logger.info("programs removed", extra={"removed": removed, "moved": [p.name for p in moved]})
-    return RemoveProgramsOutput(
-        channel=channel.name,
-        removed=removed,
-        not_found=[n for n in wanted if n not in future],
-        moved=[guide_entry(p) for p in moved],
-    )
+    logger.info("programs removed", extra={"removed": removed})
+    return RemoveProgramsOutput(channel=channel.name, removed=removed, not_found=[n for n in wanted if n not in future])
 
 
 # --- briefs ----------------------------------------------------------------------------------------------------------

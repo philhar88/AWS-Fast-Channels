@@ -58,6 +58,22 @@ def test_xmltv_follows_the_dtd(guide: epg.Epg) -> None:
     assert [child.tag for child in second] == ["title", "category", "category"]
 
 
+def test_skipped_programs_stay_in_the_json_feed_and_leave_xmltv(guide: epg.Epg) -> None:
+    skipped = _program("s", "2026-10-16T11:30:00Z", "2026-10-16T12:00:00Z", status="SKIPPED")
+    with_skipped = epg.feed(
+        channel=guide.channel,
+        ladder_version=guide.ladder_version,
+        programs=[*guide.programs, skipped],
+        generated_at=guide.generated_at,
+    )
+    assert [(p.name, p.status) for p in with_skipped.programs] == [
+        ("s", "SKIPPED"),
+        ("a", "PUBLISHED"),
+        ("b", "PUBLISHED"),
+    ]
+    assert epg.xmltv(with_skipped) == epg.xmltv(guide)
+
+
 def test_write_uploads_both_feeds_with_short_caching(guide: epg.Epg) -> None:
     s3 = aws.client("s3")
     with Stubber(s3) as stub:

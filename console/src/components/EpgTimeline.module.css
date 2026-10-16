@@ -43,6 +43,18 @@
   border-color: var(--epg-on-air-border);
 }
 
+/* Never aired: hatched, with a dashed warning border, so it reads as a hole in the schedule. */
+.skipped {
+  border-style: dashed;
+  border-color: var(--epg-skipped);
+  background: repeating-linear-gradient(135deg, var(--epg-block) 0 6px, transparent 6px 12px);
+}
+
+.skipped .title {
+  text-decoration: line-through;
+  color: var(--epg-muted);
+}
+
 .title,
 .time {
   display: block;

@@ -10,10 +10,16 @@ A started channel bills by the hour, so ``start_channel`` first creates a one-ti
 stops it after ``channels.max_runtime_hours`` (verified: the universal target ``mediatailor:stopChannel`` stops the
 channel and the schedule deletes itself), then starts it: a channel never runs without a pending stop, and a stop
 that fires on a channel that never started is harmless.
+
+Before a stopped channel starts, ``start_channel`` removes the programs whose planned start has passed
+(:func:`skip_missed`): Channel Assembly plays a stopped channel's schedule from its head, so it would air them late
+and replay aired programs it has not deleted yet. Every program is ABSOLUTE (``core.specs.program_requests``), so
+the rest of the schedule airs at its planned times.
 """
 
 import json
 import re
+import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
@@ -35,6 +41,8 @@ from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import dispatch
 from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools._alerts import Alert, after_change
+from fast_channels.functions.tools._guide import PROGRAM_LOOKBACK_MS, guide_entry, write_guide
+from fast_channels.functions.tools._lease import lease
 from fast_channels.functions.tools.library_store import ChannelInput, definition, require_channel
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
 
@@ -45,6 +53,9 @@ logger = Logger()
 
 STOP_CHANNEL_TARGET: Final = "arn:aws:scheduler:::aws-sdk:mediatailor:stopChannel"
 """EventBridge Scheduler universal target; the schedule's Input is the StopChannel request."""
+START_TIME_MARGIN_MS: Final = 150_000
+"""``start_channel`` stops removing missed programs this long before the function times out, keeping the time to
+start the channel and wait until it runs (``channel_ops.STATE_TIMEOUT_S``)."""
 DRAIN_TIME_MARGIN_MS: Final = 60_000
 """``delete_channel`` stops deleting programs this long before the function times out, keeping the time to delete
 the playback configuration, its log deliveries and the channel once the drain is complete."""
@@ -53,6 +64,10 @@ PRIMARY_CDN: Final = "cloudfront"
 """Name of the deployment's own CloudFront distribution (``CDN_BASE_URL``) in per-CDN playback listings."""
 
 type ChannelState = Literal["RUNNING", "STOPPED", "MISSING"]
+
+
+def now_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 def _ignore_missing(operation: Callable[..., Any], **request: Any) -> None:
@@ -134,6 +149,24 @@ class StateChange(BaseModel):
     state: Literal["RUNNING", "STOPPED"]
     auto_stop_at: str | None = Field(None, description="UTC ISO-8601 time the channel is stopped automatically.")
     alerts: list[Alert] = Field([], description="Channel alerts after the change (expected warnings left out).")
+
+
+class SkippedProgram(BaseModel):
+    """A program removed unaired because the channel started after its planned start."""
+
+    name: str
+    title: str
+    start: str = Field(description="Planned UTC ISO-8601 start.")
+    end: str = Field(description="Planned UTC ISO-8601 end.")
+
+
+class StartChannelOutput(StateChange):
+    skipped: list[SkippedProgram] | None = Field(
+        None,
+        description="Programs whose planned start had passed when the stopped channel started: removed unaired, "
+        "SKIPPED in the guide. Absent when none.",
+    )
+    hint: str | None = Field(None, description="What to tell the operator about the skipped programs.")
 
 
 class CreateChannelInput(BaseModel):
@@ -312,12 +345,89 @@ def cancel_auto_stop(channel: str) -> None:
         _ignore_missing(aws.client("scheduler").delete_schedule, Name=_auto_stop_name(channel), GroupName=group)
 
 
+def _mark_skipped(program: store.ProgramRecord) -> store.ProgramRecord | None:
+    """``program`` stored as SKIPPED, unless the as-run log marked it AIRED (it was removed so as not to replay)."""
+    if program.status is store.ProgramStatus.AIRED:
+        return None
+    try:
+        return store.put(
+            program.model_copy(update={"status": store.ProgramStatus.SKIPPED}),
+            condition=Attr("status").ne(store.ProgramStatus.AIRED.value),
+        )
+    except ClientError as error:
+        if channel_ops.error_code(error) != "ConditionalCheckFailedException":
+            raise
+        return None
+
+
+def skip_missed(record: store.ChannelRecord, ctx: ToolContext) -> list[store.ProgramRecord]:
+    """Remove the programs of a stopped channel whose planned start has passed, before the channel starts.
+
+    Channel Assembly plays a stopped channel's schedule from its head: a missed or in-progress program would start
+    with the channel and be cut at the next program's ABSOLUTE start, and an aired program it has not deleted yet
+    would replay (channel-assembly.md §5.3, verified live). Starts are the media library's, else Channel
+    Assembly's; a RELATIVE program the library does not know is listed at 1970 and stays, as its air time is
+    unknown. Programs that start later are never touched.
+
+    Those that have not aired are marked SKIPPED first (whatever happens next, they will not air: every start
+    removes them) and returned; the guide is rewritten once they are gone. Raises a retryable ToolError when the
+    function runs out of time; calling again removes the rest.
+    """
+    hint = f"Wait a minute, then start {record.name} again."
+    with lease(record.name, f"start.{ctx.correlation_id}", hint=hint):
+        at = now_ms()
+        known = {p.name: p for p in store.programs(record.name, start_ms=max(0, at - PROGRAM_LOOKBACK_MS))}
+        live = channel_ops.live_programs(record.name, known_starts={name: p.start_ms for name, p in known.items()})
+        missed = [p.name for p in live if p.anchored and p.start_ms < at]
+        if not missed:
+            return []
+        skipped = [s for s in (_mark_skipped(known[name]) for name in missed if name in known) if s is not None]
+        removed = channel_ops.delete_programs(
+            record.name, missed, out_of_time=lambda: ctx.out_of_time(START_TIME_MARGIN_MS)
+        )
+        write_guide(record, at)
+    logger.info(
+        "missed programs removed",
+        extra={"channel": record.name, "removed": removed, "skipped": [p.name for p in skipped]},
+    )
+    if len(removed) < len(missed):
+        raise ToolError(
+            "UPSTREAM",
+            f"removed {len(removed)} of the {len(missed)} programs of {record.name} whose start has passed, then "
+            "ran out of time; the channel was not started",
+            retryable=True,
+            hint=f"Call channels___start_channel again: it removes the rest, then starts {record.name}.",
+        )
+    return skipped
+
+
+def _late_start_hint(skipped: list[SkippedProgram]) -> str | None:
+    if not skipped:
+        return None
+    titles = "; ".join(f"{p.title} ({p.start})" for p in skipped)
+    return (
+        f"The channel started after the planned start of {len(skipped)} program(s), which will not air (SKIPPED "
+        f"in the guide): {titles}. Every later program airs at its planned time, with filler slate until the next "
+        "one; a new block (schedule___plan) can fill the gap."
+    )
+
+
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
-def start_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
+def start_channel(payload: ChannelInput, ctx: ToolContext) -> StartChannelOutput:
     """Start a channel so viewers can watch it. It is billed per hour while running (BASIC ~$0.10/h, STANDARD
     ~$0.35/h) and is stopped automatically after the deployment's maximum runtime (auto_stop_at); starting a running
-    channel only moves the auto-stop. Returns the channel's alerts: SCHEDULING_ERROR alerts break playback."""
+    channel only moves the auto-stop. A stopped channel first drops the programs whose planned start has passed,
+    which would otherwise air late: they are returned in skipped (SKIPPED in the guide) with a hint to relay to the
+    operator, and every later program airs at its planned time. Returns the channel's alerts: SCHEDULING_ERROR
+    alerts break playback."""
     record = require_channel(payload.channel)
+    state = channel_ops.channel_state(record.name)
+    if state is None:
+        raise ToolError("NOT_FOUND", f"channel {record.name} does not exist in Channel Assembly")
+    skipped = [
+        SkippedProgram(**guide_entry(p).model_dump(include={"name", "title", "start", "end"}))
+        for p in (skip_missed(record, ctx) if state == "STOPPED" else [])
+    ]
     stop_at = None
     if (hours := settings().auto_stop_hours) > 0:
         when = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=hours)
@@ -328,18 +438,26 @@ def start_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
     except ChannelStateTimeoutError as error:
         raise _in_transition(error, record.name) from error
     except ClientError as error:
-        if is_missing(error):  # nothing to stop: the dispatcher reports NOT_FOUND
+        if is_missing(error):  # deleted meanwhile: the dispatcher reports NOT_FOUND
             cancel_auto_stop(record.name)
         raise
     logger.info("channel started", extra={"channel": record.name, "auto_stop_at": stop_at})
     alerts = after_change(lambda: channel_ops.channel_arn(record.name, record.arn))
-    return StateChange(channel=record.name, state="RUNNING", auto_stop_at=stop_at, alerts=alerts)
+    return StartChannelOutput(
+        channel=record.name,
+        state="RUNNING",
+        auto_stop_at=stop_at,
+        alerts=alerts,
+        skipped=skipped or None,
+        hint=_late_start_hint(skipped),
+    )
 
 
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
 def stop_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
     """Stop a channel: playback ends for every viewer and billing stops. Published programs stay in the schedule
-    and the guide; programs that have not aired yet play when the channel is started again."""
+    and the guide. When the channel is started again, the programs whose start has passed by then are skipped and
+    the rest air at their planned times."""
     record = require_channel(payload.channel)
     try:
         stopped = channel_ops.stop_channel(record.name)

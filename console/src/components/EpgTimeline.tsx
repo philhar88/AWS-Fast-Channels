@@ -4,15 +4,16 @@ import {
   colorBackgroundStatusInfo,
   colorBorderDividerDefault,
   colorBorderStatusInfo,
+  colorBorderStatusWarning,
   colorChartsStatusHigh,
   colorTextBodySecondary,
 } from "@cloudscape-design/design-tokens";
 import type { CSSProperties } from "react";
 import { formatClock } from "../lib/format";
-import type { EpgProgram } from "../lib/schedule";
+import { GUIDE_PAST_MS, guideStatus, type EpgProgram } from "../lib/schedule";
 import styles from "./EpgTimeline.module.css";
 
-const BEFORE_MS = 30 * 60_000;
+const BEFORE_MS = GUIDE_PAST_MS;
 const AFTER_MS = 3.5 * 3_600_000;
 const TICK_MS = 30 * 60_000;
 
@@ -23,12 +24,30 @@ const THEME = {
   "--epg-on-air": colorBackgroundStatusInfo,
   "--epg-on-air-border": colorBorderStatusInfo,
   "--epg-break": colorChartsStatusHigh,
+  "--epg-skipped": colorBorderStatusWarning,
   "--epg-muted": colorTextBodySecondary,
   "--epg-radius": borderRadiusBadge,
 } as CSSProperties;
 
-/** Four hours of the program guide around `now`: program blocks, their ad breaks, and a now marker. */
-export function EpgTimeline({ programs, now }: { programs: readonly EpgProgram[]; now: number }) {
+const CLASSES: Partial<Record<ReturnType<typeof guideStatus>, string>> = {
+  ON_AIR: `${styles.program} ${styles.onAir}`,
+  SKIPPED: `${styles.program} ${styles.skipped}`,
+};
+
+const LABELS: Partial<Record<ReturnType<typeof guideStatus>, string>> = { ON_AIR: " · on air", SKIPPED: " · skipped" };
+
+interface EpgTimelineProps {
+  readonly programs: readonly EpgProgram[];
+  readonly now: number;
+  /** The channel is running: the program at `now` is highlighted as on air. */
+  readonly onAir: boolean;
+}
+
+/**
+ * Four hours of the program guide around `now`: program blocks, their ad breaks, and a now marker. Skipped
+ * programs are hatched: filler slate played in their slot.
+ */
+export function EpgTimeline({ programs, now, onAir }: EpgTimelineProps) {
   const start = now - BEFORE_MS;
   const end = now + AFTER_MS;
   const percent = (time: number) => ((Math.min(Math.max(time, start), end) - start) / (end - start)) * 100;
@@ -48,18 +67,18 @@ export function EpgTimeline({ programs, now }: { programs: readonly EpgProgram[]
         {visible.map((program) => {
           const programStart = Date.parse(program.start);
           const programEnd = Date.parse(program.end);
-          const onAir = programStart <= now && now < programEnd;
+          const status = guideStatus(program, onAir ? now : undefined);
           return (
             <li
               key={program.name}
-              className={onAir ? `${styles.program} ${styles.onAir}` : styles.program}
+              className={CLASSES[status] ?? styles.program}
               style={{ insetInlineStart: `${percent(programStart)}%`, inlineSize: `${percent(programEnd) - percent(programStart)}%` }}
-              title={`${program.title}, ${formatClock(programStart)} to ${formatClock(programEnd)}`}
+              title={`${program.title}, ${formatClock(programStart)} to ${formatClock(programEnd)}${LABELS[status] ?? ""}`}
             >
               <span className={styles.title}>{program.title}</span>
               <span className={styles.time}>
                 {formatClock(programStart)}
-                {onAir ? " · on air" : ""}
+                {LABELS[status]}
               </span>
               {program.breaks.map((b) => (
                 <span

@@ -42,6 +42,8 @@ RECENT_PROGRAMS_MS: Final = 86_400_000
 program it might not list would only delay deleting its VOD source by 6-8 minutes, which the reaper retries."""
 AIRED_RETENTION_MS: Final = 3_600_000
 """An aired program is gone from Channel Assembly this long after its end (about 15 minutes, with a margin)."""
+UNANCHORED_MS: Final = 365 * 86_400_000
+"""Approximate starts before 1971 are a stopped channel's RELATIVE chain, which starts at epoch 0."""
 MISSING: Final = frozenset({"NotFoundException", "ResourceNotFoundException"})
 
 logger = Logger(child=True)
@@ -124,6 +126,12 @@ class LiveProgram:
     name: str
     start_ms: int
     """The planned start from the media library when known, else Channel Assembly's approximate start."""
+
+    @property
+    def anchored(self) -> bool:
+        """Whether ``start_ms`` is an air time: a stopped channel chains its RELATIVE programs from 1970-01-01
+        (verified live), and those are known only once the channel starts."""
+        return self.start_ms >= UNANCHORED_MS
 
 
 def _schedule_entries(channel: str) -> Iterator[Mapping[str, Any]]:
@@ -217,11 +225,16 @@ def delete_program(channel: str, program: str, pacer: Pacer | None = None) -> No
     _with_conflict_retries(delete, pacer or Pacer())
 
 
-def delete_programs(channel: str, names: Iterable[str], pacer: Pacer | None = None) -> list[str]:
-    """Delete each program in order; returns the names deleted."""
+def delete_programs(
+    channel: str, names: Iterable[str], pacer: Pacer | None = None, *, out_of_time: OutOfTime = _never
+) -> list[str]:
+    """Delete each program in order, stopping early once ``out_of_time()`` (checked before each); returns the names
+    deleted."""
     pacer = pacer or Pacer()
     deleted = []
     for name in names:
+        if out_of_time():
+            break
         delete_program(channel, name, pacer)
         deleted.append(name)
     return deleted
@@ -255,12 +268,7 @@ def drain_channel(channel: str, *, table_name: str | None = None, out_of_time: O
         return Drained(deleted=0, remaining=0)
     names = scheduled_programs(channel) | (recent_library_programs(table_name, channel) if table_name else set())
     pending = sorted(names)  # program names start with their UTC start time
-    pacer, deleted = Pacer(), 0
-    for name in pending:
-        if out_of_time():
-            break
-        delete_program(channel, name, pacer)
-        deleted += 1
+    deleted = len(delete_programs(channel, pending, out_of_time=out_of_time))
     drained = Drained(deleted=deleted, remaining=len(pending) - deleted)
     logger.info(
         "channel drained", extra={"channel": channel, "deleted": drained.deleted, "remaining": drained.remaining}
@@ -271,8 +279,8 @@ def drain_channel(channel: str, *, table_name: str | None = None, out_of_time: O
 def recent_library_programs(table_name: str, channel: str, *, now_ms: int | None = None) -> set[str]:
     """Names of the channel's library programs that Channel Assembly may still hold: those starting from a day ago
     on (the schedule omits programs beyond its 14-day look-ahead), except aired ones that ended more than
-    :data:`AIRED_RETENTION_MS` ago, which Channel Assembly has deleted. A key-range query: older history is never
-    read."""
+    :data:`AIRED_RETENTION_MS` ago, which Channel Assembly has deleted, and skipped ones, which were deleted. A
+    key-range query: older history is never read."""
     now = time.time_ns() // 1_000_000 if now_ms is None else now_ms
     request: dict[str, Any] = {
         "KeyConditionExpression": Key("pk").eq(f"{CHANNEL_PREFIX}{channel}")
@@ -290,7 +298,11 @@ def recent_library_programs(table_name: str, channel: str, *, now_ms: int | None
 
 
 def _held(item: Mapping[str, Any], now_ms: int) -> bool:
-    if item.get("status") != ProgramStatus.AIRED:
-        return True
-    end_ms = int(item.get("start_ms", 0)) + int(item.get("duration_ms", 0))
-    return end_ms > now_ms - AIRED_RETENTION_MS
+    match item.get("status"):
+        case ProgramStatus.SKIPPED:  # removed by the late start that skipped it (the schedule lists it otherwise)
+            return False
+        case ProgramStatus.AIRED:
+            end_ms = int(item.get("start_ms", 0)) + int(item.get("duration_ms", 0))
+            return end_ms > now_ms - AIRED_RETENTION_MS
+        case _:
+            return True

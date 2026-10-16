@@ -37,8 +37,9 @@ description: How to build channel schedules with the schedule tools - read the b
   planning the next.
 
 ## Changing a schedule
-- `schedule___remove_programs` (approval) removes programs that have not started; later programs of the same
-  block move up, and filler airs before the next block.
+- `schedule___remove_programs` (approval) removes programs that have not started. Every other program keeps its
+  planned start (programs are published at absolute times), so filler slate airs in the gap; plan a replacement
+  for that window if the operator wants it filled.
 - Programs that are on air or have aired cannot be changed.
 
 ## Briefs

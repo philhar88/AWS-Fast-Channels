@@ -2,7 +2,9 @@
 
 The MediaLibrary ``PROGRAM`` items are the source of truth for a channel's schedule: Channel Assembly deletes aired
 programs about 15 minutes after they finish (channel-assembly.md §5.6). The feeds are rendered from those items after
-every schedule change and served publicly through the CDN's default (S3) behaviour.
+every schedule change and served publicly through the CDN's default (S3) behaviour. ``SKIPPED`` programs (removed
+unaired because the channel started after their start) stay in the JSON feed with their status and are left out of
+the XMLTV feed, which lists what airs.
 """
 
 from collections.abc import Sequence
@@ -19,7 +21,7 @@ CACHE_CONTROL: Final = "public, max-age=30"
 """Short enough that a published change reaches viewers' guides within half a minute through the CDN."""
 GENERATOR: Final = "FAST Channels on AWS"
 
-type ProgramStatus = Literal["PLANNED", "PUBLISHED", "AIRED"]
+type ProgramStatus = Literal["PLANNED", "PUBLISHED", "AIRED", "SKIPPED"]
 
 
 class EpgBreak(BaseModel):
@@ -41,7 +43,10 @@ class EpgProgram(BaseModel):
     rating: str | None
     genres: list[str]
     breaks: list[EpgBreak]
-    status: ProgramStatus
+    status: ProgramStatus = Field(
+        description="PUBLISHED (scheduled), AIRED (Channel Assembly started it) or SKIPPED (removed unaired: the "
+        "channel started after the program's start)."
+    )
 
 
 class Epg(BaseModel):
@@ -64,10 +69,13 @@ def _xmltv_time(iso: str) -> str:
 
 
 def xmltv(epg: Epg) -> str:
-    """The guide as an XMLTV document (one ``channel``; ``programme`` elements in DTD child order)."""
+    """The guide as an XMLTV document (one ``channel``; ``programme`` elements in DTD child order); programs that do
+    not air (``SKIPPED``) are left out."""
     tv = Element("tv", {"generator-info-name": GENERATOR, "date": _xmltv_time(epg.generated_at)})
     SubElement(SubElement(tv, "channel", id=epg.channel), "display-name", lang="en").text = epg.channel
     for p in epg.programs:
+        if p.status == "SKIPPED":
+            continue
         programme = SubElement(
             tv, "programme", start=_xmltv_time(p.start), stop=_xmltv_time(p.end), channel=epg.channel
         )

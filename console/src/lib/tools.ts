@@ -56,6 +56,20 @@ export interface ChannelStateChange {
   readonly alerts: readonly ChannelAlert[];
 }
 
+/** `channels.SkippedProgram`: removed unaired because the channel started after its planned start. */
+export interface SkippedProgram {
+  readonly name: string;
+  readonly title: string;
+  readonly start: string;
+  readonly end: string;
+}
+
+/** `channels.StartChannelOutput` (channels___start_channel). */
+export interface StartChannelResult extends ChannelStateChange {
+  /** Programs whose planned start had passed when the stopped channel started; SKIPPED in the guide. */
+  readonly skipped?: readonly SkippedProgram[];
+}
+
 export type AssetKind = "content" | "slate" | "ad";
 export type AssetStatus = "INGESTING" | "ENCODED" | "READY" | "FAILED";
 
@@ -118,8 +132,8 @@ export const getChannel = (gateway: Gateway, channel: string): Promise<ChannelDe
   gateway.call<ChannelDetail>("channels___get_channel", { channel });
 
 /** CONFIRM tool: the operator's click in the confirmation dialog is the approval. */
-export const startChannel = (gateway: Gateway, channel: string): Promise<ChannelStateChange> =>
-  gateway.call<ChannelStateChange>("channels___start_channel", { channel });
+export const startChannel = (gateway: Gateway, channel: string): Promise<StartChannelResult> =>
+  gateway.call<StartChannelResult>("channels___start_channel", { channel });
 
 /** CONFIRM tool: the operator's click in the confirmation dialog is the approval. */
 export const stopChannel = (gateway: Gateway, channel: string): Promise<ChannelStateChange> =>

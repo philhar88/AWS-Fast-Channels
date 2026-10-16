@@ -2,6 +2,7 @@ import Badge from "@cloudscape-design/components/badge";
 import Hls from "hls.js";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import styles from "./HlsPlayer.module.css";
+import { describeError, superviseSession } from "./retry";
 import {
   attachPlaybackTelemetry,
   attachSgaiTelemetry,
@@ -24,7 +25,9 @@ export interface HlsPlayerProps {
 
 /**
  * An hls.js 1.7 player that reports ad activity. Give it a `key` per stream: ad state belongs to one session.
- * hls.js runs its transmuxer in a blob: worker and plays through MSE blob: URLs, which the console CSP allows.
+ * Mount it only while the channel is on air (players/gate.ts); a session that fails anyway, as a starting channel's
+ * does, is reopened with backoff and each reload is logged. hls.js runs its transmuxer in a blob: worker and plays
+ * through MSE blob: URLs, which the console CSP allows.
  */
 export function HlsPlayer({ src, mode, cdnBaseUrl, label, onEvent }: HlsPlayerProps) {
   const video = useRef<HTMLVideoElement>(null);
@@ -52,23 +55,27 @@ export function HlsPlayer({ src, mode, cdnBaseUrl, label, onEvent }: HlsPlayerPr
         media.load();
       };
     }
-    const hls = new Hls({
-      enableInterstitialPlayback: mode === "sgai",
-      interstitialLiveLookAhead: 10,
-      // Desktop/TV start estimate so HEVC and AV1 tiers stay eligible at startup (ladders.md §3.5, §7).
-      abrEwmaDefaultEstimate: 2_000_000,
-    });
-    attachPlaybackTelemetry(hls, sink);
-    if (mode === "ssai") {
-      attachSsaiTelemetry(hls, sink, cdnBaseUrl);
-    } else {
-      attachSgaiTelemetry(hls, sink, media);
-    }
-    hls.loadSource(src);
-    hls.attachMedia(media);
-    return () => {
-      hls.destroy();
+    const open = () => {
+      const hls = new Hls({
+        enableInterstitialPlayback: mode === "sgai",
+        interstitialLiveLookAhead: 10,
+        // Desktop/TV start estimate so HEVC and AV1 tiers stay eligible at startup (ladders.md §3.5, §7).
+        abrEwmaDefaultEstimate: 2_000_000,
+      });
+      attachPlaybackTelemetry(hls, sink);
+      if (mode === "ssai") {
+        attachSsaiTelemetry(hls, sink, cdnBaseUrl);
+      } else {
+        attachSgaiTelemetry(hls, sink, media);
+      }
+      hls.loadSource(src);
+      hls.attachMedia(media);
+      return hls;
     };
+    return superviseSession(open, ({ attempt, delayMs, error }) => {
+      sink.adState({ kind: "content" });
+      sink.event("warning", `Retry ${attempt}`, `${describeError(error)}: reloading in ${delayMs / 1000} s`);
+    });
   }, [src, mode, cdnBaseUrl]);
 
   return (

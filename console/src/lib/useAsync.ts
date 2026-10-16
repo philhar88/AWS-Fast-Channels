@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 export interface AsyncState<T> {
   /** Latest result; kept while a reload is in flight so tables do not flash empty. */
   readonly data: T | undefined;
+  /** The latest run's failure; kept while a reload of the same `load` is in flight, so a polled alert stays put. */
   readonly error: unknown;
   readonly loading: boolean;
   /** Stable across renders. */
@@ -39,6 +40,7 @@ export function useAsync<T>(load: (signal: AbortSignal) => Promise<T>): AsyncSta
   const reload = useCallback(() => {
     setGeneration((n) => n + 1);
   }, []);
-  const settled = result?.load === load && result.generation === generation;
-  return { data: result?.data, error: settled ? result.error : undefined, loading: !settled, reload };
+  const current = result?.load === load;
+  const settled = current && result.generation === generation;
+  return { data: result?.data, error: current ? result.error : undefined, loading: !settled, reload };
 }

@@ -19,6 +19,7 @@ from _stack import Plane, StackError, Stage
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.ladder import Ladder
@@ -268,17 +269,22 @@ def test_mezzanines_are_uploaded_after_their_sidecar(stubbed: Any, monkeypatch: 
     assert uploaded == {"bucket": "ingest", "key": key, "body": payload, "content_type": "video/mp4"}
 
 
-def test_catalog_items_are_the_catalog_tools_own(stubbed: Any) -> None:
+def test_catalog_items_are_the_catalog_tools_own_with_the_staged_mezzanine(stubbed: Any) -> None:
     table = session().resource("dynamodb").Table("catalog")
     stubber = stubbed(table.meta.client)
     [content] = seed.sample_titles(seed.CATALOG, ["sintel-trailer"])
-    request = IngestRequest(source_uri=str(content.mezzanine_uri), ladder_version=STANDARD.version)
-    linked = content.model_copy(update={"asset_ids": [request.resolved_asset_id]})
-    item = catalog_item(linked)  # the resource API serialises after the stub sees the request
+    publisher = str(content.mezzanine_uri)
+    assert publisher.startswith("https://")
+    request = IngestRequest(source_uri=publisher, ladder_version=STANDARD.version)
+    staged = "s3://ingest/samples/sintel-trailer.mp4"  # where upload() puts it
+    linked = content.model_copy(update={"asset_ids": [request.resolved_asset_id], "mezzanine_uri": staged})
+    item = {**catalog_item(linked), "source_url": publisher}  # the resource API serialises after the stub sees it
     stubber.add_response(
         "batch_write_item", {"UnprocessedItems": {}}, {"RequestItems": {"catalog": [{"PutRequest": {"Item": item}}]}}
     )
-    seed.write_catalog(table, [seed.Title(content, request, None)])
+    seed.write_catalog(table, [seed.Title(content, request, None)], ingest_bucket="ingest")
+    assert seed.staged_key(content) == staged.removeprefix("s3://ingest/")
+    assert ContentItem.model_validate(item).mezzanine_uri == staged  # what the catalog tool serves
 
 
 def test_the_ladder_must_be_provisioned(stubbed: Any) -> None:

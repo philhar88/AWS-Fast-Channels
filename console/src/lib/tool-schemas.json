@@ -195,6 +195,35 @@
               "last_modified"
             ]
           }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "title",
+              "start",
+              "end"
+            ]
+          }
+        },
+        "hint": {
+          "type": "string"
         }
       },
       "required": [
@@ -668,7 +697,8 @@
                 "enum": [
                   "PLANNED",
                   "PUBLISHED",
-                  "AIRED"
+                  "AIRED",
+                  "SKIPPED"
                 ]
               }
             },
@@ -818,7 +848,8 @@
                 "enum": [
                   "PLANNED",
                   "PUBLISHED",
-                  "AIRED"
+                  "AIRED",
+                  "SKIPPED"
                 ]
               }
             },

@@ -111,11 +111,11 @@ a person. Everything deploys from one AWS CDK (Python) app.
    hour for two hours with the sample titles, with ad breaks about every 12 minutes."* The agent shows the plan with
    every start time, break and rule check, then asks for approval before publishing it.
 
-7. **Start the channel** before the block's first program begins: Channel Assembly skips a block's first program
-   when the channel starts after its start time, and airs the rest of the block early. Ask *"Start fast-demo"* (and
-   approve), or use **Start** in the Channels view. A BASIC channel costs $0.10 per running hour and stops
-   automatically after four hours. The Channels view plays an SSAI and an SGAI session side by side, with the ad and
-   beacon events of each.
+7. **Start the channel.** Every program airs at its planned time; a channel started after a program's start skips
+   the programs it missed (the agent lists them, and the guide marks them `SKIPPED`) and airs the rest on time. Ask
+   *"Start fast-demo"* (and approve), or use **Start** in the Channels view. A BASIC channel costs $0.10 per running
+   hour and stops automatically after four hours. The Channels view plays an SSAI and an SGAI session side by side,
+   with the ad and beacon events of each.
 
 `make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`); see
 [docs/operations.md](docs/operations.md) for configuration and day-two operations.
