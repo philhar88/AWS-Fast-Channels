@@ -150,7 +150,9 @@ def test_approved_call_runs_on_resume(harness: HarnessFactory) -> None:
     ]
     snapshot = of_kind(events, "STATE_SNAPSHOT")[0]["snapshot"]
     assert snapshot["plan"] is None
-    assert snapshot["schedule"]["plan_id"] == "plan-1"
+    # No guide was read in this conversation, so the snapshot is only what was just published.
+    assert snapshot["schedule"] == {"channel": "fast-demo", "programs": []}
+    assert snapshot["schedule_scope"] == "published"
 
 
 def test_native_ag_ui_resume_also_approves(harness: HarnessFactory) -> None:
@@ -162,6 +164,14 @@ def test_native_ag_ui_resume_also_approves(harness: HarnessFactory) -> None:
     assert [name for name, _ in h.gateway.calls] == ["schedule___publish"]
 
 
+def declined(content: str) -> dict[str, Any]:
+    envelope = json.loads(content)
+    assert envelope["ok"] is False
+    assert envelope["error"]["code"] == "DECLINED"
+    assert envelope["error"]["retryable"] is False
+    return dict(envelope["error"])
+
+
 def test_declined_call_is_cancelled_with_the_note(harness: HarnessFactory) -> None:
     h = harness(publish_script(), [text("Understood, not publishing.")])
     pending = interrupt_id(run(h.run("publish plan-1")))
@@ -169,7 +179,11 @@ def test_declined_call_is_cancelled_with_the_note(harness: HarnessFactory) -> No
     events = run(h.run(approval={"interrupt_id": pending, "approved": False, "note": "not now"}))
 
     assert h.gateway.calls == []
-    assert of_kind(events, "TOOL_CALL_RESULT")[0]["content"] == "The operator declined schedule___publish: not now"
+    content = of_kind(events, "TOOL_CALL_RESULT")[0]["content"]
+    assert declined(content)["message"] == "The operator declined schedule___publish: not now"
+    history = h.models[-1][1].calls[0]["messages"]
+    model_result = next(b["toolResult"] for m in history for b in m["content"] if "toolResult" in b)
+    assert model_result["content"] == [{"text": content}]  # the model reads the same envelope as the console
     assert "STATE_SNAPSHOT" not in kinds(events)
 
 
@@ -180,10 +194,62 @@ def test_new_message_declines_pending_approval(harness: HarnessFactory) -> None:
     events = run(h.run("no, use Sintel instead"))
 
     assert h.gateway.calls == []
-    assert of_kind(events, "TOOL_CALL_RESULT")[0]["content"] == (
-        "The operator declined schedule___publish: no, use Sintel instead"
-    )
+    message = declined(of_kind(events, "TOOL_CALL_RESULT")[0]["content"])["message"]
+    assert message == "The operator declined schedule___publish: no, use Sintel instead"
     assert events[-1]["type"] == "RUN_FINISHED"
+
+
+def test_failed_tool_call_reaches_the_client_as_an_error_envelope(harness: HarnessFactory) -> None:
+    def denied(_: dict[str, Any]) -> dict[str, Any]:
+        raise PermissionError("Tool call denied by policy")
+
+    h = harness(
+        [tool_use("t1", "catalog___search_content", {"text": "bunny"})],
+        [text("I am not allowed to search.")],
+        handlers={"catalog___search_content": denied},
+    )
+
+    events = run(h.run("find bunny"))
+
+    error = json.loads(of_kind(events, "TOOL_CALL_RESULT")[0]["content"])["error"]
+    assert error["code"] == "TOOL_ERROR"
+    assert "Tool call denied by policy" in error["message"]
+
+
+def program(name: str, start: str) -> dict[str, Any]:
+    return {"name": name, "title": name, "start": start, "end": start, "status": "PUBLISHED"}
+
+
+def test_publish_is_folded_into_the_schedule_already_shown(harness: HarnessFactory) -> None:
+    on_air = program("a", "2026-10-16T12:00:00.000Z")
+    block = [program("b", "2026-10-16T12:30:00.000Z"), program("c", "2026-10-16T12:40:00.000Z")]
+    handlers = {
+        "schedule___get_schedule": lambda args: {
+            "ok": True,
+            "channel": args["channel"],
+            "programs": [on_air],
+            "gaps": [],
+        },
+        "schedule___publish": lambda args: {"ok": True, "channel": "fast-demo", "plan_id": "p", "programs": block},
+    }
+    h = harness(
+        [tool_use("g1", "schedule___get_schedule", {"channel": "fast-demo"})],
+        [text("Publishing.")],
+        [tool_use("p1", "schedule___publish", {"plan_id": "p"})],
+        [text("Published.")],
+        handlers=handlers,
+    )
+    shown = of_kind(run(h.run("what is on fast-demo?")), "STATE_SNAPSHOT")[0]["snapshot"]
+    pending = interrupt_id(run(h.run("publish p", state=shown)))
+
+    events = run(h.run(approval={"interrupt_id": pending, "approved": True}, state=shown))
+
+    snapshot = of_kind(events, "STATE_SNAPSHOT")[0]["snapshot"]
+    assert shown["schedule"] == {"channel": "fast-demo", "programs": [on_air]}
+    assert (snapshot["schedule_scope"], [p["name"] for p in snapshot["schedule"]["programs"]]) == (
+        "channel",
+        ["a", "b", "c"],
+    )
 
 
 def test_answered_approvals_cannot_be_replayed(harness: HarnessFactory, tmp_path: Path) -> None:

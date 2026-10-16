@@ -31,7 +31,53 @@ test("assistant plans, asks for approval and publishes", async ({ page }) => {
   await screenshot(page, "assistant");
   await approve.click();
   await expect(page.getByText(/Published \d+ programs to/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: /^Schedule/ })).toBeVisible();
+  // The published block is folded into the schedule read before planning, so the panel still shows all of it.
+  const schedule = page.getByRole("heading", { name: /^Schedule/ });
+  await expect(schedule).toBeVisible();
+  await expect(page.getByText("Published schedule of fast-demo from now on")).toBeVisible();
+  await expect(page.getByRole("img", { name: "Succeeded" })).toHaveCount(4);
+  expect(problems).toEqual([]);
+});
+
+test("a rejected publish is shown as declined, not as succeeded", async ({ page }) => {
+  const problems = await open(page, "#/assistant");
+  await page.getByRole("menuitem", { name: /Fill fast-demo for the next two hours/ }).click();
+  await page.getByRole("button", { name: "Reject", exact: true }).click();
+  await expect(page.getByText(/I left that alone/)).toBeVisible();
+  await expect(page.getByRole("img", { name: "Declined" })).toHaveCount(1);
+  await expect(page.getByRole("img", { name: "Succeeded" })).toHaveCount(3); // get_schedule, search, plan
+  expect(problems).toEqual([]);
+});
+
+test("agent tables render as tables", async ({ page }) => {
+  const problems = await open(page, "#/assistant");
+  await page.getByRole("menuitem", { name: /Which channels are on air/ }).click();
+  const table = page.getByRole("region", { name: "Conversation" }).getByRole("table");
+  await expect(table.getByRole("columnheader", { name: "Ladder" })).toBeVisible();
+  await expect(table.getByRole("cell", { name: "fast-kids" })).toBeVisible();
+  await expect(page.getByText("|---|")).toHaveCount(0);
+  expect(problems).toEqual([]);
+});
+
+test("two approvals are answered one run at a time, each with one card", async ({ page }) => {
+  const problems = await open(page, "#/assistant");
+  const prompt = page.getByRole("textbox", { name: "Message to the scheduling agent" });
+  await prompt.fill("Stop fast-demo and fast-kids");
+  await prompt.press("Enter");
+  const approve = page.getByRole("button", { name: "Approve", exact: true });
+  await expect(approve).toHaveCount(2);
+
+  await approve.first().click();
+  // The other card waits while the first decision runs, then the agent asks for it again under the same id.
+  await expect(approve).toHaveCount(1);
+  await expect(approve).toBeDisabled();
+  await expect(approve).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Reject", exact: true })).toHaveCount(1);
+  await expect(page.getByText("Approval required")).toHaveCount(2);
+
+  await approve.click();
+  await expect(page.getByText("fast-kids is stopped.")).toBeVisible();
+  await expect(page.getByRole("img", { name: "Succeeded" })).toHaveCount(2);
   expect(problems).toEqual([]);
 });
 

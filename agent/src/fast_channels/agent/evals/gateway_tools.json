@@ -180,8 +180,8 @@
                 "type": "number"
               },
               "min_gap_minutes": {
-                "description": "Minimum minutes between the end of one break and the next break (default 6; ≥ 0).",
-                "type": "number"
+                "type": "number",
+                "description": "Minimum minutes between the end of one break and the next break; omit for half the cadence (≥ 0)."
               },
               "max_breaks": {
                 "type": "integer",
@@ -190,6 +190,18 @@
               "slate_gops": {
                 "description": "Break length in GOPs, one of 15, 30, 45, 60: about 30, 60, 90 or 120 s with 2 s GOPs (default 30).",
                 "type": "integer"
+              },
+              "start_margin_seconds": {
+                "description": "No break this close to a program's start, unless the asset has editorial cue points (default 60; ≥ 0).",
+                "type": "number"
+              },
+              "end_margin_seconds": {
+                "description": "No break this close to a program's end, unless the asset has editorial cue points (default 30; ≥ 0).",
+                "type": "number"
+              },
+              "min_program_minutes": {
+                "description": "Programs shorter than this get no breaks, unless the asset has editorial cue points (default 3; ≥ 0).",
+                "type": "number"
               }
             }
           },

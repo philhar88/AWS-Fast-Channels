@@ -1,7 +1,7 @@
 /** Conversation state of the Assistant view, folded from local actions and AG-UI events. */
 import type { AgUiEvent, AgentSnapshot, ApprovalDecision, ApprovalRequest } from "./agui";
 
-export type ToolStatus = "running" | "succeeded" | "failed";
+export type ToolStatus = "running" | "succeeded" | "failed" | "declined";
 
 export type TranscriptItem =
   | { readonly kind: "user"; readonly id: string; readonly text: string }
@@ -98,18 +98,33 @@ function applyEvent(state: Transcript, event: AgUiEvent): Transcript {
   }
 }
 
+/**
+ * A resume answers one approval; the agent then asks again for every other pending one, with the same interrupt id.
+ * The card that is already shown is reset to pending instead of adding a second card with the same id.
+ */
 function approvalRequested(state: Transcript, request: ApprovalRequest): Transcript {
-  return append(state, { kind: "approval", id: request.interrupt_id, request });
+  const card: TranscriptItem = { kind: "approval", id: request.interrupt_id, request };
+  return has(state, card.id) ? patch(state, card.id, () => card) : append(state, card);
 }
 
-/** Tools answer with their output model, or with the `{"ok": false, "error": …}` envelope (SPEC §6). */
+/** Error code of a CONFIRM call the operator declined (the call never ran). */
+export const DECLINED = "DECLINED";
+
+/**
+ * AG-UI results carry no status. Tools answer with their output model or the `{"ok": false, "error": …}` envelope
+ * (SPEC §6), and the agent reports every other failure (Cedar denial, Gateway error, declined approval) the same way.
+ */
 function toolStatus(content: string): ToolStatus {
+  let envelope: { ok?: unknown; error?: { code?: unknown } | null } | null;
   try {
-    const parsed = JSON.parse(content) as { ok?: unknown } | null;
-    return parsed?.ok === false ? "failed" : "succeeded";
+    envelope = JSON.parse(content) as typeof envelope;
   } catch {
+    return "succeeded"; // plain text, such as a loaded skill
+  }
+  if (envelope?.ok !== false) {
     return "succeeded";
   }
+  return envelope.error?.code === DECLINED ? "declined" : "failed";
 }
 
 /** The approval card still waiting for the operator, if any. */

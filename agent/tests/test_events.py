@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
@@ -63,3 +64,30 @@ def test_result_text_joins_text_and_json_blocks() -> None:
     result: Any = {"toolUseId": "t", "status": "error", "content": [{"text": "a"}, {"json": [1]}, {"image": {}}]}
 
     assert result_text(result) == "a\n[1]"
+
+
+def result_content_of(result: dict[str, Any]) -> str:
+    translator = EventTranslator(lambda _: None)
+    (event,) = translator.translate({"message": {"role": "user", "content": [{"toolResult": result}]}})
+    content: str = event.content  # type: ignore[attr-defined]
+    return content
+
+
+def test_failed_calls_without_an_envelope_are_wrapped_as_tool_errors() -> None:
+    # What Strands returns for a Cedar denial or a Gateway failure: plain text with status error.
+    denied = {"toolUseId": "t", "status": "error", "content": [{"text": "Tool call denied by policy"}]}
+
+    assert json.loads(result_content_of(denied)) == {
+        "ok": False,
+        "error": {"code": "TOOL_ERROR", "message": "Tool call denied by policy", "retryable": False, "hint": ""},
+    }
+    assert json.loads(result_content_of({**denied, "content": []}))["error"]["message"] == "The tool call failed."
+
+
+def test_envelopes_and_successful_results_pass_through() -> None:
+    declined = '{"ok": false, "error": {"code": "DECLINED", "message": "no"}}'
+
+    assert result_content_of({"toolUseId": "t", "status": "error", "content": [{"text": declined}]}) == declined
+    assert result_content_of({"toolUseId": "t", "status": "success", "content": [{"text": "Loaded skill."}]}) == (
+        "Loaded skill."
+    )

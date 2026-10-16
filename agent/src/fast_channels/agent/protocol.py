@@ -4,9 +4,11 @@ Inbound: an AG-UI ``RunAgentInput``. The server keeps the conversation (AgentCor
 only the newest user message is read; earlier ``messages`` the client replays are ignored. A run resumes a paused
 approval with ``forwardedProps.approval`` (contract) or with standard AG-UI ``resume`` entries.
 
-Outbound value shapes: the ``approval_required`` CUSTOM event and the ``STATE_SNAPSHOT`` state.
+Outbound value shapes: the ``approval_required`` CUSTOM event, the ``STATE_SNAPSHOT`` state, and the error envelope
+that every failed ``TOOL_CALL_RESULT`` carries (AG-UI results have no status field).
 """
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, Self
@@ -16,6 +18,15 @@ from pydantic import BaseModel, ValidationError
 
 APPROVAL_EVENT: Final = "approval_required"
 """Name of the AG-UI CUSTOM event that asks the operator to approve a CONFIRM tool call."""
+DECLINED: Final = "DECLINED"
+"""Error code of a CONFIRM tool call the operator declined (the call never ran)."""
+TOOL_ERROR: Final = "TOOL_ERROR"
+"""Error code of a failed call that did not return a tool envelope: a Cedar denial, a Gateway, MCP or Strands error."""
+
+
+def error_envelope(code: str, message: str, *, hint: str = "") -> str:
+    """JSON text of the tools' error envelope (SPEC §6), for failures the agent reports itself; never retryable."""
+    return json.dumps({"ok": False, "error": {"code": code, "message": message, "retryable": False, "hint": hint}})
 
 
 class AgentRunError(Exception):
@@ -51,12 +62,26 @@ class ApprovalRequest(BaseModel, frozen=True):
     tool_call_id: str
 
 
+class ScheduleScope(StrEnum):
+    """How much of the channel's guide ``SharedState.schedule`` holds."""
+
+    CHANNEL = "channel"
+    """The guide from now on (``schedule___get_schedule``), with later publishes and removals folded in."""
+    PUBLISHED = "published"
+    """Only the programs published in this conversation: the guide was not read before the first publish."""
+
+
 class SharedState(BaseModel):
-    """The AG-UI shared state the agent publishes in ``STATE_SNAPSHOT`` after schedule tools."""
+    """The AG-UI shared state the agent publishes in ``STATE_SNAPSHOT`` after schedule tools.
+
+    ``schedule`` is EPG-shaped (CONTRACTS §I: ``channel``, ``generated_at``, ``ladder_version``, ``programs``);
+    ``schedule_scope`` says whether it is the channel's whole guide or only what this conversation published.
+    """
 
     channel: str | None = None
     plan: dict[str, Any] | None = None
     schedule: dict[str, Any] | None = None
+    schedule_scope: ScheduleScope | None = None
 
 
 @dataclass(frozen=True, slots=True)

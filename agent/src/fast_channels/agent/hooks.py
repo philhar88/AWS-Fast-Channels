@@ -1,13 +1,14 @@
 """Strands hooks around Gateway tool calls: operator approval, correlation id, shared schedule state."""
 
 import json
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent, HookRegistry
 from strands.interrupt import InterruptException
 
 from fast_channels.agent.gateway import CORRELATION_FIELD, is_gateway_tool
-from fast_channels.agent.protocol import ApprovalRequest, SharedState
+from fast_channels.agent.protocol import DECLINED, ApprovalRequest, ScheduleScope, SharedState, error_envelope
 
 if TYPE_CHECKING:
     from strands.agent import Agent
@@ -23,7 +24,8 @@ class ToolGuard:
 
     CONFIRM tools raise a Strands interrupt; the run ends with an ``approval_required`` event and resumes when the
     client answers. The tool use that was shown is the one that runs: resuming re-enters this hook with the
-    same tool use id and only the answer added. A declined call is cancelled and the model sees why.
+    same tool use id and only the answer added. A declined call is cancelled with a ``DECLINED`` error envelope, so
+    the model reads why and the console shows the call as declined.
     """
 
     def __init__(self, *, correlation_id: str, confirm_tools: frozenset[str]) -> None:
@@ -66,7 +68,11 @@ class ToolGuard:
         if isinstance(answer, dict) and answer.get("approved") is True:
             return True
         note = answer.get("note") if isinstance(answer, dict) else None
-        event.cancel_tool = f"The operator declined {request.tool}" + (f": {note}" if note else ".")
+        event.cancel_tool = error_envelope(
+            DECLINED,
+            f"The operator declined {request.tool}" + (f": {note}" if note else "."),
+            hint="Do not retry this call; ask the operator what they want instead.",
+        )
         return False
 
 
@@ -74,7 +80,8 @@ class SharedStateTracker:
     """After schedule tools: fold the result into the AG-UI shared state and queue a ``STATE_SNAPSHOT``.
 
     Snapshots come from tool results, never from model text, so the console's schedule view only shows what the
-    tools computed.
+    tools computed. A publish or removal result covers only the programs it changed, so it is folded into the
+    guide already shown instead of replacing it (``SharedState.schedule_scope`` says what that guide covers).
     """
 
     def __init__(self, state: SharedState) -> None:
@@ -95,19 +102,70 @@ class SharedStateTracker:
             return
         channel = payload.get("channel") or _arguments(event.tool_use).get("channel") or self.state.channel
         current = self.state if channel == self.state.channel else SharedState()
-        update: dict[str, Any]
-        match name:
-            case "schedule___plan":
-                update = {"plan": payload}
-            case "schedule___publish":
-                update = {"plan": None, "schedule": payload}  # the plan is now on air
-            case _:
-                update = {"schedule": payload}
+        if (update := _state_update(name, current, payload)) is None:
+            return
         self.state = current.model_copy(update={"channel": channel, **update})
         self._snapshots[event.tool_use["toolUseId"]] = self.state.model_dump(mode="json")
 
 
-_SNAPSHOT_TOOLS: Final = frozenset({"schedule___plan", "schedule___publish", "schedule___get_schedule"})
+_SNAPSHOT_TOOLS: Final = frozenset(
+    {"schedule___plan", "schedule___publish", "schedule___get_schedule", "schedule___remove_programs"}
+)
+_GUIDE_FIELDS: Final = ("channel", "generated_at", "ladder_version")
+
+
+def _state_update(tool: str, state: SharedState, result: dict[str, Any]) -> dict[str, Any] | None:
+    """The shared-state fields that ``result`` of ``tool`` changes; ``None`` when it changes nothing shown."""
+    match tool:
+        case "schedule___plan":
+            return {"plan": result}
+        case "schedule___get_schedule":
+            return {
+                "schedule": fold_guide(None, result, upserted=result.get("programs", ())),
+                "schedule_scope": ScheduleScope.CHANNEL,
+            }
+        case "schedule___publish":
+            shown = state.schedule_scope if state.schedule is not None else None
+            return {
+                "plan": None,  # the plan is now on air
+                "schedule": fold_guide(state.schedule, result, upserted=result.get("programs", ())),
+                "schedule_scope": shown or ScheduleScope.PUBLISHED,
+            }
+        case "schedule___remove_programs" if state.schedule is not None:
+            moved, removed = result.get("moved", ()), result.get("removed", ())
+            return {"schedule": fold_guide(state.schedule, result, upserted=moved, removed=removed)}
+        case _:
+            return None
+
+
+def fold_guide(
+    guide: Mapping[str, Any] | None,
+    change: Mapping[str, Any],
+    *,
+    upserted: Iterable[Mapping[str, Any]] = (),
+    removed: Iterable[str] = (),
+) -> dict[str, Any]:
+    """``guide`` (EPG-shaped, CONTRACTS §I) after the schedule change ``change``, programs in air order.
+
+    ``upserted`` programs replace those of the same name or join them, and ``removed`` names leave. The guide
+    fields (channel, generated_at, ladder_version) that ``change`` carries win over those of ``guide``.
+    """
+    new = [dict(p) for p in upserted]
+    gone = {*removed, *(p.get("name") for p in new)}
+    kept = [p for p in _programs(guide) if p.get("name") not in gone]
+    fields = {k: v for source in (guide or {}, change) for k, v in source.items() if k in _GUIDE_FIELDS}
+    return {**fields, "programs": sorted([*kept, *new], key=_air_order)}
+
+
+def _programs(guide: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """The guide's programs; the guide comes back from the client, so anything that is not a program is dropped."""
+    programs = (guide or {}).get("programs")
+    return [p for p in programs if isinstance(p, dict)] if isinstance(programs, list) else []
+
+
+def _air_order(program: Mapping[str, Any]) -> tuple[str, str]:
+    # Tools format every time the same way (UTC ISO-8601 with milliseconds), so text order is time order.
+    return str(program.get("start", "")), str(program.get("name", ""))
 
 
 def pending_approvals(agent: Agent) -> dict[str, ApprovalRequest]:

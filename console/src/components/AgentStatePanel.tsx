@@ -2,11 +2,13 @@ import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table, { type TableProps } from "@cloudscape-design/components/table";
 import type { AgentSnapshot } from "../lib/agui";
 import { formatClock, formatDateTime, formatDuration } from "../lib/format";
+import { href } from "../lib/router";
 import type { Plan, PlannedProgram } from "../lib/schedule";
 import { ProgramTable } from "./ProgramTable";
 
@@ -35,13 +37,27 @@ export function AgentStatePanel({ snapshot }: { snapshot: AgentSnapshot | null }
     return <PlanView plan={snapshot.plan} />;
   }
   if (snapshot?.schedule) {
+    // Without a guide read first, the agent only knows what this conversation published: never call that the schedule.
+    const partial = snapshot.schedule_scope !== "channel";
+    const guide = <Link href={href({ view: "channels", channel: snapshot.channel })}>program guide</Link>;
     return (
       <ProgramTable
         variant="container"
+        compact
         programs={snapshot.schedule.programs}
         header={
-          <Header variant="h2" counter={`(${snapshot.schedule.programs.length})`} description={`Published schedule of ${snapshot.channel}`}>
-            Schedule
+          <Header
+            variant="h2"
+            counter={`(${snapshot.schedule.programs.length})`}
+            description={
+              partial ? (
+                <>Programs this conversation published to {snapshot.channel}. The full schedule is in its {guide}.</>
+              ) : (
+                `Published schedule of ${snapshot.channel} from now on`
+              )
+            }
+          >
+            {partial ? "Published programs" : "Schedule"}
           </Header>
         }
       />
@@ -89,6 +105,7 @@ function PlanView({ plan }: { plan: Plan }) {
           columnDefinitions={PLAN_COLUMNS}
           trackBy="name"
           stripedRows
+          wrapLines
           ariaLabels={{ tableLabel: "Planned programs" }}
         />
       </SpaceBetween>

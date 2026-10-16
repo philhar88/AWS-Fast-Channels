@@ -1,6 +1,7 @@
 """The AG-UI HTTP surface as AgentCore Runtime calls it: POST /invocations (SSE) and GET /ping."""
 
 import json
+import os
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -64,3 +65,21 @@ def test_invalid_run_input_is_rejected_before_streaming(client: tuple[TestClient
 
 def test_ping(client: tuple[TestClient, Harness]) -> None:
     assert client[0].get("/ping").json() == {"status": "Healthy"}
+
+
+def test_serve_keeps_conversation_content_out_of_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[int] = []
+    # Registered with monkeypatch so that what serve() writes is undone after the test.
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")  # ADOT's default
+    monkeypatch.setenv("OTEL_SEMCONV_STABILITY_OPT_IN", "")
+    monkeypatch.delenv("CAPTURE_PROMPTS", raising=False)
+
+    def run(*, port: int) -> None:
+        started.append(port)
+
+    monkeypatch.setattr(main.app, "run", run)
+
+    main.serve()
+
+    assert started == [8080]
+    assert os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] == "false"

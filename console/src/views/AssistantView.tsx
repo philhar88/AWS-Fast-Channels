@@ -14,7 +14,7 @@ import PromptInput from "@cloudscape-design/components/prompt-input";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator, { type StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
 import { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
+import { AgentMarkdown } from "../components/AgentMarkdown";
 import { AgentStatePanel } from "../components/AgentStatePanel";
 import { JsonBlock } from "../components/JsonBlock";
 import type { ApprovalDecision } from "../lib/agui";
@@ -84,7 +84,7 @@ export function AssistantView() {
               i18nStrings={{ actionButtonAriaLabel: "Send" }}
               ariaLabel="Message to the scheduling agent"
               placeholder={pending ? "Approve or reject the pending action first" : "Ask the scheduling agent"}
-              disabled={transcript.running || pending !== undefined}
+              disabled={chat.busy || pending !== undefined}
               disableActionButton={!prompt.trim()}
               maxRows={6}
             />
@@ -109,6 +109,7 @@ export function AssistantView() {
                     key={item.id}
                     item={item}
                     continued={index > 0 && isAgent(item) && isAgent(transcript.items[index - 1])}
+                    busy={chat.busy}
                     onDecide={chat.decide}
                   />
                 ))}
@@ -146,10 +147,12 @@ interface MessageProps {
   readonly item: TranscriptItem;
   /** Same author as the previous item: keep the avatar's space but hide it. */
   readonly continued: boolean;
+  /** A run's stream is open: decisions wait until it closes (one run at a time per session). */
+  readonly busy: boolean;
   readonly onDecide: (decision: ApprovalDecision) => void;
 }
 
-function Message({ item, continued, onDecide }: MessageProps) {
+function Message({ item, continued, busy, onDecide }: MessageProps) {
   switch (item.kind) {
     case "user":
       return (
@@ -160,9 +163,7 @@ function Message({ item, continued, onDecide }: MessageProps) {
     case "assistant":
       return (
         <ChatBubble type="incoming" ariaLabel="Scheduling agent" avatar={<AgentAvatar loading={item.streaming} />} hideAvatar={continued}>
-          <div className={styles.markdown}>
-            <Markdown>{item.text}</Markdown>
-          </div>
+          <AgentMarkdown text={item.text} />
         </ChatBubble>
       );
     case "tool":
@@ -170,7 +171,11 @@ function Message({ item, continued, onDecide }: MessageProps) {
         <ChatBubble type="incoming" ariaLabel={`Tool call ${item.name}`} avatar={<AgentAvatar />} hideAvatar={continued}>
           <ExpandableSection
             variant="footer"
-            headerText={<StatusIndicator type={TOOL_STATUS[item.status]}>{item.name}</StatusIndicator>}
+            headerText={
+              <StatusIndicator type={TOOL_STATUS[item.status].type} iconAriaLabel={TOOL_STATUS[item.status].label}>
+                {item.name}
+              </StatusIndicator>
+            }
           >
             <SpaceBetween size="xs">
               <JsonBlock label="Arguments" text={item.args} />
@@ -182,7 +187,7 @@ function Message({ item, continued, onDecide }: MessageProps) {
     case "approval":
       return (
         <ChatBubble type="incoming" ariaLabel={`Approval required for ${item.request.tool}`} avatar={<AgentAvatar />} hideAvatar={continued}>
-          <ApprovalCard item={item} onDecide={onDecide} />
+          <ApprovalCard item={item} busy={busy} onDecide={onDecide} />
         </ChatBubble>
       );
     case "error":
@@ -194,13 +199,20 @@ function Message({ item, continued, onDecide }: MessageProps) {
   }
 }
 
-const TOOL_STATUS: Record<ToolStatus, StatusIndicatorProps.Type> = {
-  running: "in-progress",
-  succeeded: "success",
-  failed: "error",
+const TOOL_STATUS: Record<ToolStatus, { readonly type: StatusIndicatorProps.Type; readonly label: string }> = {
+  running: { type: "in-progress", label: "Running" },
+  succeeded: { type: "success", label: "Succeeded" },
+  failed: { type: "error", label: "Failed" },
+  declined: { type: "stopped", label: "Declined" },
 };
 
-function ApprovalCard({ item, onDecide }: { item: Extract<TranscriptItem, { kind: "approval" }>; onDecide: (d: ApprovalDecision) => void }) {
+interface ApprovalCardProps {
+  readonly item: Extract<TranscriptItem, { kind: "approval" }>;
+  readonly busy: boolean;
+  readonly onDecide: (decision: ApprovalDecision) => void;
+}
+
+function ApprovalCard({ item, busy, onDecide }: ApprovalCardProps) {
   const [note, setNote] = useState("");
   const { request, decision } = item;
   const decide = (approved: boolean) => {
@@ -236,6 +248,7 @@ function ApprovalCard({ item, onDecide }: { item: Extract<TranscriptItem, { kind
           />
           <SpaceBetween direction="horizontal" size="xs">
             <Button
+              disabled={busy}
               onClick={() => {
                 decide(false);
               }}
@@ -244,6 +257,7 @@ function ApprovalCard({ item, onDecide }: { item: Extract<TranscriptItem, { kind
             </Button>
             <Button
               variant="primary"
+              disabled={busy}
               onClick={() => {
                 decide(true);
               }}

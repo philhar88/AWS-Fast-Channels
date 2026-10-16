@@ -52,6 +52,37 @@ describe("transcriptReducer", () => {
     expect(state.items.map((i) => (i.kind === "tool" ? i.status : i.kind))).toEqual(["succeeded", "assistant"]);
   });
 
+  it("tells declined and failed calls from successful ones by the result envelope", () => {
+    const result = (toolCallId: string, content: string): AgUiEvent => ({ type: "TOOL_CALL_RESULT", toolCallId, content });
+    const declined = { ok: false, error: { code: "DECLINED", message: "The operator declined channels___delete_channel." } };
+    const denied = { ok: false, error: { code: "TOOL_ERROR", message: "Tool call denied by policy" } };
+    const state = fold(
+      EMPTY_TRANSCRIPT,
+      ...["c1", "c2", "c3", "c4"].map((id): AgUiEvent => ({ type: "TOOL_CALL_START", toolCallId: id, toolCallName: "x___y" })),
+      result("c1", JSON.stringify(declined)),
+      result("c2", JSON.stringify(denied)),
+      result("c3", "Loaded the scheduling skill."),
+      result("c4", "null"),
+    );
+    expect(state.items.map((i) => (i.kind === "tool" ? i.status : i.kind))).toEqual(["declined", "failed", "succeeded", "succeeded"]);
+  });
+
+  it("keeps one card per interrupt id when the agent asks again for an approval a resume left open", () => {
+    const ask = (interruptId: string): AgUiEvent => ({
+      type: "CUSTOM",
+      name: "approval_required",
+      value: { interrupt_id: interruptId, tool: "channels___stop_channel", arguments: { channel: interruptId }, reason: "why" },
+    });
+    const asked = fold(EMPTY_TRANSCRIPT, ask("a"), ask("b"));
+    const decided = transcriptReducer(asked, { type: "decide", decision: { interrupt_id: "a", approved: true, note: null } });
+
+    const resumed = fold(decided, { type: "RUN_STARTED", ...run }, ask("b"), { type: "RUN_FINISHED", ...run });
+
+    expect(resumed.items.map((i) => i.id)).toEqual(["a", "b"]);
+    expect(pendingApproval(resumed)?.id).toBe("b");
+    expect(resumed.items[0]).toMatchObject({ decision: { approved: true } });
+  });
+
   it("ends streaming and records RUN_ERROR, and settles a stream that closed without RUN_FINISHED", () => {
     const errored = fold(
       EMPTY_TRANSCRIPT,

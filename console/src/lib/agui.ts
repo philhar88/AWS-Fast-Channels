@@ -45,11 +45,18 @@ export interface ApprovalRequest {
   readonly cost_estimate_usd?: number;
 }
 
-/** STATE_SNAPSHOT payload, emitted after plan, publish and get_schedule. */
+/**
+ * How much of the channel's guide `AgentSnapshot.schedule` holds: `channel` is the guide from now on (get_schedule,
+ * with later publishes and removals folded in); `published` only the programs published in this conversation.
+ */
+export type ScheduleScope = "channel" | "published";
+
+/** STATE_SNAPSHOT payload, emitted after plan, get_schedule, publish and remove_programs. */
 export interface AgentSnapshot {
   readonly channel: string;
   readonly plan: Plan | null;
   readonly schedule: Epg | null;
+  readonly schedule_scope?: ScheduleScope | null;
 }
 
 export type AgUiEvent =

@@ -11,10 +11,10 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { AuthProvider, useAuth, useAutoSignin } from "react-oidc-context";
 import type { AppConfig } from "../lib/config";
 import { SessionContext, type Session } from "../lib/session";
+import { freshAccessToken, RENEW_BEFORE_EXPIRY_S } from "../lib/tokens";
 
 /** Resource-server scope required by the Runtime and Gateway JWT authorizers (SPEC §6). */
 const SCOPE = "openid email profile fast-channels/agent.invoke";
-const RENEW_BEFORE_EXPIRY_S = 60;
 
 function userManager(config: AppConfig): UserManager {
   const home = `${window.location.origin}/`;
@@ -26,6 +26,8 @@ function userManager(config: AppConfig): UserManager {
     response_type: "code",
     scope: SCOPE,
     automaticSilentRenew: true,
+    // Renew in the background as early as accessToken() would, so a run rarely waits for a renewal.
+    accessTokenExpiringNotificationTimeInSeconds: RENEW_BEFORE_EXPIRY_S,
     // Cognito's discovery document lists no revocation endpoint; it lives on the managed-login domain.
     metadataSeed: { revocation_endpoint: `${config.cognitoDomain}/oauth2/revoke` },
   });
@@ -54,14 +56,7 @@ function SignedIn({ config, manager, children }: { config: AppConfig; manager: U
   const { isLoading, error } = useAutoSignin({ signinArgs: { state: window.location.hash } });
 
   // Stable across token renewals, so clients built on it (and their effects) are not recreated every hour.
-  const accessToken = useCallback(async () => {
-    const current = await manager.getUser();
-    const fresh = current && (current.expires_in ?? 0) > RENEW_BEFORE_EXPIRY_S ? current : await manager.signinSilent();
-    if (!fresh) {
-      throw new Error("Your session has expired; sign in again.");
-    }
-    return fresh.access_token;
-  }, [manager]);
+  const accessToken = useMemo(() => freshAccessToken(manager), [manager]);
 
   const signOut = useCallback(() => {
     // Cognito has no OIDC end_session_endpoint: revoke the refresh token, then end the managed-login session.

@@ -3,11 +3,3 @@
   overflow-y: auto;
   padding-inline-end: 4px;
 }
-
-.markdown > :first-child {
-  margin-block-start: 0;
-}
-
-.markdown > :last-child {
-  margin-block-end: 0;
-}

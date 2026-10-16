@@ -16,6 +16,9 @@ from bedrock_agentcore.runtime.ag_ui import AGUIApp
 
 from fast_channels.agent.scheduler import Scheduler
 from fast_channels.agent.settings import Settings
+from fast_channels.agent.telemetry import configure_content_capture
+
+logger = logging.getLogger(__name__)
 
 app = AGUIApp()
 
@@ -53,6 +56,7 @@ def configure_logging() -> None:
 
 
 def serve() -> None:
-    """Start the server on port 8080 (the AgentCore AGUI contract)."""
+    """Apply the telemetry content switch (``CAPTURE_PROMPTS``), then serve on port 8080 (AgentCore AGUI contract)."""
     configure_logging()
+    logger.info("telemetry content capture", extra={"capture_prompts": configure_content_capture()})
     app.run(port=8080)

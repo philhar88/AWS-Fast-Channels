@@ -1,8 +1,9 @@
 /**
- * Schedule shapes shared by the agent's STATE_SNAPSHOT (the raw schedule___plan, schedule___publish and
- * schedule___get_schedule results, CONTRACTS §G) and the EPG feed (CONTRACTS §I). Checked against
- * `tool-schemas.json` by the contract test.
+ * Schedule shapes shared by the agent's STATE_SNAPSHOT (the schedule___plan result, and guides built from the
+ * schedule___get_schedule, publish and remove_programs results, CONTRACTS §G) and the EPG feed (CONTRACTS §I).
+ * Checked against `tool-schemas.json` by the contract test.
  */
+import { formatDuration } from "./format";
 
 /** `fast_channels.core.timeline.PlannedBreak`: an ad break `offset_ms` into the content. */
 export interface PlannedBreak {
@@ -74,6 +75,19 @@ export interface EpgProgram {
   readonly genres: readonly string[];
   readonly breaks: readonly EpgBreak[];
   readonly status: "PLANNED" | "PUBLISHED" | "AIRED";
+}
+
+/** `2 × 1:00` when a program's breaks are equally long, else their count and total length: `3, 2:30 in all`. */
+export function breakSummary(breaks: readonly EpgBreak[]): string {
+  const durations = new Set(breaks.map((b) => b.duration_ms));
+  const [only] = durations;
+  if (only === undefined) {
+    return "None";
+  }
+  if (durations.size === 1) {
+    return `${breaks.length} × ${formatDuration(only)}`;
+  }
+  return `${breaks.length}, ${formatDuration(breaks.reduce((total, b) => total + b.duration_ms, 0))} in all`;
 }
 
 /** `epg/<channel>.json` on the media CDN; also the core of the schedule___publish and get_schedule results. */
