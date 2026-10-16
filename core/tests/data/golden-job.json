@@ -1,0 +1,489 @@
+{
+  "Role": "arn:aws:iam::898676505562:role/fastv3-exp-mediaconvert-role",
+  "Queue": "arn:aws:mediaconvert:us-east-1:898676505562:queues/Default",
+  "StatusUpdateInterval": "SECONDS_10",
+  "AccelerationSettings": {
+    "Mode": "PREFERRED"
+  },
+  "UserMetadata": {
+    "project": "fastv3-exp",
+    "ad_offsets_ms": "20000 40000"
+  },
+  "Tags": {
+    "Project": "fastv3-exp"
+  },
+  "Settings": {
+    "TimecodeConfig": {
+      "Source": "ZEROBASED"
+    },
+    "FollowSource": 1,
+    "Inputs": [
+      {
+        "FileInput": "s3://fastv3-exp-898676505562-media/sources/fastv3-test-source-1080p30-60s.mp4",
+        "TimecodeSource": "ZEROBASED",
+        "VideoSelector": {
+          "ColorSpace": "FOLLOW",
+          "Rotate": "AUTO"
+        },
+        "AudioSelectors": {
+          "Audio Selector 1": {
+            "DefaultSelection": "DEFAULT"
+          }
+        }
+      }
+    ],
+    "OutputGroups": [
+      {
+        "Name": "CMAF",
+        "CustomName": "cmaf_abr",
+        "OutputGroupSettings": {
+          "Type": "CMAF_GROUP_SETTINGS",
+          "CmafGroupSettings": {
+            "Destination": "s3://fastv3-exp-898676505562-media/vod/fastv3-test-source/cmaf/index",
+            "SegmentControl": "SEGMENTED_FILES",
+            "SegmentLength": 6,
+            "SegmentLengthControl": "GOP_MULTIPLE",
+            "FragmentLength": 2,
+            "MinFinalSegmentLength": 1,
+            "WriteHlsManifest": "ENABLED",
+            "WriteDashManifest": "ENABLED",
+            "ManifestDurationFormat": "FLOATING_POINT",
+            "CodecSpecification": "RFC_6381",
+            "StreamInfResolution": "INCLUDE",
+            "ClientCache": "ENABLED",
+            "ManifestCompression": "NONE",
+            "MpdProfile": "MAIN_PROFILE",
+            "MpdManifestBandwidthType": "AVERAGE",
+            "DashManifestStyle": "BASIC",
+            "WriteSegmentTimelineInRepresentation": "ENABLED",
+            "PtsOffsetHandlingForBFrames": "ZERO_BASED",
+            "TargetDurationCompatibilityMode": "SPEC_COMPLIANT",
+            "VideoCompositionOffsets": "UNSIGNED",
+            "AdditionalManifests": [
+              {
+                "ManifestNameModifier": "_av1",
+                "SelectedOutputs": [
+                  "_av1_1080p",
+                  "_av1_720p",
+                  "_av1_360p",
+                  "_aac-lc-128k",
+                  "_he-aac-64k"
+                ]
+              },
+              {
+                "ManifestNameModifier": "_hevc",
+                "SelectedOutputs": [
+                  "_hevc_1080p",
+                  "_hevc_720p",
+                  "_aac-lc-128k",
+                  "_he-aac-64k"
+                ]
+              },
+              {
+                "ManifestNameModifier": "_avc",
+                "SelectedOutputs": [
+                  "_avc_1080p",
+                  "_avc_720p",
+                  "_avc_360p",
+                  "_aac-lc-128k",
+                  "_he-aac-64k"
+                ]
+              }
+            ],
+            "DestinationSettings": {
+              "S3Settings": {
+                "StorageClass": "STANDARD"
+              }
+            }
+          }
+        },
+        "Outputs": [
+          {
+            "NameModifier": "_av1_1080p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 1920,
+              "Height": 1080,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "AV1",
+                "Av1Settings": {
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 8
+                  },
+                  "MaxBitrate": 4000000,
+                  "GopSize": 60,
+                  "NumberBFramesBetweenReferenceFrames": 7,
+                  "BitDepth": "BIT_10",
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "AdaptiveQuantization": "HIGH",
+                  "SpatialAdaptiveQuantization": "ENABLED",
+                  "FilmGrainSynthesis": "DISABLED"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_av1_720p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 1280,
+              "Height": 720,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "AV1",
+                "Av1Settings": {
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 7
+                  },
+                  "MaxBitrate": 2000000,
+                  "GopSize": 60,
+                  "NumberBFramesBetweenReferenceFrames": 7,
+                  "BitDepth": "BIT_10",
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "AdaptiveQuantization": "HIGH",
+                  "SpatialAdaptiveQuantization": "ENABLED",
+                  "FilmGrainSynthesis": "DISABLED"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_av1_360p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 640,
+              "Height": 360,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "AV1",
+                "Av1Settings": {
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 7
+                  },
+                  "MaxBitrate": 600000,
+                  "GopSize": 60,
+                  "NumberBFramesBetweenReferenceFrames": 7,
+                  "BitDepth": "BIT_10",
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "AdaptiveQuantization": "HIGH",
+                  "SpatialAdaptiveQuantization": "ENABLED",
+                  "FilmGrainSynthesis": "DISABLED"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_hevc_1080p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 1920,
+              "Height": 1080,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "H_265",
+                "H265Settings": {
+                  "GopSize": 60,
+                  "GopSizeUnits": "FRAMES",
+                  "GopClosedCadence": 1,
+                  "MinIInterval": 0,
+                  "SceneChangeDetect": "TRANSITION_DETECTION",
+                  "QualityTuningLevel": "SINGLE_PASS_HQ",
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 8
+                  },
+                  "MaxBitrate": 5000000,
+                  "HrdBufferSize": 10000000,
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "ParControl": "INITIALIZE_FROM_SOURCE",
+                  "InterlaceMode": "PROGRESSIVE",
+                  "AdaptiveQuantization": "AUTO",
+                  "GopBReference": "ENABLED",
+                  "DynamicSubGop": "ADAPTIVE",
+                  "CodecProfile": "MAIN10_MAIN",
+                  "CodecLevel": "AUTO",
+                  "WriteMp4PackagingType": "HVC1",
+                  "AlternateTransferFunctionSei": "DISABLED",
+                  "TemporalIds": "DISABLED",
+                  "SampleAdaptiveOffsetFilterMode": "ADAPTIVE"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_hevc_720p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 1280,
+              "Height": 720,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "H_265",
+                "H265Settings": {
+                  "GopSize": 60,
+                  "GopSizeUnits": "FRAMES",
+                  "GopClosedCadence": 1,
+                  "MinIInterval": 0,
+                  "SceneChangeDetect": "TRANSITION_DETECTION",
+                  "QualityTuningLevel": "SINGLE_PASS_HQ",
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 7
+                  },
+                  "MaxBitrate": 2500000,
+                  "HrdBufferSize": 5000000,
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "ParControl": "INITIALIZE_FROM_SOURCE",
+                  "InterlaceMode": "PROGRESSIVE",
+                  "AdaptiveQuantization": "AUTO",
+                  "GopBReference": "ENABLED",
+                  "DynamicSubGop": "ADAPTIVE",
+                  "CodecProfile": "MAIN10_MAIN",
+                  "CodecLevel": "AUTO",
+                  "WriteMp4PackagingType": "HVC1",
+                  "AlternateTransferFunctionSei": "DISABLED",
+                  "TemporalIds": "DISABLED",
+                  "SampleAdaptiveOffsetFilterMode": "ADAPTIVE"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_avc_1080p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 1920,
+              "Height": 1080,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "H_264",
+                "H264Settings": {
+                  "GopSize": 60,
+                  "GopSizeUnits": "FRAMES",
+                  "GopClosedCadence": 1,
+                  "MinIInterval": 0,
+                  "SceneChangeDetect": "TRANSITION_DETECTION",
+                  "QualityTuningLevel": "SINGLE_PASS_HQ",
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 8
+                  },
+                  "MaxBitrate": 6000000,
+                  "HrdBufferSize": 12000000,
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "ParControl": "INITIALIZE_FROM_SOURCE",
+                  "InterlaceMode": "PROGRESSIVE",
+                  "AdaptiveQuantization": "AUTO",
+                  "GopBReference": "ENABLED",
+                  "DynamicSubGop": "ADAPTIVE",
+                  "CodecProfile": "HIGH",
+                  "CodecLevel": "AUTO",
+                  "EntropyEncoding": "CABAC",
+                  "Syntax": "DEFAULT"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_avc_720p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 1280,
+              "Height": 720,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "H_264",
+                "H264Settings": {
+                  "GopSize": 60,
+                  "GopSizeUnits": "FRAMES",
+                  "GopClosedCadence": 1,
+                  "MinIInterval": 0,
+                  "SceneChangeDetect": "TRANSITION_DETECTION",
+                  "QualityTuningLevel": "SINGLE_PASS_HQ",
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 7
+                  },
+                  "MaxBitrate": 3000000,
+                  "HrdBufferSize": 6000000,
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "ParControl": "INITIALIZE_FROM_SOURCE",
+                  "InterlaceMode": "PROGRESSIVE",
+                  "AdaptiveQuantization": "AUTO",
+                  "GopBReference": "ENABLED",
+                  "DynamicSubGop": "ADAPTIVE",
+                  "CodecProfile": "HIGH",
+                  "CodecLevel": "AUTO",
+                  "EntropyEncoding": "CABAC",
+                  "Syntax": "DEFAULT"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_avc_360p",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioRenditionSets": "aac-lc-128k,he-aac-64k"
+              }
+            },
+            "VideoDescription": {
+              "Width": 640,
+              "Height": 360,
+              "ScalingBehavior": "DEFAULT",
+              "Sharpness": 50,
+              "ColorMetadata": "INSERT",
+              "CodecSettings": {
+                "Codec": "H_264",
+                "H264Settings": {
+                  "GopSize": 60,
+                  "GopSizeUnits": "FRAMES",
+                  "GopClosedCadence": 1,
+                  "MinIInterval": 0,
+                  "SceneChangeDetect": "TRANSITION_DETECTION",
+                  "QualityTuningLevel": "SINGLE_PASS_HQ",
+                  "RateControlMode": "QVBR",
+                  "QvbrSettings": {
+                    "QvbrQualityLevel": 7
+                  },
+                  "MaxBitrate": 800000,
+                  "HrdBufferSize": 1600000,
+                  "FramerateControl": "INITIALIZE_FROM_SOURCE",
+                  "ParControl": "INITIALIZE_FROM_SOURCE",
+                  "InterlaceMode": "PROGRESSIVE",
+                  "AdaptiveQuantization": "AUTO",
+                  "GopBReference": "ENABLED",
+                  "DynamicSubGop": "ADAPTIVE",
+                  "CodecProfile": "HIGH",
+                  "CodecLevel": "AUTO",
+                  "EntropyEncoding": "CABAC",
+                  "Syntax": "DEFAULT"
+                }
+              }
+            }
+          },
+          {
+            "NameModifier": "_aac-lc-128k",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioGroupId": "aac-lc-128k",
+                "AudioTrackType": "ALTERNATE_AUDIO_AUTO_SELECT_DEFAULT",
+                "AudioDuration": "MATCH_VIDEO_DURATION"
+              }
+            },
+            "AudioDescriptions": [
+              {
+                "AudioSourceName": "Audio Selector 1",
+                "LanguageCodeControl": "USE_CONFIGURED",
+                "LanguageCode": "ENG",
+                "StreamName": "English LC",
+                "CodecSettings": {
+                  "Codec": "AAC",
+                  "AacSettings": {
+                    "CodecProfile": "LC",
+                    "RateControlMode": "CBR",
+                    "Bitrate": 128000,
+                    "CodingMode": "CODING_MODE_2_0",
+                    "SampleRate": 48000,
+                    "Specification": "MPEG4"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "NameModifier": "_he-aac-64k",
+            "ContainerSettings": {
+              "Container": "CMFC",
+              "CmfcSettings": {
+                "AudioGroupId": "he-aac-64k",
+                "AudioTrackType": "ALTERNATE_AUDIO_AUTO_SELECT_DEFAULT",
+                "AudioDuration": "MATCH_VIDEO_DURATION"
+              }
+            },
+            "AudioDescriptions": [
+              {
+                "AudioSourceName": "Audio Selector 1",
+                "LanguageCodeControl": "USE_CONFIGURED",
+                "LanguageCode": "ENG",
+                "StreamName": "English HEV1",
+                "CodecSettings": {
+                  "Codec": "AAC",
+                  "AacSettings": {
+                    "CodecProfile": "HEV1",
+                    "RateControlMode": "CBR",
+                    "Bitrate": 64000,
+                    "CodingMode": "CODING_MODE_2_0",
+                    "SampleRate": 48000,
+                    "Specification": "MPEG4"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "Esam": {
+      "ResponseSignalPreroll": 0,
+      "SignalProcessingNotification": {
+        "SccXml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><SignalProcessingNotification xmlns=\"urn:cablelabs:iptvservices:esam:xsd:signal:1\" xmlns:sig=\"urn:cablelabs:md:xsd:signaling:3.0\" xmlns:common=\"urn:cablelabs:iptvservices:esam:xsd:common:1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" acquisitionPointIdentity=\"fastv3\"><common:BatchInfo batchId=\"1\"><common:Source xsi:type=\"content:MovieType\"/></common:BatchInfo><ResponseSignal acquisitionPointIdentity=\"fastv3\" acquisitionSignalID=\"1\" signalPointID=\"1\" action=\"create\"><sig:NPTPoint nptPoint=\"20.000\"/><sig:SCTE35PointDescriptor spliceCommandType=\"06\"><sig:SegmentationDescriptorInfo segmentEventId=\"1\" segmentTypeId=\"52\"/></sig:SCTE35PointDescriptor></ResponseSignal><ResponseSignal acquisitionPointIdentity=\"fastv3\" acquisitionSignalID=\"2\" signalPointID=\"2\" action=\"create\"><sig:NPTPoint nptPoint=\"40.000\"/><sig:SCTE35PointDescriptor spliceCommandType=\"06\"><sig:SegmentationDescriptorInfo segmentEventId=\"2\" segmentTypeId=\"52\"/></sig:SCTE35PointDescriptor></ResponseSignal><ConditioningInfo acquisitionSignalIDRef=\"1\" startOffset=\"PT20.000S\" duration=\"PT0S\"/><ConditioningInfo acquisitionSignalIDRef=\"2\" startOffset=\"PT40.000S\" duration=\"PT0S\"/></SignalProcessingNotification>"
+      }
+    }
+  }
+}
