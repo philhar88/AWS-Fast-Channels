@@ -1,9 +1,16 @@
 [project]
 name = "fast-channels-agent"
 version = "3.0.0"
-description = "Amazon Bedrock AgentCore Runtime app: the FAST channel scheduling agent (Strands Agents)."
+description = "Amazon Bedrock AgentCore Runtime app: the FAST channel scheduling agent (Strands Agents, AG-UI)."
 requires-python = ">=3.14"
-dependencies = ["strands-agents>=1.61,<2", "bedrock-agentcore>=1.24,<2", "aws-opentelemetry-distro>=0.21", "ag-ui-protocol>=1.0,<2", "httpx>=0.28"]
+dependencies = [
+    "ag-ui-protocol>=1.0,<2",
+    "aws-opentelemetry-distro>=0.21",
+    "bedrock-agentcore>=1.24,<2",
+    "boto3>=1.42",
+    "pydantic>=2.12,<3",
+    "strands-agents>=1.61,<2",
+]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.14"]
@@ -12,3 +19,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "fast_channels.agent"
 
+[tool.uv]
+# Non-editable builds (the Runtime code zip) reuse a cached wheel unless a cache key changes; by default only
+# pyproject.toml is a key, so a zip built after a source-only edit would ship stale code.
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*" }]
