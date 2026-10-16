@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 from uuid import uuid4
 
 import pytest
+from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -42,7 +43,9 @@ from harness import (  # noqa: E402
 )
 from playback import break_windows  # noqa: E402
 
+from fast_channels.core.ingest import AssetKind  # noqa: E402
 from fast_channels.functions.tools._library_store import (  # noqa: E402
+    GSI1,
     Asset,
     AssetStatus,
     LadderRecord,
@@ -118,8 +121,10 @@ def ladder(library: Table, channel: Channel) -> Ladder:
 
 @pytest.fixture(scope="session")
 def tools(stage: Stage, run_id: str) -> Tools:
-    # A synchronous tool call can take minutes (start_channel waits for RUNNING); never re-send one on a timeout.
-    config = Config(read_timeout=900, retries={"mode": "standard", "total_max_attempts": 1})
+    # A synchronous tool call can take minutes (start_channel waits for RUNNING), but never longer than the tool
+    # functions' 5-minute timeout. TCP keepalive stops an idle connection from being dropped silently between calls
+    # (observed: a response that never arrived, then a 900 s read timeout). Never re-send a call on a timeout.
+    config = Config(read_timeout=330, tcp_keepalive=True, retries={"mode": "standard", "total_max_attempts": 1})
     client = stage.session.client("lambda", region_name=stage.region, config=config)
     return Tools(client, stage.json_output(Plane.OPERATOR, "ToolFunctions"), run_id)
 
@@ -209,7 +214,14 @@ def running(tools: Tools, channel: Channel, published: dict[str, Any]) -> Iterat
 
 
 @pytest.fixture(scope="session")
-def observation(player: Player, channel: Channel, published: dict[str, Any], running: dict[str, Any]) -> Observation:
+def observation(
+    player: Player,
+    channel: Channel,
+    library: Table,
+    ladder: Ladder,
+    published: dict[str, Any],
+    running: dict[str, Any],
+) -> Observation:
     """SSAI, SGAI and DASH sessions watched from the first program until every break was seen filled (or until
     shortly after the last break)."""
     breaks = break_windows(published["programs"])
@@ -222,4 +234,12 @@ def observation(player: Player, channel: Channel, published: dict[str, Any], run
         dash_url=channel.url("dash"),
         breaks=breaks,
         ends=breaks[-1].ends + timedelta(seconds=45),
+        house_ads=house_ad_assets(library, ladder.version),
     )
+
+
+def house_ad_assets(library: Table, ladder_version: str) -> frozenset[str]:
+    """Asset ids of the ladder kit's house ads (media-library assets of kind ``ad``)."""
+    condition = Key("gsi1pk").eq(f"KIND#{AssetKind.AD}#{ladder_version}")
+    items = library.query(IndexName=GSI1, KeyConditionExpression=condition)["Items"]
+    return frozenset(Asset.from_item(item).asset_id for item in items)

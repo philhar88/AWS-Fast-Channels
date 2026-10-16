@@ -254,7 +254,6 @@ responsible for the content you stream, your rights to it, and the cost of what 
 
 ## License and sample content
 
-MIT License; see [LICENSE](LICENSE). Sample content (`make seed`) is ingested directly from its publishers' servers
-and not redistributed here: *Sintel* and *Tears of Steel* (CC BY 3.0, © Blender Foundation), *Big Buck Bunny*
-(CC BY 3.0, © 2008 Blender Foundation) and *Elephants Dream* (CC BY 2.5, © Orange Open Movie Project). Credit them
-when you broadcast them; see [NOTICE](NOTICE).
+MIT License; see [LICENSE](LICENSE). Sample content (`make seed`) is copied from its publishers' servers into your
+ingest bucket and not redistributed here: *Sintel* and *Tears of Steel* (CC BY 3.0, © Blender Foundation) and
+*Elephants Dream* (CC BY 2.5, © Orange Open Movie Project). Credit them when you broadcast them; see [NOTICE](NOTICE).

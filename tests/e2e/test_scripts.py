@@ -13,13 +13,14 @@ from typing import Any
 
 import _stack
 import boto3
+import httpx
 import pytest
 from _stack import Plane, StackError, Stage
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from fast_channels.core.cost import encode_cost
-from fast_channels.core.ingest import IngestRequest, asset_id_for
+from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.ladder import Ladder
 from fast_channels.functions.tools.catalog import catalog_item
 from fast_channels.functions.tools.channels import STOP_CHANNEL_TARGET
@@ -181,11 +182,10 @@ def test_the_sample_catalog_is_valid_and_can_be_subset() -> None:
         "tears-of-steel",
         "elephants-dream",
         "sintel-trailer",
-        "big-buck-bunny-trailer",
     ]
     assert all(t.mezzanine_uri and t.duration_ms for t in titles)
-    subset = seed.sample_titles(seed.CATALOG, ["big-buck-bunny-trailer", "sintel"])
-    assert [t.content_id for t in subset] == ["sintel", "big-buck-bunny-trailer"]
+    subset = seed.sample_titles(seed.CATALOG, ["sintel-trailer", "sintel"])
+    assert [t.content_id for t in subset] == ["sintel", "sintel-trailer"]
     with pytest.raises(SystemExit, match="unknown titles nope"):
         seed.sample_titles(seed.CATALOG, ["nope"])
 
@@ -194,7 +194,7 @@ def test_titles_carry_an_ingest_request_and_their_library_status(stubbed: Any) -
     table = library_table()
     stubber = stubbed(table.meta.client)
     [content] = seed.sample_titles(seed.CATALOG, ["sintel-trailer"])
-    asset_id = asset_id_for(str(content.mezzanine_uri))
+    asset_id = content.content_id  # sample titles keep their content id as asset id
     item = {
         "pk": {"S": f"ASSET#{asset_id}"},
         "sk": {"S": f"LADDER#{STANDARD.version}"},
@@ -229,27 +229,43 @@ def test_the_plan_prices_only_what_is_encoded(stubbed: Any, capsys: pytest.Captu
     assert lines[2].split()[1:] == ["0:52", "-", f"${total:.2f}"]
 
 
-def test_ingest_requests_are_events_on_the_bus(stubbed: Any) -> None:
-    events = session().client("events")
-    stubber = stubbed(events)
-    contents = seed.sample_titles(seed.CATALOG, ["sintel-trailer"])
+def test_mezzanines_are_uploaded_after_their_sidecar(stubbed: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sidecar (the whole request) lands first, then the streamed mezzanine: the upload starts the ingest."""
+    s3 = session().client("s3")
+    stubber = stubbed(s3)
+    [content] = seed.sample_titles(seed.CATALOG, ["sintel-trailer"])
     request = IngestRequest(
-        source_uri=str(contents[0].mezzanine_uri), ladder_version=STANDARD.version, correlation_id="seed-x"
+        source_uri=str(content.mezzanine_uri),
+        asset_id=content.content_id,
+        content_id=content.content_id,
+        ladder_version=STANDARD.version,
+        correlation_id="seed-x",
     )
-    titles = [seed.Title(contents[0], request, None)]
-    entry = {
-        "Source": "fast-channels.fastci",
-        "DetailType": "Ingest Requested",
-        "Detail": request.model_dump_json(),
-        "EventBusName": "bus",
-    }
-    stubber.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "1"}]}, {"Entries": [entry]})
-    seed.request_ingest(events, titles, prefix="fastci", event_bus="bus")
+    sidecar = request.model_dump(mode="json", exclude={"source_uri", "generator"}, exclude_none=True)
     stubber.add_response(
-        "put_events", {"FailedEntryCount": 1, "Entries": [{"ErrorCode": "X", "ErrorMessage": "denied"}]}
+        "put_object",
+        {},
+        {
+            "Bucket": "ingest",
+            "Key": "samples/sintel-trailer.mp4.json",
+            "Body": json.dumps(sidecar).encode(),
+            "ContentType": "application/json",
+        },
     )
-    with pytest.raises(SystemExit, match="PutEvents rejected 1 entries: seed-x: denied"):
-        seed.request_ingest(events, titles, prefix="fastci", event_bus="bus")
+    uploaded: dict[str, Any] = {}
+
+    def upload_fileobj(body: Any, bucket: str, key: str, **kwargs: Any) -> None:
+        uploaded.update(bucket=bucket, key=key, body=body.read(), content_type=kwargs["ExtraArgs"]["ContentType"])
+
+    monkeypatch.setattr(s3, "upload_fileobj", upload_fileobj)
+    payload = b"\x00\x00\x00\x18ftypmp42" * 1000
+    publisher = httpx.MockTransport(
+        lambda _: httpx.Response(200, content=payload, headers={"content-type": "video/mp4"})
+    )
+    with httpx.Client(transport=publisher) as http:
+        key = seed.upload(s3, http, "ingest", seed.Title(content, request, None))
+    assert key == "samples/sintel-trailer.mp4"
+    assert uploaded == {"bucket": "ingest", "key": key, "body": payload, "content_type": "video/mp4"}
 
 
 def test_catalog_items_are_the_catalog_tools_own(stubbed: Any) -> None:

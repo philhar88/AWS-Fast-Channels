@@ -452,3 +452,18 @@ def test_render_test_pattern(tmp_path: Path) -> None:
     video, audio = json.loads(probe.stdout)["streams"]
     assert (video["codec_name"], video["width"], video["height"], video["r_frame_rate"]) == ("h264", 1920, 1080, "30/1")
     assert (audio["codec_name"], audio["channels"], audio["sample_rate"]) == ("aac", 2, "48000")
+
+
+def test_preconditioned_ad_audio_counts_by_house_ad_asset() -> None:
+    """Live capture (2026-10-16): SSAI serves the house ad's audio straight from its CMAF output on the CDN, with no
+    beacon redirect, so only the kit's house-ad asset ids identify it as ad audio."""
+    url = "https://d33qgmyhyt7h03.cloudfront.net/v1/manifest/x/fast-demo/session/16.m3u8"
+    text = (DATA / "ssai-preconditioned-ad-audio.m3u8").read_text()
+    segments = playback.media_segments(text, url)
+    house_ad = [s for s in segments if s.asset_id == "house-ad-2-f45aeb"]
+    assert house_ad and not any(s.is_ad for s in house_ad)
+    first = house_ad[0].starts
+    assert first is not None
+    window = playback.Window(starts=first, ends=first + timedelta(seconds=30))
+    assert playback.ad_seconds(segments, window) == 0
+    assert playback.ad_seconds(segments, window, house_ads={"house-ad-2-f45aeb"}) >= 24

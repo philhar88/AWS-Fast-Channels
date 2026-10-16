@@ -10,7 +10,7 @@ periods take their segments from ``…/v1/dashsegment/…``.
 import json
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
@@ -21,6 +21,7 @@ from fast_channels.core.manifests import attributes, parse_multivariant
 INTERSTITIAL_CLASS: Final = "com.apple.hls.interstitial"
 AD_SEGMENT_MARKERS: Final = ("/segment/", "/tm/", "/ads/", "/preconditioned-ads/")
 """URI parts of stitched ad segments: beacon redirects, transcoded ads, our preconditioned creatives."""
+_ASSET_PATH = re.compile(r"/assets/([a-z0-9][a-z0-9-]*)/")
 DASH_AD_MARKER: Final = "/dashsegment/"
 MPD: Final = "{urn:mpeg:dash:schema:mpd:2011}"
 VAST: Final = "{http://www.iab.com/VAST}"
@@ -39,8 +40,22 @@ class Segment:
 
     @property
     def is_ad(self) -> bool:
-        """Stitched ad content, as opposed to programs and slates (both served from the CDN's ``/assets/``)."""
+        """Stitched ad content recognisable from its URI alone (beacon redirects, transcoded or re-hosted ads)."""
         return any(marker in uri for uri in (self.uri, self.map_uri or "") for marker in AD_SEGMENT_MARKERS)
+
+    @property
+    def asset_id(self) -> str | None:
+        """The media-library asset whose CMAF output this segment is (``/assets/<asset id>/…`` on the CDN)."""
+        match = _ASSET_PATH.search(self.uri) or _ASSET_PATH.search(self.map_uri or "")
+        return match.group(1) if match else None
+
+    def is_ad_of(self, house_ads: Collection[str]) -> bool:
+        """An ad: recognisable from its URI, or a segment of one of the kit's preconditioned house-ad assets.
+
+        SSAI serves preconditioned ad audio straight from the creative's CMAF output on the CDN, while ad video
+        goes through MediaTailor's ``/segment/`` beacon redirects, so only the asset id identifies ad audio.
+        """
+        return self.is_ad or self.asset_id in house_ads
 
     @property
     def ends(self) -> datetime | None:
@@ -121,9 +136,19 @@ def media_segments(text: str, base_url: str) -> list[Segment]:
     return segments
 
 
-def ad_seconds(segments: Iterable[Segment], window: Window, *, slack: timedelta = timedelta(seconds=15)) -> float:
-    """Seconds of ad segments that start within ``window``."""
-    return sum(s.duration for s in segments if s.is_ad and s.starts is not None and window.holds(s.starts, slack=slack))
+def ad_seconds(
+    segments: Iterable[Segment],
+    window: Window,
+    *,
+    house_ads: Collection[str] = (),
+    slack: timedelta = timedelta(seconds=15),
+) -> float:
+    """Seconds of ad segments (see :meth:`Segment.is_ad_of`) that start within ``window``."""
+    return sum(
+        s.duration
+        for s in segments
+        if s.is_ad_of(house_ads) and s.starts is not None and window.holds(s.starts, slack=slack)
+    )
 
 
 def break_windows(programs: Iterable[Mapping[str, Any]]) -> list[Window]:

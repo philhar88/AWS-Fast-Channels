@@ -52,7 +52,7 @@ plugins = ["pydantic.mypy"]
 warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
-module = ["aws_cdk.*", "constructs.*", "cdk_nag.*", "jsii.*"]
+module = ["aws_cdk.*", "constructs.*", "cdk_nag.*", "jsii.*", "diagrams.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

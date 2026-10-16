@@ -6,30 +6,34 @@
     uv run python scripts/seed_sample_content.py --dry-run           # what would happen, and what it costs
 
 For each title of assets/sample-catalog.json the script writes the ReferenceCatalog item that the catalog tool
-serves, then puts an ``Ingest Requested`` event on the deployment's bus. The ingest pipeline encodes the mezzanine
-(MediaConvert reads it over HTTPS from its publisher), registers the VOD source and marks the asset READY in the
-media library. Titles that are already READY with the ladder, or being ingested, are not encoded again, so the
-script can be re-run. MediaConvert bills per output minute: the estimate is printed first and has to be confirmed
-unless ``--yes`` is given. Each request's correlation id is printed; ``scripts/trace.py <id>`` follows it.
+serves, then streams the mezzanine from its publisher into the ingest bucket (``samples/<content id>.<ext>``) after
+its JSON sidecar, which is exactly how a CMS hands content over: the upload triggers the ingest pipeline, which
+encodes it, registers the VOD source and marks the asset READY in the media library. (MediaConvert can read HTTPS
+inputs directly, but the Blender Foundation's servers refuse its fetcher.) Titles that are already READY with the
+ladder, or being ingested, are not encoded again, so the script can be re-run. MediaConvert bills per output
+minute: the estimate is printed first and has to be confirmed unless ``--yes`` is given. Each request's
+correlation id is printed; ``scripts/trace.py <id>`` follows it.
 """
 
 import argparse
+import io
 import json
 import sys
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from itertools import batched
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
+from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 from _stack import REPO, Plane, Stage, add_prefix_argument, run
+from boto3.s3.transfer import TransferConfig
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
-from fast_channels.core.events import put_events_entry
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.naming import slug
 from fast_channels.functions.tools._library_store import (
@@ -45,7 +49,7 @@ from fast_channels.functions.tools.library import execution_arn
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
-    from mypy_boto3_events import EventBridgeClient
+    from mypy_boto3_s3 import S3Client
     from mypy_boto3_stepfunctions import SFNClient
 
     from fast_channels.core.ladder import Ladder
@@ -53,10 +57,11 @@ if TYPE_CHECKING:
 CATALOG: Final = REPO / "assets" / "sample-catalog.json"
 NOT_AGAIN: Final = frozenset({AssetStatus.READY, AssetStatus.INGESTING, AssetStatus.ENCODED})
 """Library statuses of an encode that is done or under way."""
-PUT_EVENTS_BATCH: Final = 10
+SAMPLES_PREFIX: Final = "samples/"
+UPLOAD: Final = TransferConfig(multipart_chunksize=64 * 1024 * 1024, max_concurrency=8)
 POLL_SECONDS: Final = 15
 START_GRACE_SECONDS: Final = 180
-"""How long a request may go without an execution before it counts as rejected (the trigger then publishes an
+"""How long an upload may go without an execution before it counts as rejected (the trigger then publishes an
 ``Asset Failed`` event with error InvalidIngestRequest instead of starting one)."""
 
 
@@ -117,15 +122,13 @@ def main() -> int:
     print(f"\nWrote {len(titles)} items to {catalog.name}.")
     if not pending:
         return 0
-    request_ingest(
-        stage.session.client("events", region_name=stage.region),
-        pending,
-        prefix=stage.prefix,
-        event_bus=stage.output(Plane.MEDIA, "EventBusName"),
-    )
-    print("Ingest requested (trace one with: uv run python scripts/trace.py <correlation id>):")
-    for title in pending:
-        print(f"  {title.content.content_id:<26} {title.request.correlation_id}")
+    s3 = stage.session.client("s3", region_name=stage.region)
+    bucket = stage.output(Plane.DATA, "IngestBucketName")
+    print("Uploading to the ingest bucket (trace one with: uv run python scripts/trace.py <correlation id>):")
+    with httpx.Client(follow_redirects=True, timeout=60) as http:
+        for title in pending:
+            key = upload(s3, http, bucket, title)
+            print(f"  {title.content.content_id:<26} {title.request.correlation_id}  s3://{bucket}/{key}")
     if not args.wait:
         return 0
     sfn = stage.session.client("stepfunctions", region_name=stage.region)
@@ -157,6 +160,7 @@ def title_of(library: Table, content: ContentItem, ladder_version: str) -> Title
         sys.exit(f"title {content.content_id} has no mezzanine_uri")
     request = IngestRequest(
         source_uri=content.mezzanine_uri,
+        asset_id=slug(content.content_id),
         content_id=content.content_id,
         cue_points_ms=content.cue_points_ms,
         ladder_version=ladder_version,
@@ -204,14 +208,48 @@ def write_catalog(catalog: Table, titles: list[Title]) -> None:
             batch.put_item(Item=catalog_item(title.content.model_copy(update={"asset_ids": [title.asset_id]})))
 
 
-def request_ingest(events: EventBridgeClient, titles: list[Title], *, prefix: str, event_bus: str) -> None:
-    """Put one ``Ingest Requested`` event per title on the deployment's bus; exits if any entry is rejected."""
-    entries: list[Any] = [put_events_entry(title.request, prefix=prefix, event_bus=event_bus) for title in titles]
-    for batch in batched(entries, PUT_EVENTS_BATCH, strict=False):
-        results = events.put_events(Entries=list(batch))["Entries"]
-        if failed := [(e, r) for e, r in zip(batch, results, strict=True) if "ErrorCode" in r]:
-            details = "; ".join(f"{json.loads(e['Detail'])['correlation_id']}: {r['ErrorMessage']}" for e, r in failed)
-            sys.exit(f"PutEvents rejected {len(failed)} entries: {details}")
+def upload(s3: S3Client, http: httpx.Client, bucket: str, title: Title) -> str:
+    """Stream the title's mezzanine into the ingest bucket after its sidecar; returns the object key.
+
+    The sidecar carries the request (asset and content ids, cue points, ladder, correlation id), so the upload's
+    ``Object Created`` event becomes exactly this ingest request.
+    """
+    uri = str(title.request.source_uri)
+    key = f"{SAMPLES_PREFIX}{title.content.content_id}{Path(urlparse(uri).path).suffix.lower()}"
+    sidecar = title.request.model_dump(mode="json", exclude={"source_uri", "generator"}, exclude_none=True)
+    s3.put_object(Bucket=bucket, Key=f"{key}.json", Body=json.dumps(sidecar).encode(), ContentType="application/json")
+    with http.stream("GET", uri) as response:
+        response.raise_for_status()
+        body = io.BufferedReader(_Chunks(response.iter_bytes(8 * 1024 * 1024)), buffer_size=8 * 1024 * 1024)
+        s3.upload_fileobj(
+            body,
+            bucket,
+            key,
+            Config=UPLOAD,
+            ExtraArgs={"ContentType": response.headers.get("content-type", "application/octet-stream")},
+        )
+    return key
+
+
+class _Chunks(io.RawIOBase):
+    """A readable stream over an iterator of byte chunks (an HTTP body), for boto3's multipart upload."""
+
+    def __init__(self, chunks: Iterator[bytes]) -> None:
+        self._chunks = chunks
+        self._pending = b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: bytearray | memoryview) -> int:  # type: ignore[override]
+        while not self._pending:
+            if (chunk := next(self._chunks, None)) is None:
+                return 0
+            self._pending = chunk
+        size = min(len(buffer), len(self._pending))
+        buffer[:size] = self._pending[:size]
+        self._pending = self._pending[size:]
+        return size
 
 
 def wait(library: Table, sfn: SFNClient, state_machine_arn: str, titles: list[Title]) -> bool:

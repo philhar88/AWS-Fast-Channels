@@ -7,7 +7,7 @@ import random
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -206,6 +206,8 @@ class Observation:
     """What one SSAI, one SGAI (HLS Interstitials) and one DASH session saw while the scheduled breaks aired."""
 
     breaks: list[Window]
+    house_ads: frozenset[str] = frozenset()
+    """Asset ids of the ladder kit's house ads (their segments are ad segments, see ``Segment.is_ad_of``)."""
     ssai_multivariant: str = ""
     ssai: dict[str, dict[str, Segment]] = field(default_factory=dict)
     """Every distinct segment per rendition (``avc``, ``hevc``, ``av1``, ``audio:<group>``), by URI."""
@@ -220,7 +222,7 @@ class Observation:
     def ssai_ad_seconds(self, rendition: str) -> list[float]:
         """Seconds of ad segments a rendition showed in each break."""
         segments = self.ssai.get(rendition, {}).values()
-        return [ad_seconds(segments, window) for window in self.breaks]
+        return [ad_seconds(segments, window, house_ads=self.house_ads) for window in self.breaks]
 
     def ssai_filled(self, rendition: str) -> bool:
         """Ads in a break after the first: the first break of a new creative airs its slate (NEW_CREATIVE)."""
@@ -255,13 +257,20 @@ class Observation:
 
 
 def watch(
-    player: Player, *, ssai_url: str, sgai_url: str, dash_url: str, breaks: list[Window], ends: datetime
+    player: Player,
+    *,
+    ssai_url: str,
+    sgai_url: str,
+    dash_url: str,
+    breaks: list[Window],
+    ends: datetime,
+    house_ads: Collection[str] = (),
 ) -> Observation:
     """Play one session of each kind until every break was seen filled, or until ``ends``.
 
     Errors are recorded, not raised, so one bad response does not hide what the other sessions saw.
     """
-    seen = Observation(breaks)
+    seen = Observation(breaks, frozenset(house_ads))
     ssai = player.get(ssai_url)
     seen.ssai_multivariant = ssai.text
     ssai_media = renditions(ssai.text, str(ssai.url))
