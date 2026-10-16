@@ -299,10 +299,10 @@
         "MemoryStrategies": [
           {
             "UserPreferenceMemoryStrategy": {
-              "Description": "Capture individual preferences, interaction patterns, and personalized settings to enhance future experiences.",
-              "Name": "preference_builtin_cdkGen0001",
+              "Description": "Scheduling preferences each operator states in conversation",
+              "Name": "operator_preferences",
               "Namespaces": [
-                "/strategies/{memoryStrategyId}/actors/{actorId}"
+                "/users/{actorId}/preferences/"
               ]
             }
           }

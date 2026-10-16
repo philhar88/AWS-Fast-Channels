@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "description": "FAST Channels media delivery routes in precedence order (first match wins; the last rule is the default). Every URL players receive is relative or on the content domain, so any CDN that serves that domain with these rules delivers the same channels without MediaTailor changes.",
+  "origins": {
+    "media": {
+      "host": "<distribution>.cloudfront.net",
+      "note": "Chain to CloudFront: the media bucket only admits CloudFront origin access control."
+    },
+    "mediatailor-manifests": {
+      "host": "manifests.mediatailor.<region>.amazonaws.com"
+    },
+    "mediatailor-segments": {
+      "host": "segments.mediatailor.<region>.amazonaws.com"
+    }
+  },
+  "rules": [
+    {
+      "path": "/tm/*",
+      "origin": "mediatailor-segments",
+      "purpose": "Ad segments MediaTailor transcoded (external VAST creatives)",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "compress": false,
+      "cache": {
+        "min_ttl": 1,
+        "default_ttl": 86400,
+        "max_ttl": 31536000,
+        "key": {
+          "query_strings": "none",
+          "headers": [],
+          "cookies": "none"
+        },
+        "compression": false,
+        "cloudfront_policy": {
+          "id": "b2884449-e4de-46a7-ac36-70bc7f1ddd6d",
+          "name": "Managed-CachingOptimizedForUncompressedObjects"
+        }
+      },
+      "cors": "media"
+    },
+    {
+      "path": "/preconditioned-ads/*",
+      "origin": "mediatailor-segments",
+      "purpose": "Preconditioned ad playlists MediaTailor re-hosts for SGAI asset lists",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "compress": false,
+      "cache": {
+        "min_ttl": 1,
+        "default_ttl": 86400,
+        "max_ttl": 31536000,
+        "key": {
+          "query_strings": "none",
+          "headers": [],
+          "cookies": "none"
+        },
+        "compression": false,
+        "cloudfront_policy": {
+          "id": "b2884449-e4de-46a7-ac36-70bc7f1ddd6d",
+          "name": "Managed-CachingOptimizedForUncompressedObjects"
+        }
+      },
+      "cors": "media"
+    },
+    {
+      "path": "/v1/i-media/*",
+      "origin": "mediatailor-manifests",
+      "purpose": "SGAI media playlists: identical across sessions, cached for the origin's max-age (1 s)",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "compress": true,
+      "cache": {
+        "min_ttl": 0,
+        "default_ttl": 0,
+        "max_ttl": 31536000,
+        "key": {
+          "query_strings": "all",
+          "headers": [
+            "host",
+            "origin",
+            "x-http-method",
+            "x-http-method-override",
+            "x-method-override"
+          ],
+          "cookies": "all"
+        },
+        "compression": true,
+        "cloudfront_policy": {
+          "id": "4cc15a8a-d715-48a4-82b8-cc0b614638fe",
+          "name": "UseOriginCacheControlHeaders-QueryStrings"
+        }
+      },
+      "cors": "media"
+    },
+    {
+      "path": "/v1/dash/*",
+      "origin": "mediatailor-manifests",
+      "purpose": "SSAI DASH manifests (per session, gzip)",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "compress": true,
+      "cache": {
+        "min_ttl": 0,
+        "default_ttl": 0,
+        "max_ttl": 0,
+        "key": {
+          "query_strings": "none",
+          "headers": [],
+          "cookies": "none"
+        },
+        "compression": false,
+        "cloudfront_policy": {
+          "id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+          "name": "Managed-CachingDisabled"
+        }
+      },
+      "forward": {
+        "headers": [
+          "*"
+        ],
+        "query_strings": "all",
+        "cookies": "all",
+        "cloudfront_policy": {
+          "id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+          "name": "Managed-AllViewerAndCloudFrontHeaders-2022-06"
+        }
+      },
+      "cors": "preflight"
+    },
+    {
+      "path": "/v1/manifest/*",
+      "origin": "mediatailor-manifests",
+      "purpose": "SSAI HLS media playlists (per session, gzip)",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "compress": true,
+      "cache": {
+        "min_ttl": 0,
+        "default_ttl": 0,
+        "max_ttl": 0,
+        "key": {
+          "query_strings": "none",
+          "headers": [],
+          "cookies": "none"
+        },
+        "compression": false,
+        "cloudfront_policy": {
+          "id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+          "name": "Managed-CachingDisabled"
+        }
+      },
+      "forward": {
+        "headers": [
+          "*"
+        ],
+        "query_strings": "all",
+        "cookies": "all",
+        "cloudfront_policy": {
+          "id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+          "name": "Managed-AllViewerAndCloudFrontHeaders-2022-06"
+        }
+      },
+      "cors": "preflight"
+    },
+    {
+      "path": "/v1/*",
+      "origin": "mediatailor-manifests",
+      "purpose": "Session start (/v1/master, POST /v1/session), tracking, beacon redirects, interstitial asset lists",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PUT",
+        "PATCH",
+        "POST",
+        "DELETE"
+      ],
+      "compress": true,
+      "cache": {
+        "min_ttl": 0,
+        "default_ttl": 0,
+        "max_ttl": 0,
+        "key": {
+          "query_strings": "none",
+          "headers": [],
+          "cookies": "none"
+        },
+        "compression": false,
+        "cloudfront_policy": {
+          "id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+          "name": "Managed-CachingDisabled"
+        }
+      },
+      "forward": {
+        "headers": [
+          "origin",
+          "access-control-request-headers",
+          "access-control-request-method",
+          "user-agent",
+          "x-forwarded-for"
+        ],
+        "query_strings": "all",
+        "cookies": "none",
+        "cloudfront_policy": {
+          "id": "775133bc-15f2-49f9-abea-afb2e0bf67d2",
+          "name": "Managed-Elemental-MediaTailor-PersonalizedManifests"
+        }
+      },
+      "cors": "preflight"
+    },
+    {
+      "path": "*",
+      "origin": "media",
+      "purpose": "CMAF content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); content manifests under /assets are denied by the bucket policy",
+      "methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS"
+      ],
+      "compress": false,
+      "cache": {
+        "min_ttl": 1,
+        "default_ttl": 86400,
+        "max_ttl": 31536000,
+        "key": {
+          "query_strings": "none",
+          "headers": [],
+          "cookies": "none"
+        },
+        "compression": false,
+        "cloudfront_policy": {
+          "id": "b2884449-e4de-46a7-ac36-70bc7f1ddd6d",
+          "name": "Managed-CachingOptimizedForUncompressedObjects"
+        }
+      },
+      "forward": {
+        "headers": [
+          "origin",
+          "access-control-request-headers",
+          "access-control-request-method"
+        ],
+        "query_strings": "none",
+        "cookies": "none",
+        "cloudfront_policy": {
+          "id": "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf",
+          "name": "Managed-CORS-S3Origin"
+        }
+      },
+      "cors": "media"
+    }
+  ],
+  "cors": {
+    "media": {
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "*",
+      "access-control-allow-methods": "GET, HEAD, OPTIONS",
+      "access-control-expose-headers": "*",
+      "access-control-max-age": 86400,
+      "override_origin": true,
+      "timing-allow-origin": "*",
+      "server-timing": true
+    },
+    "preflight": {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, HEAD, PUT, POST, PATCH, DELETE, OPTIONS",
+      "access-control-expose-headers": "*",
+      "override_origin": false
+    }
+  },
+  "notes": [
+    "A rule without 'forward' sends the origin only what its cache key contains.",
+    "Send each origin its own host name as Host; CloudFront forwards the viewer Host to MediaTailor only where a policy lists it, and that was verified with *.cloudfront.net hosts only.",
+    "Never cache /v1/master, /v1/session or /v1/segment responses: they create sessions or expire.",
+    "Keep CMCD query strings and headers out of segment cache keys."
+  ]
+}
