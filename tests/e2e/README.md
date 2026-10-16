@@ -5,7 +5,7 @@ tools, airs it on the channel, plays it through the CDN, and asks the agent a qu
 gate (CONTRIBUTING.md). The manual GitHub workflow `.github/workflows/e2e.yml` runs it between a deploy and a destroy.
 
 ```bash
-uv run pytest tests/e2e -m e2e --prefix <prefix> -v      # against FastChannels-<prefix>-* (25 minutes)
+uv run pytest tests/e2e -m e2e --prefix <prefix> -v      # against FastChannels-<prefix>-* (about 30 minutes)
 uv run pytest tests/e2e -m e2e -v                        # the prefix in cdk.json (fast-channels.prefix)
 uv run pytest tests/e2e -m e2e --prefix <prefix> -k agent   # one part only
 uv run pytest tests/e2e -m "not e2e"                     # offline unit tests of the helpers and scripts
@@ -18,9 +18,12 @@ given. The report header prints the run id. That id is the correlation id of the
 ## Requirements
 
 - A deployed stage with its default ladder kit READY. The kit is provisioned during the deployment. Run in the
-  stage's region (`AWS_REGION`). IaC channel names must start with the prefix, so a prefix other than the one in
-  cdk.json also renames the channel:
-  `npx cdk deploy 'FastChannels*/*' -c fast-channels.prefix=<prefix> -c fast-channels.channels.iac.0.name=<prefix>-demo`.
+  stage's region (`AWS_REGION`). The shipped IaC channel is named `{prefix}-demo`, so it follows any prefix:
+  `npx cdk deploy '**' -c fast-channels.prefix=<prefix>`.
+- An autopilot schedule on that channel, for `test_05_agent`: it signs in as the autopilot's machine client, which
+  exists only for a channel with an `autopilot_cron`. The workflow deploys with
+  `-c 'fast-channels.channels.iac.0.autopilot_cron=cron(0 0 1 1 ? *)'`, which fires only on 1 January.
+- No `e2e-pattern` asset in the stage yet (see [What a run leaves behind](#what-a-run-leaves-behind)).
 - AWS credentials allowed to:
   - read the stacks (`cloudformation:DescribeStacks`);
   - put objects into the ingest bucket, and read the media bucket and the media library table;
@@ -62,7 +65,9 @@ Timing and behaviour worth knowing:
 ## What a run leaves behind
 
 - The asset `e2e-pattern`: its encode under `assets/e2e-pattern/`, its VOD source, and its upload
-  `e2e/e2e-pattern.mp4` (with `.json`) in the ingest bucket. The next run re-encodes it in place.
+  `e2e/e2e-pattern.mp4` (with `.json`) in the ingest bucket. The pipeline refuses to encode a `READY` asset again
+  in place (it would overwrite the media its VOD source serves), so a second run against the same stage fails at
+  ingest with `IngestRefusedError … is already READY`. Run the suite against a fresh stage, as the workflow does.
 - Its three programs. Channel Assembly deletes aired programs about 15 minutes later. Their EPG entries stay in the
   media library and in `epg/<channel>.json`.
 - The channel, stopped.

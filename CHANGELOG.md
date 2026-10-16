@@ -33,9 +33,11 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - **Operator console** (React, Cloudscape, hls.js): chat with tool activity and approval cards; SSAI and SGAI players
   side by side with ad, interstitial and beacon events; EPG timeline; channel start and stop; library and ladders.
 - **Autopilot**: per-channel EventBridge Scheduler schedules that keep a channel's schedule 24 hours ahead with a
-  machine token limited by Cedar to planning and publishing.
-- **Model choice**: Claude Haiku 5.5 by default; a validated ModelSpec in SSM switches among allow-listed models
-  without a redeploy; `make model-access` checks Bedrock access; `make eval` runs the scheduling conformance suite.
+  machine token limited by Cedar to planning and publishing on its own channels. The machine client, its permits and
+  the autopilot's error and dead-letter alarms exist only when a channel has an `autopilot_cron`.
+- **Model choice**: Claude Haiku 5.5 by default, as the deployment region's inference profile (`{geo}` resolves to
+  `us.`, `eu.`, `au.` or `global.`); a validated ModelSpec in SSM switches among allow-listed models without a
+  redeploy; `make model-access` checks Bedrock access; `make eval` runs the scheduling conformance suite.
 - **Ladders as code**: validated, fingerprinted TOML ladders (`standard`, `uhd`) compiled to MediaConvert job
   templates; agent-driven ladder proposals and provisioning; encode cost estimates.
 - **One CMAF encode** of AV1 (10-bit), HEVC and AVC with AAC, writing HLS and DASH manifests per rendition profile
@@ -43,14 +45,19 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - **Ingest pipeline** (Step Functions, JSONata): uploads with JSON sidecars, `Ingest Requested` events or tool calls;
   probe-based refusals (HDR, 50/60 Hz conversions); cue points snapped to the GOP grid with ESAM only off the segment
   grid; output verification, AV1 `av1C` repair, nominal `BANDWIDTH`, break-offset discovery; VOD source registration.
+  An encode that is `READY` is never overwritten in place, a reused correlation id is reported
+  (`DuplicateCorrelationId`), and every refusal or failure ends in an `Asset Failed` event. The deinterlacer runs in
+  `DEINTERLACE` mode, which keeps content jobs eligible for accelerated transcoding.
 - **Ladder kits**: filler slate, four break slates, two house ads and a VAST 4.2 pod per ladder version, encoded at
   deploy time or by the agent.
 - **Channels**: IaC LINEAR channels with per-channel `PLAYER_SELECT` playback configurations, SigV4-only channel
   policies, update guards and lifecycle handling; agent-created channels from the same specifications; auto-stop after
   a maximum runtime.
-- **Schedules**: deterministic planning with programming briefs (ratings, genres, dayparts, break cadence), SCTE-35
-  `TIME_SIGNAL` breaks with deterministic ids, idempotent publishing with leases and stale-plan detection, the
-  schedule of record in DynamoDB, EPG feeds in JSON and XMLTV, as-run reconciliation.
+- **Schedules**: deterministic planning with programming briefs (ratings, genres, dayparts and a break policy whose
+  minimum gap defaults to half the cadence, with start and end margins and a minimum program length that editorial
+  cue points are exempt from), SCTE-35 `TIME_SIGNAL` breaks with deterministic ids, idempotent and resumable
+  publishing with leases and stale-plan detection, the schedule of record in DynamoDB (kept 30 days after each
+  program ends), EPG feeds in JSON and XMLTV, as-run reconciliation.
 - **SGAI** (HLS Interstitials) next to SSAI, including preconditioned ads re-hosted for asset lists.
 - **Bring-your-own content**: agent tools to create SigV4 source locations for your buckets, register pre-encoded
   content after a ladder-signature check, and update package configurations.
@@ -58,15 +65,18 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
   table, published as a CDN-neutral path contract; optional CDN-neutral content domain; standard logs v2 in Parquet
   with CMCD fields.
 - **Observability**: logs with retention for every service, one correlation id from upload to ad request, saved
-  Logs Insights queries, `scripts/trace.py`, a dashboard, alarms (including Channel Assembly quota usage and running
-  channel-hours) and SNS alerts; optional CloudWatch Transaction Search for agent traces and online evaluations.
-- **Contracts**: catalog OpenAPI for bring-your-own CMS, `IngestRequest` and event JSON schemas, generated from the
-  domain models.
-- **Teardown**: a runtime-resource reaper that deletes runtime-created resources before their containers;
-  `scripts/cleanup.py` for interrupted teardowns.
-- **Engineering**: uv workspace (`core`, `functions`, `agent`, `infra`), ruff, strict mypy, unit and CDK assertion
-  tests, cdk-nag (AWS Solutions and Serverless) on every synth, a manual end-to-end release workflow, architecture
-  decision records, Dependabot.
+  Logs Insights queries, `scripts/trace.py`, a dashboard, alarms (including Channel Assembly quota usage, running
+  channel-hours and dead-letter queues) and SNS alerts; a `tool audit` record for every change made through a tool;
+  optional CloudWatch Transaction Search for agent traces and online evaluations. Prompts and model replies stay out
+  of the agent's logs and spans unless `observability.capture_prompts` is on.
+- **Contracts**: catalog OpenAPI for bring-your-own CMS (also as `catalog.gateway.openapi.json`, ready for an
+  AgentCore Gateway OpenAPI target), `IngestRequest` and event JSON schemas, generated from the domain models.
+- **Teardown**: a runtime-resource reaper that deletes runtime-created resources before their containers, draining
+  channels within each invocation's time budget so an interrupted teardown resumes; `scripts/cleanup.py` for
+  teardowns that cannot finish.
+- **Engineering**: uv workspace (`core`, `functions`, `agent`, `infra`), ruff, strict mypy (also over `scripts/` and
+  `tests/e2e`), unit and CDK assertion tests, cdk-nag (AWS Solutions and Serverless) on every synth, a manual
+  end-to-end release workflow, architecture decision records, Dependabot.
 
 ### Changed
 
@@ -76,6 +86,19 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - Tracing uses Lambda and Step Functions active tracing and AWS Distro for OpenTelemetry instead of the X-Ray SDK.
 - Documentation rewritten: README and `docs/` (architecture, encoding, Channel Assembly, ad insertion, delivery,
   agent, CMS integration, observability, operations, migration).
+
+### Security
+
+- The media bucket admits Channel Assembly only as the deployment's own source location, `<prefix>-media`, and the
+  reaper's IAM reaches only `<prefix>-*` names, so one deployment's grants never match another's names (`fast` and
+  `fastci`, for example).
+- The autopilot's Cognito client, whose secret `cognito-idp:DescribeUserPoolClient` returns, exists only with an
+  autopilot schedule, and its Cedar permits name the channels it schedules.
+- The console accepts a local dev server as a sign-in redirect only with `agent.console_dev_url`.
+- The Gateway's service role trusts only this deployment's Gateway; the alert topic admits no service principal
+  (EventBridge publishes through a rule-scoped role); the agent runtime cannot read the CDK assets bucket beyond its
+  own code.
+- The end-to-end workflow validates its `prefix` input and passes it to commands only through the environment.
 
 ### Removed
 

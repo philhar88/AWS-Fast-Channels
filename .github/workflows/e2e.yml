@@ -25,6 +25,11 @@ env:
   PYTHON_VERSION: "3.14"
   NODE_VERSION: "24"
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # The input reaches the shell only through this variable, never interpolated into a script.
+  PREFIX: ${{ inputs.prefix }}
+  # The agent test signs in as the autopilot's machine client, which exists only for a channel with an autopilot
+  # schedule. This one fires once a year (1 January, 00:00 UTC), not during a test run.
+  AUTOPILOT_CRON: "cron(0 0 1 1 ? *)"
 
 jobs:
   e2e:
@@ -32,6 +37,10 @@ jobs:
     environment: e2e
     timeout-minutes: 120
     steps:
+      - name: Check the prefix
+        run: |
+          pattern='^[a-z][a-z0-9-]{0,14}[a-z0-9]$'  # FastChannelsConfig.prefix
+          [[ "$PREFIX" =~ $pattern ]] || { echo "::error::the prefix input must match $pattern"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -48,9 +57,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked --all-packages && npm ci && (cd console && npm ci && npm run build)
       - name: Deploy
-        run: npx cdk deploy '**' --require-approval never --concurrency 2 -c fast-channels.prefix=${{ inputs.prefix }}
+        run: >-
+          npx cdk deploy '**' --require-approval never --concurrency 2 -c "fast-channels.prefix=$PREFIX"
+          -c "fast-channels.channels.iac.0.autopilot_cron=$AUTOPILOT_CRON"
       - name: End-to-end tests
-        run: uv run pytest tests/e2e -m e2e --prefix ${{ inputs.prefix }} -v
+        run: uv run pytest tests/e2e -m e2e --prefix "$PREFIX" -v
       - name: Destroy
         if: always() && !inputs.keep
-        run: npx cdk destroy '**' --force -c fast-channels.prefix=${{ inputs.prefix }}
+        run: npx cdk destroy '**' --force -c "fast-channels.prefix=$PREFIX"

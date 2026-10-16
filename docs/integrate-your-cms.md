@@ -36,7 +36,7 @@ implementation.
 | `genres` | string[] | Lower-case genre tags, e.g. `animation` |
 | `duration_ms` | integer or null | Running time (lets the tools estimate encode cost before ingest) |
 | `cue_points_ms` | integer[] | Editorial ad cue points |
-| `mezzanine_uri` | string or null | Source to ingest, `s3://` or `https://` |
+| `mezzanine_uri` | string or null | Source to ingest: an object in the ingest bucket (`s3://`), or `https://` from an origin that serves MediaConvert ([caveat](#ingest-contract)) |
 | `available_from`, `available_until` | date-time or null | Rights window (`until` exclusive) |
 | `asset_ids` | string[] | Encoded assets of this title |
 
@@ -70,18 +70,13 @@ reference Lambda. The Gateway then exposes your operations as `catalog___search_
 This is a code change in the Operator stack in v3.0; the steps below were checked by synthesis, not deployed.
 
 1. **Prepare the schema.** The CDK L2 reads local OpenAPI schemas as JSON and rejects specification-level security
-   schemes (authentication is the Gateway's outbound configuration). Convert the contract, drop `security` and
-   `components.securitySchemes`, and set your server URL:
+   schemes (authentication is the Gateway's outbound configuration).
+   [`contracts/catalog.gateway.openapi.json`](../contracts/catalog.gateway.openapi.json) is the same contract in
+   that form, generated with the others. Copy it and set `servers[0].url` (now `https://cms.example.com/fast/v1`)
+   to your API:
 
    ```bash
-   uv run python - <<'EOF' > infra/my-cms.openapi.json
-   import json, sys, yaml
-   spec = yaml.safe_load(open("contracts/catalog.openapi.yaml"))
-   spec.pop("security", None)
-   spec.get("components", {}).pop("securitySchemes", None)
-   spec["servers"] = [{"url": "https://cms.example.com/fast/v1"}]
-   json.dump(spec, sys.stdout, indent=2)
-   EOF
+   cp contracts/catalog.gateway.openapi.json infra/my-cms.openapi.json
    ```
 
 2. **Store the API key** in AWS Secrets Manager and register it in AgentCore Identity's token vault, then add the
@@ -133,14 +128,14 @@ An ingest is one [`IngestRequest`](../contracts/ingest-request.schema.json):
 
 | Field | Meaning |
 |---|---|
-| `source_uri` | Mezzanine, `s3://<bucket>/<key>` or `https://…` (no whitespace). MediaConvert reads it with its role (ingest bucket) or over HTTPS |
+| `source_uri` | Mezzanine, `s3://<bucket>/<key>` or `https://…` (no whitespace). MediaConvert reads it with its role (ingest bucket) or over HTTPS, with its own fetcher. Origins that refuse that fetcher fail the encode with `3403: Access to https://… is forbidden` (the Blender Foundation's servers do, which is why `make seed` uploads the sample files instead); copying the file into the ingest bucket always works |
 | `generator` | Instead of `source_uri`: a still image rendered for a whole number of GOPs (slates, house ads) |
 | `kind` | `content` (default), `slate` or `ad` |
 | `asset_id` | Optional; defaults to the file name's slug plus 6 hex of the URI (`big-buck-bunny-1a2b3c`) |
 | `content_id` | Your catalog id |
 | `cue_points_ms` | Editorial ad cue points; snapped to the GOP grid ([encoding.md](encoding.md#cue-points-and-the-esam-rule)) |
 | `ladder_version` | e.g. `standard@86bf8088e0` (output `DefaultLadderVersion`; `encoding___list_ladders` lists the others) |
-| `correlation_id` | Optional trace id, `[A-Za-z0-9_-]{1,80}`; becomes the Step Functions execution name. Execution names cannot repeat for 90 days |
+| `correlation_id` | Optional trace id, `[A-Za-z0-9_-]{1,80}`; becomes the Step Functions execution name. Execution names cannot repeat for 90 days: use a new one per request (a new request that reuses one fails with `DuplicateCorrelationId`) |
 | `metadata` | String map; `title` is copied to the library asset |
 
 Three ways to submit one:
@@ -157,7 +152,19 @@ aws s3 cp movie.mp4      "s3://$INGEST_BUCKET/library/movie.mp4"
 
 Without sidecar cue points, the v2 `AdOffsets` object tag still works (milliseconds separated by spaces or commas).
 Keys with whitespace are rejected with an `Asset Failed` event. A redelivered S3 event resolves to the same execution,
-so an upload is encoded once.
+so an upload is encoded once. This is also how `make seed` loads the sample titles: it writes each sidecar as
+`samples/<content id>.<ext>.json`, then streams the file to `samples/<content id>.<ext>`.
+
+Two rules keep a published asset intact:
+
+- **An asset is encoded once per ladder version.** Uploading the same key again, or requesting an `asset_id` that is
+  already `ENCODED` or `READY` with that ladder version, is refused with `Asset Failed` (`IngestRefusedError … is
+  already READY`): a second encode would overwrite, in place, the media its VOD source and scheduled programs serve.
+  Upload a new version under a new key, or pass a new `asset_id`; only `FAILED` encodes are replaced.
+- **A correlation id names one request.** EventBridge may deliver an event twice; the redelivery is ignored. A *new*
+  request that reuses a correlation id from the last 90 days (a re-sent `Ingest Requested`, or a re-upload with an
+  unchanged sidecar such as the one above) cannot start an execution and gets `Asset Failed` with error
+  `DuplicateCorrelationId`. Send it again with a new `correlation_id`.
 
 **2. Put an `Ingest Requested` event** on the deployment's bus (output `EventBusName`), for example from your CMS
 workflow; the detail is the `IngestRequest`:
@@ -167,7 +174,7 @@ aws events put-events --entries '[{
   "EventBusName": "fast-fast-channels",
   "Source": "fast-channels.fast",
   "DetailType": "Ingest Requested",
-  "Detail": "{\"source_uri\": \"https://cdn.example.com/m-123.mov\", \"content_id\": \"m-123\", \"ladder_version\": \"standard@86bf8088e0\", \"correlation_id\": \"cms-m-123-v1\"}"
+  "Detail": "{\"source_uri\": \"https://cdn.example.com/m-123.mov\", \"content_id\": \"m-123\", \"ladder_version\": \"standard@86bf8088e0\", \"correlation_id\": \"cms-m-123-v2\"}"
 }]'
 ```
 
@@ -187,7 +194,7 @@ Subscribe to the bus to keep your CMS in sync (schemas in
 | Detail type | When | Detail |
 |---|---|---|
 | `Asset Ready` | An asset is encoded, verified and (content, slates) registered | `asset_id`, `kind`, `ladder_version`, `vod_source`, `duration_ms`, `correlation_id` |
-| `Asset Failed` | An ingest failed or a request was invalid | `asset_id`, `kind`, `ladder_version`, `error`, `cause`, `correlation_id` |
+| `Asset Failed` | An ingest failed, or a request was refused: invalid (`InvalidIngestRequest`), not encodable with its ladder or already encoded (`IngestRefusedError`), or a reused correlation id (`DuplicateCorrelationId`) | `asset_id`, `kind`, `ladder_version`, `error`, `cause`, `correlation_id` |
 | `Ladder Ready`, `Ladder Failed` | A ladder version's kit finished | `ladder_version`, `correlation_id`, `job_template` or `error`/`cause` |
 | `Schedule Published` | A plan went on air | `channel`, `plan_id`, `programs`, `start_ms`, `end_ms`, `correlation_id` |
 | `Autopilot Run` | An autopilot run finished | `channel`, `status`, `session_id`, `summary` |

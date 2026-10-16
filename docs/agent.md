@@ -44,7 +44,7 @@ flowchart LR
 | **Policy** | A Cedar policy engine in `ENFORCE` mode attached to the Gateway, policies generated from the registry |
 | **Memory** | Short-term events (30 days) for stateless sessions and pending approvals, plus a `USER_PREFERENCE` long-term strategy per operator |
 | **Identity** | Inbound: Cognito access tokens on Runtime and Gateway. Outbound: the agent forwards the operator's own token to the Gateway, so no service credential exists. AgentCore Identity credential providers are the extension point for API-key targets ([integrate-your-cms.md](integrate-your-cms.md#option-b-your-cms-api-as-an-openapi-gateway-target)) |
-| **Observability** | ADOT (`opentelemetry-instrument`) in the Runtime; vended application logs of Runtime, Gateway and Memory; traces when CloudWatch Transaction Search is on |
+| **Observability** | ADOT (`opentelemetry-instrument`) in the Runtime, with message content off unless `observability.capture_prompts`; vended application logs of Runtime, Gateway and Memory; traces when CloudWatch Transaction Search is on |
 | **Evaluations** | Online evaluation of 10 % of sessions (goal success, tool selection, tool parameters) when traces are on; an offline model conformance suite in the repository |
 
 Not used in v3.0: the managed Harness (slower to first event and no hooks for approvals or UI state;
@@ -67,8 +67,9 @@ surface for other agents), Browser and Code Interpreter.
    `ad-insertion`, `encoding-ladders` under `agent/src/fast_channels/agent/skills/`) and two hooks:
    - `ToolGuard` sets `correlation_id` to the session id on every Gateway call and raises an approval interrupt for
      every approval-gated tool;
-   - `SharedStateTracker` turns `schedule___plan`, `schedule___publish` and `schedule___get_schedule` results into
-     AG-UI shared state, which the console renders as tables.
+   - `SharedStateTracker` turns `schedule___plan`, `schedule___get_schedule`, `schedule___publish` and
+     `schedule___remove_programs` results into AG-UI shared state, which the console renders as tables: publishes
+     and removals are folded into the guide the run already read.
 5. Standard AG-UI events stream back over Server-Sent Events.
 
 The prompt's central rule is the architecture's: **tools do the arithmetic and the validation; the model only
@@ -131,9 +132,17 @@ Every tool returns a JSON object. Success is `{"ok": true, …}`; failure is an 
 {"ok": false, "error": {"code": "PLAN_STALE", "message": "…", "retryable": false, "hint": "Plan again."}}
 ```
 
-Codes: `VALIDATION`, `NOT_FOUND`, `CONFLICT`, `THROTTLED`, `PLAN_STALE`, `LADDER_MISMATCH`, `QUOTA`, `FORBIDDEN`,
-`UPSTREAM`. AWS errors are mapped (`ConflictException` → retryable `CONFLICT`, `TooManyRequestsException` →
-retryable `THROTTLED`, …). The agent retries only retryable errors, at most twice.
+Codes: `VALIDATION` (the arguments only), `NOT_FOUND`, `CONFLICT`, `THROTTLED`, `PLAN_STALE`, `LADDER_MISMATCH`,
+`QUOTA`, `FORBIDDEN`, `UPSTREAM`, `INTERNAL`. AWS errors are mapped (`ConflictException` → retryable `CONFLICT`,
+`TooManyRequestsException` → retryable `THROTTLED`, …); timeouts and transport errors are retryable `UPSTREAM`;
+`INTERNAL` is a fault inside the tool (for example a stored item that no longer validates), which changing the
+arguments cannot fix. A tool call never fails without an envelope. The agent retries only retryable errors, at most
+twice.
+
+A publish that stops part-way keeps the underlying error's code and says how far it got (`published 2 of 5 programs
+of fast-demo.1a2b3c4d, then: …`). The programs published so far are in the library and the guide; publishing the
+same `plan_id` again adds the rest, which is also what its hint says. Calls that change something leave a
+`tool audit` log record ([observability.md](observability.md#audit-trail)).
 
 Every tool accepts an optional `correlation_id`; the Runtime sets it to the session id and every log line of the
 call carries it ([observability.md](observability.md#correlation-contract)). Each target is one Lambda function
@@ -149,13 +158,15 @@ Operators are Cognito users (administrator-created only) in one of three groups:
 | `fast-viewers` | Read tools (14) | `permit_read` |
 | `fast-operators` | Read and write tools (26) | `permit_read`, `permit_write` |
 | `fast-admins` | Everything (27) | adds `permit_destructive` |
-| Autopilot client | Read tools plus `schedule___plan` and `schedule___publish` (16) | `permit_autopilot`, `forbid_autopilot_confirm` |
+| Autopilot client (only with an `autopilot_cron`) | Read tools, plus `schedule___plan` and `schedule___publish` on the channels that have an autopilot schedule | `permit_autopilot`, `permit_autopilot_plan`, `permit_autopilot_publish`, `forbid_autopilot_confirm` |
 | A user in no group | Nothing | |
 
 The Gateway authorises every `tools/list` and `tools/call` against the policy engine, so the agent sees only the tools
 its caller may use, whatever the model tries. Policies are generated by
-`fast_channels.infra.constructs.operator.cedar.gateway_policies`; JWT claims are principal tags, and an array claim
-such as `cognito:groups` arrives as JSON text, so group membership is a `like` match:
+`fast_channels.infra.constructs.operator.cedar.gateway_policies` and deployed as `<engine>_<policy>`, for example
+`fast_tools_permit_read` (AgentCore policy names are unique per account, not per engine); a denial names the policy.
+JWT claims are principal tags, and an array claim such as `cognito:groups` arrives as JSON text, so group membership
+is a `like` match:
 
 ```cedar
 permit(
@@ -179,6 +190,8 @@ unless { context.input has channel && context.input.channel like "fast-agent-*" 
 
 Forbids always win: `forbid_iac_channels` keeps every caller, admins included, from deleting channels CloudFormation
 owns, and `forbid_autopilot_confirm` keeps the autopilot away from every approval-gated tool except publishing. The
+autopilot's plan and publish permits name its channels (`context.input.channel`, and the `<channel>.` prefix of a
+`plan_id`), so it cannot touch other channels' schedules. The
 engine runs in `ENFORCE` mode. No role in the solution may update the Gateway, its targets, the policy engine or its
 policies: the Runtime, tool and autopilot roles carry an explicit `Deny` on those actions, because whoever holds them
 could switch enforcement to `LOG_ONLY`. IAM below Cedar is least privilege too: destructive MediaTailor actions are
@@ -198,27 +211,42 @@ model calls one:
    `interrupt`. The pending approval is stored with the session.
 2. The console shows an approval card with the exact arguments and the cost the agent quoted from the tool.
 3. The client resumes the same thread with `forwardedProps.approval = {"interrupt_id", "approved", "note"}` (or the
-   standard AG-UI `resume` list). Approved: the very tool call that was shown runs. Declined: it is cancelled and the
-   model reads the note. A new message while an approval is pending declines it, with the message as the note.
+   standard AG-UI `resume` list). Approved: the very tool call that was shown runs. Declined: it is cancelled, its
+   `TOOL_CALL_RESULT` is a `DECLINED` error envelope, and the model reads the note. A new message while an approval
+   is pending declines it, with the message as the note.
 
-Unknown or replayed interrupt ids return `RUN_ERROR` `APPROVAL_NOT_FOUND`. The console's own Start and Stop buttons
-call the Gateway directly with the user's token behind a confirmation dialog; the click is the approval, and Cedar
-still decides.
+Several approval-gated calls in one turn (*"stop fast-demo and fast-news"*) raise one interrupt each. A resume answers
+the approvals it carries; the agent asks again, with the same `interrupt_id`, for any it left open, and the console
+updates that card instead of adding another. The console keeps Approve, Reject and the prompt box disabled while a
+run streams, so one session never has two runs at a time. Unknown or replayed interrupt ids return `RUN_ERROR`
+`APPROVAL_NOT_FOUND`. The console's own Start and Stop buttons call the Gateway directly with the user's token behind
+a confirmation dialog; the click is the approval, and Cedar still decides.
 
 ## Autopilot
 
 Give an IaC channel an `autopilot_cron` (an EventBridge Scheduler expression such as `cron(0 */6 * * ? *)`) and it
-keeps its schedule 24 hours ahead without anyone in the loop:
+keeps its schedule 24 hours ahead without anyone in the loop. The autopilot (its Cognito machine client, Cedar
+permits, schedules, function and alarms) exists only when some IaC channel has an `autopilot_cron`.
 
 1. A schedule in the `<prefix>-autopilot` group invokes the autopilot Lambda with `{"channel": "<name>"}`.
 2. The Lambda gets a Cognito client-credentials token for the autopilot app client (its secret is read with
-   `DescribeUserPoolClient` and cached).
+   `DescribeUserPoolClient`) and reuses it only while it has at least 15 minutes left, the Lambda timeout, because the
+   Runtime forwards it to the Gateway for every tool call of the run.
 3. It asks the Runtime, in `plan` mode, to extend the channel to a 24-hour horizon following its brief, with session
-   id `autopilot-<channel>-<YYYYMMDDTHH>` (padded to the 33 characters the Runtime requires).
-4. It answers approval interrupts itself: it approves `schedule___publish` only and declines everything else. Cedar
-   would deny the rest anyway.
-5. It emits an `Autopilot Run` event (`SUCCEEDED` or `FAILED`); failures notify the alert topic and raise, so the
-   asynchronous invocation retries once and then lands in a dead-letter queue (maximum event age 1 hour).
+   id `autopilot-<channel>-<YYYYMMDDTHH>` (padded to the 33 characters the Runtime requires). Each run gets only the
+   time the invocation has left, less a margin to report.
+4. It answers approval interrupts itself: it approves `schedule___publish` of a plan for its own channel only and
+   declines everything else. Cedar would deny the rest anyway.
+5. It emits an `Autopilot Run` event (`SUCCEEDED` or `FAILED`) for every invocation, including transport, token and
+   protocol failures. Failures notify the alert topic and raise, so the asynchronous invocation retries once and then
+   lands in a dead-letter queue (maximum event age 1 hour); the `<prefix>-autopilot-errors` and
+   `<prefix>-autopilot-dead-letters` alarms watch both.
+
+**Treat `cognito-idp:DescribeUserPoolClient` on the user pool as the autopilot's credential.** Cognito returns the
+client secret from it, and the AWS managed `ReadOnlyAccess` and `SecurityAudit` policies grant it, so anyone with
+read-only access to the account can mint autopilot tokens and plan and publish on the autopilot's channels. Deny that
+action on the pool to every principal except the autopilot function's role, with a service control policy or a
+permissions boundary.
 
 A `rate()` expression fires as soon as it is created. Right after a deployment the Gateway can briefly list no tools;
 such a run fails with `GATEWAY_UNAVAILABLE` and is retried once by the asynchronous invocation, and the next scheduled
@@ -248,13 +276,20 @@ curl -sN "$RUNTIME_INVOKE_URL" \
 reasoning effort.
 
 **Events**: `RUN_STARTED`; `TEXT_MESSAGE_START`/`CONTENT`/`END`; `TOOL_CALL_START`/`ARGS`/`END` and
-`TOOL_CALL_RESULT` (also for the local `skills` tool); `STATE_SNAPSHOT` with `{"channel", "plan", "schedule"}` after
-schedule tools; `CUSTOM` `approval_required`; then `RUN_FINISHED` (with `usage` token counts, and the interrupt
-outcome when paused) or `RUN_ERROR {code, message}`. Error codes: `UNAUTHENTICATED`, `BAD_REQUEST`,
-`APPROVAL_NOT_FOUND`, `GATEWAY_UNAVAILABLE`, `THROTTLED`, `INTERNAL_ERROR`; platform authentication failures arrive as
-`RUN_ERROR` events (`ACCESS_DENIED`, `UNAUTHORIZED`) on a 401 or 403 response, so read the body on non-200 too. A
-WebSocket transport (`…/ws`, with the base64url-encoded token in a `base64UrlBearerAuthorization.<token>`
-subprotocol next to `base64UrlBearerAuthorization`) carries the same events.
+`TOOL_CALL_RESULT` (also for the local `skills` tool); `STATE_SNAPSHOT` with `{"channel", "plan", "schedule",
+"schedule_scope"}` after schedule tools; `CUSTOM` `approval_required`; then `RUN_FINISHED` (with `usage` token
+counts, and the interrupt outcome when paused) or `RUN_ERROR {code, message}`. Error codes: `UNAUTHENTICATED`,
+`BAD_REQUEST`, `APPROVAL_NOT_FOUND`, `GATEWAY_UNAVAILABLE`, `THROTTLED`, `INTERNAL_ERROR`; platform authentication
+failures arrive as `RUN_ERROR` events (`ACCESS_DENIED`, `UNAUTHORIZED`) on a 401 or 403 response, so read the body on
+non-200 too. A WebSocket transport (`…/ws`, with the base64url-encoded token in a
+`base64UrlBearerAuthorization.<token>` subprotocol next to `base64UrlBearerAuthorization`) carries the same events.
+
+`TOOL_CALL_RESULT` has no status field, so a failed call always carries an error envelope
+(`{"ok": false, "error": {…}}`): the tool's own, `DECLINED` for a declined approval, or `TOOL_ERROR` for a call that
+never reached a tool (a Cedar denial, a Gateway, MCP or Strands error). In `STATE_SNAPSHOT`, `schedule` is
+EPG-shaped (`channel`, `generated_at`, `ladder_version`, `programs`) and `schedule_scope` says what it covers:
+`channel` when it is the channel's guide from now on (a `get_schedule` result with later publishes and removals folded
+in), `published` when the run published without reading the guide, so it holds only the programs published in it.
 
 The console's client is in `console/src/lib/agui.ts` and `console/src/lib/sse.ts`; the full contract is in
 [`agent/README.md`](../agent/README.md).
@@ -263,8 +298,8 @@ The console's client is in `console/src/lib/agui.ts` and `console/src/lib/sse.ts
 
 | | |
 |---|---|
-| Default | `us.anthropic.claude-haiku-5-5` (the region's geographic inference profile) |
-| Allowed by default | Haiku 5.5 and Sonnet 5.5, as `us.` and `global.` profiles (`agent.allowed_models`) |
+| Default | `{geo}.anthropic.claude-haiku-5-5`: the region's geographic inference profile, `us.` in US regions and ca-central-1, `eu.` in Europe, `au.` in ap-southeast-2, `global.` elsewhere |
+| Allowed by default | Haiku 5.5 and Sonnet 5.5, as the region's (`{geo}.`) and `global.` profiles (`agent.allowed_models`) |
 | Switch at runtime | SSM parameter `/<prefix>/agent/model-spec` (output `ModelSpecParameter`), read with a 60 s cache |
 | Cost | About $0.003–0.006 of Bedrock tokens per schedule built with Haiku 5.5 |
 
@@ -307,6 +342,9 @@ The exit status is 0 only if every run passes. Measured on 2026-10-16, 3 runs pe
 | Claude Sonnet 5.5 | 6/6 | about $0.05 |
 | Amazon Nova 2 Lite | 0/6 | |
 
+Sonnet 5.5 and Nova 2 Lite were measured before the local fake server advertised the real Gateway tool definitions;
+only Haiku 5.5 has been measured against them. Re-run `make eval MODEL=<id>` before relying on another model.
+
 To use another **Bedrock** model: pass the suite, add the id to `agent.allowed_models`, deploy, then switch the
 ModelSpec. **Non-Bedrock providers** are not wired in v3.0 and are deliberately not reachable through the ModelSpec;
 adding one is a deployment-time code change (a Strands model provider in `agent/src/fast_channels/agent/model.py`,
@@ -329,12 +367,17 @@ policies apply to it unchanged.
 
 - The Runtime runs under the AWS Distro for OpenTelemetry. Application log records, with `correlation_id`, `actor`,
   `mode` and `model_id`, go to the `otel-rt-logs` stream of `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT`.
+- Message content (operator prompts, the system prompt, tool results and model replies) is kept out of those logs and
+  of the spans unless `observability.capture_prompts` is on, which by default it is only with Transaction Search,
+  for the online evaluations. The deployment passes the switch to the Runtime as `CAPTURE_PROMPTS`; see
+  [observability.md](observability.md#what-the-agent-runtime-records).
 - Runtime application and usage logs, Gateway application logs and Memory application logs are vended to
   `/aws/vendedlogs/bedrock-agentcore/<prefix>/…` log groups.
 - **Traces** need CloudWatch Transaction Search (`observability.transaction_search: enable`, an account-level change;
   see [observability.md](observability.md#transaction-search)). Without it the Runtime sets
   `OTEL_TRACES_EXPORTER=none`, so it exports no spans and logs no export errors.
 - **Online evaluations** (traces on only): an `OnlineEvaluationConfig` named `<runtime>_online` scores 10 % of
-  sessions with the built-in Goal Success Rate, Tool Selection Accuracy and Tool Parameter Accuracy evaluators.
+  sessions with the built-in Goal Success Rate, Tool Selection Accuracy and Tool Parameter Accuracy evaluators. They
+  score the message content, which `capture_prompts: false` removes.
 - **Offline**: the conformance suite above, with saved transcripts that `scripts/eval_model.py --rescore <dir>`
   re-scores.

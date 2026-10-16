@@ -17,7 +17,7 @@ from fast_channels.core.profiles import ManifestFormat, profile
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
-    from fast_channels.functions.tools._library_store import Asset
+    from fast_channels.functions.tools.library_store import Asset
 
 pytestmark = pytest.mark.e2e
 

@@ -39,7 +39,8 @@ Rules behind the table:
   route 6 uses MediaTailor's managed policy, which forwards `User-Agent` and `X-Forwarded-For` (ad targeting) and all
   query strings (ADS variables, `aws.*` session options), but not `Host`.
 - **Never cache** `/v1/master`, `/v1/session` or `/v1/segment` responses: they create sessions or expire.
-- **Content segments are immutable**: a new encode is a new key under a new ladder version, so long TTLs are safe.
+- **Content segments are immutable**: a new encode is a new key under a new ladder version (the pipeline refuses to
+  encode a `READY` asset again in place), so long TTLs are safe.
   Mutable objects on the default route (EPG feeds, VAST pods) are written with a short `Cache-Control`, which the
   cache policy honours.
 - The distribution uses managed policies plus exactly one custom response headers policy and no custom cache policy;
@@ -54,12 +55,14 @@ Rules behind the table:
 | `mediatailor-segments` | `segments.mediatailor.<region>.amazonaws.com` | Same |
 
 The Data stack's bucket policy admits CloudFront distributions of this account and **denies them `assets/*.m3u8` and
-`assets/*.mpd`**: content manifests are for Channel Assembly only, so nobody can watch a channel's content without its
-ads by fetching the VOD manifests through the CDN (verified: 403). Segments, ad manifests under `ads/`, VAST pods and
-EPG feeds stay readable.
+`assets/*.mpd`**: content manifests are for Channel Assembly only, so an asset cannot simply be played from the CDN by
+its VOD manifest (verified: 403). Segments, ad manifests under `ads/`, VAST pods and EPG feeds stay readable. This
+stops casual direct playback, not a determined viewer: content segments have predictable names
+(`assets/<asset>/<ladder>/main_<rendition>_<n>.cmfv`, and every SSAI playlist shows the prefix), so an ad-free
+playlist can be rebuilt. If that matters, protect `/assets/*` with CloudFront signed cookies or URLs, or a token check
+at the edge.
 
-MediaTailor has no CloudFront origin access control type yet. `MediaDistribution(mediatailor_oac_id=...)` is the slot
-for it: one argument attaches an OAC to both MediaTailor origins when the type exists.
+MediaTailor has no CloudFront origin access control type, so the two MediaTailor origins are its public endpoints.
 
 The distribution serves HTTP/2 and HTTP/3 over IPv4 and IPv6, HTTPS only, with `delivery.price_class`. With
 `delivery.content_domain` and `delivery.certificate_arn` (an ACM certificate in us-east-1) it also answers on your
@@ -91,9 +94,9 @@ s3://<LogsBucketName>/AWSLogs/aws-account-id=<acct>/CloudFront/DistributionId=<i
 Records include the request id, cache result, timing (`time-to-first-byte`, `origin-fbl`), the matched
 `cache-behavior-path-pattern`, the full query string (ADS requests carry `ch`, `sid`, `evid`, `upid`) and every CMCD
 field (`cmcd-session-id` joins MediaTailor's session id when players send CMCD). Parquet column names use `_` for `-`,
-`(` and `)` (`cache_behavior_path_pattern`, `cs_User_Agent`). The construct can also deliver JSON records to an
-Infrequent Access log group for Logs Insights (`cloudwatch_retention`). Because CloudFront's delivery source exists
-only in us-east-1, deployments in other regions get these resources in a `…-Edge-<region>` stack there.
+`(` and `)` (`cache_behavior_path_pattern`, `cs_User_Agent`); query them with Amazon Athena. Because CloudFront's
+delivery source exists only in us-east-1, deployments in other regions get these resources in a `…-Edge-<region>`
+stack there.
 
 ## The path contract
 

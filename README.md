@@ -42,7 +42,8 @@ a person. Everything deploys from one AWS CDK (Python) app.
 
 - An AWS account and credentials that can create the resources (administrator access is simplest for a first
   deployment), in a Region with MediaTailor Channel Assembly, MediaConvert and Amazon Bedrock AgentCore, for example
-  `us-east-1`, `us-west-2` or `eu-west-1`. Synthesis validates the Region.
+  `us-east-1`, `us-west-2` or `eu-west-1`. Synthesis validates the Region, and the agent's default models resolve to
+  its Bedrock inference profiles (`us.`, `eu.`, `au.` or `global.`), so no Region needs model overrides.
 - The account and Region [bootstrapped for the AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping.html):
   `npx cdk bootstrap aws://<account>/<region>`. Outside us-east-1, bootstrap us-east-1 too (CloudFront logs are
   delivered from there).
@@ -63,9 +64,10 @@ a person. Everything deploys from one AWS CDK (Python) app.
    make model-access
    ```
 
-2. **Deploy.** Takes about {{DEPLOY_MINUTES}} minutes, unattended. It builds the console, synthesises with cdk-nag and
-   deploys `FastChannels-Data`, `FastChannels-Media` and `FastChannels-Operator`, including the `standard` ladder's
-   slate and house-ad kit and a stopped demo channel, `fast-demo`.
+2. **Deploy.** Takes about 20 minutes, unattended (measured: 20 min 20 s; Data 2:48, Media 11:18 including the
+   default ladder's kit, Operator 5:29). It builds the console, synthesises with cdk-nag and deploys
+   `FastChannels-Data`, `FastChannels-Media` and `FastChannels-Operator`, including the `standard` ladder's slate and
+   house-ad kit and a stopped demo channel, `fast-demo`.
 
    ```bash
    make deploy
@@ -89,21 +91,31 @@ a person. Everything deploys from one AWS CDK (Python) app.
      --query "Stacks[0].Outputs[?OutputKey=='ConsoleUrl'].OutputValue" --output text
    ```
 
-5. **Load sample content.** `make seed` writes five open-licensed titles (about 39 minutes) to the reference catalog
-   and encodes them, after showing the cost estimate (about $22) and asking you to confirm. Encoding takes about
-   {{SEED_MINUTES}} minutes.
+5. **Load sample content.** `make seed` loads four open-licensed titles (about 39 minutes of video) into the
+   reference catalog and the media library. It first shows the encode estimate (about $22) and asks you to confirm.
+   The Blender Foundation's servers refuse MediaConvert's own HTTPS fetcher, so the script streams each file (about
+   1.6 GB in all) through your machine into the ingest bucket as `samples/<content id>.<ext>`, after a JSON sidecar
+   with its catalog id, cue points and correlation id. That upload starts the ingest, exactly as a CMS dropping files
+   into the bucket would ([integrate-your-cms.md](docs/integrate-your-cms.md#ingest-contract)). It prints a line
+   after each upload, so a large title can take minutes with no output on a slow connection, and it returns once the
+   uploads are done, while encoding goes on. MediaConvert accelerates the long encodes, so expect every title to be
+   READY about 20 to 30 minutes after the uploads. That figure is an estimate: the seed measured before acceleration applied
+   took 57 minutes, and acceleration cut the Tears of Steel encode from 24 to 5 minutes. Follow the encodes in the
+   console's Library view, or pass `--wait`.
 
    ```bash
-   make seed
+   make seed                              # or: make seed SEED_ARGS="--wait"
    ```
 
 6. **Ask the agent for a schedule.** In the console's Assistant, for example: *"Fill fast-demo from the next full
    hour for two hours with the sample titles, with ad breaks about every 12 minutes."* The agent shows the plan with
    every start time, break and rule check, then asks for approval before publishing it.
 
-7. **Start the channel.** Ask *"Start fast-demo"* (and approve), or use **Start** in the Channels view. A BASIC channel
-   costs $0.10 per running hour and stops automatically after four hours. The Channels view plays an SSAI and an SGAI
-   session side by side, with the ad and beacon events of each.
+7. **Start the channel** before the block's first program begins: Channel Assembly skips a block's first program
+   when the channel starts after its start time, and airs the rest of the block early. Ask *"Start fast-demo"* (and
+   approve), or use **Start** in the Channels view. A BASIC channel costs $0.10 per running hour and stops
+   automatically after four hours. The Channels view plays an SSAI and an SGAI session side by side, with the ad and
+   beacon events of each.
 
 `make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`); see
 [docs/operations.md](docs/operations.md) for configuration and day-two operations.
@@ -192,7 +204,8 @@ app.synth()
 ```
 
 ```bash
-npx cdk deploy --app "uv run --frozen --package fast-channels-infra python my_app.py" 'FastChannels-news/*'
+# '**' selects every stack of the app: Transcoding and the stage's FastChannels-news/*
+npx cdk deploy --app "uv run --frozen --package fast-channels-infra python my_app.py" '**'
 ```
 
 Run the CDK CLI from the repository root so that `cdk.json`'s feature flags apply. `fast_channels.core` has no AWS

@@ -29,11 +29,12 @@ asset from another ladder (`LADDER_MISMATCH`).
 
 A ladder is a TOML file validated by `fast_channels.core.ladder.Ladder`. The built-in ladders live in
 `core/src/fast_channels/core/ladders/` (package data, so Lambda functions load them too); `ladders/` at the repository
-root is a symlink to that directory.
+root is a symlink to that directory. A small but complete ladder, valid as written (`ladders/standard.toml` is the
+full default):
 
 ```toml
-id = "standard"
-description = "AVC + HEVC + AV1 up to 1080p, 29.97 fps"
+id = "avc-720p"
+description = "AVC up to 720p, 29.97 fps, for legacy set-top boxes"
 frame_rate = "29.97"        # also "25", "30000/1001", "50", "59.94"
 gop_seconds = 2             # every codec gets an IDR on the same 2 s grid
 segment_seconds = 6
@@ -42,11 +43,11 @@ segment_seconds = 6
 iframe_playlists = false    # off until verified through Channel Assembly and ad insertion
 loudness_lkfs = -24.0       # ITU BS.1770-3; null disables normalisation
 acceleration = "PREFERRED"  # MediaConvert accelerated transcoding: PREFERRED | ENABLED | DISABLED
-film_grain = false          # AV1 film-grain synthesis
+film_grain = false          # AV1 film-grain synthesis (AV1 ladders only)
 allow_frame_rate_conversion = false
 
-[[video]]                   # multivariant order: the lowest AVC 720p rung first
-name = "avc-720p-a"
+[[video]]                   # multivariant order: the lowest-bitrate AVC 720p rung first
+name = "avc-720p"
 codec = "avc"               # avc | hevc | av1
 width = 1280
 height = 720
@@ -61,23 +62,28 @@ width = 768
 height = 432
 qvbr = 7
 max_kbps = 1100
-hrd_kbps = 1100             # HRD buffer = cap on rungs <= 432p
+hrd_kbps = 1100             # rungs at or below 432p: HRD buffer = cap
 audio_group = "aac-he1-64"
 
 [[video]]
-name = "av1-1080p"
-codec = "av1"
-width = 1920
-height = 1080
-qvbr = 7
-max_kbps = 3500
-audio_group = "aac-lc-128"
-bit_depth = 10
+name = "avc-234p"           # lowest variant at most 500 kbit/s, so hls.js can start with it
+codec = "avc"
+width = 416
+height = 234
+qvbr = 6
+max_kbps = 120
+hrd_kbps = 120
+audio_group = "aac-he1-64"
 
 [[audio]]
 group_id = "aac-lc-128"
 profile = "lc"              # lc | he1 | he2
 kbps = 128
+
+[[audio]]
+group_id = "aac-he1-64"
+profile = "he1"
+kbps = 64
 ```
 
 ### Identity: the ladder version
@@ -215,7 +221,9 @@ agent). A profile that is *new to the catalogue* does need a re-encode.
   asset (for example 24 → 29.97 for the sample films). **Conversion across families is refused** (it judders) unless
   the ladder sets `allow_frame_rate_conversion = true`. For 25 fps libraries, add a ladder with `frame_rate = "25"`
   and bind 50 Hz channels to it.
-- Interlaced and telecined sources go through MediaConvert's adaptive deinterlacer; progressive frames pass untouched.
+- Interlaced sources go through MediaConvert's deinterlacer in `DEINTERLACE` mode (interpolation); frames flagged
+  progressive pass untouched. Telecined sources are deinterlaced too, not inverse-telecined: `ADAPTIVE` mode would
+  add inverse telecine, which MediaConvert cannot accelerate ([codec caveats](#codec-caveats)).
 - HDR sources (PQ, HLG) are refused: both built-in ladders are SDR.
 - Sources without a video or an audio track are refused (every rendition carries audio).
 - Sources smaller than the top rung are upscaled; the asset records a warning.
@@ -231,11 +239,16 @@ Channel Assembly can only insert an ad break where **every track** has a segment
 3. Only points between segment boundaries add an ESAM signal (SCC XML) to the job, which splits a segment there. ESAM
    makes DASH multi-period and creates short segments, which raise harmless `SEGMENT_DURATION_MISMATCH` alerts (the
    tools filter them).
-4. Without cue points, the asset's break offsets are every segment boundary common to all tracks (HE-AAC audio
-   trails video by up to about 150 ms, so the match tolerance is 200 ms). That is about 600 candidate offsets per
-   hour; the planner picks the ones closest to the channel's break cadence.
+4. With cue points, the asset's break offsets are those points only. Without, they are every segment boundary
+   common to all tracks (HE-AAC audio trails video by up to about 150 ms, so the match tolerance is 200 ms): about
+   600 candidate offsets per hour.
 
-The library stores the valid offsets per asset (`break_offsets_ms`); the planner never invents one.
+The library stores the valid offsets per asset (`break_offsets_ms`, plus the snapped `cue_points_ms`); the planner
+never invents one. It picks the offsets closest to the channel's break cadence, and trusts editorial cue points where
+the editor put them. Plain segment boundaries must also keep the break policy's margins: none in a program's first
+`start_margin_seconds` (60) or last `end_margin_seconds` (30), and none at all in programs shorter than
+`min_program_minutes` (3), so a short clip without cue points airs without breaks
+([channel-assembly.md](channel-assembly.md#programs-and-ad-breaks)).
 
 ## What the pipeline verifies and fixes
 
@@ -259,6 +272,12 @@ The `Finalize` step runs after every encode:
 
 Content and slates are then registered as Channel Assembly VOD sources named `<asset_id>-<ladder key>` with one
 package configuration per `package_profiles` entry; ads are not registered.
+
+An asset is encoded once per ladder version. Its outputs live at a fixed path that its VOD source, and every program
+scheduled from it, keep reading, so a request to encode a file again as an asset that is already `ENCODED` or `READY`
+with that version is refused (`IngestRefusedError … upload the file under a new key, or pass a new asset_id`); only
+a `FAILED` encode is replaced. Kit stills are the exception: they are deterministic, and their provisioner re-encodes
+them.
 
 ## Ladder kits
 
@@ -327,7 +346,9 @@ creates resources or costs money needs approval.
    new renditions need a TOML file.
 2. **Provision** (approval). `encoding___provision_ladder` creates the MediaConvert job template (category
    `<prefix>`, tagged `fast:owner=agent`) and encodes the kit. The version becomes `READY` in a few minutes.
-3. **Re-encode** (approval). `library___ingest` with the new `ladder_version` encodes each title the channel needs.
+3. **Re-encode** (approval). `library___ingest` with the new `ladder_version` encodes each title the channel needs,
+   from the asset's `source_uri` (`library___get_asset`). For the sample titles that is the staged copy
+   `s3://<IngestBucketName>/samples/<content id>.<ext>`: their publishers' servers refuse MediaConvert's fetcher.
 4. **Create a channel** (approval). `channels___create_channel` builds an agent-owned `<prefix>-agent-<name>`
    channel on the ready ladder, with its filler slate, playback configuration, logs and SigV4 channel policy. Then plan,
    publish and start it as usual.
@@ -357,6 +378,8 @@ before a channel can switch.
 - **AV1** uses QVBR only, has no HRD or closed-GOP controls, and honours ESAM splits only on the GOP grid, which is
   why every cue point is snapped first.
 - **Accelerated transcoding** applies to long jobs; video-generator inputs (kit slates and house ads) never accelerate.
-  Acceleration combined with the deinterlacer has not been verified on long mezzanines.
+  Verified with the deinterlacer: the 12-minute Tears of Steel encode ran `ACCELERATED` in 5 min 19 s, against
+  23 min 53 s `NOT_ACCELERATED` with the earlier `ADAPTIVE` deinterlacer. A job's `AccelerationStatus` stays
+  `IN_PROGRESS` until it finishes.
 - **Untagged sources** raise MediaConvert colour-space warnings 230001/230005. They are harmless.
 - **Captions** are not part of v3.0 ([ADR-0013](adr/0013-captions-roadmap.md)).

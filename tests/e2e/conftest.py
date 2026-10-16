@@ -44,7 +44,8 @@ from harness import (  # noqa: E402
 from playback import break_windows  # noqa: E402
 
 from fast_channels.core.ingest import AssetKind  # noqa: E402
-from fast_channels.functions.tools._library_store import (  # noqa: E402
+from fast_channels.functions.aws import execution_arn  # noqa: E402
+from fast_channels.functions.tools.library_store import (  # noqa: E402
     GSI1,
     Asset,
     AssetStatus,
@@ -52,7 +53,6 @@ from fast_channels.functions.tools._library_store import (  # noqa: E402
     asset_key,
     ladder_key,
 )
-from fast_channels.functions.tools.library import execution_arn  # noqa: E402
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table

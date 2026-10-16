@@ -2,7 +2,7 @@
 """Load the open-licensed sample titles into the reference catalog and encode them with the default ladder.
 
     uv run python scripts/seed_sample_content.py                     # every title; asks before encoding
-    uv run python scripts/seed_sample_content.py --titles sintel-trailer big-buck-bunny-trailer --yes --wait
+    uv run python scripts/seed_sample_content.py --titles sintel-trailer elephants-dream --yes --wait
     uv run python scripts/seed_sample_content.py --dry-run           # what would happen, and what it costs
 
 For each title of assets/sample-catalog.json the script writes the ReferenceCatalog item that the catalog tool
@@ -36,7 +36,9 @@ from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.naming import slug
-from fast_channels.functions.tools._library_store import (
+from fast_channels.functions.aws import execution_arn
+from fast_channels.functions.tools.catalog import catalog_item
+from fast_channels.functions.tools.library_store import (
     Asset,
     AssetStatus,
     LadderRecord,
@@ -44,8 +46,6 @@ from fast_channels.functions.tools._library_store import (
     asset_key,
     ladder_key,
 )
-from fast_channels.functions.tools.catalog import catalog_item
-from fast_channels.functions.tools.library import execution_arn
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table

@@ -121,7 +121,9 @@ The default (preconditioned) ADS URL of a channel is its ladder's pod on the con
 The pod is static, so the parameters exist for traceability: the CloudFront log of every ad request records the
 channel, the MediaTailor session, the SCTE-35 event id and the UPID of the break, and the exact avail duration
 (29.97 fps breaks are not whole seconds). MediaTailor strips the `FST3` format identifier from the MPU UPID, so
-`upid` arrives as the content id's hex bytes.
+`upid` arrives as the content id itself, in plain text: `…&evid=14366456&upid=e2e-pattern&dur_ms=30030` in a live
+`MAKING_ADS_REQUEST` (the SCTE-35 descriptor and the library hold the bytes `FST3e2e-pattern`, hex
+`465354336532652D7061747465726E`).
 
 Variables accepted in any ADS URL (`core.specs.ADS_VARIABLES`):
 
@@ -135,8 +137,11 @@ Variables accepted in any ADS URL (`core.specs.ADS_VARIABLES`):
 ## Beaconing and ad tracking
 
 - **SSAI, implicit sessions** (a plain `GET` of the multivariant): MediaTailor fires the VAST impression and quartile
-  beacons server-side as the player fetches the ad segments through `/v1/segment/…` redirects (301 to the CDN). Never
-  cache those redirects; they are unique per session and expire.
+  beacons server-side as the player fetches the ad video segments through `/v1/segment/…` redirects (301 to the CDN).
+  Never cache those redirects; they are unique per session and expire. With preconditioned ads only the video goes
+  through them: the ad audio is served straight from the creative's own CMAF output, `/assets/<ad asset>/…` on the
+  content host, on the CDN's default route. In CDN logs, count ad audio by the house ads' asset ids under
+  `/assets/`, not by the redirect route.
 - **SSAI, explicit sessions** (`POST /v1/session/…`): MediaTailor returns a `trackingUrl` for client-side reporting.
 - **SGAI**: request `?aws.insertionMode=GUIDED&aws.reportingMode=CLIENT`. Each asset list then contains a `TRACKING`
   block with the beacon URLs and their times, and the player fires them. Server-side beaconing is not possible for

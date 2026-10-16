@@ -26,6 +26,7 @@ lint: ## Format check and lint (Python + console)
 
 typecheck: ## Static type checks (mypy strict + tsc)
 	uv run mypy core/src functions/src agent/src infra/src
+	MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e
 	cd console && npm run typecheck
 
 test: ## Unit and infrastructure tests (Python + console)
@@ -35,12 +36,12 @@ test: ## Unit and infrastructure tests (Python + console)
 check: lint typecheck test synth ## Everything CI runs
 
 synth: console ## Synthesize all stacks (runs cdk-nag); PREFIX=name to override the deployment prefix
-	$(CDK) synth --quiet $(PREFIX_ARG)
+	$(CDK) synth '**' --quiet $(PREFIX_ARG)
 
 diff: console ## Show pending changes against the deployed stacks
 	$(CDK) diff '**' $(PREFIX_ARG)
 
-deploy: console ## Deploy every stack (about 25 minutes the first time)
+deploy: console ## Deploy every stack (about 20 minutes the first time)
 	$(CDK) deploy '**' --require-approval never --concurrency 2 $(PREFIX_ARG)
 
 destroy: ## Delete every stack and the runtime resources the pipeline and agent created
@@ -49,8 +50,8 @@ destroy: ## Delete every stack and the runtime resources the pipeline and agent 
 model-access: ## Check (and optionally request) Amazon Bedrock model access for the agent
 	uv run python scripts/check_model_access.py
 
-seed: ## Ingest the open-licensed sample titles and load the reference catalog
-	uv run python scripts/seed_sample_content.py $(if $(PREFIX),--prefix $(PREFIX))
+seed: ## Ingest the open-licensed sample titles and load the reference catalog (SEED_ARGS="--wait --yes")
+	uv run python scripts/seed_sample_content.py $(if $(PREFIX),--prefix $(PREFIX)) $(SEED_ARGS)
 
 eval: ## Run the agent model-conformance suite (MODEL=<bedrock model id>)
 	uv run python scripts/eval_model.py --model-id $(or $(MODEL),us.anthropic.claude-haiku-5-5)

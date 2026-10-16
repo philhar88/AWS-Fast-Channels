@@ -34,8 +34,8 @@ refactored without export locks, and they also cross regions for the Edge stack.
 that an Operator rollback can never get stuck on a Memory that is still `CREATING`.
 
 The Data stack owns every bucket policy. Consumer stacks never add statements to it: the policy admits CloudFront
-distributions of the account, Channel Assembly source locations named `<prefix>*` and log delivery through
-synth-time ARN patterns, so no cross-stack cycle can form.
+distributions of the account, the deployment's own Channel Assembly source location (`<prefix>-media`) and log
+delivery through synth-time ARNs and patterns, so no cross-stack cycle can form.
 
 ### Stack outputs
 
@@ -44,8 +44,8 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 | Stack | Outputs |
 |---|---|
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
-| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai?, sgai?, dash?}}}]`), `DashboardUrl`, `DistributionId`, `PathContract` |
-| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId`, `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
+| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai?, sgai?, dash?}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
+| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only when an IaC channel has an `autopilot_cron`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
 
 ```bash
 aws cloudformation describe-stacks --stack-name FastChannels-Media \
@@ -71,7 +71,8 @@ It does nothing with `removal: retain`, and nothing during updates or update rol
 
 IaC channels have their own lifecycle custom resource: on update it fails fast while the channel is `RUNNING` (unless
 `restart_on_update`), and on delete it stops the channel and deletes its programs first. Channels are never started by
-a deployment.
+a deployment. Both drain channels within their function's time budget, and only of the programs Channel Assembly can
+still hold, so a teardown that runs out of time resumes on the next attempt instead of starting over.
 
 ## Flows
 
@@ -201,34 +202,41 @@ Assembly output without ad insertion, and CloudFront's bucket policy denies the 
 ## Construct catalogue
 
 All constructs are in `infra/src/fast_channels/infra/constructs/`. Each one is a plain L2-based construct with
-documented props; see the module docstrings for details.
+documented props; see the module docstrings for details. The `encoding` and `channel_assembly` packages re-export
+their constructs, so `from fast_channels.infra.constructs.encoding import EncodingLadder` works as well as the full
+module path.
 
 | Module | Construct | What it creates |
 |---|---|---|
-| `storage` | `MediaStorage` | Ingest, media and logs buckets (SSE-S3, bucket-owner enforced, TLS only); `allow_cloudfront_read()`, `allow_channel_assembly_read(prefix)`, `allow_log_delivery()` |
+| `storage` | `MediaStorage` | Ingest, media and logs buckets (SSE-S3, bucket-owner enforced, TLS only); `allow_cloudfront_read()`, `allow_channel_assembly_read(source_location)`, `allow_log_delivery()` |
 | | `MediaLibrary`, `ReferenceCatalogTable` | `TableV2` tables (on demand, PITR, TTL `expires_at`, `GSI1`) |
-| `functions` | `FastFunction` | Python 3.14 arm64 Lambda from the shared workspace bundle, JSON logs, explicit log group with retention, active tracing |
-| `encoding` | `EncodingLadder` | MediaConvert job template of one ladder version |
-| | `IngestPipeline` | MediaConvert queue and role, ingest state machine, trigger rules, DLQ |
-| | `LadderProvisioner`, `LadderKit` | Kit state machine; deploy-time custom resource, idempotent by fingerprint |
-| `channel_assembly` | `ChannelAssemblyOrigin` | `S3_SIGV4` source location on the media bucket |
-| | `MediaTailorLogs` | `/aws/vendedlogs/mediatailor/<prefix>` and its delivery destination |
+| `functions` | `FastFunction` | Python 3.14 arm64 Lambda from the shared workspace bundle, JSON logs, explicit log group with retention, active tracing; `allow()` adds a least-privilege statement |
+| `encoding.ladder` | `EncodingLadder` | MediaConvert job template of one ladder version |
+| `encoding.pipeline` | `IngestPipeline` | MediaConvert queue and role, ingest state machine, trigger rules, DLQ |
+| `encoding.kits` | `LadderProvisioner`, `LadderKit` | Kit state machine; deploy-time custom resource, idempotent by fingerprint |
+| `channel_assembly.origin` | `ChannelAssemblyOrigin` | `S3_SIGV4` source location on the media bucket |
+| `channel_assembly.ad_insertion` | `MediaTailorLogs` | `/aws/vendedlogs/mediatailor/<prefix>` and its delivery destination |
 | | `AdInsertion` | Playback configuration with three vended-log deliveries |
-| | `LinearChannel` | LINEAR channel, its `AdInsertion`, SigV4-only channel policy, lifecycle custom resources |
-| | `AsRunLogging` | As-run log retention and the reconciler that marks programs `AIRED` |
-| | `RuntimeResourceReaper` | Delete-first cleanup of runtime resources |
+| `channel_assembly.channel` | `LinearChannel` | LINEAR channel, its `AdInsertion`, SigV4-only channel policy, lifecycle custom resources |
+| `channel_assembly.as_run` | `AsRunLogging` | As-run log retention and the reconciler that marks programs `AIRED` |
+| `channel_assembly.reaper` | `RuntimeResourceReaper` | Delete-first cleanup of runtime resources |
 | `delivery` | `MediaDistribution` | CloudFront distribution driven by `ROUTES` (OAC to S3, MediaTailor origins) and its path contract |
-| | `CdnAccessLogs` | Standard logs v2 to S3 (Parquet), optionally to CloudWatch Logs |
-| `observability` | `FastEventBus` | `<prefix>-fast-channels` bus with archive and logs |
-| | `MediaObservability`, `ChannelCensus` | Dashboard, alarms, MediaConvert job logs, saved trace queries, running-channel census |
+| | `CdnAccessLogs` | Standard logs v2 to S3 (Parquet, Hive partitions) |
+| `events` | `FastEventBus` | `<prefix>-fast-channels` bus with archive and logs |
+| `observability` | `MediaObservability`, `ChannelCensus` | Dashboard, alarms (including the dead-letter queues), MediaConvert job logs, saved trace queries, running-channel census |
 | `observability_baseline` | `TransactionSearch` | Account-level Transaction Search (AccountBaseline stack only) |
-| `operator.identity` | `OperatorIdentity` | Cognito Essentials pool, groups, managed login, console and autopilot clients |
+| `operator.identity` | `OperatorIdentity` | Cognito Essentials pool, groups, managed login, console client; the autopilot's machine client only with an autopilot |
 | `operator.tools` | `AgentTools` | One tool Lambda per registry target with least-privilege IAM; auto-stop scheduler group |
-| `operator.gateway` | `AgentGateway` | MCP Gateway (CUSTOM_JWT), Lambda targets, Cedar policy engine in `ENFORCE` mode |
+| `operator.gateway` | `AgentGateway` | MCP Gateway (CUSTOM_JWT) with its own conditioned service role, Lambda targets, Cedar policy engine in `ENFORCE` mode |
 | `operator.runtime` | `SchedulerAgent` | AgentCore Runtime (code zip, AG-UI), ModelSpec parameter, online evaluations with traces |
 | `operator.deliveries` | `AgentTelemetry` | Vended logs (and traces) of Gateway, Memory and Runtime |
-| `operator.autopilot` | `Autopilot` | Scheduler schedules per channel, autopilot Lambda, DLQ |
+| `operator.autopilot` | `Autopilot` | Scheduler schedules per channel, autopilot Lambda, DLQ, error and dead-letter alarms |
 | `operator.console` | `OperatorConsole` | Private bucket, CloudFront with OAC and CSP, `config.json` |
+
+Shared recipes next to them: `alerts` (alert topic, alarms, CDN metrics), `logs` (service and vended log groups,
+log deliveries), `queues` (dead-letter queues) and `_provider` (custom-resource providers); and in
+`fast_channels.infra`, `exports` (the `DataExports`, `MediaExports` and `ChannelExports` that stacks hand to each
+other), `grants` and `arns`.
 
 Pure logic (ladder validation, MediaConvert settings, timelines, MediaTailor request shapes, VAST) lives in
 `fast_channels.core`, which both the CDK app and the Lambda tools import, so the IaC channels and the agent-created
@@ -244,7 +252,7 @@ channels are built from the same functions (`core.specs`).
 | Ladder version | `LADDER#<ladder_id>` | `V#<ladder_version>` | `LADDERS` / `<status>#<ladder_version>` |
 | Ladder proposal | `PROPOSAL#<id>` | `META` (TTL 24 h) | |
 | Channel | `CHANNEL#<name>` | `META` | `CHANNELS` / `<owner>#<name>` |
-| Program (schedule of record) | `CHANNEL#<name>` | `PROGRAM#<start_ms:013d>` | `PROGRAM#<program_name>` / `<channel>` |
+| Program (schedule of record) | `CHANNEL#<name>` | `PROGRAM#<start_ms:013d>` (TTL 30 days after its end) | `PROGRAM#<program_name>` / `<channel>` |
 | Plan | `CHANNEL#<name>` | `PLAN#<plan_id>` (TTL 1 h) | |
 | Publish lease | `CHANNEL#<name>` | `LEASE` (TTL) | |
 

@@ -30,13 +30,14 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from fast_channels.core.naming import agentcore_name
-from fast_channels.functions.tools._library_store import GSI1, Asset, ProgramRecord
+from fast_channels.core.tags import TAG_APP
+from fast_channels.functions.tools.library_store import GSI1, Asset, ProgramRecord
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
     from mypy_boto3_logs import CloudWatchLogsClient
 
-APP_TAG: Final = "fast:app"
+APP_TAG: Final = TAG_APP
 AS_RUN_LOG_GROUP: Final = "MediaTailor/Channel/AsRunLog"
 """Channel Assembly's account-wide as-run log (``infra.constructs.channel_assembly.AS_RUN_LOG_GROUP``)."""
 LOG_GROUPS_PER_QUERY: Final = 50

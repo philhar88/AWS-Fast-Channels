@@ -27,11 +27,20 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
+      # The offline tests of tests/e2e render the release gate's synthetic source with ffmpeg.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked --all-packages
       - run: uv run ruff format --check
       - run: uv run ruff check
       - run: uv run mypy core/src functions/src agent/src infra/src
+      - name: mypy scripts tests/e2e
+        run: uv run mypy scripts tests/e2e
+        env:
+          MYPYPATH: scripts:tests/e2e # their modules import scripts/_stack.py and tests/e2e/harness.py by name
+      # Every package's tests, plus the offline tests of tests/e2e and scripts/ (pytest testpaths; marker "not e2e").
       - run: uv run pytest --cov=fast_channels --cov-report=term-missing:skip-covered
+      - name: No unfilled release placeholders in the docs
+        run: "! git grep -nE '\\{\\{[A-Z_]+\\}\\}' -- '*.md'"
 
   console:
     name: Console (lint, types, tests, build)
@@ -78,8 +87,9 @@ jobs:
           path: console/dist
       - run: uv sync --locked --all-packages
       - run: npm ci
-      # cdk-nag and the CloudFormation validation rules run during synth and fail the build on findings.
-      - run: npx cdk synth --quiet
+      # cdk-nag and the CloudFormation validation rules run during synth and fail the build on findings of the
+      # selected stacks: without '**' no stage stack is selected and findings pass silently.
+      - run: npx cdk synth '**' --quiet
         env:
           CDK_DEFAULT_ACCOUNT: "123456789012"
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}

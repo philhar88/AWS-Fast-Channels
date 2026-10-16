@@ -3,10 +3,11 @@
     uv run python scripts/generate_contracts.py          # write the files
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
-Outputs: ``ingest-request.schema.json`` and ``events.schema.json`` (JSON Schema 2020-12) and
-``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract). The OpenAPI document is flattened for
-AgentCore Gateway OpenAPI targets: every schema is inline, optional fields drop their ``null`` branch, and no
-``$ref``/``anyOf``/``oneOf``/``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
+Outputs: ``ingest-request.schema.json`` and ``events.schema.json`` (JSON Schema 2020-12),
+``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json`` (the
+same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
+targets: every schema is inline, optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/
+``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
 """
 
 import argparse
@@ -143,6 +144,17 @@ def catalog_openapi() -> dict[str, Any]:
     }
 
 
+def catalog_gateway_openapi() -> dict[str, Any]:
+    """:func:`catalog_openapi` as a Gateway OpenAPI target takes it: JSON, with no specification-level security.
+
+    The CDK L2 (``ApiSchema.from_local_asset``) rejects YAML and a top-level ``security``; the Gateway's outbound
+    credential provider sends the API key instead. Only ``servers`` needs editing before use.
+    """
+    document = catalog_openapi()
+    del document["security"], document["components"]
+    return document
+
+
 _PLAIN_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
@@ -175,6 +187,7 @@ def render() -> dict[str, str]:
         "ingest-request.schema.json": as_json(ingest_request_schema()),
         "events.schema.json": as_json(events_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
+        "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
     }
 
 

@@ -57,7 +57,6 @@ OUTPUT_KEYS: Final[dict[Plane, tuple[str, ...]]] = {
         "ConsoleUrl",
         "UserPoolId",
         "ConsoleClientId",
-        "AutopilotClientId",
         "CognitoDomain",
         "RuntimeArn",
         "RuntimeInvokeUrl",
@@ -65,7 +64,8 @@ OUTPUT_KEYS: Final[dict[Plane, tuple[str, ...]]] = {
         "ToolFunctions",
     ),
 }
-"""Outputs every deployment has (``MemoryId`` is in Data too, when the agent plane is enabled)."""
+"""Outputs every deployment has. Two more exist only with what they describe: ``MemoryId`` (Data) with the agent
+plane, and ``AutopilotClientId`` (Operator) when an IaC channel has an ``autopilot_cron``."""
 
 
 class StackError(LookupError):

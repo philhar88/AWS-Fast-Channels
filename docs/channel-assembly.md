@@ -25,8 +25,9 @@ lifecycle, programs and the EPG, quotas, and bringing your own pre-encoded conte
 | `HttpConfiguration.BaseUrl` | `https://<media bucket>.s3.<region>.amazonaws.com` | SigV4 needs the regional virtual-hosted URL; path-style, global and dual-stack hosts are rejected |
 | `DefaultSegmentDeliveryConfiguration.BaseUrl` | the content base URL (`delivery.content_domain`, or the CloudFront domain) | Channel manifests carry absolute segment URLs on this host; ad insertion does not rewrite them |
 
-The Data stack's bucket policy admits `mediatailor.amazonaws.com` to `s3:GetObject` on `assets/*`, only for source
-locations named `<prefix>*` in this account (`aws:SourceAccount` and `aws:SourceArn`). The bucket must use SSE-S3:
+The Data stack's bucket policy admits `mediatailor.amazonaws.com` to `s3:GetObject` on `assets/*` only for this
+source location, `<prefix>-media` in this account (`aws:SourceAccount` and `aws:SourceArn`), so other deployments'
+source locations cannot read it. The bucket must use SSE-S3:
 Channel Assembly cannot read SSE-KMS objects. `CreateVodSource` also checks that the *caller* can read the manifests,
 which is why the pipeline's Register step and the origins tools have `s3:GetObject` on `assets/*`.
 
@@ -58,7 +59,7 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
 ```json
 "channels": {
   "iac": [{
-    "name": "fast-demo",
+    "name": "{prefix}-demo",
     "ladder": "standard",
     "outputs": ["hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc"],
     "tier": "BASIC",
@@ -70,7 +71,8 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
 }
 ```
 
-Each channel gets:
+`{prefix}` in a name is replaced with the deployment prefix, so the shipped channel is `fast-demo` by default and
+`news-demo` with `make deploy PREFIX=news`. Each channel gets:
 
 - a **LINEAR** channel (programs play once, back to back; gaps play the filler slate) with the ladder kit's filler
   slate, one output per profile and `AS_RUN` logging;
@@ -80,8 +82,10 @@ Each channel gets:
   so anonymous requests to the channel get 403 ([ADR-0007](adr/0007-sigv4-channel-origin-no-cdn-shield.md));
 - a `CHANNEL#<name>` item in the media library (ladder, outputs, playback prefixes, owner `iac`, brief);
 - **lifecycle custom resources**: an update guard that fails fast when an update would change a `RUNNING` channel
-  (the `LinearChannel` construct's `restart_on_update=True` stops, updates and restarts instead), an endpoint lookup,
-  and a delete step that stops the channel and deletes its programs first.
+  (the `LinearChannel` construct's `restart_on_update=True` stops, updates and restarts instead, also when a later
+  failure rolls the update back), an endpoint lookup, and a delete step that stops the channel and deletes the
+  programs Channel Assembly can still hold (its schedule and the library programs from a day ago on). A delete that
+  runs out of time fails with the number of programs left; deleting the stack again resumes.
 
 Names must start with `<prefix>-`; `<prefix>-agent-` is reserved for the agent.
 
@@ -122,9 +126,21 @@ Programs are runtime data: the deployment creates none. The agent plans and publ
 - Program names are deterministic: `<yyyymmddThhmmss>-<asset_id>` of the planned UTC start (at most 64 characters).
 - An ad break is placed at one of the asset's valid offsets ([encoding.md](encoding.md#cue-points-and-the-esam-rule))
   nearest to the brief's cadence. A break *inserts* its slate: a 10-minute program with two 60 s breaks airs for 12
-  minutes. The cadence runs channel-wide across program boundaries, so short-form channels still get breaks.
-- Break policy (in the channel brief): `cadence_minutes` (12), `min_gap_minutes` (6), `max_breaks` per program
-  (unlimited), `slate_gops` (30, about 60 s; one of 15, 30, 45, 60).
+  minutes. The cadence runs across program boundaries within a block.
+- Break policy (in the channel brief):
+
+  | Field | Default | Meaning |
+  |---|---|---|
+  | `cadence_minutes` | 12 | A break is due this long after the previous one ended (or the block started) |
+  | `min_gap_minutes` | half the cadence | Never less than this from the end of one break to the next |
+  | `max_breaks` | unlimited | Breaks per program |
+  | `slate_gops` | 30 (about 60 s) | Break length; one of 15, 30, 45, 60 |
+  | `start_margin_seconds`, `end_margin_seconds` | 60, 30 | No break at a plain segment boundary this close to a program's start or end |
+  | `min_program_minutes` | 3 | Programs shorter than this break only at editorial cue points |
+
+  Editorial cue points (the asset's `cue_points_ms`) are exempt from the margins and the minimum length: the editor
+  chose them. Short-form content without cue points therefore airs without breaks; lower `min_program_minutes` (and
+  the margins) to break inside it.
 - The brief's `ratings`, `genres_allow`, `genres_deny` and UTC `dayparts` are checked per program.
 
 Each break is a SCTE-35 `TIME_SIGNAL` with one segmentation descriptor: type `0x34` (provider placement opportunity
@@ -146,12 +162,21 @@ schedule:
    planned start and the rest are `RELATIVE` (`AFTER_PROGRAM`). List order beats wall-clock time for `ABSOLUTE`
    programs, so the anchor matters; a block before the whole schedule is placed `BEFORE_PROGRAM`.
 3. Fails with `PLAN_STALE` when the live schedule from the anchor on changed since planning, or when re-validation
-   finds new errors. Plan again.
-4. Calls `CreateProgram` strictly in sequence at 3 TPS or less. Program names are deterministic, so a retried publish
-   skips programs that already exist and is idempotent.
-5. Writes the `PROGRAM#` items and the EPG feeds, emits `Schedule Published` and returns filtered alerts.
+   finds new errors (including an asset that is no longer `READY`). Plan again.
+4. Calls `CreateProgram` strictly in sequence at 3 TPS or less, writing each program's `PROGRAM#` item as soon as
+   Channel Assembly has it. Program names are deterministic, so a retried publish skips programs that already exist
+   and is idempotent.
+5. Writes the EPG feeds, emits `Schedule Published` and returns filtered alerts. The event and the alerts are best
+   effort: the programs are on air by then, so failing to read or announce is logged (alerts that cannot be read
+   come back as one `INFO` alert, `ALERTS_UNAVAILABLE`) instead of failing the publish.
+
+If a program cannot be created (an error, or the function nearing its timeout), publishing stops, rewrites the guide
+for what was published and fails with the error's code and `published <k> of <n> programs of <plan id>`. Publishing
+the same `plan_id` again adds the rest; `schedule___remove_programs` takes the published ones off instead.
 
 An `ABSOLUTE` start snaps to the next filler segment boundary, so a block can start up to about one second late.
+Start the channel before the block's first program: when a channel starts after that program's start time, Channel
+Assembly skips it and airs the block's `RELATIVE` programs at once, earlier than the guide says.
 
 `schedule___remove_programs` (approval required) removes programs that have not started. Later programs of the same
 block move up, like Channel Assembly re-links them; the next block keeps its start and filler plays in between.
@@ -166,6 +191,8 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   `<CdnBaseUrl>/epg/<channel>.json`.
 - Channel Assembly writes `VodProgramStart` events to the account's as-run log group `MediaTailor/Channel/AsRunLog`.
   A subscription filter sends this deployment's events to a reconciler that marks programs `AIRED` with `aired_at`.
+- `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow
+  without bound; the guide shows the last 6 hours.
 
 ```json
 {"channel": "fast-demo", "generated_at": "2026-10-16T12:00:00Z", "ladder_version": "standard@86bf8088e0",

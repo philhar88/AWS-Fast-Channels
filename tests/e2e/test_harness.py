@@ -23,7 +23,7 @@ from playback import Segment, Window
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.specs import Creative, vast_pod
 from fast_channels.core.timeline import BreakPolicy, PlanInputAsset, ProgrammingBrief, plan_block
-from fast_channels.functions.tools._library_store import iso
+from fast_channels.functions.tools.library_store import iso
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE
 
 DATA = Path(__file__).parent / "data"
@@ -151,12 +151,19 @@ def test_break_windows_shift_later_breaks_by_earlier_ones() -> None:
 
 
 def test_the_scenario_plans_one_break_per_program() -> None:
-    """The suite's break policy over the 70 s pattern (break offsets on the 6.006 s segment grid): three breaks,
-    the first on the cue point, the second more than a minute later (once MediaTailor imported the creatives)."""
+    """The suite's break policy over the 70 s pattern as the tools hand it to the planner: its sidecar cue point is
+    its only break offset and is editorial, so the policy's margins and minimum program length do not apply. Three
+    breaks, all on the cue point, the second more than a minute after the first (once MediaTailor imported the
+    creatives)."""
     ladder = Ladder.builtin("standard")
-    offsets = [ladder.grid.segment_ms * n for n in range(1, 12)]
+    cue = ladder.grid.snap_to_gop(CUE_POINT_MS)
     pattern = PlanInputAsset(
-        asset_id=ASSET_ID, vod_source="v", duration_ms=70_070, break_offsets_ms=offsets, ladder_version=ladder.version
+        asset_id=ASSET_ID,
+        vod_source="v",
+        duration_ms=70_070,
+        break_offsets_ms=[cue],
+        editorial_breaks=True,
+        ladder_version=ladder.version,
     )
     start = 1_792_120_000_000
     plan = plan_block(
@@ -172,7 +179,7 @@ def test_the_scenario_plans_one_break_per_program() -> None:
     epg = [{"start": iso(p.start_ms), "breaks": [b.model_dump() for b in p.breaks]} for p in plan.programs]
     windows = playback.break_windows(epg)
     offsets_aired = [b.offset_ms for p in plan.programs for b in p.breaks]
-    assert offsets_aired == [ladder.grid.snap_to_gop(CUE_POINT_MS), offsets[0], offsets[0]]
+    assert offsets_aired == [cue] * PROGRAMS
     assert windows[1].starts - windows[0].starts > timedelta(minutes=1)
 
 
