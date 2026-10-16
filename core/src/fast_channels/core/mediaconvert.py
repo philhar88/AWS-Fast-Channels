@@ -1,7 +1,7 @@
 """MediaConvert settings compiled from a ladder: one CMAF group with every codec, plus per-job overrides.
 
 The template reproduces the verified golden job (mediaconvert.md §9.4) field for field, with the v3 changes:
-frame rate normalised to the ladder (``SPECIFIED`` + ``DUPLICATE_DROP``), an adaptive deinterlacer, loudness
+frame rate normalised to the ladder (``SPECIFIED`` + ``DUPLICATE_DROP``), a deinterlacer, loudness
 normalisation, ``MpdManifestBandwidthType: MAX``, ``CustomLanguageCode``, I-frame playlists per option, an
 ``AdditionalManifests`` entry per applicable profile, and no ``Destination``. Each job sends only sparse overrides
 (Inputs, Destination, optional Esam): CreateJob deep-merges them into the template (ARCHITECTURE-SPEC App. A).
@@ -14,8 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fast_channels.core.esam import build_esam
 from fast_channels.core.ladder import AudioProfile, AudioRendition, Ladder, VideoCodec, VideoRendition
-from fast_channels.core.naming import ladder_key
+from fast_channels.core.naming import ladder_path
 from fast_channels.core.profiles import applicable, selected_outputs
+from fast_channels.core.tags import TAG_APP, TAG_LADDER
 
 AUDIO_SELECTOR: Final = "Audio Selector 1"
 LANGUAGE: Final = "en"  # BCP-47 "en", not MediaConvert's default "eng" (ladders.md §3.3 item 6)
@@ -105,9 +106,10 @@ def _video_output(ladder: Ladder, r: VideoRendition) -> dict[str, Any]:
             "ScalingBehavior": "DEFAULT",
             "Sharpness": 50,
             "ColorMetadata": "INSERT",
-            # NORMAL control leaves frames flagged progressive untouched; ADAPTIVE detects interlace/telecine.
+            # NORMAL control leaves frames flagged progressive untouched. DEINTERLACE, not ADAPTIVE: ADAPTIVE adds
+            # inverse telecine, which MediaConvert cannot accelerate, so every PREFERRED job ran NOT_ACCELERATED.
             "VideoPreprocessors": {
-                "Deinterlacer": {"Algorithm": "INTERPOLATE", "Mode": "ADAPTIVE", "Control": "NORMAL"}
+                "Deinterlacer": {"Algorithm": "INTERPOLATE", "Mode": "DEINTERLACE", "Control": "NORMAL"}
             },
             "CodecSettings": codec,
         },
@@ -220,7 +222,7 @@ def job_template_props(ladder: Ladder, *, name: str, queue_arn: str, category: s
         "StatusUpdateInterval": "SECONDS_60",  # fewer STATUS_UPDATE events in production (mediaconvert.md §7.2)
         "AccelerationSettings": {"Mode": ladder.options.acceleration},
         "Settings": compile_job_settings(ladder),
-        "Tags": {"fast:app": category, "fast:ladder": ladder.version},
+        "Tags": {TAG_APP: category, TAG_LADDER: ladder.version},
     }
 
 
@@ -249,7 +251,7 @@ class JobOverrides(BaseModel):
 
 def output_prefix(asset_id: str, ladder_version: str) -> str:
     """S3 key prefix of an asset's encode: ``assets/<asset_id>/<ladder_version with @ -> _>/``."""
-    return f"assets/{asset_id}/{ladder_key(ladder_version)}/"
+    return f"assets/{asset_id}/{ladder_path(ladder_version)}/"
 
 
 def _input(ladder: Ladder, source_uri: str | None, generator: GeneratorInput | None) -> dict[str, Any]:

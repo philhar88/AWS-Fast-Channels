@@ -102,7 +102,7 @@ def test_video_outputs(
     description = output["VideoDescription"]
     added = shared(description, golden["VideoDescription"], varies={"CodecSettings"})
     assert added == {
-        "VideoPreprocessors": {"Deinterlacer": {"Algorithm": "INTERPOLATE", "Mode": "ADAPTIVE", "Control": "NORMAL"}}
+        "VideoPreprocessors": {"Deinterlacer": {"Algorithm": "INTERPOLATE", "Mode": "DEINTERLACE", "Control": "NORMAL"}}
     }
     codec_settings = description["CodecSettings"][settings_key]
     golden_codec = golden["VideoDescription"]["CodecSettings"][settings_key]
@@ -160,6 +160,16 @@ def test_output_order_is_multivariant_order(settings: dict[str, Any], standard: 
     names = [o["NameModifier"] for o in settings["OutputGroups"][0]["Outputs"]]
     assert names == [r.name_modifier for r in standard.video] + [a.name_modifier for a in standard.audio]
     assert names[0] == "_avc-720p-a"
+
+
+@pytest.mark.parametrize("name", ["standard", "uhd"])
+def test_video_preprocessing_allows_accelerated_transcoding(name: str) -> None:
+    # Inverse telecine (ADAPTIVE or INVERSE_TELECINE) makes MediaConvert run PREFERRED jobs NOT_ACCELERATED.
+    outputs = compile_job_settings(Ladder.builtin(name))["OutputGroups"][0]["Outputs"]
+    modes = {
+        o["VideoDescription"]["VideoPreprocessors"]["Deinterlacer"]["Mode"] for o in outputs if "VideoDescription" in o
+    }
+    assert modes == {"DEINTERLACE"}
 
 
 def test_standard_settings_snapshot(settings: dict[str, Any], snapshot: SnapshotAssertion) -> None:

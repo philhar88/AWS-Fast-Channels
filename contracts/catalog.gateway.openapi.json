@@ -1,0 +1,276 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FAST Channels catalog",
+    "version": "3.0.0",
+    "description": "Bring-your-own-CMS contract. Implement these two operations and register the API as the AgentCore Gateway 'catalog' target; the scheduling agent then searches your catalog with the same tools it uses for the reference catalog."
+  },
+  "servers": [
+    {
+      "url": "https://cms.example.com/fast/v1",
+      "description": "Replace with your CMS API."
+    }
+  ],
+  "paths": {
+    "/content/search": {
+      "post": {
+        "operationId": "search_content",
+        "summary": "Search the catalog",
+        "description": "Find titles to schedule. Filters combine with AND; genres and ratings match any listed value. Results are paged with next_token.",
+        "requestBody": {
+          "required": true,
+          "description": "Search criteria.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Catalog search: free text plus genre/rating filters; all criteria are combined with AND.",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Words to match in title or synopsis."
+                  },
+                  "genres": {
+                    "default": [],
+                    "description": "Match any of these genres.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "ratings": {
+                    "default": [],
+                    "description": "Match any of these ratings.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_duration_minutes": {
+                    "exclusiveMinimum": 0,
+                    "type": "number",
+                    "description": "Longest running time to return."
+                  },
+                  "limit": {
+                    "default": 20,
+                    "description": "Page size.",
+                    "maximum": 100,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "next_token": {
+                    "type": "string",
+                    "description": "Token from the previous page."
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One page of matching titles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "One page of search results.",
+                  "properties": {
+                    "items": {
+                      "description": "Matching titles.",
+                      "items": {
+                        "description": "A catalog title with its editorial metadata, rights window and encoded assets.",
+                        "properties": {
+                          "content_id": {
+                            "description": "Stable catalog id.",
+                            "maxLength": 64,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                            "type": "string"
+                          },
+                          "title": {
+                            "description": "Display title.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "synopsis": {
+                            "default": "",
+                            "description": "Short description for EPGs and the agent.",
+                            "type": "string"
+                          },
+                          "rating": {
+                            "type": "string",
+                            "description": "Parental rating, e.g. TV-G."
+                          },
+                          "genres": {
+                            "default": [],
+                            "description": "Lower-case genre tags, e.g. animation.",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "duration_ms": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer",
+                            "description": "Running time in milliseconds."
+                          },
+                          "cue_points_ms": {
+                            "default": [],
+                            "description": "Editorial ad cue points in milliseconds.",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "type": "array"
+                          },
+                          "mezzanine_uri": {
+                            "type": "string",
+                            "description": "Source file to ingest (s3:// or https://)."
+                          },
+                          "available_from": {
+                            "format": "date-time",
+                            "type": "string",
+                            "description": "Start of the rights window (inclusive)."
+                          },
+                          "available_until": {
+                            "format": "date-time",
+                            "type": "string",
+                            "description": "End of the rights window (exclusive)."
+                          },
+                          "asset_ids": {
+                            "default": [],
+                            "description": "Encoded assets of this title.",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "content_id",
+                          "title"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "next_token": {
+                      "type": "string",
+                      "description": "Pass back to get the next page; absent on the last page."
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/content/{content_id}": {
+      "get": {
+        "operationId": "get_content",
+        "summary": "Get one title",
+        "description": "Full metadata of one title, including cue points, rights window and assets.",
+        "parameters": [
+          {
+            "name": "content_id",
+            "in": "path",
+            "required": true,
+            "description": "Catalog content id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The title.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "A catalog title with its editorial metadata, rights window and encoded assets.",
+                  "properties": {
+                    "content_id": {
+                      "description": "Stable catalog id.",
+                      "maxLength": 64,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "description": "Display title.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "synopsis": {
+                      "default": "",
+                      "description": "Short description for EPGs and the agent.",
+                      "type": "string"
+                    },
+                    "rating": {
+                      "type": "string",
+                      "description": "Parental rating, e.g. TV-G."
+                    },
+                    "genres": {
+                      "default": [],
+                      "description": "Lower-case genre tags, e.g. animation.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "duration_ms": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer",
+                      "description": "Running time in milliseconds."
+                    },
+                    "cue_points_ms": {
+                      "default": [],
+                      "description": "Editorial ad cue points in milliseconds.",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "mezzanine_uri": {
+                      "type": "string",
+                      "description": "Source file to ingest (s3:// or https://)."
+                    },
+                    "available_from": {
+                      "format": "date-time",
+                      "type": "string",
+                      "description": "Start of the rights window (inclusive)."
+                    },
+                    "available_until": {
+                      "format": "date-time",
+                      "type": "string",
+                      "description": "End of the rights window (exclusive)."
+                    },
+                    "asset_ids": {
+                      "default": [],
+                      "description": "Encoded assets of this title.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "content_id",
+                    "title"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title."
+          }
+        }
+      }
+    }
+  }
+}

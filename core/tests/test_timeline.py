@@ -184,6 +184,45 @@ def test_breaks_respect_min_gap_and_max_breaks(grid: Grid) -> None:
     assert _plan([_asset(1, break_offsets_ms=[])], grid).programs[0].breaks == []
 
 
+def _offsets(plan: Plan) -> list[list[int]]:
+    return [[b.offset_ms for b in p.breaks] for p in plan.programs]
+
+
+def test_short_programs_get_no_breaks_at_plain_boundaries(grid: Grid) -> None:
+    # The live incident: a break due 6 s into the 52 s trailer that follows an 11.9-minute title.
+    trailer = _asset(2, minutes=52 / 60)
+    assert _offsets(_plan([_asset(1, minutes=11.9), trailer], grid)) == [[], []]
+    anywhere = ProgrammingBrief(break_policy=BreakPolicy(min_program_minutes=0))
+    assert _offsets(_plan([_asset(1, minutes=11.9), trailer], grid, anywhere)) == [[], []]  # 52 s < both margins
+
+
+def test_breaks_keep_clear_of_program_start_and_end(grid: Grid) -> None:
+    due_early = _plan([_asset(1, minutes=11.5), _asset(2, minutes=5)], grid)  # due 30 s into the second program
+    assert _offsets(due_early) == [[], [60060]]  # the first segment boundary at least 60 s in
+    late = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=4.9, max_breaks=1))  # due 6 s before the end
+    assert _offsets(_plan([_asset(1, minutes=5)], grid, late)) == [[264264]]  # the last boundary 30 s before it
+    unbounded = BreakPolicy(cadence_minutes=4.9, max_breaks=1, start_margin_seconds=0, end_margin_seconds=0)
+    assert _offsets(_plan([_asset(1, minutes=5)], grid, ProgrammingBrief(break_policy=unbounded))) == [[294294]]
+
+
+def test_editorial_cue_points_are_honoured_anywhere(grid: Grid) -> None:
+    trailer = _asset(1, minutes=52 / 60, break_offsets_ms=[20020], editorial_breaks=True)
+    brief = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=0.5))
+    assert _offsets(_plan([trailer], grid, brief)) == [[20020]]  # 20 s in, in a 52 s program
+
+
+def test_min_gap_defaults_to_half_the_cadence(grid: Grid) -> None:
+    assert BreakPolicy().min_gap_ms == 6 * MINUTE
+    assert BreakPolicy(cadence_minutes=5).min_gap_ms == 150_000
+    assert BreakPolicy(cadence_minutes=5, min_gap_minutes=0).min_gap_ms == 0
+    # Tears of Steel: cue points 3.9 minutes apart, both kept at a 5-minute cadence (a fixed 6-minute gap dropped one).
+    tears = _asset(1, minutes=734 / 60, break_offsets_ms=[254254, 488488], editorial_breaks=True)
+    brief = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=5))
+    plan = _plan([tears], grid, brief)
+    assert _offsets(plan) == [[254254, 488488]]
+    assert plan == _plan([tears], grid, brief)  # deterministic
+
+
 def test_content_rules(grid: Grid) -> None:
     brief = ProgrammingBrief(
         ratings=["TV-G"],

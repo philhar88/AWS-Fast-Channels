@@ -63,6 +63,19 @@ def test_openapi_is_gateway_compatible(generator: ModuleType) -> None:
     }
 
 
+def test_gateway_openapi_passes_the_cdk_target_checks(generator: ModuleType) -> None:
+    # The rules of aws_bedrockagentcore's validateOpenApiSchema, which add_open_api_target applies at synth.
+    document = json.loads((REPO / "contracts/catalog.gateway.openapi.json").read_text())
+    assert document["openapi"].startswith("3.1.")
+    assert all(server["url"].startswith("https://") for server in document["servers"])
+    operations = [op for path in document["paths"].values() for op in path.values()]
+    assert all(op["operationId"] for op in operations)
+    assert not _keys(document) & {"oneOf", "anyOf", "allOf", "callbacks", "webhooks"}
+    assert "security" not in document and "components" not in document
+    full = generator.catalog_openapi()
+    assert document == {k: v for k, v in full.items() if k not in {"security", "components"}}
+
+
 def test_yaml_emitter_round_trips(generator: ModuleType) -> None:
     yaml = pytest.importorskip("yaml")
     text = generator.render()["catalog.openapi.yaml"]

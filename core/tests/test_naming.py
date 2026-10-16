@@ -30,12 +30,33 @@ def test_agentcore_name_has_no_hyphens() -> None:
 def test_agent_owned_namespace() -> None:
     name = naming.agent_owned_name("fast", "kids")
     assert name == "fast-agent-kids"
+    assert naming.agent_namespace("fast") == "fast-agent-"
     assert naming.is_agent_owned(name, "fast")
     assert not naming.is_agent_owned("fast-kids", "fast")
+    assert not naming.is_agent_owned("fastci-agent-kids", "fast")
 
 
-def test_ladder_key_host_hash_and_creative_id() -> None:
-    assert naming.ladder_key("standard@0123abcd45") == "standard_0123abcd45"
+def test_stage_id() -> None:
+    assert naming.stage_id(naming.DEFAULT_PREFIX) == "FastChannels"
+    assert naming.stage_id("news") == "FastChannels-news"
+
+
+def test_runtime_resource_names() -> None:
+    version = "standard@0123456789"
+    assert naming.job_template_name("fast", version) == "fast-standard_0123456789"
+    assert naming.source_location_name("fast") == "fast-media"
+    assert naming.vod_source_name("filler-1a2b3c", version) == "filler-1a2b3c-standard_0123456789"
+    long = naming.vod_source_name("a" * 48, version)
+    assert len(long) == naming.MEDIATAILOR_NAME_MAX and long == naming.vod_source_name("a" * 48, version)
+
+
+def test_ladder_key_is_a_deprecated_alias_of_ladder_path() -> None:
+    with pytest.deprecated_call(match="renamed ladder_path"):
+        assert naming.ladder_key("standard@0123abcd45") == naming.ladder_path("standard@0123abcd45")
+
+
+def test_ladder_path_host_hash_and_creative_id() -> None:
+    assert naming.ladder_path("standard@0123abcd45") == "standard_0123abcd45"
     assert naming.host_hash("https://D1.cloudfront.net/x") == naming.host_hash("https://d1.cloudfront.net/y")
     creative = naming.creative_id("house-30", "standard@0123abcd45", "https://d1.cloudfront.net")
     assert creative == f"house-30-standard_0123abcd45-{naming.host_hash('https://d1.cloudfront.net')}"

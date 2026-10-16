@@ -9,9 +9,14 @@ import re
 import unicodedata
 from typing import Final
 from urllib.parse import urlsplit
+from warnings import deprecated
 
+DEFAULT_PREFIX: Final = "fast"
+"""Prefix of the default deployment, the one whose stack names carry no prefix (:func:`stage_id`)."""
 AGENT_PREFIX_SUFFIX: Final = "agent"
 """Agent-owned runtime resources are named ``<prefix>-agent-...`` (Cedar forbids destructive tools elsewhere)."""
+SOURCE_LOCATION_SUFFIX: Final = "media"
+"""The IaC Channel Assembly source location of the media bucket is ``<prefix>-media``."""
 
 MEDIATAILOR_NAME_MAX: Final = 64  # PlaybackConfiguration Name: ^[a-zA-Z0-9_-]+$, 1-64 (ad-insertion.md §1)
 AGENTCORE_NAME_MAX: Final = 48  # Runtime/Memory names: [a-zA-Z][a-zA-Z0-9_]{0,47} (agentcore.md §2)
@@ -54,6 +59,17 @@ def agentcore_name(*parts: str) -> str:
     return _fit(name, AGENTCORE_NAME_MAX, "_")
 
 
+def stage_id(prefix: str) -> str:
+    """CDK stage id of deployment ``prefix``, which prefixes every stack name: ``FastChannels``
+    (``FastChannels-Data``, ...) for :data:`DEFAULT_PREFIX`, else ``FastChannels-<prefix>``."""
+    return "FastChannels" if prefix == DEFAULT_PREFIX else f"FastChannels-{prefix}"
+
+
+def agent_namespace(prefix: str) -> str:
+    """Name prefix of every agent-owned runtime resource of deployment ``prefix``: ``<prefix>-agent-``."""
+    return f"{prefix}-{AGENT_PREFIX_SUFFIX}-"
+
+
 def agent_owned_name(prefix: str, *parts: str) -> str:
     """Name of a runtime resource owned by the agent: ``<prefix>-agent-<parts...>``."""
     return mediatailor_name(prefix, AGENT_PREFIX_SUFFIX, *parts)
@@ -61,12 +77,41 @@ def agent_owned_name(prefix: str, *parts: str) -> str:
 
 def is_agent_owned(name: str, prefix: str) -> bool:
     """Whether ``name`` belongs to the agent-owned namespace of deployment ``prefix``."""
-    return name.startswith(f"{prefix}-{AGENT_PREFIX_SUFFIX}-")
+    return name.startswith(agent_namespace(prefix))
 
 
-def ladder_key(ladder_version: str) -> str:
-    """S3-key and path-safe form of a ladder version (``standard@0123abcd45`` -> ``standard_0123abcd45``)."""
+def ladder_path(ladder_version: str) -> str:
+    """S3-key and name-safe form of a ladder version (``standard@0123abcd45`` -> ``standard_0123abcd45``).
+
+    A string for paths and resource names; the MediaLibrary item key of a ladder is a different thing
+    (``ladder_key`` in the functions package's library schema).
+    """
     return ladder_version.replace("@", "_")
+
+
+@deprecated("fast_channels.core.naming.ladder_key is renamed ladder_path")
+def ladder_key(ladder_version: str) -> str:
+    """Deprecated alias of :func:`ladder_path`, kept for v3.0 imports; removed in the next major version."""
+    return ladder_path(ladder_version)
+
+
+def job_template_name(prefix: str, ladder_version: str) -> str:
+    """MediaConvert job template of a ladder version: ``<prefix>-<ladder id>_<fingerprint>``.
+
+    The single source for CloudFormation (built-in ladders) and the agent's ``provision_ladder`` (custom ones),
+    so the pipeline finds either by the ladder version alone.
+    """
+    return f"{prefix}-{ladder_path(ladder_version)}"
+
+
+def source_location_name(prefix: str) -> str:
+    """Channel Assembly source location of deployment ``prefix``'s media bucket: ``<prefix>-media``."""
+    return mediatailor_name(prefix, SOURCE_LOCATION_SUFFIX)
+
+
+def vod_source_name(asset_id: str, ladder_version: str) -> str:
+    """Channel Assembly VOD source of an asset encode: unique per asset and ladder within its source location."""
+    return mediatailor_name(asset_id, ladder_path(ladder_version))
 
 
 def host_hash(url: str) -> str:
@@ -80,4 +125,4 @@ def creative_id(creative: str, ladder_version: str, content_base_url: str) -> st
     MediaTailor caches preconditioned imports by creative id, so the id must change whenever the media or
     the absolute host baked into the ad playlists changes (e2e.md §8 item 10).
     """
-    return mediatailor_name(creative, ladder_key(ladder_version), host_hash(content_base_url))
+    return mediatailor_name(creative, ladder_path(ladder_version), host_hash(content_base_url))

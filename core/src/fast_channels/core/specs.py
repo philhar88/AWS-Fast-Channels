@@ -13,7 +13,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 from pydantic import BaseModel, Field
 
-from fast_channels.core.naming import ladder_key
+from fast_channels.core.naming import ladder_path
 from fast_channels.core.profiles import ManifestFormat, RenditionProfile, profile
 
 if TYPE_CHECKING:
@@ -254,7 +254,7 @@ def validate_ads_url(url: str) -> str:
 
 def vast_key(ladder_version: str) -> str:
     """S3 key of a ladder's static VAST pod."""
-    return f"ads/{ladder_key(ladder_version)}/vast.xml"
+    return f"ads/{ladder_path(ladder_version)}/vast.xml"
 
 
 def ads_url(*, content_base_url: str, ladder_version: str, channel: str) -> str:

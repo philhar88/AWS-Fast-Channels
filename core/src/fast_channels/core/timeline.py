@@ -134,20 +134,55 @@ class Grid(BaseModel):
 
 
 class BreakPolicy(BaseModel):
-    """How often ad breaks air. ``max_breaks`` limits breaks per program."""
+    """How often ad breaks air, and where in a program they may go.
+
+    A break is due ``cadence_minutes`` after the previous one ended (or the block started), and never comes less
+    than ``min_gap_minutes`` after it: half the cadence when unset, so any explicit cadence is honoured.
+    ``max_breaks`` limits breaks per program. The margins and ``min_program_minutes`` keep breaks at plain segment
+    boundaries out of a program's opening and closing seconds and out of short programs; an asset's editorial cue
+    points (:attr:`PlanInputAsset.editorial_breaks`) are used wherever the editor put them.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     cadence_minutes: float = Field(12, gt=0)
-    min_gap_minutes: float = Field(6, ge=0)
+    min_gap_minutes: float | None = Field(None, ge=0)
     max_breaks: int | None = Field(None, ge=0)
     slate_gops: int = 30
+    start_margin_seconds: float = Field(60, ge=0)
+    end_margin_seconds: float = Field(30, ge=0)
+    min_program_minutes: float = Field(3, ge=0)
 
     @model_validator(mode="after")
     def _known_slate(self) -> Self:
         if self.slate_gops not in BREAK_SLATE_GOPS:
             raise ValueError(f"slate_gops must be one of {BREAK_SLATE_GOPS}")
         return self
+
+    @property
+    def cadence_ms(self) -> Millis:
+        """Target time from the end of one break to the next."""
+        return round(self.cadence_minutes * 60_000)
+
+    @property
+    def min_gap_ms(self) -> Millis:
+        """Shortest time from the end of one break to the next: ``min_gap_minutes``, else half the cadence."""
+        if self.min_gap_minutes is None:
+            return self.cadence_ms // 2
+        return round(self.min_gap_minutes * 60_000)
+
+    def offsets(self, asset: PlanInputAsset) -> list[Millis]:
+        """The offsets of ``asset`` a break may use: inside the content, and for plain segment boundaries also
+        ``start_margin_seconds`` from its start, ``end_margin_seconds`` from its end and only in programs of at
+        least ``min_program_minutes``."""
+        inside = sorted({o for o in asset.break_offsets_ms if 0 < o < asset.duration_ms})
+        if asset.editorial_breaks:
+            return inside
+        if asset.duration_ms < round(self.min_program_minutes * 60_000):
+            return []
+        first = round(self.start_margin_seconds * 1000)
+        last = asset.duration_ms - round(self.end_margin_seconds * 1000)
+        return [o for o in inside if first <= o <= last]
 
 
 _HHMM = r"^([01]\d|2[0-3]):[0-5]\d$"
@@ -261,7 +296,9 @@ class PlanInputAsset(BaseModel):
     """A schedulable asset: a registered VOD source encoded with ``ladder_version``.
 
     ``break_offsets_ms`` are the offsets where every track has a common segment boundary (see
-    :func:`fast_channels.core.manifests.segment_boundaries_ms`).
+    :func:`fast_channels.core.manifests.segment_boundaries_ms`). When the asset has editorial cue points the pipeline
+    keeps only the boundaries at those points: set ``editorial_breaks`` then, so the planner trusts their placement
+    instead of applying the :class:`BreakPolicy` margins.
     """
 
     asset_id: str
@@ -269,6 +306,7 @@ class PlanInputAsset(BaseModel):
     content_id: str | None = None
     duration_ms: Millis = Field(gt=0)
     break_offsets_ms: list[Millis] = []
+    editorial_breaks: bool = False
     ladder_version: str
     rating: str | None = None
     genres: list[str] = []
@@ -326,15 +364,15 @@ def _content_violations(asset: PlanInputAsset, brief: ProgrammingBrief, name: st
 def _plan_breaks(
     name: str, asset: PlanInputAsset, *, start_ms: Millis, grid: Grid, policy: BreakPolicy, last_break_end: Millis
 ) -> tuple[list[PlannedBreak], Millis]:
-    """Pick breaks from the asset's valid offsets nearest to the channel-wide cadence.
+    """Pick breaks from the offsets the policy allows (:meth:`BreakPolicy.offsets`) nearest to the cadence.
 
-    The cadence runs across program boundaries (short-form channels still get breaks), and a break is never
-    closer than ``min_gap`` to the end of the previous one. Returns the breaks and the new last-break end.
+    The cadence runs across program boundaries within a block, and a break is never closer than the policy's
+    minimum gap to the end of the previous one. Returns the breaks and the new last-break end.
     """
-    cadence, min_gap = round(policy.cadence_minutes * 60_000), round(policy.min_gap_minutes * 60_000)
+    cadence, min_gap = policy.cadence_ms, policy.min_gap_ms
     slate_ms = grid.gop_exact(policy.slate_gops)
     content_id = asset.content_id or asset.asset_id
-    candidates = sorted({o for o in asset.break_offsets_ms if 0 < o < asset.duration_ms})
+    candidates = policy.offsets(asset)
     offsets: list[Millis] = []
     while policy.max_breaks is None or len(offsets) < policy.max_breaks:
         inserted = len(offsets) * slate_ms
