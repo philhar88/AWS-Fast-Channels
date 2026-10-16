@@ -1,0 +1,16 @@
+[project]
+name = "fast-channels-functions"
+version = "3.0.0"
+description = "AWS Lambda handlers: ingest pipeline steps, agent tools, custom resources."
+requires-python = ">=3.14"
+dependencies = ["fast-channels-core", "aws-lambda-powertools[parser]>=3.36,<4"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "fast_channels.functions"
+
+[tool.uv.sources]
+fast-channels-core = { workspace = true }
