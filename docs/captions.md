@@ -202,7 +202,7 @@ are no sound or music descriptions or speaker labels, which is why every generat
 | Path | What viewers get |
 |---|---|
 | Channel Assembly | The tracks pass through untouched, renamed by position (`sub_1.m3u8`), on the video segments' timeline. |
-| SSAI HLS | During an ad MediaTailor serves one blank WebVTT (`/v1/webvtt/.../web.vtt`) in every subtitle rendition; content captions resume after the break. |
+| SSAI HLS | During an ad MediaTailor serves one blank WebVTT (`/v1/webvtt/.../web.vtt`) in every subtitle rendition, the IMSC1 one included, so that playlist is not valid HLS during ads (see [Limits](#limits)); content captions resume after the break. |
 | SGAI (HLS Interstitials) | The primary stream keeps the slate's (empty) track under the interstitial; the house ad's own multivariant lists the same tracks. |
 | SSAI DASH | Every period, ad periods included, has the `stpp` AdaptationSet: house ads carry the empty track. |
 | Console | Both players show a CC toggle (on by default) when the stream has caption tracks; hls.js renders IMSC1 as text tracks, until one of the hls.js bugs below stops them. |
@@ -238,5 +238,14 @@ Elemental Inference).
 - Only the spoken language is taken from the source or generated, and only CC1 of embedded captions.
 - IMSC1 needs a player that renders it: hls.js, AVPlayer (iOS 11+, tvOS), ExoPlayer, dash.js and Shaka do; some
   smart-TV stacks render only WebVTT or 608.
-- During SSAI ads the subtitle renditions carry MediaTailor's blank WebVTT, also in IMSC tracks; players that cannot
-  switch text formats at a discontinuity show no captions until the break ends.
+- During SSAI HLS ads MediaTailor puts its blank WebVTT into the IMSC1 rendition, although it has matched the house
+  ad's own caption playlist to that rendition (`FILLED_AVAIL` in the vended logs lists `sub_1.m3u8` ->
+  `main_cc-en.m3u8` under `adPlaylistUris`). The content's `EXT-X-MAP` (an IMSC1 init segment) still applies to those
+  WebVTT segments, since an `EXT-X-MAP` applies to every later segment until the next one (HLS 2nd edition
+  §4.4.4.5), so one rendition mixes two segment formats. Apple's mediastreamvalidator reports every blank segment as
+  *No samples found in the segment* (641087, Critical), and *Each fMP4 Segment in a Media Playlist MUST have an
+  EXT-X-MAP tag* (535008) when the playlist window starts inside a break. MediaTailor documents the blank WebVTT for
+  WebVTT renditions only ([dynamic transcoding](https://docs.aws.amazon.com/mediatailor/latest/ug/dynamic-transcoding.html))
+  and has no setting for subtitle renditions, so this is MediaTailor's behaviour, not a channel setting. An ad's own
+  captions never show in SSAI, and players have to survive segments they cannot parse (hls.js 1.7.3 stops
+  loading subtitles at the first one, see above); SGAI is not affected.
