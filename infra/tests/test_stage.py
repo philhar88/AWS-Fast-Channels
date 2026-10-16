@@ -42,8 +42,14 @@ def test_edge_stack_in_us_east_1_when_deploying_elsewhere(deployment: GetDeploym
     d = deployment(GLOBAL_MODELS, region="eu-west-1")
 
     assert d.stage.edge is not None
-    assert (d.stage.edge.stack_name, d.stage.edge.region) == ("FastChannels-Edge", "us-east-1")
+    assert (d.stage.edge.stack_name, d.stage.edge.region) == ("FastChannels-Edge-eu-west-1", "us-east-1")
     assert {stack.region for stack in d.stacks if stack is not d.stage.edge} == {"eu-west-1"}
+
+
+def test_edge_stacks_of_one_prefix_in_two_regions_do_not_collide(deployment: GetDeployment) -> None:
+    edges = [deployment(GLOBAL_MODELS, region=region).stage.edge for region in ("eu-west-1", "ap-northeast-1")]
+
+    assert [edge.stack_name for edge in edges] == ["FastChannels-Edge-eu-west-1", "FastChannels-Edge-ap-northeast-1"]
 
 
 def test_account_baseline_only_when_enabling_transaction_search(deployment: GetDeployment) -> None:
@@ -120,18 +126,38 @@ def test_consumers_get_weak_references_also_across_regions(fresh_deployment: Cal
 
     assert "Fn::ImportValue" not in media
     assert media.count('"Fn::GetStackOutput": {"StackName": "FastChannels-Data", "Region": "eu-west-1"') >= 3
-    [parameter] = edge["Resources"].values()
+    [parameter] = (r for r in edge["Resources"].values() if r["Type"] == "AWS::SSM::Parameter")
     reference = parameter["Properties"]["Value"]["Fn::GetStackOutput"]
     assert (reference["StackName"], reference["Region"]) == ("FastChannels-Data", "eu-west-1")
     assert "BucketPolicy" not in media  # grants never touch DataStack's resource policies
 
 
-def test_no_account_level_logs_resource_policy_outside_the_baseline(deployment: GetDeployment) -> None:
-    d = deployment(EVERYTHING, region="eu-west-1")
+TOPOLOGIES = {"us-east-1": ({}, "us-east-1"), "everything-elsewhere": (EVERYTHING, "eu-west-1")}
+
+
+@pytest.mark.parametrize(("overrides", "region"), TOPOLOGIES.values(), ids=TOPOLOGIES.keys())
+def test_no_account_level_logs_resource_policy_outside_the_baseline(
+    deployment: GetDeployment, overrides: dict[str, Any], region: str
+) -> None:
+    d = deployment(overrides, region=region)
 
     for stack in d.stacks:
         expected = 1 if stack is d.stage.baseline else 0
         d.template(stack).resource_count_is("AWS::Logs::ResourcePolicy", expected)
+
+
+@pytest.mark.parametrize(("overrides", "region"), TOPOLOGIES.values(), ids=TOPOLOGIES.keys())
+def test_no_public_function_urls_or_invoke_permissions(
+    deployment: GetDeployment, overrides: dict[str, Any], region: str
+) -> None:
+    d = deployment(overrides, region=region)
+
+    for stack in d.stacks:
+        template = d.template(stack)
+        template.resource_count_is("AWS::Lambda::Url", 0)
+        for permission in template.find_resources("AWS::Lambda::Permission").values():
+            props = permission["Properties"]
+            assert props["Principal"] != "*" and "FunctionUrlAuthType" not in props, stack.stack_name
 
 
 def test_region_is_required() -> None:
@@ -145,5 +171,18 @@ def test_unresolved_account_still_synthesizes_across_regions(fresh_deployment: C
     d = fresh_deployment(GLOBAL_MODELS, region="eu-west-1", account=None)
     ssm.StringParameter(d.stage.edge, "LogsBucket", string_value=d.stage.data.exports.logs_bucket.bucket_arn)
 
-    [parameter] = d.template(d.stage.edge).to_json()["Resources"].values()
+    resources = d.template(d.stage.edge).to_json()["Resources"].values()
+    [parameter] = (r for r in resources if r["Type"] == "AWS::SSM::Parameter")
     assert parameter["Properties"]["Value"]["Fn::GetStackOutput"]["Region"] == "eu-west-1"
+
+
+def test_other_cdns_reach_the_channels_tool(deployment: GetDeployment) -> None:
+    cdns = [{"name": "cdn-b", "manifest_base": "https://b.example.com", "content_base": "https://b.example.com/c"}]
+    d = deployment({"delivery.cdns": cdns})
+
+    [variables] = [
+        fn["Properties"]["Environment"]["Variables"]
+        for fn in d.template(d.stage.operator).find_resources("AWS::Lambda::Function").values()
+        if "CDN_ENDPOINTS" in fn["Properties"].get("Environment", {}).get("Variables", {})
+    ]
+    assert json.loads(variables["CDN_ENDPOINTS"]) == cdns

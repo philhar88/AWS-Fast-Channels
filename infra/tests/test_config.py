@@ -100,7 +100,7 @@ def test_overrides_address_list_items_and_deep_merge_objects(load_config: Load) 
         with_shipped(
             **{
                 "channels.iac.0.tier": "STANDARD",
-                "agent": '{"guardrail_checks": true}',
+                "agent": '{"admin_email": "ops@example.com"}',
                 "channels.iac.0.brief": {"ratings": ["TV-G"]},
             }
         )
@@ -109,7 +109,7 @@ def test_overrides_address_list_items_and_deep_merge_objects(load_config: Load) 
     [channel] = config.channels.iac
     assert channel.tier is ChannelTier.STANDARD
     assert channel.brief is not None and channel.brief.ratings == ["TV-G"]
-    assert config.agent.guardrail_checks and config.agent.enabled  # merged, not replaced
+    assert config.agent.admin_email == "ops@example.com" and config.agent.enabled  # merged, not replaced
 
 
 def test_prefix_override_needs_matching_channel_names(load_config: Load) -> None:

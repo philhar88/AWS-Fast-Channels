@@ -32,6 +32,7 @@ from fast_channels.core import specs
 from fast_channels.core.profiles import profile
 from fast_channels.infra import nag
 from fast_channels.infra.config import ChannelTier
+from fast_channels.infra.constructs._provider import acknowledge_framework, trace_waiter
 from fast_channels.infra.constructs.functions import FastFunction
 
 if TYPE_CHECKING:
@@ -52,7 +53,6 @@ VENDED_LOG_TYPES: Final = {
 GSI1: Final = "GSI1"
 _CHANNEL_HANDLER: Final = "fast_channels.functions.custom_resources.channel_lifecycle.handler"
 _TOKEN: Final = re.compile(r"\$\{Token\[[^\]]*\]\}")
-_FRAMEWORK_DLQ: Final = "Provider framework function, invoked by CloudFormation, which reports failures back to it"
 
 
 def _arn(service: str, resource: str) -> str:
@@ -237,7 +237,7 @@ class MediaTailorLogs(Construct):
                 delivery_destination_arn=self.destination_arn,
             )
             if self._last_delivery is not None:
-                delivery.add_dependency(self._last_delivery)
+                delivery.add_resource_dependency(self._last_delivery)
             self._last_delivery = delivery
 
 
@@ -367,7 +367,7 @@ class _ChannelProvider(Construct):
             on_event_handler=self.handler.function,
             framework_lambda_logging_level=lambda_.ApplicationLogLevel.INFO,
         )
-        _acknowledge_framework(self.provider, self.handler)
+        acknowledge_framework(self.provider, self.handler.function)
 
     @classmethod
     def of(cls, scope: Construct, *, log_retention: logs.RetentionDays, removal_policy: RemovalPolicy) -> Self:
@@ -488,7 +488,7 @@ class LinearChannel(Construct):
                 account=Aws.ACCOUNT_ID,
             ),
         )
-        policy.add_dependency(self.channel)
+        policy.add_resource_dependency(self.channel)
 
         lifecycle = resource(
             "Lifecycle",
@@ -615,7 +615,7 @@ class AsRunLogging(Construct):
             on_event_handler=handler.function,
             framework_lambda_logging_level=lambda_.ApplicationLogLevel.INFO,
         )
-        _acknowledge_framework(provider, handler)
+        acknowledge_framework(provider, handler.function)
         log_group = CustomResource(
             self,
             "LogGroup",
@@ -741,8 +741,8 @@ class RuntimeResourceReaper(Construct):
                 destination=waiter_logs, level=sfn.LogLevel.ALL, include_execution_data=True
             ),
         )
-        _trace_waiter(provider)
-        _acknowledge_framework(provider, *functions.values())
+        trace_waiter(provider)
+        acknowledge_framework(provider, *(fn.function for fn in functions.values()))
         self.resource = CustomResource(
             self,
             "Resource",
@@ -854,52 +854,3 @@ class RuntimeResourceReaper(Construct):
                 **{_finding(service, resource): reason for service, resource, _, reason in scoped},
             },
         )
-
-
-def _trace_waiter(provider: cr.Provider) -> None:
-    """X-Ray tracing for the Provider's waiter state machine (the L2 offers logging options only)."""
-    waiter = provider.node.find_child("waiter-state-machine")
-    cast(
-        "sfn.CfnStateMachine", waiter.node.find_child("Resource")
-    ).tracing_configuration = sfn.CfnStateMachine.TracingConfigurationProperty(enabled=True)
-    role = cast("iam.Role", waiter.node.find_child("Role"))
-    role.add_to_principal_policy(
-        iam.PolicyStatement(
-            actions=[
-                "xray:PutTraceSegments",
-                "xray:PutTelemetryRecords",
-                "xray:GetSamplingRules",
-                "xray:GetSamplingTargets",
-            ],
-            resources=["*"],
-        )
-    )
-    nag.acknowledge(role, {nag.wildcard_resource(): "X-Ray tracing actions only support '*'"})
-
-
-def _acknowledge_framework(provider: cr.Provider, *handlers: FastFunction) -> None:
-    """cdk-nag findings of the CDK custom-resource Provider framework, whose functions this module does not shape.
-
-    The framework invokes ``handlers`` (and the waiter its own functions) with ``<function ARN>:*``, i.e. any
-    version or alias.
-    """
-    invoked = [h.function for h in handlers] + [c for c in provider.node.find_all() if isinstance(c, lambda_.Function)]
-    nag.acknowledge(
-        provider,
-        {
-            nag.LAMBDA_DLQ: _FRAMEWORK_DLQ,
-            nag.managed_policy("service-role/AWSLambdaBasicExecutionRole"): "Provider framework function role",
-            nag.wildcard_resource(): "Active tracing of the framework functions: X-Ray actions only support '*'",
-            "Serverless-LambdaDefaultMemorySize": "Provider framework functions only relay requests",
-            **{
-                nag.wildcard_resource(f"<{_logical_id(function)}.Arn>:*"): "Provider framework: invoke the function "
-                "and its versions"
-                for function in invoked
-            },
-        },
-    )
-
-
-def _logical_id(function: lambda_.Function) -> str:
-    """Logical id of a function, as cdk-nag prints it in finding ids (``<LogicalId.Arn>``)."""
-    return Stack.of(function).get_logical_id(cast("lambda_.CfnFunction", function.node.default_child))

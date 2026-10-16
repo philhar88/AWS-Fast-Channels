@@ -209,8 +209,8 @@ def test_retain_keeps_data_and_protects_tables(retained: Template) -> None:
         assert table["Properties"]["Replicas"][0]["DeletionProtectionEnabled"] is True
 
 
-def test_outputs_for_scripts(data: Template) -> None:
-    assert set(data.find_outputs("*")) == {
+def test_outputs_for_scripts(data: Template, named_outputs: Callable[[Template], set[str]]) -> None:
+    assert named_outputs(data) == {
         "IngestBucketName",
         "MediaBucketName",
         "LogsBucketName",

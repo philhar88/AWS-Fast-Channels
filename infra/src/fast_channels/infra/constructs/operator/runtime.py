@@ -14,7 +14,7 @@ from constructs import Construct
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.operator.agent_bundle import agent_code
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
-from fast_channels.infra.constructs.operator.nag_references import acknowledge_references, file_asset_objects
+from fast_channels.infra.nag import acknowledge_references, file_asset_objects
 
 IDLE_TIMEOUT: Final = Duration.minutes(10)
 MAX_LIFETIME: Final = Duration.hours(2)

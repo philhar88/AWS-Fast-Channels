@@ -85,6 +85,7 @@ class OperatorStack(Stack):
             package_profiles=config.channel_assembly.package_profiles,
             auto_stop_hours=config.channels.max_runtime_hours,
             max_agent_channels=config.channels.max_agent_channels,
+            cdns=config.delivery.cdns,
             log_retention=retention,
             removal_policy=removal,
         )
@@ -172,6 +173,9 @@ class OperatorStack(Stack):
             "RuntimeArn": self.agent.runtime.agent_runtime_arn,
             "RuntimeInvokeUrl": self.agent.invoke_url,
             "ModelSpecParameter": self.agent.model_spec.parameter_name,
+            "ToolFunctions": self.to_json_string(
+                {target: function.function.function_name for target, function in self.tools.functions.items()}
+            ),
         }
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)

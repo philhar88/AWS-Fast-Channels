@@ -11,7 +11,7 @@ from fast_channels.functions.tools.registry import gateway_tool_schema
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.operator.cedar import gateway_policies
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
-from fast_channels.infra.constructs.operator.nag_references import acknowledge_references
+from fast_channels.infra.nag import acknowledge_references
 
 if TYPE_CHECKING:
     from fast_channels.infra.constructs.operator.tools import ToolTarget

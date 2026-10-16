@@ -1,4 +1,5 @@
-"""``FastChannels-Edge``: CloudFront resources that must live in us-east-1 when the deployment runs elsewhere."""
+"""``FastChannels-Edge-<region>``: CloudFront resources that must live in us-east-1 when a deployment runs in
+``<region>``."""
 
 from typing import TYPE_CHECKING, Any, Final
 

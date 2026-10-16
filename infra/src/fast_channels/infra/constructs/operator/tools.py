@@ -6,6 +6,7 @@ permissions follow the name partition (_review.md, IAM lens): ``<prefix>-*`` for
 permissions are allowed only with this deployment's ``fast:app`` tag (``aws:RequestTag``).
 """
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
@@ -21,10 +22,11 @@ from constructs import Construct
 from fast_channels.functions.tools.registry import TARGETS, ToolSpec, load
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.functions import FastFunction
-from fast_channels.infra.constructs.operator.nag_references import acknowledge_references
 from fast_channels.infra.constructs.storage import GSI1
+from fast_channels.infra.nag import acknowledge_references
 
 if TYPE_CHECKING:
+    from fast_channels.infra.config import CdnEndpoint
     from fast_channels.infra.stacks.data import DataExports
     from fast_channels.infra.stacks.media import MediaExports
 
@@ -43,7 +45,8 @@ _DESCRIPTIONS: Final = {
 _TIMEOUTS: Final = {
     "schedule": Duration.minutes(5),  # publish creates programs one by one at <= 3 TPS (channel-assembly.md)
     "origins": Duration.minutes(2),  # VOD source calls are limited to 1 TPS
-    "channels": Duration.minutes(2),  # create_channel chains channel, logs, playback config and policy calls
+    # delete_channel waits for STOPPED, then drains up to 400 programs at <= 3 TPS (~135 s); start waits for RUNNING
+    "channels": Duration.minutes(5),
 }
 ENVIRONMENT: Final = {
     "catalog": ("CATALOG_TABLE",),
@@ -55,6 +58,7 @@ ENVIRONMENT: Final = {
         "MEDIA_BUCKET",
         "SOURCE_LOCATION",
         "CDN_DOMAIN",
+        "CDN_ENDPOINTS",
         "PACKAGE_PROFILES",
         "DEFAULT_LADDER_VERSION",
         "PLAYBACK_CONFIG_TEMPLATE",
@@ -97,6 +101,7 @@ class AgentTools(Construct):
         package_profiles: ``channel_assembly.package_profiles``.
         auto_stop_hours: ``channels.max_runtime_hours``; ``None`` disables auto-stop.
         max_agent_channels: ``channels.max_agent_channels``.
+        cdns: ``delivery.cdns``, the other CDNs whose playback URLs ``channels___get_channel`` lists.
         log_retention, removal_policy: of the function log groups.
         tools: tool specs by target; defaults to the registry.
 
@@ -117,6 +122,7 @@ class AgentTools(Construct):
         package_profiles: Sequence[str],
         auto_stop_hours: float | None,
         max_agent_channels: int,
+        cdns: Sequence[CdnEndpoint] = (),
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         tools: Mapping[str, Sequence[ToolSpec[Any, Any]]] | None = None,
@@ -155,6 +161,7 @@ class AgentTools(Construct):
             "MEDIACONVERT_QUEUE_ARN": media.mediaconvert_queue_arn,
             "SOURCE_LOCATION": media.source_location_name,
             "CDN_DOMAIN": media.cdn_base_url,
+            "CDN_ENDPOINTS": json.dumps([cdn.model_dump(mode="json") for cdn in cdns]),
             "PACKAGE_PROFILES": ",".join(package_profiles),
             "DEFAULT_LADDER_VERSION": media.default_ladder_version,
             "PLAYBACK_CONFIG_TEMPLATE": media.playback_configuration_template,

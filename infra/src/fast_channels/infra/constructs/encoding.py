@@ -21,7 +21,6 @@ from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as targets
 from aws_cdk import aws_iam as iam
-from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_lambda_destinations as destinations
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_mediaconvert as mediaconvert
@@ -41,8 +40,8 @@ from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.functions.ingest.library import job_template_name
 from fast_channels.infra import nag
 from fast_channels.infra.bundling import REPO_ROOT
+from fast_channels.infra.constructs._provider import acknowledge_framework, trace_waiter
 from fast_channels.infra.constructs.functions import FastFunction
-from fast_channels.infra.constructs.operator.nag_references import acknowledge_references
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
@@ -60,7 +59,6 @@ EVENT_MAX_AGE: Final = Duration.hours(6)
 _FUNCTIONS: Final = "fast_channels.functions.ingest"
 _SYNC: Final = "Invoked synchronously by Step Functions, which retries and catches its failures"
 _PROVIDER: Final = "Invoked synchronously by the custom-resource Provider framework, which reports failures"
-_XRAY: Final = ("xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets")
 
 
 class EncodingLadder(Construct):
@@ -240,7 +238,7 @@ class IngestPipeline(Construct):
             tracing_enabled=True,
             timeout=EXECUTION_TIMEOUT,
         )
-        acknowledge_references(
+        nag.acknowledge_references(
             self.state_machine.role,
             {
                 nag.wildcard_resource(): "MediaConvert CreateJob/GetJob/CancelJob (job ARNs exist only after "
@@ -627,7 +625,7 @@ class LadderProvisioner(Construct):
             tracing_enabled=True,
             timeout=Duration.hours(2),
         )
-        acknowledge_references(
+        nag.acknowledge_references(
             self.state_machine.role,
             {
                 nag.wildcard_resource(): "X-Ray has no resource-level permissions",
@@ -650,7 +648,7 @@ class LadderProvisioner(Construct):
         # The CDK-managed handler is a stack-wide singleton; its findings are acknowledged where it lives.
         handler = cast("IConstruct", cast("IConstruct", deployment.handler_role).node.scope)
         reason = "CDK BucketDeployment handler (aws-cdk-lib shapes it)"
-        acknowledge_references(
+        nag.acknowledge_references(
             handler,
             {
                 nag.LAMBDA_DLQ: f"{reason}, invoked synchronously by CloudFormation",
@@ -750,7 +748,7 @@ class LadderProvisioner(Construct):
         on_event.function.add_environment("PROVISION_STATE_MACHINE_ARN", self.state_machine.state_machine_arn)
         self.state_machine.grant_start_execution(on_event.function)
         self.state_machine.grant_execution(is_complete.function, "states:DescribeExecution")
-        acknowledge_references(
+        nag.acknowledge_references(
             _role(is_complete),
             {nag.wildcard_resource(f"{_executions(self.state_machine)}:*"): "Poll provisioning executions"},
         )
@@ -773,8 +771,8 @@ class LadderProvisioner(Construct):
                 destination=waiter_logs, level=sfn.LogLevel.ALL, include_execution_data=True
             ),
         )
-        _trace_waiter(provider)
-        _acknowledge_framework(provider, on_event.function, is_complete.function)
+        trace_waiter(provider)
+        acknowledge_framework(provider, on_event.function, is_complete.function)
         return provider
 
     def _kit_handler(self, id: str, name: str, description: str) -> FastFunction:
@@ -893,7 +891,7 @@ def _allow(
         iam.PolicyStatement(actions=list(actions), resources=list(resources), conditions=conditions)
     )
     if why is not None:
-        acknowledge_references(role, {nag.wildcard_resource(r): why for r in resources if "*" in r})
+        nag.acknowledge_references(role, {nag.wildcard_resource(r): why for r in resources if "*" in r})
 
 
 def _executions(state_machine: sfn.IStateMachine) -> str:
@@ -903,37 +901,4 @@ def _executions(state_machine: sfn.IStateMachine) -> str:
         resource="execution",
         resource_name=Fn.select(6, Fn.split(":", state_machine.state_machine_arn)),
         arn_format=ArnFormat.COLON_RESOURCE_NAME,
-    )
-
-
-def _trace_waiter(provider: cr.Provider) -> None:
-    """X-Ray tracing for the Provider's waiter state machine, whose L2 offers logging options only."""
-    waiter = provider.node.find_child("waiter-state-machine")
-    cast(
-        "sfn.CfnStateMachine", waiter.node.find_child("Resource")
-    ).tracing_configuration = sfn.CfnStateMachine.TracingConfigurationProperty(enabled=True)
-    role = cast("iam.Role", waiter.node.find_child("Role"))
-    role.add_to_principal_policy(iam.PolicyStatement(actions=list(_XRAY), resources=["*"]))
-
-
-def _acknowledge_framework(provider: cr.Provider, *handlers: lambda_.IFunction) -> None:
-    """cdk-nag findings of the CDK Provider framework, whose functions and roles this module does not shape.
-
-    The framework (and its waiter) invoke ``handlers`` and the framework functions as ``<function ARN>:*``.
-    """
-    invoked = [*handlers, *(c for c in provider.node.find_all() if isinstance(c, lambda_.Function))]
-    acknowledge_references(
-        provider,
-        {
-            nag.LAMBDA_DLQ: _PROVIDER,
-            nag.managed_policy("service-role/AWSLambdaBasicExecutionRole"): "Provider framework function role",
-            nag.wildcard_resource(): "X-Ray tracing, and the waiter's CloudWatch Logs delivery actions, have no "
-            "resource-level permissions",
-            "Serverless-LambdaDefaultMemorySize": "Provider framework functions only relay requests",
-            **{
-                nag.wildcard_resource(f"{function.function_arn}:*"): "Provider framework: invoke the function and "
-                "its versions"
-                for function in invoked
-            },
-        },
     )

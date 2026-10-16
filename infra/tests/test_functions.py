@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from aws_cdk import Duration
+from aws_cdk import Duration, Stack
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_stepfunctions as sfn
@@ -32,17 +32,18 @@ def fast_function(scope: Any, id: str, **kwargs: Any) -> FastFunction:
 class Templates:
     media: Template
     operator: Template
-    deployment: Any
+    stacks: tuple[Stack, Stack]
 
 
 @pytest.fixture
 def templates(fresh_deployment: Factory) -> Templates:
-    """FAST functions, plus plain functions and state machines as other constructs would create them."""
+    """FAST functions, plus plain functions and state machines as other constructs would create them, in two stacks
+    of a stage that get its defaults (the real Media and Operator stacks are tested elsewhere)."""
     d = fresh_deployment()
-    media = d.stage.media
+    media, operator = Stack(d.stage, "MediaUnderTest"), Stack(d.stage, "OperatorUnderTest")
     fast_function(media, "Catalog", environment={"CATALOG_TABLE": "t"}, timeout=Duration.seconds(10), memory_size=256)
     fast_function(media, "Library")
-    fast_function(d.stage.operator, "Tools")
+    fast_function(operator, "Tools")
     plain = {
         "runtime": lambda_.Runtime.PYTHON_3_14,
         "handler": "index.handler",
@@ -59,7 +60,7 @@ def templates(fresh_deployment: Factory) -> Templates:
         definition_body=sfn.DefinitionBody.from_chainable(sfn.Pass(media, "Other")),
         logs=sfn.LogOptions(destination=logs.LogGroup(media, "OwnLogs"), level=sfn.LogLevel.ERROR),
     )
-    return Templates(d.template(media), d.template(d.stage.operator), d)
+    return Templates(d.template(media), d.template(operator), (media, operator))
 
 
 def resource(template: Template, type_: str, logical_prefix: str) -> Mapping[str, Any]:
@@ -119,7 +120,7 @@ def test_one_code_asset_per_stack(templates: Templates) -> None:
 
     assert len(keys) == 1
     assert function(templates.operator, "Tools")["Code"]["S3Key"] in keys
-    for stack in (templates.deployment.stage.media, templates.deployment.stage.operator):
+    for stack in templates.stacks:
         assert stack.node.try_find_child("FastFunctionsCode") is not None
 
 

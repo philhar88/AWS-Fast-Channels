@@ -33,6 +33,58 @@
           "MemoryId"
         ]
       }
+    },
+    "PublishOutputFnGetAttMemory3232ACABMemoryArnEE7806EB": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Memory3232ACAB",
+          "MemoryArn"
+        ]
+      }
+    },
+    "PublishOutputFnGetAttStorageIngestF6E638ADArnD024EC5F": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StorageIngestF6E638AD",
+          "Arn"
+        ]
+      }
+    },
+    "PublishOutputFnGetAttStorageLogs2A2D4D26Arn595046A4": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StorageLogs2A2D4D26",
+          "Arn"
+        ]
+      }
+    },
+    "PublishOutputFnGetAttStorageMedia9333CB25Arn75C441A1": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StorageMedia9333CB25",
+          "Arn"
+        ]
+      }
+    },
+    "PublishOutputRefCatalog742F25FDA41764CC": {
+      "Value": {
+        "Ref": "Catalog742F25FD"
+      }
+    },
+    "PublishOutputRefLibrary9A29C343BD63F0CC": {
+      "Value": {
+        "Ref": "Library9A29C343"
+      }
+    },
+    "PublishOutputRefStorageIngestF6E638AD111F7663": {
+      "Value": {
+        "Ref": "StorageIngestF6E638AD"
+      }
+    },
+    "PublishOutputRefStorageMedia9333CB25D888E8BE": {
+      "Value": {
+        "Ref": "StorageMedia9333CB25"
+      }
     }
   },
   "Parameters": {

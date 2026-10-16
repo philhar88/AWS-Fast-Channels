@@ -24,6 +24,8 @@ ACCOUNT = "123456789012"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CDK_CONTEXT: dict[str, Any] = json.loads((REPO_ROOT / "cdk.json").read_text())["context"]
 type Overrides = Mapping[str, Any]
+WEAK_REFERENCE_OUTPUT = "PublishOutput"
+"""Name prefix of the outputs behind weak cross-stack references (``Fn::GetStackOutput``)."""
 
 
 def context(overrides: Overrides | None = None) -> dict[str, Any]:
@@ -106,6 +108,16 @@ def _normalized(template: Template) -> dict[str, Any]:
 def normalized() -> Callable[[Template], dict[str, Any]]:
     """Template JSON with asset hashes replaced, so snapshots only change when the infrastructure does."""
     return _normalized
+
+
+def _named_outputs(template: Template) -> set[str]:
+    return {name for name in template.find_outputs("*") if not name.startswith(WEAK_REFERENCE_OUTPUT)}
+
+
+@pytest.fixture
+def named_outputs() -> Callable[[Template], set[str]]:
+    """Output keys of a template, without the outputs CDK generates for weak cross-stack references."""
+    return _named_outputs
 
 
 @pytest.fixture

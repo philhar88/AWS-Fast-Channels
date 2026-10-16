@@ -737,13 +737,19 @@ def _channel_metrics(channel: str) -> tuple[cw.Metric, cw.MathExpression]:
             period=_PERIOD,
         )
 
+    e4, e5 = _metric_id("e4", channel), _metric_id("e5", channel)
     errors = cw.MathExpression(
-        expression="FILL(e4, 0) + FILL(e5, 0)",
-        using_metrics={"e4": metric("4xxErrorCount"), "e5": metric("5xxErrorCount")},
+        expression=f"FILL({e4}, 0) + FILL({e5}, 0)",
+        using_metrics={e4: metric("4xxErrorCount"), e5: metric("5xxErrorCount")},
         period=_PERIOD,
         label=f"{channel} 4xx + 5xx",
     )
     return metric("RequestCount"), errors
+
+
+def _metric_id(name: str, resource: str) -> str:
+    """Math-expression metric id unique per resource: a dashboard graph of several channels shares one id space."""
+    return f"{name}_{resource.replace('-', '_')}"
 
 
 def _ads_metrics(configuration: str) -> dict[str, cw.IMetric]:
@@ -756,12 +762,13 @@ def _ads_metrics(configuration: str) -> dict[str, cw.IMetric]:
             period=_PERIOD,
         )
 
+    errors, timeouts = _metric_id("errors", configuration), _metric_id("timeouts", configuration)
     return {
         "errors": cw.MathExpression(
-            expression="FILL(errors, 0) + FILL(timeouts, 0)",
+            expression=f"FILL({errors}, 0) + FILL({timeouts}, 0)",
             using_metrics={
-                "errors": metric("AdDecisionServer.Errors", cw.Stats.SUM),
-                "timeouts": metric("AdDecisionServer.Timeouts", cw.Stats.SUM),
+                errors: metric("AdDecisionServer.Errors", cw.Stats.SUM),
+                timeouts: metric("AdDecisionServer.Timeouts", cw.Stats.SUM),
             },
             period=_PERIOD,
             label=f"{configuration} ADS errors + timeouts",

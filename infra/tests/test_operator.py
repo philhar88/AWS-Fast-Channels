@@ -30,9 +30,9 @@ from fast_channels.infra.constructs.operator import agent_bundle, cedar
 from fast_channels.infra.constructs.operator.console import ConsoleConfig, OperatorConsole, content_security_policy
 from fast_channels.infra.constructs.operator.deliveries import LogDelivery, LogType, vended_log_group
 from fast_channels.infra.constructs.operator.gateway import CONTROL_PLANE_WRITES, INSTRUCTIONS
-from fast_channels.infra.constructs.operator.nag_references import flatten
 from fast_channels.infra.constructs.operator.runtime import model_invoke_statements
 from fast_channels.infra.constructs.operator.tools import ENVIRONMENT, registry_tools
+from fast_channels.infra.nag import flatten
 from fast_channels.infra.stacks.data import MEMORY_PREFERENCE_NAMESPACE, DataStack
 from fast_channels.infra.stacks.media import ChannelExports, MediaExports
 from fast_channels.infra.stacks.operator import OperatorStack

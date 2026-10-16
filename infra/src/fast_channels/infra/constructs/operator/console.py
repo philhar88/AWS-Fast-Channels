@@ -15,7 +15,7 @@ from constructs import Construct
 from fast_channels.core.specs import playback_urls
 from fast_channels.infra import nag
 from fast_channels.infra.bundling import REPO_ROOT
-from fast_channels.infra.constructs.operator.nag_references import acknowledge_references, file_asset_objects
+from fast_channels.infra.nag import acknowledge_references, file_asset_objects
 
 if TYPE_CHECKING:
     from fast_channels.infra.stacks.media import ChannelExports

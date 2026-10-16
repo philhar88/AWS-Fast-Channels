@@ -179,7 +179,8 @@ def _known_profiles(names: tuple[str, ...]) -> tuple[str, ...]:
 
 class LaddersConfig(_Section):
     builtin: tuple[str, ...] = ("standard",)
-    """Built-in ladders (``ladders/<name>.toml``) provisioned at deploy time with their slate and house-ad kit."""
+    """Built-in ladders (``ladders/<name>.toml``), each deployed as a MediaConvert job template. Slate and house-ad
+    kits are encoded at deploy time for the default ladder and every ladder an IaC channel uses."""
     default: str = "standard"
     """Ladder used when a request names none (ingest, agent proposals); one of ``builtin``."""
 
@@ -218,7 +219,7 @@ class ChannelAssemblyConfig(_Section):
 class ChannelConfig(_Section):
     name: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", max_length=40)
     """Channel Assembly channel name. Must start with ``<prefix>-``; ``<prefix>-agent-`` is reserved for channels
-    the agent creates."""
+    the agent creates. ``{prefix}`` is replaced with the deployment prefix (the default is ``{prefix}-demo``)."""
     ladder: str = "standard"
     """Built-in ladder of every program, slate and house ad on this channel (one of ``ladders.builtin``)."""
     outputs: tuple[str, ...] = DEFAULT_PACKAGE_PROFILES
@@ -256,11 +257,18 @@ class ChannelsConfig(_Section):
 
 class CdnEndpoint(_Section):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
-    """Short CDN name used in playback-URL listings, e.g. ``cdn-b``."""
+    """Short CDN name used in playback-URL listings, e.g. ``cdn-b`` (``cloudfront`` is reserved for the primary)."""
     manifest_base: str = Field(pattern=_HTTPS_URL)
     """Base URL this CDN serves MediaTailor manifests under (chains to CloudFront)."""
     content_base: str = Field(pattern=_HTTPS_URL)
     """Base URL this CDN serves content segments under."""
+
+    @field_validator("name")
+    @classmethod
+    def _not_reserved(cls, name: str) -> str:
+        if name == "cloudfront":
+            raise ValueError("'cloudfront' is reserved for the deployment's own distribution")
+        return name
 
     @field_validator("manifest_base", "content_base")
     @classmethod
@@ -323,8 +331,6 @@ class AgentConfig(_Section):
     """Models the agent may be switched to at runtime (SSM ModelSpec); the runtime role may invoke only these."""
     admin_email: str | None = Field(default=None, pattern=_EMAIL)
     """Email of the first ``fast-admins`` user (invited by Cognito). Omit to create users yourself."""
-    guardrail_checks: bool = False
-    """Screen catalog tool results for prompt attacks with Bedrock Guardrails."""
 
     @model_validator(mode="after")
     def _model_is_allowed(self) -> Self:
@@ -458,6 +464,7 @@ class FastChannelsConfig(_Section):
             raise ConfigError(f"context {CONTEXT_KEY!r} must be a JSON object, got {data!r}")
         for key in sorted(k for k in context if k.startswith(f"{CONTEXT_KEY}.")):
             _merge_path(data, key.removeprefix(f"{CONTEXT_KEY}.").split("."), _decode(context[key]))
+        _expand_prefix(data)
         try:
             return cls.model_validate(data, context={"region": region})
         except ValidationError as error:
@@ -466,6 +473,17 @@ class FastChannelsConfig(_Section):
 
 def _mixed_codec_outputs(ladder: Ladder, outputs: tuple[str, ...]) -> list[str]:
     return [o for o in outputs if len({r.codec for r in ladder.video if profile(o).selects(r)}) > 1]
+
+
+def _expand_prefix(data: dict[str, Any]) -> None:
+    """Replace ``{prefix}`` in IaC channel names, so one default channel works for every deployment prefix."""
+    prefix = data.get("prefix")
+    channels = data.get("channels")
+    if not isinstance(prefix, str) or not isinstance(channels, dict):
+        return
+    for channel in channels.get("iac") or ():
+        if isinstance(channel, dict) and isinstance(channel.get("name"), str):
+            channel["name"] = channel["name"].replace("{prefix}", prefix)
 
 
 def _decode(value: Any) -> Any:

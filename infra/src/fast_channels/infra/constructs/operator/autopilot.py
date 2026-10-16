@@ -16,7 +16,7 @@ from constructs import Construct
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.functions import FastFunction
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
-from fast_channels.infra.constructs.operator.nag_references import acknowledge_references
+from fast_channels.infra.nag import acknowledge_references
 
 HANDLER: Final = "fast_channels.functions.autopilot.handler"
 TIMEOUT: Final = Duration.minutes(15)

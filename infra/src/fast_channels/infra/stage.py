@@ -1,6 +1,6 @@
 """``FastChannelsStage``: one FAST Channels deployment, as a set of stacks."""
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from aws_cdk import Aspects, Environment, Stage, Tags
 
@@ -33,7 +33,8 @@ def stage_id(prefix: str) -> str:
 
 class FastChannelsStage(Stage):
     """Data → Media → Operator (if ``agent.enabled``), plus Edge (in us-east-1, when ``env.region`` is another
-    region) and AccountBaseline (if ``observability.transaction_search`` is ``enable``).
+    region; named ``<stage>-Edge-<region>``) and AccountBaseline (if ``observability.transaction_search`` is
+    ``enable``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -57,7 +58,7 @@ class FastChannelsStage(Stage):
             property_injectors=[LambdaDefaults(log_groups), StateMachineDefaults(log_groups)],  # type: ignore[list-item]
         )
         tags = {"fast:app": config.prefix, "fast:owner": OWNER_TAG}
-        stacks = {"tags": tags, "termination_protection": config.removal is Removal.RETAIN}
+        stacks: dict[str, Any] = {"tags": tags, "termination_protection": config.removal is Removal.RETAIN}
 
         self.data = DataStack(self, "Data", config=config, **stacks)
         self.media = MediaStack(self, "Media", config=config, data=self.data.exports, **stacks)
@@ -70,7 +71,7 @@ class FastChannelsStage(Stage):
         self.operator: OperatorStack | None = None
         if config.agent.enabled:
             self.operator = OperatorStack(
-                self, "Operator", config=config, data=self.data.exports, media=self.media, **stacks
+                self, "Operator", config=config, data=self.data.exports, media=self.media.exports, **stacks
             )
             self.operator.add_stack_dependency(self.data, "AgentCore Memory is ACTIVE before the agent plane")
             self.operator.add_stack_dependency(self.media)
@@ -79,12 +80,14 @@ class FastChannelsStage(Stage):
 
         self.edge: EdgeStack | None = None
         if env.region != EDGE_REGION:
-            # Integration point: also pass distribution=self.media.distribution once MediaStack exposes it.
             self.edge = EdgeStack(
                 self,
                 "Edge",
+                # One Edge stack per deployment region: the same prefix may be deployed in several regions.
+                stack_name=f"{self.stage_name}-Edge-{env.region}",
                 config=config,
                 data=self.data.exports,
+                distribution=self.media.distribution,
                 env=Environment(account=env.account, region=EDGE_REGION),
                 **stacks,
             )
