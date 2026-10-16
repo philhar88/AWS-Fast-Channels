@@ -1,0 +1,17 @@
+.player {
+  position: relative;
+}
+
+.video {
+  display: block;
+  inline-size: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 8px;
+}
+
+.badge {
+  position: absolute;
+  inset-block-start: 8px;
+  inset-inline-start: 8px;
+}

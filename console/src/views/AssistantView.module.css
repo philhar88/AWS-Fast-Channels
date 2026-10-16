@@ -1,0 +1,13 @@
+.conversation {
+  block-size: max(360px, calc(100vh - 420px));
+  overflow-y: auto;
+  padding-inline-end: 4px;
+}
+
+.markdown > :first-child {
+  margin-block-start: 0;
+}
+
+.markdown > :last-child {
+  margin-block-end: 0;
+}
