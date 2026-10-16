@@ -27,8 +27,14 @@ BREAK_SLATE_GOPS: Final[tuple[int, ...]] = (15, 30, 45, 60)
 """Ad-break slate lengths in GOPs (~30/60/90/120 s at 2 s GOPs). Channel Assembly sets a break's duration to its
 slate's duration, so breaks can only have these lengths (channel-assembly.md §5.3)."""
 
-HOUSE_AD_GOPS: Final[tuple[int, ...]] = (7, 15)
-"""House-ad creative lengths in GOPs (~14/30 s); frame-exact so pods never overshoot an avail."""
+HOUSE_AD_GOPS: Final[tuple[int, ...]] = (15, 15)
+"""House-ad creative lengths in GOPs (~30 s each). Every break slate is a whole number of these, so a pod that cycles
+through the house ads fills any break exactly: MediaTailor drops the whole avail when the time left unfilled exceeds
+the playback configuration's personalization threshold (LEFTOVER_AVAIL_EXCEEDED_THRESHOLD, seen live with 14 + 30 s
+ads in a 60 s break)."""
+
+KIT_SPEC: Final = f"breaks={'+'.join(map(str, BREAK_SLATE_GOPS))};ads={'+'.join(map(str, HOUSE_AD_GOPS))}"
+"""Identifies the kit's slate and house-ad lengths; part of a kit's fingerprint, so changing them re-provisions it."""
 
 LEAD_TIME_MS: Final[Millis] = 10 * 60_000  # CA docs recommend adding VOD programs >= 10 min ahead (§5.3)
 MAX_PROGRAMS: Final = 400  # Channel Assembly quota: programs per channel (§5.6)

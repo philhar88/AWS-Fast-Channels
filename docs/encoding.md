@@ -379,7 +379,8 @@ before a channel can switch.
   why every cue point is snapped first.
 - **Accelerated transcoding** applies to long jobs; video-generator inputs (kit slates and house ads) never accelerate.
   Verified with the deinterlacer: the 12-minute Tears of Steel encode ran `ACCELERATED` in 5 min 19 s, against
-  23 min 53 s `NOT_ACCELERATED` with the earlier `ADAPTIVE` deinterlacer. A job's `AccelerationStatus` stays
+  23 min 53 s `NOT_ACCELERATED` with the earlier `ADAPTIVE` deinterlacer, and Elephants Dream (10:54) in 3 min 47 s
+  against 35 min 40 s (the full `standard` ladder: 16 video renditions including AV1, 3 audio). A job's `AccelerationStatus` stays
   `IN_PROGRESS` until it finishes.
 - **Untagged sources** raise MediaConvert colour-space warnings 230001/230005. They are harmless.
 - **Captions** are not part of v3.0 ([ADR-0013](adr/0013-captions-roadmap.md)).

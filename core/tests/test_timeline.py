@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from fast_channels.core.timeline import (
     BREAK_SLATE_GOPS,
     HOUSE_AD_GOPS,
+    KIT_SPEC,
     LEAD_TIME_MS,
     BreakPolicy,
     Daypart,
@@ -85,7 +86,7 @@ def test_grid_is_frame_exact(grid: Grid) -> None:
 
 def test_break_catalogue_constants() -> None:
     assert BREAK_SLATE_GOPS == (15, 30, 45, 60)
-    assert HOUSE_AD_GOPS == (7, 15)
+    assert HOUSE_AD_GOPS == (15, 15)
 
 
 def test_break_policy_only_known_slates() -> None:
@@ -285,3 +286,14 @@ def test_plan_uses_the_ladder_grid(standard: Ladder) -> None:
     )
     assert plan.programs[0].breaks[0].duration_ms == standard.grid.gop_exact(30)
     assert Plan.model_validate(plan.model_dump(mode="json")) == plan
+
+
+def test_every_break_slate_is_a_whole_number_of_house_ads() -> None:
+    """A pod cycling through the house ads fills every break exactly (no LEFTOVER_AVAIL_EXCEEDED_THRESHOLD)."""
+    cycle = sum(HOUSE_AD_GOPS)
+    for gops in BREAK_SLATE_GOPS:
+        filled, ads = 0, iter(HOUSE_AD_GOPS * gops)
+        while filled < gops:
+            filled += next(ads)
+        assert filled == gops, (gops, cycle)
+    assert KIT_SPEC == "breaks=15+30+45+60;ads=15+15"

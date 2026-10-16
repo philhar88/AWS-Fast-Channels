@@ -101,7 +101,7 @@ def test_ready_writes_the_vast_pod_and_marks_the_ladder(
             vod_source=None,
             creative={"creative_id": f"c{n}", "hls_uri": f"h{n}", "dash_uri": f"d{n}"},
         )
-        for n, d in ((1, 14014), (2, 30030))
+        for n, d in ((1, 30030), (2, 30030))
     ]
     assets = [child("filler", 30030), *(child(f"break-{g}", g * 2002) for g in BREAK_SLATE_GOPS), *ads]
     context = {
@@ -111,6 +111,7 @@ def test_ready_writes_the_vast_pod_and_marks_the_ladder(
         "correlation_id": "kit-1",
         "width": 1920,
         "height": 1080,
+        "pod_fill_ms": 120120,
     }
 
     result = kit.handler({"step": "ready", "kit": context, "assets": assets}, lambda_context)
@@ -120,13 +121,14 @@ def test_ready_writes_the_vast_pod_and_marks_the_ladder(
         "kit_fingerprint": "fp",
         "filler": "filler-vod",
         "break_slates": {str(g): f"break-{g}-vod" for g in BREAK_SLATE_GOPS},
-        "house_ads": ["c2", "c1"],
+        "house_ads": ["c1", "c2"],
         "vast_key": vast_key(STANDARD.version),
         "vast_url": f"https://media.example.com/{vast_key(STANDARD.version)}",
     }
     vast = ET.fromstring(objects.objects[vast_key(STANDARD.version)])
-    assert [ad.get("sequence") for ad in vast.iter(f"{VAST}Ad")] == ["1", "2"]
-    assert [d.text for d in vast.iter(f"{VAST}Duration")] == ["00:00:30.030", "00:00:14.014"]
+    # The pod cycles through the house ads until it covers the longest break slate (4 x 30.03 s = 120.12 s).
+    assert [ad.get("sequence") for ad in vast.iter(f"{VAST}Ad")] == ["1", "2", "3", "4"]
+    assert [d.text for d in vast.iter(f"{VAST}Duration")] == ["00:00:30.030"] * 4
     assert objects.objects[kit.BEACON_KEY] == kit.BEACON_GIF
     assert objects.cache_control[kit.BEACON_KEY] == "no-store"
 

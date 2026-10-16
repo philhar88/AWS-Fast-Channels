@@ -19,7 +19,7 @@ from aws_cdk import aws_stepfunctions_tasks as tasks
 from aws_cdk import custom_resources as cr
 from constructs import Construct, IConstruct
 
-from fast_channels.core.timeline import BREAK_SLATE_GOPS
+from fast_channels.core.timeline import BREAK_SLATE_GOPS, KIT_SPEC
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
 from fast_channels.infra.bundling import REPO_ROOT
@@ -307,6 +307,7 @@ class LadderKit(Construct):
                 "ContentBaseUrl": pipeline.content_base_url,
                 "PackageProfiles": ",".join(pipeline.package_profiles),
                 "SourceLocation": pipeline.source_location_name,
+                "KitSpec": KIT_SPEC,
             },
         )
         self.resource.node.add_dependency(ladder, provisioner.brand)

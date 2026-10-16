@@ -275,3 +275,14 @@ def test_playback_urls() -> None:
         },
         "dash-avc": {"dash": f"{CDN}/v1/dash/h/fast-demo/dash-avc.mpd"},
     }
+
+
+def test_vast_pod_repeats_creatives_to_cover_the_longest_break() -> None:
+    ads = [specs.Creative(creative_id=f"house-{n}", duration_ms=30030, hls_uri="h", dash_uri="d") for n in (1, 2)]
+    root = ET.fromstring(specs.vast_pod(creatives=ads, content_base_url=CDN, fill_ms=120120))
+    pod = root.findall("v:Ad", VAST_NS)
+    assert [a.get("sequence") for a in pod] == ["1", "2", "3", "4"]
+    assert [a.findtext(".//v:UniversalAdId", namespaces=VAST_NS) for a in pod] == ["house-1", "house-2"] * 2
+    assert len({a.get("id") for a in pod}) == 4  # Ad ids stay unique within the pod
+    with pytest.raises(ValueError, match="at least one creative"):
+        specs.vast_pod(creatives=[], content_base_url=CDN)

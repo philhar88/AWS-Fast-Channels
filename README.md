@@ -98,10 +98,10 @@ a person. Everything deploys from one AWS CDK (Python) app.
    with its catalog id, cue points and correlation id. That upload starts the ingest, exactly as a CMS dropping files
    into the bucket would ([integrate-your-cms.md](docs/integrate-your-cms.md#ingest-contract)). It prints a line
    after each upload, so a large title can take minutes with no output on a slow connection, and it returns once the
-   uploads are done, while encoding goes on. MediaConvert accelerates the long encodes, so expect every title to be
-   READY about 20 to 30 minutes after the uploads. That figure is an estimate: the seed measured before acceleration applied
-   took 57 minutes, and acceleration cut the Tears of Steel encode from 24 to 5 minutes. Follow the encodes in the
-   console's Library view, or pass `--wait`.
+   uploads are done, while encoding goes on. MediaConvert encodes the titles in parallel with accelerated
+   transcoding (measured: Elephants Dream, 10:54, in 3 min 47 s; Tears of Steel, 12:14, in 5 min 19 s), so expect
+   every title to be READY about 10 to 15 minutes after the uploads. Follow the encodes in the console's Library
+   view, or pass `--wait`.
 
    ```bash
    make seed                              # or: make seed SEED_ARGS="--wait"

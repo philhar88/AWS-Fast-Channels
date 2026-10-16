@@ -41,9 +41,11 @@ CUE_POINT_MS: Final = 30_000
 PROGRAMS: Final = 3
 LEAD: Final = timedelta(minutes=2, seconds=30)
 """From planning to the first program: publishing and starting the channel fit in it."""
-BREAK_POLICY: Final = {"cadence_minutes": 0.5, "min_gap_minutes": 0.25, "max_breaks": 1, "slate_gops": 15}
-"""One 30 s break per program, three in five minutes. The first break of new creatives airs its slate while
-MediaTailor imports them (NEW_CREATIVE), so ad fill is asserted from the second break on."""
+BREAK_POLICY: Final = {"cadence_minutes": 0.5, "min_gap_minutes": 0.25, "max_breaks": 1, "slate_gops": 30}
+"""One 60 s break per program, three in about seven minutes, each filled by a pod of two 30 s house ads (a break
+that one ad fills exactly would hide pod-fill problems such as LEFTOVER_AVAIL_EXCEEDED_THRESHOLD). The first break
+of new creatives airs its slate while MediaTailor imports them (NEW_CREATIVE), so ad fill is asserted from the
+second break on."""
 
 USER_AGENT: Final = "fast-channels-e2e/3.0"
 POLL_SECONDS: Final = 4.0

@@ -161,6 +161,7 @@ def begin(provision: Mapping[str, Any], execution: str, images: KitImages) -> di
         "correlation_id": correlation_id,
         "width": top.width,
         "height": top.height,
+        "pod_fill_ms": ladder.grid.gop_exact(max(BREAK_SLATE_GOPS)),
         "requests": [r.model_dump(mode="json", exclude_none=True) for r in requests],
     }
 
@@ -175,7 +176,7 @@ def ready(kit: Mapping[str, Any], assets: Sequence[Mapping[str, Any]]) -> dict[s
     logger.append_keys(ladder_version=ladder_version)
     by_label = {a["label"]: a for a in assets}
     ads = [by_label[house_ad_label(n)] for n in range(1, len(HOUSE_AD_GOPS) + 1)]
-    # Longest first: a frame-exact 15-GOP ad fills a 15-GOP break exactly; MediaTailor skips ads that overrun.
+    # Longest first; the pod repeats them to cover the longest break slate, each break being a whole number of ads.
     creatives = [
         Creative(
             creative_id=ad["creative"]["creative_id"],
@@ -191,7 +192,11 @@ def ready(kit: Mapping[str, Any], assets: Sequence[Mapping[str, Any]]) -> dict[s
     key = vast_key(ladder_version)
     store.write(
         key,
-        vast_pod(creatives=creatives, content_base_url=config.content_base_url).encode(),
+        vast_pod(
+            creatives=creatives,
+            content_base_url=config.content_base_url,
+            fill_ms=int(kit.get("pod_fill_ms", 0)),
+        ).encode(),
         cache_control=VAST_CACHE_CONTROL,
     )
     store.write(BEACON_KEY, BEACON_GIF, cache_control=BEACON_CACHE_CONTROL)

@@ -314,7 +314,7 @@ def _ad(sequence: int, c: Creative, beacon: str) -> str:
     size = f'width="{c.width}" height="{c.height}"'
     tracking = "".join(f'<Tracking event="{e}">{track(e)}</Tracking>' for e in QUARTILE_EVENTS)
     return (
-        f'<Ad id={quoteattr(f"ad-{c.creative_id}")} sequence="{sequence}"><InLine>'
+        f'<Ad id={quoteattr(f"ad-{sequence}-{c.creative_id}")} sequence="{sequence}"><InLine>'
         f"<AdSystem>fast-channels</AdSystem><AdTitle>{escape(c.creative_id)}</AdTitle>"
         f"<AdServingId>{escape(c.creative_id)}</AdServingId>"
         f'<Impression id="imp">{track("impression")}</Impression>'
@@ -330,15 +330,29 @@ def _ad(sequence: int, c: Creative, beacon: str) -> str:
     )
 
 
-def vast_pod(*, creatives: Sequence[Creative], content_base_url: str, beacon_path: str = "/ads/b.gif") -> str:
+def vast_pod(
+    *,
+    creatives: Sequence[Creative],
+    content_base_url: str,
+    fill_ms: int = 0,
+    beacon_path: str = "/ads/b.gif",
+) -> str:
     """Static VAST 4.2 pod of preconditioned creatives (streaming HLS + DASH only).
+
+    The creatives repeat in order until the pod lasts at least ``fill_ms`` (the longest break), because MediaTailor
+    fills an avail with the pod's ads in sequence and drops the avail when too much of it would stay unfilled.
 
     No progressive MP4: with AdConditioning NONE, MediaTailor would transcode it when streaming files cannot fill
     an avail, reintroducing the disproven transcode path (_review.md, SlateAdUrl). Impressions and quartiles hit a
     1x1 GIF on the CDN so they appear in CloudFront logs; VAST macros are not expanded by MediaTailor (e2e.md §7).
     """
+    if not creatives:
+        raise ValueError("a VAST pod needs at least one creative")
     beacon = f"{content_base_url.rstrip('/')}/{beacon_path.lstrip('/')}"
-    ads = "".join(_ad(n, c, beacon) for n, c in enumerate(creatives, start=1))
+    pod: list[Creative] = []
+    while not pod or sum(c.duration_ms for c in pod) < fill_ms:
+        pod.extend(creatives)
+    ads = "".join(_ad(n, c, beacon) for n, c in enumerate(pod, start=1))
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<VAST version="4.2" xmlns="http://www.iab.com/VAST">{ads}</VAST>\n'
 
 
