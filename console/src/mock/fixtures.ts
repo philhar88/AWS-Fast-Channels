@@ -1,13 +1,14 @@
 /** Fixture data for mock mode: one deployment with two channels, a small library and a rolling EPG. */
-import type { AppConfig, OutputPlayback } from "../lib/config";
+import type { AppConfig, ChannelPlayback, OutputPlayback } from "../lib/config";
 import type { Epg, EpgBreak, EpgProgram, Plan, PlannedProgram } from "../lib/schedule";
-import type { Asset, ChannelDetail, Ladder } from "../lib/tools";
+import type { Asset, ChannelDetail, ChannelSummary, Ladder } from "../lib/tools";
 
 /** Served by the `fast-mock-cdn` Vite plugin from `mock/cdn` (see scripts/mock-media.sh). */
 const CDN = new URL("/mock/cdn", window.location.href).href;
 const LADDER = "standard@3f9c2a71d0";
 const BREAK_MS = 60_060; // 30 GOPs of 2.002 s: the BREAK_SLATE_GOPS default
 const GOP_MS = 2_002;
+const SEGMENT_MS = 6_006; // every segment boundary common to all renditions is a valid break offset
 
 const hls: OutputPlayback = {
   ssai: `${CDN}/channel/ssai.m3u8`,
@@ -55,6 +56,7 @@ export const CATALOG: readonly Title[] = [
 ];
 
 const assetId = (contentId: string) => `${contentId}-${contentId.length.toString(16).padStart(2, "0")}a3f1`;
+/** Editorial break positions the plans use, on the segment grid. */
 const breakOffsets = (duration: number) => [300_300, 600_600].filter((offset) => offset < duration - 60_000);
 
 export const ASSETS: readonly Asset[] = [
@@ -64,12 +66,13 @@ export const ASSETS: readonly Asset[] = [
       kind: "content",
       ladder_version: LADDER,
       status: "READY",
+      owner: "pipeline",
       title: item.title,
       content_id: item.content_id,
       duration_ms: item.duration_ms,
-      break_offsets_ms: breakOffsets(item.duration_ms),
-      vod_source: `fast-${assetId(item.content_id)}`,
-      updated_at: "2026-10-15T21:14:03Z",
+      break_offset_count: Math.floor(item.duration_ms / SEGMENT_MS),
+      vod_source: `${assetId(item.content_id)}-standard_3f9c2a71d0`,
+      updated_at: "2026-10-15T21:14:03.000Z",
     }),
   ),
   ...[15, 30, 45, 60].map(
@@ -78,10 +81,12 @@ export const ASSETS: readonly Asset[] = [
       kind: "slate",
       ladder_version: LADDER,
       status: "READY",
+      owner: "pipeline",
       title: `Break slate, ${gops} GOPs`,
       duration_ms: gops * GOP_MS,
-      vod_source: `fast-slate-${gops}g`,
-      updated_at: "2026-10-15T20:02:41Z",
+      break_offset_count: 0,
+      vod_source: `slate-${gops}g-standard_3f9c2a71d0`,
+      updated_at: "2026-10-15T20:02:41.000Z",
     }),
   ),
   ...[7, 15].map(
@@ -90,9 +95,11 @@ export const ASSETS: readonly Asset[] = [
       kind: "ad",
       ladder_version: LADDER,
       status: "READY",
+      owner: "pipeline",
       title: `House ad, ${gops} GOPs`,
       duration_ms: gops * GOP_MS,
-      updated_at: "2026-10-15T20:05:12Z",
+      break_offset_count: 0,
+      updated_at: "2026-10-15T20:05:12.000Z",
     }),
   ),
   {
@@ -100,17 +107,21 @@ export const ASSETS: readonly Asset[] = [
     kind: "content",
     ladder_version: LADDER,
     status: "INGESTING",
+    owner: "pipeline",
     title: "Agent 327: Operation Barbershop",
     content_id: "agent327",
-    updated_at: "2026-10-16T11:52:37Z",
+    break_offset_count: 0,
+    updated_at: "2026-10-16T11:52:37.000Z",
   },
   {
     asset_id: "hdr-trailer-0b7731",
     kind: "content",
     ladder_version: LADDER,
     status: "FAILED",
+    owner: "pipeline",
     title: "HDR trailer (refused: HDR source into an SDR ladder)",
-    updated_at: "2026-10-16T09:31:08Z",
+    break_offset_count: 0,
+    updated_at: "2026-10-16T09:31:08.000Z",
   },
 ];
 
@@ -118,41 +129,76 @@ export const LADDERS: readonly Ladder[] = [
   {
     ladder_version: LADDER,
     status: "READY",
+    owner: "iac",
     description: "AVC 8 + HEVC 4 + AV1 4 + AAC 3, capped at 1080p (default)",
-    codecs: ["avc", "hevc", "av1"],
+    codecs: ["av1", "avc", "hevc"],
     renditions: 16,
     max_height: 1080,
     cost_per_minute_usd: 0.56,
-    kit: { filler: "slate-30g", break_slates: ["slate-15g", "slate-30g", "slate-45g", "slate-60g"], house_ads: ["house-ad-7g", "house-ad-15g"] },
+    kit: {
+      filler: "slate-30g-standard_3f9c2a71d0",
+      break_slates: [15, 30, 45, 60].map((gops) => `slate-${gops}g-standard_3f9c2a71d0`),
+      house_ads: ["house-ad-7g-standard_3f9c2a71d0", "house-ad-15g-standard_3f9c2a71d0"],
+    },
   },
   {
     ladder_version: "uhd@8b1e44c2f7",
     status: "PROVISIONING",
+    owner: "iac",
     description: "AVC 8 + HEVC Main10 7 + AV1 10-bit 7 + AAC 4, up to 2160p",
-    codecs: ["avc", "hevc", "av1"],
+    codecs: ["av1", "avc", "hevc"],
     renditions: 22,
     max_height: 2160,
-    cost_per_minute_usd: 1.09,
-    kit: { filler: null, break_slates: ["slate-15g"], house_ads: [] },
+    cost_per_minute_usd: 1.36,
+    kit: { break_slates: ["slate-15g-uhd_8b1e44c2f7"], house_ads: [] },
   },
   {
     ladder_version: "standard-av1@51d0e8b3aa",
     status: "PROPOSED",
-    description: "Agent proposal: AV1 rungs only, capped at 1080p",
+    owner: "agent",
+    description: "derived from standard@3f9c2a71d0",
     codecs: ["av1"],
     renditions: 4,
     max_height: 1080,
     cost_per_minute_usd: 0.21,
+    kit: { break_slates: [], house_ads: [] },
   },
 ];
+
+/** The mock deployment's other CDN (`delivery.cdns`): same paths, another host. Listed, never fetched. */
+function viaOtherCdn(playback: ChannelPlayback): ChannelPlayback {
+  const move = (url: string) => url.replace(CDN, "https://cdn-b.example.net");
+  return Object.fromEntries(
+    Object.entries(playback).map(([output, { ssai, sgai, dash }]): [string, OutputPlayback] => [
+      output,
+      { ...(ssai ? { ssai: move(ssai) } : {}), ...(sgai ? { sgai: move(sgai) } : {}), ...(dash ? { dash: move(dash) } : {}) },
+    ]),
+  );
+}
 
 export const CHANNELS: readonly ChannelDetail[] = MOCK_CONFIG.channels.map((channel) => ({
   name: channel.name,
   state: channel.name === "fast-demo" ? "RUNNING" : "STOPPED",
+  owner: "iac",
   ladder_version: channel.ladderVersion,
   outputs: Object.keys(channel.playback),
-  owner: "iac",
+  tier: "BASIC",
+  playback: channel.playback,
+  cdn_playback: [
+    { cdn: "cloudfront", playback: channel.playback },
+    { cdn: "cdn-b", playback: viaOtherCdn(channel.playback) },
+  ],
 }));
+
+/** A list_channels row: the summary fields of a channel. */
+export const summary = ({ name, state, owner, ladder_version, outputs, tier }: ChannelDetail): ChannelSummary => ({
+  name,
+  state,
+  owner,
+  ladder_version,
+  outputs,
+  ...(tier === undefined ? {} : { tier }),
+});
 
 const programName = (startMs: number, asset: string) =>
   `${new Date(startMs).toISOString().replaceAll(/[-:]/g, "").slice(0, 15)}-${asset}`;
@@ -191,44 +237,89 @@ export function mockEpg(channel: string, now = Date.now()): Epg {
   return { channel, generated_at: new Date(now).toISOString(), ladder_version: LADDER, programs };
 }
 
-/** The plan the mock agent proposes: family titles appended after the published schedule. */
+const FILLER_BEFORE_PLAN_MS = 120_000;
+
+/** The schedule___plan result the mock agent gets: family titles two minutes after the published schedule. */
 export function mockPlan(channel: string, now = Date.now()): Plan {
   const family = CATALOG.filter((item) => item.rating !== "TV-14");
-  let start = Date.parse(mockEpg(channel, now).programs.at(-1)?.end ?? new Date(now).toISOString());
-  const programs = [...family, ...family.slice(0, 1)].map((item, index): PlannedProgram => {
+  const scheduleEnd = Date.parse(mockEpg(channel, now).programs.at(-1)?.end ?? new Date(now).toISOString());
+  let start = scheduleEnd + FILLER_BEFORE_PLAN_MS;
+  const programs = family.map((item, index): PlannedProgram => {
+    const offsets = breakOffsets(item.duration_ms);
     const program: PlannedProgram = {
       name: programName(start, assetId(item.content_id)),
       asset_id: assetId(item.content_id),
-      vod_source: `fast-${assetId(item.content_id)}`,
+      vod_source: `${assetId(item.content_id)}-standard_3f9c2a71d0`,
       content_id: item.content_id,
       start_ms: start,
-      duration_ms: item.duration_ms + breakOffsets(item.duration_ms).length * BREAK_MS,
-      breaks: breakOffsets(item.duration_ms).map((offset_ms, breakIndex) => ({
+      start: new Date(start).toISOString(),
+      end: new Date(start + item.duration_ms + offsets.length * BREAK_MS).toISOString(),
+      duration_ms: item.duration_ms + offsets.length * BREAK_MS,
+      breaks: offsets.map((offset_ms, breakIndex) => ({
         offset_ms,
+        duration_ms: BREAK_MS,
         slate_gops: 30,
         event_id: 0x3c00 + index * 16 + breakIndex,
         upid: `FST3${item.content_id}`,
       })),
       ladder_version: LADDER,
+      title: item.title,
+      rating: item.rating,
+      genres: item.genres,
     };
     start += program.duration_ms;
     return program;
   });
-  const startMs = programs[0]?.start_ms ?? now;
+  const startMs = scheduleEnd + FILLER_BEFORE_PLAN_MS;
   return {
-    plan_id: "plan-7d41c0e2",
+    plan_id: `${channel}.7d41c0e2`,
     channel,
     ladder_version: LADDER,
-    programs,
-    violations: [
-      {
-        code: "REPEAT",
-        severity: "warning",
-        message: "Big Buck Bunny airs twice within 2 hours.",
-        program: programs.at(-1)?.name ?? null,
-      },
-    ],
     start_ms: startMs,
+    start: new Date(startMs).toISOString(),
     end_ms: start,
+    end: new Date(start).toISOString(),
+    programs,
+    violations: [{ code: "GAP", severity: "warning", message: `${FILLER_BEFORE_PLAN_MS / 1000} s of filler slate before the block` }],
+    publishable: true,
+    expires_at: new Date(now + 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
   };
+}
+
+/** The schedule___publish result for `plan`: the published block as guide entries. */
+export function mockPublished(plan: Plan, now = Date.now()) {
+  return {
+    channel: plan.channel,
+    generated_at: new Date(now).toISOString(),
+    ladder_version: plan.ladder_version,
+    programs: plan.programs.map(
+      (p): EpgProgram => ({
+        name: p.name,
+        title: p.title,
+        ...(p.content_id === undefined ? {} : { content_id: p.content_id }),
+        asset_id: p.asset_id,
+        start: p.start,
+        end: p.end,
+        ...(p.rating === undefined ? {} : { rating: p.rating }),
+        genres: p.genres,
+        breaks: p.breaks.map(({ offset_ms, duration_ms }) => ({ offset_ms, duration_ms })),
+        status: "PUBLISHED",
+      }),
+    ),
+    plan_id: plan.plan_id,
+    published: plan.programs.length,
+    start_ms: plan.start_ms,
+    start: plan.start,
+    end_ms: plan.end_ms,
+    end: plan.end,
+    alerts: [],
+  };
+}
+
+/** The schedule___get_schedule result: the guide from now on, where it ends and its gaps. */
+export function mockSchedule(channel: string, now = Date.now()) {
+  const epg = mockEpg(channel, now);
+  const upcoming = epg.programs.filter((p) => Date.parse(p.end) > now);
+  const last = upcoming.at(-1);
+  return { ...epg, programs: upcoming, ...(last ? { end_ms: Date.parse(last.end), end: last.end } : {}), gaps: [] };
 }

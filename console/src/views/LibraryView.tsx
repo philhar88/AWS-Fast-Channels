@@ -52,9 +52,9 @@ const ASSET_COLUMNS: TableProps.ColumnDefinition<Asset>[] = [
   { id: "kind", header: "Kind", cell: (a) => titleCase(a.kind), sortingField: "kind" },
   { id: "status", header: "Status", cell: (a) => <StatusIndicator type={ASSET_STATUS[a.status]}>{titleCase(a.status)}</StatusIndicator>, sortingField: "status" },
   { id: "duration", header: "Duration", cell: (a) => (a.duration_ms ? formatDuration(a.duration_ms) : "-") },
-  { id: "breaks", header: "Break points", cell: (a) => a.break_offsets_ms?.length ?? "-" },
+  { id: "breaks", header: "Break points", cell: (a) => (a.kind === "content" ? a.break_offset_count : "-") },
   { id: "ladder", header: "Ladder", cell: (a) => a.ladder_version },
-  { id: "updated", header: "Updated", cell: (a) => (a.updated_at ? formatDateTime(a.updated_at) : "-"), sortingField: "updated_at" },
+  { id: "updated", header: "Updated", cell: (a) => formatDateTime(a.updated_at), sortingField: "updated_at" },
 ];
 
 const LADDER_COLUMNS: TableProps.ColumnDefinition<Ladder>[] = [
@@ -79,13 +79,8 @@ function videoSummary(ladder: Ladder): string {
 }
 
 /** A ladder goes on air only with its kit: filler, break slates and house ads encoded on the same ladder. */
-function kitSummary(ladder: Ladder): string {
-  const kit = ladder.kit;
-  if (!kit) {
-    return "-";
-  }
-  const parts = [kit.filler ? "filler" : "no filler", `${kit.break_slates?.length ?? 0} slates`, `${kit.house_ads?.length ?? 0} house ads`];
-  return parts.join(", ");
+function kitSummary({ kit }: Ladder): string {
+  return [kit.filler ? "filler" : "no filler", `${kit.break_slates.length} slates`, `${kit.house_ads.length} house ads`].join(", ");
 }
 
 /** Media library (assets) and encoding ladders, read through the Gateway's library and encoding tools. */

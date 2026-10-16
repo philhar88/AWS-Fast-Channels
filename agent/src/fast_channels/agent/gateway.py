@@ -3,7 +3,8 @@
 The Gateway authorizes every tool call (Cedar) against the caller's JWT, so the agent forwards the
 ``Authorization`` header it received instead of using its own credentials. One MCP connection serves a whole run
 (every tool call of the agent loop) and is closed when the run ends. ``tools/list`` costs a round trip
-(~0.4 s measured) and depends only on who is asking, so tool definitions are cached per principal.
+(~0.4 s measured) and depends only on who is asking, so tool definitions are cached per principal; an empty list is
+never cached.
 """
 
 import asyncio
@@ -15,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from strands.tools.mcp import MCPAgentTool, MCPClient
 
+from fast_channels.agent.protocol import AgentRunError
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Hashable
 
@@ -24,6 +27,7 @@ SEPARATOR: Final = "___"
 """Gateway tool names are ``<target>___<tool>`` (three underscores; agentcore.md §5.1)."""
 CORRELATION_FIELD: Final = "correlation_id"
 TOOLS_TTL_SECONDS = 300.0
+EMPTY_RETRY_SECONDS = 1.0
 
 
 def is_gateway_tool(name: str) -> bool:
@@ -46,8 +50,9 @@ class GatewayTool(MCPAgentTool):
 class ToolCatalog:
     """Gateway tool definitions per principal, kept for a few minutes (Cedar filters ``tools/list`` by caller)."""
 
-    def __init__(self, ttl_seconds: float = TOOLS_TTL_SECONDS) -> None:
+    def __init__(self, ttl_seconds: float = TOOLS_TTL_SECONDS, retry_seconds: float = EMPTY_RETRY_SECONDS) -> None:
         self._ttl = ttl_seconds
+        self._retry_seconds = retry_seconds
         self._entries: dict[Hashable, tuple[float, list[Any]]] = {}
         self._lock = threading.Lock()
 
@@ -58,12 +63,29 @@ class ToolCatalog:
             self._entries = {k: v for k, v in self._entries.items() if v[0] > now}
             entry = self._entries.get(principal)
         if entry is None:
-            definitions = [tool.mcp_tool for tool in _list_all(client) if is_gateway_tool(tool.tool_name)]
+            definitions = self._list(client)
             with self._lock:
                 self._entries[principal] = (now + self._ttl, definitions)
         else:
             definitions = entry[1]
         return [GatewayTool(definition, client) for definition in definitions]
+
+    def _list(self, client: MCPClient) -> list[Any]:
+        """The registry tool definitions of ``tools/list``, asking once more after a pause when there are none.
+
+        Right after a deployment the Gateway listed no tools for a principal it listed 16 tools for minutes later
+        (the first autopilot run), so an empty list is retried and never cached; a second one fails the run.
+        """
+        for attempt in range(2):
+            if attempt:
+                time.sleep(self._retry_seconds)
+            if definitions := [tool.mcp_tool for tool in _list_all(client) if is_gateway_tool(tool.tool_name)]:
+                return definitions
+        raise AgentRunError(
+            "GATEWAY_UNAVAILABLE",
+            "The tool gateway lists no tools for this caller. Retry in a minute; if it persists, check that the "
+            "user is in an operator group.",
+        )
 
 
 @asynccontextmanager

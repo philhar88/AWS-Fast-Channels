@@ -1,42 +1,60 @@
-/** Schedule shapes shared by the agent (STATE_SNAPSHOT, CONTRACTS §G) and the EPG feed (CONTRACTS §I). */
+/**
+ * Schedule shapes shared by the agent's STATE_SNAPSHOT (the raw schedule___plan, schedule___publish and
+ * schedule___get_schedule results, CONTRACTS §G) and the EPG feed (CONTRACTS §I). Checked against
+ * `tool-schemas.json` by the contract test.
+ */
 
-/** `fast_channels.core.timeline.PlannedBreak`. */
+/** `fast_channels.core.timeline.PlannedBreak`: an ad break `offset_ms` into the content. */
 export interface PlannedBreak {
   readonly offset_ms: number;
+  readonly duration_ms: number;
   readonly slate_gops: number;
   readonly event_id: number;
   readonly upid: string;
 }
 
-/** `fast_channels.core.timeline.PlannedProgram`. */
+/** `schedule.PlannedRow`: a core `PlannedProgram` with its UTC times and catalog metadata. */
 export interface PlannedProgram {
   readonly name: string;
   readonly asset_id: string;
   readonly vod_source: string;
-  readonly content_id: string | null;
+  readonly content_id?: string;
   readonly start_ms: number;
+  readonly start: string;
+  readonly end: string;
+  /** On-air duration: content plus ad breaks. */
   readonly duration_ms: number;
   readonly breaks: readonly PlannedBreak[];
   readonly ladder_version: string;
+  readonly title: string;
+  readonly rating?: string;
+  readonly genres: readonly string[];
 }
 
-/** `fast_channels.core.timeline.Violation`. */
+/** `fast_channels.core.timeline.Violation`: errors block publishing, warnings do not. */
 export interface Violation {
   readonly code: string;
   readonly severity: "error" | "warning";
   readonly message: string;
-  readonly program: string | null;
+  /** The program (or picked asset id) the violation is about. */
+  readonly program?: string;
 }
 
-/** `fast_channels.core.timeline.Plan` as serialised by `model_dump(mode="json")`; `plan_id` when the tool adds it. */
+/** `schedule.PlanOutput`: the schedule___plan result. */
 export interface Plan {
+  readonly plan_id: string;
   readonly channel: string;
   readonly ladder_version: string;
+  readonly start_ms: number;
+  readonly start: string;
+  readonly end_ms: number;
+  readonly end: string;
   readonly programs: readonly PlannedProgram[];
   readonly violations: readonly Violation[];
-  readonly start_ms: number;
-  readonly end_ms: number;
-  readonly plan_id?: string;
+  /** False while any violation has error severity. */
+  readonly publishable: boolean;
+  /** The plan can be published until this UTC time. */
+  readonly expires_at: string;
 }
 
 export interface EpgBreak {
@@ -44,29 +62,27 @@ export interface EpgBreak {
   readonly duration_ms: number;
 }
 
+/** `epg.EpgProgram`. The feed file writes `null` for a missing content id or rating; tool results omit them. */
 export interface EpgProgram {
   readonly name: string;
   readonly title: string;
-  readonly content_id: string | null;
+  readonly content_id?: string | null;
   readonly asset_id: string;
   readonly start: string;
   readonly end: string;
-  readonly rating: string | null;
+  readonly rating?: string | null;
   readonly genres: readonly string[];
   readonly breaks: readonly EpgBreak[];
   readonly status: "PLANNED" | "PUBLISHED" | "AIRED";
 }
 
-/** `epg/<channel>.json` on the media CDN. */
+/** `epg/<channel>.json` on the media CDN; also the core of the schedule___publish and get_schedule results. */
 export interface Epg {
   readonly channel: string;
   readonly generated_at: string;
   readonly ladder_version: string;
   readonly programs: readonly EpgProgram[];
 }
-
-/** True when the plan has no error-severity violations (mirrors `Plan.ok` in core). */
-export const planIsPublishable = (plan: Plan): boolean => plan.violations.every((v) => v.severity !== "error");
 
 /**
  * Fetches a channel's EPG from `<epgBaseUrl>/<channel>.json`. A channel that has never been published has no feed

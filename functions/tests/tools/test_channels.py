@@ -12,6 +12,7 @@ import pytest
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 from botocore.stub import ANY, Stubber
+from pydantic import ValidationError
 
 from fast_channels.core import specs
 from fast_channels.core.ladder import Ladder
@@ -222,6 +223,40 @@ def test_get_channel_returns_playback_urls_per_output(aws_stubs: SimpleNamespace
         "2026-10-16T09:20:00Z",
         described("fast-demo", "RUNNING")["Arn"],
     )
+    assert result.cdn_playback is None  # one CDN: no per-CDN listing
+
+
+def test_get_channel_lists_playback_urls_per_cdn_primary_first(
+    aws_stubs: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = {"manifest_base": "https://cdn-b.example.net", "content_base": "https://media.example.com"}
+    endpoints = [{"name": "cdn-b", **other}, {"name": channels.PRIMARY_CDN, **other}]  # the primary cannot be renamed
+    monkeypatch.setenv("CDN_ENDPOINTS", json.dumps(endpoints))
+    settings.cache_clear()
+    get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
+    no_schedule(aws_stubs.scheduler, "fast-demo")
+
+    result = channels.get_channel(ChannelInput(channel="fast-demo"), CTX)
+
+    assert result.cdn_playback is not None
+    primary, alternate = result.cdn_playback
+    assert (primary.cdn, primary.playback) == ("cloudfront", result.playback)
+    assert alternate.cdn == "cdn-b"
+    assert alternate.playback == {
+        "hls": {
+            "ssai": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8",
+            "sgai": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
+        },
+        "dash-avc": {"dash": "https://cdn-b.example.net/v1/dash/1bab6b42/fast-demo/dash-avc.mpd"},
+    }
+    assert "cdn_playback" in result.model_dump(exclude_none=True)
+
+
+def test_channel_owners_are_iac_or_agent() -> None:
+    assert channels.ListChannelsInput(owner="agent").owner is store.Owner.AGENT
+    with pytest.raises(ValidationError):
+        channels.ListChannelsInput(owner="pipeline")
 
 
 def test_get_channel_reads_prefixes_from_the_playback_configuration(aws_stubs: SimpleNamespace) -> None:

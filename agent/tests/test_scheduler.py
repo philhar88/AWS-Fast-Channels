@@ -6,11 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+import pytest
 from ag_ui.core import RunAgentInput
 from strands.types.exceptions import MCPClientInitializationError
 
 from fast_channels.agent.hooks import PENDING_APPROVALS_KEY, ToolGuard
-from fast_channels.agent.protocol import Mode
+from fast_channels.agent.protocol import AgentRunError, Mode
 from fast_channels.agent.scheduler import Scheduler
 from fast_channels.agent.testing import (
     AUTOPILOT_CLAIMS,
@@ -216,13 +217,18 @@ def test_missing_token_ends_the_run_with_run_error(harness: HarnessFactory) -> N
     assert events[-1]["code"] == "UNAUTHENTICATED"
 
 
-def test_gateway_failure_is_reported(settings: Settings) -> None:
+@pytest.mark.parametrize(
+    "failure",
+    [MCPClientInitializationError("boom"), AgentRunError("GATEWAY_UNAVAILABLE", "no tools for this caller")],
+    ids=["unreachable", "no-tools"],
+)
+def test_gateway_failure_is_reported(settings: Settings, failure: Exception) -> None:
     @asynccontextmanager
-    async def unreachable(_caller: Caller) -> AsyncIterator[list[Any]]:
-        raise MCPClientInitializationError("boom")
+    async def unavailable(_caller: Caller) -> AsyncIterator[list[Any]]:
+        raise failure
         yield []
 
-    scheduler = Scheduler(settings, tools=unreachable)
+    scheduler = Scheduler(settings, tools=unavailable)
     run_input = RunAgentInput(thread_id="t", run_id="r", messages=[{"id": "1", "role": "user", "content": "hi"}])
     headers = {"Authorization": f"Bearer {unsigned_jwt(**OPERATOR_CLAIMS)}"}
 

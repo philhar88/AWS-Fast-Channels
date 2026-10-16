@@ -1,5 +1,6 @@
 """Runtime configuration for Lambda functions, read once from environment variables set by the CDK constructs."""
 
+import json
 import os
 from dataclasses import dataclass, field, fields
 from functools import cache
@@ -11,6 +12,23 @@ def _env(name: str) -> str:
 
 def _csv(name: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in _env(name).split(",") if item.strip())
+
+
+@dataclass(frozen=True, slots=True)
+class CdnEndpoint:
+    """A CDN that chains to the deployment's CloudFront distribution (config ``delivery.cdns``)."""
+
+    name: str
+    """Short name used in playback-URL listings, e.g. ``cdn-b``."""
+    manifest_base: str
+    """Base URL under which it serves the MediaTailor manifest paths, no trailing slash."""
+    content_base: str
+    """Base URL under which it serves content segments."""
+
+
+def _cdn_endpoints() -> tuple[CdnEndpoint, ...]:
+    """``CDN_ENDPOINTS``: a JSON list of ``{name, manifest_base, content_base}`` objects (absent: none)."""
+    return tuple(CdnEndpoint(**entry) for entry in json.loads(_env("CDN_ENDPOINTS") or "[]"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +49,7 @@ class Settings:
     source_location: str = field(default_factory=lambda: _env("SOURCE_LOCATION"))
     content_base_url: str = field(default_factory=lambda: _env("CONTENT_BASE_URL"))
     cdn_domain: str = field(default_factory=lambda: _env("CDN_DOMAIN"))
+    cdn_endpoints: tuple[CdnEndpoint, ...] = field(default_factory=_cdn_endpoints)
     package_profiles: tuple[str, ...] = field(default_factory=lambda: _csv("PACKAGE_PROFILES"))
     default_ladder_version: str = field(default_factory=lambda: _env("DEFAULT_LADDER_VERSION"))
     playback_config_template: str = field(default_factory=lambda: _env("PLAYBACK_CONFIG_TEMPLATE"))

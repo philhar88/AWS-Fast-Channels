@@ -8,7 +8,7 @@ the channel ladder, change the source groups (rendition profiles) a VOD source s
 """
 
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
 from urllib.parse import unquote, urljoin
 
@@ -34,6 +34,7 @@ from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
+from fast_channels.functions.tools._alerts import Alert, alerts_of, relevant
 from fast_channels.functions.tools._library_store import Asset, AssetStatus, Owner
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
 
@@ -42,13 +43,9 @@ if TYPE_CHECKING:
 
 logger = Logger(child=True)
 
-NOISE_ALERTS: Final = frozenset({"SEGMENT_DURATION_MISMATCH", "BANDWIDTH_MISMATCH"})
-"""PLAYBACK_WARNINGs this design produces by construction: 2 s ESAM split segments next to 6 s ones, and QVBR slates
-next to content. One 13-program e2e run raised 132 and 64 of them, burying real alerts (e2e.md §9 item 13)."""
 MAX_PACKAGES: Final = 5  # package configurations per VOD source (channel-assembly.md §4.3 quotas)
 MAX_MANIFEST_BYTES: Final = 2 * 1024 * 1024  # Channel Assembly manifest size limit (not adjustable)
 MANIFEST_PATH_PATTERN: Final = r"^/\S+\.(m3u8|mpd)$"
-_CATEGORY_ORDER: Final = {"SCHEDULING_ERROR": 0, "PLAYBACK_WARNING": 1, "INFO": 2}
 # S3_SIGV4 needs the regional virtual-hosted form (channel-assembly.md §2.2); bucket names with dots break its TLS.
 _S3_BASE_URL: Final = re.compile(
     r"^https://(?P<bucket>[a-z0-9][a-z0-9-]*[a-z0-9])\.s3\.(?P<region>[a-z0-9-]+)\.amazonaws\.com(?P<prefix>/[^?#]*)?$"
@@ -61,14 +58,6 @@ def _mediatailor() -> Any:
 
 
 # --- shared models -------------------------------------------------------------------------------------------------
-
-
-class Alert(BaseModel):
-    code: str
-    category: str = Field(description="SCHEDULING_ERROR (blocks playback), PLAYBACK_WARNING or INFO.")
-    message: str
-    resource_arn: str
-    last_modified: str
 
 
 class _SourceGroup(BaseModel):
@@ -95,7 +84,7 @@ class PackageChange(_SourceGroup):
         None,
         pattern=MANIFEST_PATH_PATTERN,
         description="Manifest path; needed only for agent-registered content and a source group it does not serve "
-        "yet (pipeline encodes have every profile's manifest).",
+        "yet, because pipeline encodes have every profile's manifest.",
     )
 
 
@@ -192,8 +181,8 @@ class CreateSourceLocationOutput(BaseModel):
 @tool("origins", access=Access.WRITE, approval=Approval.CONFIRM)
 def create_source_location(request: CreateSourceLocationInput, ctx: ToolContext) -> CreateSourceLocationOutput:
     """Create a SigV4 Channel Assembly source location for an operator's S3 bucket holding pre-encoded content.
-    Returns the bucket-policy statements the operator must apply (the agent never edits bucket policies); show them
-    to the operator verbatim. Requires human approval."""
+    Returns the bucket-policy statements the operator must apply before origins___register_vod_source can read the
+    bucket; show them verbatim (the agent never edits bucket policies). Idempotent for the same name and bucket."""
     config = settings()
     config.require("prefix", "region")
     if request.bucket == config.media_bucket:
@@ -320,7 +309,7 @@ def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> Re
     """Register pre-encoded HLS/DASH content from a source location as a schedulable library asset (owner agent).
     Every HLS manifest must match the ladder exactly (codec, resolution, frame rate and audio group of every
     variant, in order; LADDER_MISMATCH otherwise) because Channel Assembly switches programs variant by variant.
-    Duration and ad-break offsets are computed from the media playlists."""
+    Duration and ad-break offsets are computed from the media playlists; the asset is READY at once."""
     config = settings()
     config.require("prefix", "library_table")
     ladder_version = request.ladder_version or _default_ladder_version()
@@ -371,7 +360,7 @@ def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> Re
         break_offset_count=len(offsets),
         source_groups=groups,
         missing_source_groups=[g for g in settings().package_profiles if g not in groups],
-        alerts=_alerts(arn, include_noise=False)[0],
+        alerts=relevant(arn),
     )
 
 
@@ -556,7 +545,7 @@ class UpdatePackagesInput(BaseModel):
     packages: Annotated[list[PackageChange], AfterValidator(_unique_groups)] = Field(
         min_length=1,
         max_length=MAX_PACKAGES,
-        description="The complete new set of source groups (replaces the current one; at most 5).",
+        description="The complete new set of source groups; it replaces the current one.",
     )
 
 
@@ -572,9 +561,9 @@ class UpdatePackagesOutput(BaseModel):
 
 @tool("origins", access=Access.WRITE, approval=Approval.CONFIRM)
 def update_package_configurations(request: UpdatePackagesInput, ctx: ToolContext) -> UpdatePackagesOutput:
-    """Replace the source groups (rendition profiles) an asset's VOD source serves, e.g. add hls-sd before a channel
-    gets that output. Channel Assembly needs every program, slate and filler of a channel to serve every channel
-    output. Requires human approval."""
+    """Replace the source groups (rendition profiles) an asset's VOD source serves. Channel Assembly needs every
+    program, slate and filler of a channel to serve every output of the channel, so add a group before a channel
+    with that output airs the asset. Pass the complete new set."""
     config = settings()
     config.require("library_table", "source_location")
     ladder_version = request.ladder_version or _default_ladder_version()
@@ -611,7 +600,7 @@ def update_package_configurations(request: UpdatePackagesInput, ctx: ToolContext
         source_groups=list(paths),
         added=sorted(paths.keys() - before),
         removed=sorted(before - paths.keys()),
-        alerts=_alerts(updated["Arn"], include_noise=False)[0],
+        alerts=relevant(updated["Arn"]),
     )
 
 
@@ -663,10 +652,12 @@ class ListAlertsOutput(BaseModel):
 
 @tool("origins", access=Access.READ)
 def list_alerts(request: ListAlertsInput, ctx: ToolContext) -> ListAlertsOutput:
-    """List Channel Assembly alerts of a channel (and its programs), a VOD source or a source location. Check a
-    channel after every schedule change and before starting it; SCHEDULING_ERROR alerts break playback."""
+    """List Channel Assembly alerts of a channel (and its programs), a VOD source or a source location, most severe
+    first. Check a channel after every schedule change and before starting it: SCHEDULING_ERROR alerts break
+    playback. The expected SEGMENT_DURATION_MISMATCH and BANDWIDTH_MISMATCH warnings are left out (counted in
+    suppressed) unless include_noise is set."""
     arn = _resource_arn(request)
-    alerts, suppressed = _alerts(arn, include_noise=request.include_noise)
+    alerts, suppressed = alerts_of(arn, include_noise=request.include_noise)
     return ListAlertsOutput(
         resource_arn=arn,
         alerts=alerts[: request.limit],
@@ -684,30 +675,6 @@ def _resource_arn(request: ListAlertsInput) -> str:
     if request.vod_source is not None:
         return str(client.describe_vod_source(SourceLocationName=location, VodSourceName=request.vod_source)["Arn"])
     return str(_require_source_location(location)["Arn"])
-
-
-def _alerts(resource_arn: str, *, include_noise: bool) -> tuple[list[Alert], int]:
-    """Alerts of ``resource_arn``, most severe and newest first, and how many noise alerts were left out."""
-    items = list(_alert_items(resource_arn))
-    kept = [i for i in items if include_noise or i["AlertCode"] not in NOISE_ALERTS]
-    kept.sort(key=lambda i: i["LastModifiedTime"], reverse=True)
-    kept.sort(key=lambda i: _CATEGORY_ORDER.get(i["Category"], len(_CATEGORY_ORDER)))
-    alerts = [
-        Alert(
-            code=i["AlertCode"],
-            category=i["Category"],
-            message=i["AlertMessage"],
-            resource_arn=i["ResourceArn"],
-            last_modified=store.iso(i["LastModifiedTime"]),
-        )
-        for i in kept
-    ]
-    return alerts, len(items) - len(kept)
-
-
-def _alert_items(resource_arn: str) -> Iterator[dict[str, Any]]:
-    for page in _mediatailor().get_paginator("list_alerts").paginate(ResourceArn=resource_arn):
-        yield from page["Items"]
 
 
 def _tags(ctx: ToolContext, ladder_version: str | None = None) -> dict[str, str]:

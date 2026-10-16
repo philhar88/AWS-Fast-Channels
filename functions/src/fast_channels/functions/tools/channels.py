@@ -32,9 +32,10 @@ from fast_channels.functions.custom_resources import channel_lifecycle
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
+from fast_channels.functions.tools._alerts import Alert, relevant
 from fast_channels.functions.tools.encoding import definition
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
-from fast_channels.functions.tools.schedule import Alert, ChannelInput, alerts, channel_arn, require_channel
+from fast_channels.functions.tools.schedule import ChannelInput, channel_arn, require_channel
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
@@ -44,6 +45,9 @@ logger = Logger()
 STOP_CHANNEL_TARGET: Final = "arn:aws:scheduler:::aws-sdk:mediatailor:stopChannel"
 """EventBridge Scheduler universal target; the schedule's Input is the StopChannel request."""
 _MISSING: Final = frozenset({"NotFoundException", "ResourceNotFoundException"})
+
+PRIMARY_CDN: Final = "cloudfront"
+"""Name of the deployment's own CloudFront distribution (``CDN_DOMAIN``) in per-CDN playback listings."""
 
 type ChannelState = Literal["RUNNING", "STOPPED", "MISSING"]
 
@@ -73,50 +77,77 @@ def _tags(ctx: ToolContext, ladder_version: str) -> dict[str, str]:
 # --- models ----------------------------------------------------------------------------------------------------------
 
 
+type ChannelOwner = Literal[store.Owner.IAC, store.Owner.AGENT]
+type Playback = dict[str, dict[str, str]]
+"""Viewer URLs per channel output: ``ssai`` and ``sgai`` for HLS outputs, ``dash`` for DASH outputs."""
+
+
 class ChannelSummary(BaseModel):
     name: str
-    state: ChannelState = Field(description="MISSING: in the media library but not in Channel Assembly.")
-    owner: store.Owner = Field(description="iac: defined by the deployment; agent: created with channels tools.")
-    ladder_version: str
-    outputs: list[str] = Field(description="Output (rendition profile) names, e.g. hls, hls-avc, dash-avc.")
-    tier: str | None = Field(description="BASIC (~$0.10/h running) or STANDARD (~$0.35/h).")
+    state: ChannelState = Field(
+        description="RUNNING (viewers can watch; billed by the hour), STOPPED, or MISSING (in the media library "
+        "but not in Channel Assembly)."
+    )
+    owner: ChannelOwner = Field(description="iac: defined by the deployment; agent: created with channels tools.")
+    ladder_version: str = Field(description="The only ladder version whose assets this channel can air.")
+    outputs: list[str] = Field(description="Outputs (rendition profiles), e.g. hls, hls-avc, dash-avc.")
+    tier: str | None = Field(description="BASIC (~$0.10/h while running) or STANDARD (~$0.35/h).")
 
 
 class ListChannelsInput(BaseModel):
-    owner: store.Owner | None = Field(None, description="Only channels of this owner.")
+    owner: ChannelOwner | None = Field(None, description="Only channels of this owner.")
 
 
 class ListChannelsOutput(BaseModel):
     channels: list[ChannelSummary]
 
 
+class CdnPlayback(BaseModel):
+    """The viewer URLs of a channel through one CDN."""
+
+    cdn: str = Field(description=f"CDN name; {PRIMARY_CDN} is the deployment's own distribution.")
+    playback: Playback
+
+
 class ChannelDetail(ChannelSummary):
     arn: str | None
-    playback_configuration: str | None
-    playback: dict[str, dict[str, str]] = Field(
-        description="Viewer URLs per output through the CDN: ssai and sgai (HLS) or dash."
+    playback_configuration: str | None = Field(description="MediaTailor playback configuration (ad insertion).")
+    playback: Playback = Field(
+        description="Viewer URLs per output through the primary CDN: ssai and sgai (HLS Interstitials) for HLS "
+        "outputs, dash for DASH outputs. Empty when the channel has no playback configuration."
     )
-    auto_stop_at: str | None = Field(description="UTC time the scheduled auto-stop fires; null when none.")
+    cdn_playback: list[CdnPlayback] | None = Field(
+        None,
+        description="The same URLs through every configured CDN, primary first; only when the deployment lists "
+        "other CDNs.",
+    )
+    auto_stop_at: str | None = Field(description="UTC ISO-8601 time the pending auto-stop fires; null when none.")
 
 
 class StateChange(BaseModel):
     channel: str
     state: Literal["RUNNING", "STOPPED"]
-    auto_stop_at: str | None = Field(None, description="UTC time the channel is stopped automatically.")
-    alerts: list[Alert] = Field([], description="Channel alerts (harmless codes filtered out).")
+    auto_stop_at: str | None = Field(None, description="UTC ISO-8601 time the channel is stopped automatically.")
+    alerts: list[Alert] = Field([], description="Channel alerts after the change (expected warnings left out).")
 
 
 class CreateChannelInput(BaseModel):
     name: str = Field(
         pattern=r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$",
-        description="Short name; the channel is named <prefix>-agent-<name>.",
+        description="Short name, e.g. kids; the channel is named <prefix>-agent-<name>.",
     )
-    ladder_version: str | None = Field(None, description="READY ladder version; default: the deployment's default.")
+    ladder_version: str | None = Field(
+        None, description="READY ladder version (encoding___list_ladders); omit for the deployment default."
+    )
     outputs: list[str] | None = Field(
-        None, description="Outputs (rendition profiles), at most 5; default: every package profile of the deployment."
+        None,
+        description="Outputs (rendition profiles) with renditions on the ladder, at most 5; omit for every package "
+        "profile of the deployment.",
     )
-    tier: Literal["BASIC", "STANDARD"] = Field("BASIC", description="BASIC ~$0.10/h, STANDARD ~$0.35/h, while running.")
-    brief: ProgrammingBrief | None = Field(None, description="Programming brief for the schedule planner.")
+    tier: Literal["BASIC", "STANDARD"] = Field("BASIC", description="BASIC ~$0.10/h, STANDARD ~$0.35/h while running.")
+    brief: ProgrammingBrief | None = Field(
+        None, description="Programming brief every plan is checked against; omit for no rules (default break policy)."
+    )
 
 
 class DeleteChannelOutput(BaseModel):
@@ -146,8 +177,8 @@ def _summary(record: store.ChannelRecord, state: str | None) -> dict[str, Any]:
 
 @tool("channels", access=Access.READ)
 def list_channels(payload: ListChannelsInput, ctx: ToolContext) -> ListChannelsOutput:
-    """List the deployment's channels with their live state (RUNNING bills by the hour), owner, ladder version and
-    outputs."""
+    """List the deployment's channels: live state (RUNNING is billed by the hour), owner, tier, ladder version and
+    outputs. channels___get_channel adds the playback URLs and the auto-stop time."""
     states = _live_states()
     return ListChannelsOutput(
         channels=[ChannelSummary(**_summary(r, states.get(r.name))) for r in store.list_channels(payload.owner)]
@@ -173,15 +204,26 @@ def _prefixes(record: store.ChannelRecord) -> tuple[str, str] | None:
     return config["HlsConfiguration"]["ManifestEndpointPrefix"], config["DashConfiguration"]["ManifestEndpointPrefix"]
 
 
-def playback(record: store.ChannelRecord) -> dict[str, dict[str, str]]:
-    """Viewer URLs per output (``core.specs.playback_urls``); empty without a playback configuration."""
+def playback_by_cdn(record: store.ChannelRecord) -> dict[str, Playback]:
+    """Viewer URLs (``core.specs.playback_urls``) per CDN, :data:`PRIMARY_CDN` first, then ``CDN_ENDPOINTS``.
+
+    Other CDNs chain to CloudFront and serve the same paths under their ``manifest_base``. Empty without a playback
+    configuration or a primary CDN.
+    """
+    config = settings()
     prefixes = _prefixes(record)
-    if prefixes is None or not settings().cdn_domain:
+    if prefixes is None or not config.cdn_domain:
         return {}
+    bases = {PRIMARY_CDN: _cdn_base()}
+    for endpoint in config.cdn_endpoints:
+        bases.setdefault(endpoint.name, endpoint.manifest_base)
     hls, dash = prefixes
-    return specs.playback_urls(
-        cdn_base=_cdn_base(), playback_prefix_hls=hls, playback_prefix_dash=dash, outputs=record.outputs
-    )
+    return {
+        cdn: specs.playback_urls(
+            cdn_base=base, playback_prefix_hls=hls, playback_prefix_dash=dash, outputs=record.outputs
+        )
+        for cdn, base in bases.items()
+    }
 
 
 def _auto_stop_name(channel: str) -> str:
@@ -213,19 +255,22 @@ def _describe(name: str) -> dict[str, Any] | None:
 
 
 def _detail(record: store.ChannelRecord, live: dict[str, Any] | None) -> ChannelDetail:
+    urls = playback_by_cdn(record)
     return ChannelDetail(
         **_summary(record, live["ChannelState"] if live else None),
         arn=live["Arn"] if live else record.arn,
         playback_configuration=record.playback_configuration_name,
-        playback=playback(record),
+        playback=urls.get(PRIMARY_CDN, {}),
+        cdn_playback=[CdnPlayback(cdn=cdn, playback=p) for cdn, p in urls.items()] if len(urls) > 1 else None,
         auto_stop_at=auto_stop_at(record.name),
     )
 
 
 @tool("channels", access=Access.READ)
 def get_channel(payload: ChannelInput, ctx: ToolContext) -> ChannelDetail:
-    """Get one channel: live state, owner, tier, ladder version, outputs, viewer playback URLs per output
-    (SSAI and SGAI for HLS, DASH) and the pending auto-stop time."""
+    """Get one channel: live state, owner, tier, ladder version, outputs, the viewer playback URLs per output
+    (ssai and sgai for HLS outputs, dash for DASH outputs; per CDN when several are configured) and the pending
+    auto-stop time. Give operators these URLs verbatim; never build playback URLs yourself."""
     record = require_channel(payload.channel)
     return _detail(record, _describe(record.name))
 
@@ -269,8 +314,9 @@ def cancel_auto_stop(channel: str) -> None:
 
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
 def start_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
-    """Start a channel so viewers can watch it; it bills by the hour while running and is stopped automatically
-    after the deployment's maximum runtime (auto_stop_at). Starting a running channel only moves the auto-stop."""
+    """Start a channel so viewers can watch it. It is billed per hour while running (BASIC ~$0.10/h, STANDARD
+    ~$0.35/h) and is stopped automatically after the deployment's maximum runtime (auto_stop_at); starting a running
+    channel only moves the auto-stop. Returns the channel's alerts: SCHEDULING_ERROR alerts break playback."""
     record = require_channel(payload.channel)
     channel_lifecycle.start_channel(record.name)  # idempotent; a missing channel raises NotFoundException
     stop_at = None
@@ -279,13 +325,13 @@ def start_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
         schedule_auto_stop(record.name, at=when, ctx=ctx)
         stop_at = when.strftime("%Y-%m-%dT%H:%M:%SZ")
     logger.info("channel started", extra={"channel": record.name, "auto_stop_at": stop_at})
-    return StateChange(channel=record.name, state="RUNNING", auto_stop_at=stop_at, alerts=alerts(channel_arn(record)))
+    return StateChange(channel=record.name, state="RUNNING", auto_stop_at=stop_at, alerts=relevant(channel_arn(record)))
 
 
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
 def stop_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
-    """Stop a channel (viewers get errors; billing stops). Programs stay scheduled; restarting replays the ones
-    that have not aired."""
+    """Stop a channel: playback ends for every viewer and billing stops. Published programs stay in the schedule
+    and the guide; programs that have not aired yet play when the channel is started again."""
     record = require_channel(payload.channel)
     if not channel_lifecycle.stop_channel(record.name):
         raise ToolError("NOT_FOUND", f"channel {record.name} does not exist in Channel Assembly")
@@ -410,8 +456,11 @@ def _channel_url(created: dict[str, Any]) -> str:
 
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
 def create_channel(payload: CreateChannelInput, ctx: ToolContext) -> ChannelDetail:
-    """Create an agent-owned linear channel (<prefix>-agent-<name>) on a READY ladder, with its playback
-    configuration, logs and channel policy. It is created STOPPED: start it with channels___start_channel."""
+    """Create an agent-owned linear channel <prefix>-agent-<name> with its ad-insertion playback configuration
+    (SSAI and SGAI), logs and channel policy. The ladder version must be READY (encoding___list_ladders), and the
+    channel airs only assets encoded with it. The channel is created STOPPED and costs nothing until
+    channels___start_channel; fill it with schedule___plan and schedule___publish. Fails with QUOTA at the
+    deployment's agent-channel limit and CONFLICT when the name is taken."""
     config = settings()
     config.require("source_location", "library_table")
     name = agent_owned_name(config.prefix, payload.name.removeprefix(config.agent_prefix))
@@ -482,8 +531,9 @@ def _channel_items(channel: str) -> Iterator[store.ItemKey]:
 
 @tool("channels", access=Access.DESTRUCTIVE, approval=Approval.CONFIRM)
 def delete_channel(payload: ChannelInput, ctx: ToolContext) -> DeleteChannelOutput:
-    """Delete an agent-owned channel (<prefix>-agent-*) with its programs, guide, playback configuration and logs
-    deliveries. Channels defined by the deployment cannot be deleted."""
+    """Delete an agent-owned channel (<prefix>-agent-*): stop it, then remove its programs, guide, playback
+    configuration and log deliveries. Cannot be undone. Channels defined by the deployment (owner iac) cannot be
+    deleted; stop them instead."""
     config = settings()
     config.require("library_table", "media_bucket")
     record = require_channel(payload.channel)

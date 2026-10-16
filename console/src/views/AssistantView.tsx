@@ -214,10 +214,8 @@ function ApprovalCard({ item, onDecide }: { item: Extract<TranscriptItem, { kind
         columns={2}
         items={[
           { label: "Tool", value: <Box variant="code">{request.tool}</Box> },
-          {
-            label: "Estimated cost",
-            value: request.cost_estimate_usd === undefined ? "Not estimated" : formatUsd(request.cost_estimate_usd),
-          },
+          // The agent narrates the costs the tools return; an estimate in the event itself is optional (CONTRACTS §G).
+          ...(request.cost_estimate_usd === undefined ? [] : [{ label: "Estimated cost", value: formatUsd(request.cost_estimate_usd) }]),
         ]}
       />
       <JsonBlock label="Arguments" text={JSON.stringify(request.arguments)} />

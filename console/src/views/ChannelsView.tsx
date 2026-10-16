@@ -19,7 +19,8 @@ import { useBackend } from "../lib/backend";
 import type { ChannelPlayback } from "../lib/config";
 import { errorMessage } from "../lib/errors";
 import { href } from "../lib/router";
-import { getChannel, listChannels, type ChannelSummary } from "../lib/tools";
+import { formatDateTime } from "../lib/format";
+import { getChannel, listChannels, type CdnPlayback, type ChannelSummary } from "../lib/tools";
 import { useAsync } from "../lib/useAsync";
 import { canPlayProfile, PROFILE_LABELS } from "../players/codecs";
 import { HlsPlayer } from "../players/HlsPlayer";
@@ -32,13 +33,13 @@ export function ChannelsView({ channel }: { channel?: string | undefined }) {
 }
 
 /** A channel row; `state` is unknown until the Gateway answers. */
-type ChannelRow = Omit<ChannelSummary, "state"> & { readonly state?: ChannelSummary["state"] };
+type ChannelRow = Omit<ChannelSummary, "state" | "tier"> & { readonly state?: ChannelSummary["state"] };
 
 const LIST_COLUMNS: TableProps.ColumnDefinition<ChannelRow>[] = [
   { id: "name", header: "Name", cell: (c) => <Link href={href({ view: "channels", channel: c.name })}>{c.name}</Link>, isRowHeader: true },
   { id: "state", header: "State", cell: (c) => <ChannelStateIndicator state={c.state} /> },
-  { id: "ladder", header: "Ladder", cell: (c) => c.ladder_version ?? "-" },
-  { id: "outputs", header: "Outputs", cell: (c) => c.outputs?.join(", ") ?? "-" },
+  { id: "ladder", header: "Ladder", cell: (c) => c.ladder_version },
+  { id: "outputs", header: "Outputs", cell: (c) => c.outputs.join(", ") || "-" },
   { id: "owner", header: "Managed by", cell: (c) => (c.owner === "agent" ? "Agent" : "CloudFormation") },
 ];
 
@@ -49,7 +50,7 @@ function ChannelList() {
   const known = new Map(live.data?.map((c) => [c.name, c]));
   const items: ChannelRow[] = [
     ...config.channels.map(
-      (c): ChannelRow => known.get(c.name) ?? { name: c.name, ladder_version: c.ladderVersion, outputs: Object.keys(c.playback) },
+      (c): ChannelRow => known.get(c.name) ?? { name: c.name, owner: "iac", ladder_version: c.ladderVersion, outputs: Object.keys(c.playback) },
     ),
     ...(live.data ?? []).filter((c) => !config.channels.some((configured) => configured.name === c.name)),
   ];
@@ -84,7 +85,9 @@ function ChannelDetail({ name }: { name: string }) {
   const { config, gateway } = useBackend();
   const configured = config.channels.find((c) => c.name === name);
   const detail = useAsync(useCallback(() => getChannel(gateway, name), [gateway, name]));
-  const playback: ChannelPlayback = detail.data?.playback ?? configured?.playback ?? {};
+  const live = detail.data?.playback;
+  // An agent channel is known only to the Gateway; a channel without a playback configuration has no live URLs.
+  const playback: ChannelPlayback = live && Object.keys(live).length > 0 ? live : (configured?.playback ?? {});
   const [events, setEvents] = useState<LoggedEvent[]>([]);
 
   const onEvent = useCallback((event: PlayerEvent) => {
@@ -100,13 +103,14 @@ function ChannelDetail({ name }: { name: string }) {
     );
   }
   const ladder = detail.data?.ladder_version ?? configured?.ladderVersion;
+  const autoStop = detail.data?.auto_stop_at ? ` · stops automatically ${formatDateTime(detail.data.auto_stop_at)}` : "";
   return (
     <ContentLayout
       header={
         <Header
           variant="h1"
           info={detail.data && <ChannelStateIndicator state={detail.data.state} />}
-          description={`Ladder ${ladder ?? "unknown"} · outputs ${Object.keys(playback).join(", ") || "none"}`}
+          description={`Ladder ${ladder ?? "unknown"} · outputs ${Object.keys(playback).join(", ") || "none"}${autoStop}`}
           actions={<ChannelActions name={name} state={detail.data?.state} loading={detail.loading} onChanged={detail.reload} />}
         >
           {name}
@@ -119,7 +123,7 @@ function ChannelDetail({ name }: { name: string }) {
             {errorMessage(detail.error)}
           </Alert>
         )}
-        <Playback playback={playback} cdnBaseUrl={config.cdnBaseUrl} onEvent={onEvent} />
+        <Playback playback={playback} otherCdns={detail.data?.cdn_playback?.slice(1) ?? []} cdnBaseUrl={config.cdnBaseUrl} onEvent={onEvent} />
         <EventLog
           events={events}
           onClear={() => {
@@ -134,12 +138,14 @@ function ChannelDetail({ name }: { name: string }) {
 
 interface PlaybackProps {
   readonly playback: ChannelPlayback;
+  /** The same URLs through the deployment's other CDNs (`delivery.cdns`), listed for copying. */
+  readonly otherCdns: readonly CdnPlayback[];
   readonly cdnBaseUrl: string;
   readonly onEvent: (event: PlayerEvent) => void;
 }
 
 /** SSAI (stitched) and SGAI (HLS Interstitials) sessions of the same output, side by side. */
-function Playback({ playback, cdnBaseUrl, onEvent }: PlaybackProps) {
+function Playback({ playback, otherCdns, cdnBaseUrl, onEvent }: PlaybackProps) {
   const hlsOutputs = Object.keys(playback).filter((output) => playback[output]?.ssai);
   const dashOutputs = Object.entries(playback).flatMap(([output, urls]) => (urls.dash ? [{ output, url: urls.dash }] : []));
   const [chosen, setChosen] = useState<string>();
@@ -191,25 +197,32 @@ function Playback({ playback, cdnBaseUrl, onEvent }: PlaybackProps) {
           </ColumnLayout>
         )}
         {dashOutputs.length > 0 && (
-          <KeyValuePairs
-            columns={2}
-            items={dashOutputs.map(({ output: id, url }) => ({
-              label: `DASH (${id}, SSAI only)`,
-              value: (
-                <CopyToClipboard
-                  variant="inline"
-                  textToCopy={url}
-                  copyButtonAriaLabel={`Copy ${id} URL`}
-                  copySuccessText="URL copied"
-                  copyErrorText="URL not copied"
-                />
-              ),
-            }))}
-          />
+          <KeyValuePairs columns={2} items={dashOutputs.map(({ output: id, url }) => copyableUrl(`DASH (${id}, SSAI only)`, url))} />
+        )}
+        {output !== undefined && otherCdns.length > 0 && (
+          <KeyValuePairs columns={2} items={otherCdns.flatMap(({ cdn, playback: urls }) => cdnUrls(cdn, output, urls))} />
         )}
       </SpaceBetween>
     </Container>
   );
+}
+
+function copyableUrl(label: string, url: string) {
+  return {
+    label,
+    value: <CopyToClipboard variant="inline" textToCopy={url} copyButtonAriaLabel={`Copy ${label} URL`} copySuccessText="URL copied" copyErrorText="URL not copied" />,
+  };
+}
+
+/** The selected output's SSAI and SGAI URLs through another CDN, plus its DASH URLs. */
+function cdnUrls(cdn: string, output: string, playback: ChannelPlayback) {
+  const urls = playback[output];
+  const dash = Object.entries(playback).flatMap(([id, u]) => (u.dash ? [copyableUrl(`DASH (${id}) via ${cdn}`, u.dash)] : []));
+  return [
+    ...(urls?.ssai ? [copyableUrl(`SSAI (${output}) via ${cdn}`, urls.ssai)] : []),
+    ...(urls?.sgai ? [copyableUrl(`SGAI (${output}) via ${cdn}`, urls.sgai)] : []),
+    ...dash,
+  ];
 }
 
 /** Asks MediaTailor for client-side reporting so the asset lists carry TRACKING beacons (players/beacons.ts). */

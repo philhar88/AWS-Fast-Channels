@@ -28,9 +28,20 @@ from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
+from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, describe_fields, tool
 
 logger = Logger()
+
+describe_fields(
+    LadderOps,
+    codecs="Video codecs to keep (avc, hevc, av1); omit to keep all.",
+    max_height="Drop video renditions taller than this many lines, e.g. 720.",
+    min_height="Drop video renditions shorter than this many lines.",
+    quality_shift="Added to every rendition's QVBR quality level (1-10, clamped); higher is better quality and "
+    "more bits.",
+    drop_rungs="Video rendition names to drop, e.g. avc-234p (encoding___get_ladder lists them).",
+    new_id="Ladder id of the result (its version is <id>@<fingerprint>); omit to keep the base id.",
+)
 
 PROPOSAL_TTL_S: Final = 24 * 3600
 KIT_GOPS: Final = (*BREAK_SLATE_GOPS, *HOUSE_AD_GOPS)
@@ -102,13 +113,16 @@ def _summary(record: store.LadderRecord, ladder: Ladder | None) -> LadderSummary
 
 @tool("encoding", access=Access.READ)
 def list_ladders(payload: ListLaddersInput, ctx: ToolContext) -> ListLaddersOutput:
-    """List encoding ladder versions with status, codecs, top resolution, rendition count, encode cost per minute
-    and kit (filler and break slates, house ads). Channels and assets only use READY versions."""
+    """List encoding ladder versions with status, codecs, top resolution, rendition count, encode cost per
+    content-minute and kit (filler and break slates, house ads). Channels need a READY version; ingest also accepts
+    a PROVISIONING one."""
     return ListLaddersOutput(ladders=[_summary(r, definition(r)) for r in store.list_ladders(payload.status)])
 
 
 class LadderInput(BaseModel):
-    ladder_version: str = Field(description="Ladder version, e.g. standard@86bf8088e0.", min_length=3)
+    ladder_version: str = Field(
+        description="Ladder version from encoding___list_ladders, e.g. standard@86bf8088e0.", min_length=3
+    )
 
 
 class LadderDetail(LadderSummary):
@@ -127,8 +141,8 @@ class LadderDetail(LadderSummary):
 
 @tool("encoding", access=Access.READ)
 def get_ladder(payload: LadderInput, ctx: ToolContext) -> LadderDetail:
-    """Get one ladder version in full: every rendition, frame rate and GOP/segment grid, options, pricing tier,
-    manifest profiles, kit and provisioning status."""
+    """Get one ladder version in full: every rendition (names for propose_ladder's drop_rungs), frame rate,
+    GOP/segment grid, options, pricing tier, manifest profiles, kit and provisioning status or error."""
     record = store.get_ladder(payload.ladder_version)
     ladder = definition(record) if record is not None else None
     if record is None or ladder is None:
@@ -156,11 +170,7 @@ def get_ladder(payload: LadderInput, ctx: ToolContext) -> LadderDetail:
 
 class ProposeLadderInput(BaseModel):
     base: str = Field(description="Ladder version to derive from, e.g. standard@86bf8088e0.", min_length=3)
-    ops: LadderOps = Field(
-        description=(
-            "Changes: codecs to keep, max/min height, quality_shift (QVBR -2..+2), rung names to drop, new_id."
-        )
-    )
+    ops: LadderOps = Field(description="Changes to apply to the base; every field is optional and they combine.")
 
 
 class ProposeLadderOutput(BaseModel):
@@ -218,8 +228,10 @@ def kit_cost(ladder: Ladder) -> float:
 
 @tool("encoding", access=Access.READ)
 def propose_ladder(payload: ProposeLadderInput, ctx: ToolContext) -> ProposeLadderOutput:
-    """Propose a new ladder derived from a base version: keep codecs, cap or floor the height, shift quality, drop
-    rungs. Changes nothing; returns the diff, validation errors and warnings, and encode cost per minute."""
+    """Propose a new ladder version derived from a base version: keep some codecs, cap or floor the height,
+    shift quality, drop rungs. Changes nothing. Returns a proposal_id (valid 24 hours), the diff, validation errors
+    and warnings, the encode cost per content-minute and the kit cost. Show it all to the operator; only a valid
+    proposal they accept goes to encoding___provision_ladder."""
     base = store.ladder_definition(payload.base)
     proposal = propose(base, payload.ops)
     ladder = proposal.ladder
@@ -259,7 +271,9 @@ def propose_ladder(payload: ProposeLadderInput, ctx: ToolContext) -> ProposeLadd
 
 
 class ProvisionLadderInput(BaseModel):
-    proposal_id: str = Field(description="proposal_id from encoding___propose_ladder.", min_length=3)
+    proposal_id: str = Field(
+        description="proposal_id of a valid proposal from encoding___propose_ladder.", min_length=3
+    )
 
 
 class ProvisionLadderOutput(BaseModel):
@@ -294,8 +308,11 @@ def _create_job_template(ladder: Ladder, ctx: ToolContext) -> str:
 
 @tool("encoding", access=Access.WRITE, approval=Approval.CONFIRM)
 def provision_ladder(payload: ProvisionLadderInput, ctx: ToolContext) -> ProvisionLadderOutput:
-    """Provision a proposed ladder: create its MediaConvert job template and encode its kit (filler slate, break
-    slates, house ads, ad pod). Costs the kit encode (kit_cost_usd) and takes minutes; the ladder becomes READY."""
+    """Provision a proposed ladder version: create its MediaConvert job template and encode its kit (filler slate,
+    break slates, house ads and ad pod) with it. Costs the kit encode (kit_cost_usd of the proposal) and takes
+    minutes: poll encoding___get_ladder until READY. Only then can channels___create_channel use the version, and
+    content must be ingested with it (library___ingest) to air on such a channel. Nothing is started when the
+    version is already PROVISIONING or READY."""
     config = settings()
     config.require("provision_state_machine_arn")
     proposal = StoredProposal.load(payload.proposal_id)

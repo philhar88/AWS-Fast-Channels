@@ -6,8 +6,8 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useState } from "react";
 import { useBackend } from "../lib/backend";
 import { formatDateTime } from "../lib/format";
-import { errorNotice, useNotifications } from "../lib/notifications";
-import { startChannel, stopChannel, type ChannelState } from "../lib/tools";
+import { errorNotice, useNotifications, type Notice } from "../lib/notifications";
+import { startChannel, stopChannel, type ChannelState, type ChannelStateChange } from "../lib/tools";
 
 export function ChannelStateIndicator({ state }: { state: ChannelState | undefined }) {
   switch (state) {
@@ -15,12 +15,29 @@ export function ChannelStateIndicator({ state }: { state: ChannelState | undefin
       return <StatusIndicator type="success">Running</StatusIndicator>;
     case "STOPPED":
       return <StatusIndicator type="stopped">Stopped</StatusIndicator>;
+    case "MISSING":
+      // In the media library but not in Channel Assembly (deleted outside the deployment).
+      return <StatusIndicator type="warning">Missing</StatusIndicator>;
     case undefined:
       return <StatusIndicator type="pending">Unknown</StatusIndicator>;
   }
 }
 
 type Action = "start" | "stop";
+
+/** Success, or a warning when the channel reports SCHEDULING_ERROR alerts (they break playback). */
+function stateChangeNotice(name: string, result: ChannelStateChange): Notice {
+  const [first, ...more] = result.alerts.filter((alert) => alert.category === "SCHEDULING_ERROR");
+  const lines = [
+    result.auto_stop_at && `It stops automatically at ${formatDateTime(result.auto_stop_at)}.`,
+    first && `Scheduling error ${first.code}: ${first.message}${more.length > 0 ? ` (and ${more.length} more)` : ""}`,
+  ];
+  return {
+    type: first ? "warning" : "success",
+    header: `${name} is ${result.state === "RUNNING" ? "running" : "stopped"}`,
+    content: lines.filter(Boolean).join(" ") || undefined,
+  };
+}
 
 const COPY: Record<Action, { title: string; body: string; button: string }> = {
   start: {
@@ -56,11 +73,7 @@ export function ChannelActions({ name, state, loading, onChanged }: ChannelActio
     setBusy(true);
     try {
       const result = await (action === "start" ? startChannel : stopChannel)(gateway, name);
-      notify({
-        type: "success",
-        header: `${name} is ${result.state === "RUNNING" ? "running" : "stopped"}`,
-        content: result.auto_stop_at ? `It stops automatically at ${formatDateTime(result.auto_stop_at)}.` : undefined,
-      });
+      notify(stateChangeNotice(name, result));
       onChanged();
     } catch (error) {
       notify(errorNotice(`Could not ${action} ${name}`, error));

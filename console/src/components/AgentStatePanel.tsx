@@ -7,13 +7,25 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table, { type TableProps } from "@cloudscape-design/components/table";
 import type { AgentSnapshot } from "../lib/agui";
 import { formatClock, formatDateTime, formatDuration } from "../lib/format";
-import { planIsPublishable, type Plan, type PlannedProgram } from "../lib/schedule";
+import type { Plan, PlannedProgram } from "../lib/schedule";
 import { ProgramTable } from "./ProgramTable";
 
 const PLAN_COLUMNS: TableProps.ColumnDefinition<PlannedProgram>[] = [
-  { id: "start", header: "Start", cell: (p) => formatClock(p.start_ms) },
-  { id: "asset", header: "Asset", cell: (p) => p.asset_id, isRowHeader: true },
-  { id: "duration", header: "Duration", cell: (p) => formatDuration(p.duration_ms) },
+  { id: "start", header: "Start", cell: (p) => formatClock(p.start) },
+  {
+    id: "title",
+    header: "Title",
+    cell: (p) => (
+      <>
+        <Box>{p.title}</Box>
+        <Box variant="small" color="text-body-secondary">
+          {p.rating ? `${p.rating} · ${p.asset_id}` : p.asset_id}
+        </Box>
+      </>
+    ),
+    isRowHeader: true,
+  },
+  { id: "duration", header: "On air", cell: (p) => formatDuration(p.duration_ms) },
   { id: "breaks", header: "Breaks", cell: (p) => p.breaks.length },
 ];
 
@@ -52,9 +64,9 @@ function PlanView({ plan }: { plan: Plan }) {
         <Header
           variant="h2"
           counter={`(${plan.programs.length})`}
-          description={`${plan.channel}, ${formatDateTime(plan.start_ms)} to ${formatClock(plan.end_ms)}, ladder ${plan.ladder_version}`}
+          description={`${plan.channel}, ${formatDateTime(plan.start)} to ${formatClock(plan.end)}, ladder ${plan.ladder_version}`}
           info={
-            planIsPublishable(plan) ? (
+            plan.publishable ? (
               <StatusIndicator type="success">Publishable</StatusIndicator>
             ) : (
               <StatusIndicator type="error">{errors} blocking error(s)</StatusIndicator>

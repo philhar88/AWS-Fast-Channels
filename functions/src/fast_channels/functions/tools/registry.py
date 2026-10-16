@@ -13,12 +13,16 @@ Tools are grouped by Gateway *target* (one Lambda per target). The Gateway expos
 
 import importlib
 import inspect
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Final, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, get_type_hints
 
 from pydantic import BaseModel
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
+
+if TYPE_CHECKING:
+    from pydantic_core import core_schema
 
 TARGETS: Final = ("catalog", "library", "origins", "schedule", "channels", "encoding")
 """Gateway targets, in the order they are documented. Each maps to ``fast_channels.functions.tools.<target>``."""
@@ -159,22 +163,56 @@ _FOLDED: Final = {
     "exclusiveMaximum": "< {}",
     "minLength": "min length {}",
     "maxLength": "max length {}",
-    "minItems": "at least {} items",
-    "maxItems": "at most {} items",
+    "minItems": "min items {}",
+    "maxItems": "max items {}",
     "pattern": "pattern {}",
     "format": "format {}",
 }
+APPROVAL_NOTE: Final = (
+    "Requires operator approval: calling it asks the operator, and it runs once they approve. Call it rather than "
+    "asking for approval in text."
+)
+_FIELD_DESCRIPTIONS: dict[type[BaseModel], Mapping[str, str]] = {}
+
+
+def describe_fields(model: type[BaseModel], **descriptions: str) -> None:
+    """Describe fields of ``model`` in the Gateway schemas of every tool whose input contains it.
+
+    For models the tools reuse but do not own (``fast_channels.core``), so the domain library stays free of
+    tool-facing wording. Descriptions declared on the model's own fields take precedence.
+    """
+    if unknown := sorted(descriptions.keys() - model.model_fields.keys()):
+        raise ValueError(f"{model.__name__} has no fields {unknown}")
+    _FIELD_DESCRIPTIONS[model] = {**_FIELD_DESCRIPTIONS.get(model, {}), **descriptions}
+
+
+class _DescribedSchema(GenerateJsonSchema):
+    """JSON schema generator that adds the :func:`describe_fields` descriptions to each model's properties."""
+
+    def model_schema(self, schema: core_schema.ModelSchema) -> JsonSchemaValue:
+        json_schema = super().model_schema(schema)
+        properties = json_schema.get("properties", {})
+        for name, description in _FIELD_DESCRIPTIONS.get(schema["cls"], {}).items():
+            properties.get(name, {}).setdefault("description", description)
+        return json_schema
 
 
 def gateway_tool_schema(spec: ToolSpec[Any, Any]) -> dict[str, Any]:
-    """The AgentCore Gateway Lambda-target tool definition for ``spec``."""
-    schema = spec.input.model_json_schema()
+    """The AgentCore Gateway Lambda-target tool definition for ``spec``.
+
+    The description is the docstring, plus :data:`APPROVAL_NOTE` for CONFIRM tools: the model should explain such a
+    call and then make it, because the runtime turns the call itself into the approval request.
+    """
+    schema = spec.input.model_json_schema(schema_generator=_DescribedSchema)
     flat = _flatten(schema, schema.get("$defs", {}))
     flat.setdefault("properties", {})[CORRELATION_FIELD] = {
         "type": "string",
         "description": "Correlation id for tracing. Set automatically by the agent runtime; never invent one.",
     }
-    return {"name": spec.name, "description": spec.description, "inputSchema": flat}
+    description = " ".join(spec.description.split())
+    if spec.approval is Approval.CONFIRM:
+        description = f"{description} {APPROVAL_NOTE}"
+    return {"name": spec.name, "description": description, "inputSchema": flat}
 
 
 def _flatten(node: Mapping[str, Any], defs: Mapping[str, Any]) -> dict[str, Any]:
@@ -190,10 +228,9 @@ def _flatten(node: Mapping[str, Any], defs: Mapping[str, Any]) -> dict[str, Any]
 
     out: dict[str, Any] = {k: v for k, v in node.items() if k in _KEPT and k not in {"properties", "items"}}
     out.setdefault("type", "object" if "properties" in node else "string")
-    notes = [template.format(_render(node[key])) for key, template in _FOLDED.items() if key in node]
-    if notes or ("title" in node and "description" not in node):
-        base = node.get("description") or node.get("title", "")
-        out["description"] = "; ".join(filter(None, [base, *notes]))
+    notes = [template.format(_render(node[key])) for key, template in _FOLDED.items() if _informative(node, key)]
+    if description := _describe(node.get("description", ""), notes):
+        out["description"] = description
     if properties := node.get("properties"):
         out["properties"] = {key: _flatten(value, defs) for key, value in properties.items()}
     if items := node.get("items"):
@@ -201,9 +238,39 @@ def _flatten(node: Mapping[str, Any], defs: Mapping[str, Any]) -> dict[str, Any]
     return out
 
 
+def _informative(node: Mapping[str, Any], key: str) -> bool:
+    """Whether ``node[key]`` tells the model something: null, empty and object defaults say nothing (an omitted
+    optional field is null; an object's own properties carry their defaults)."""
+    if key not in node:
+        return False
+    value = node[key]
+    return key != "default" or not (value is None or value in ("", []) or isinstance(value, dict))
+
+
+def _describe(base: str, notes: Sequence[str]) -> str:
+    """``base`` with the folded constraints in parentheses: ``Page size (default 20; ≥ 1; ≤ 100).``"""
+    text = base.strip().replace("``", "`")  # docstrings use reStructuredText literals
+    if not notes:
+        return text
+    constraints = "; ".join(notes)
+    if not text:
+        return constraints
+    stem = text.removesuffix(".")
+    period = "." if stem != text else ""
+    if stem.endswith(")"):  # one parenthesis, not two in a row
+        return f"{stem[:-1]}; {constraints}){period}"
+    return f"{stem} ({constraints}){period}"
+
+
 def _without(node: Mapping[str, Any], *keys: str) -> dict[str, Any]:
     return {k: v for k, v in node.items() if k not in keys}
 
 
 def _render(value: Any) -> str:
-    return ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+    match value:
+        case list():
+            return ", ".join(map(_render, value))
+        case bool():
+            return str(value).lower()
+        case _:
+            return str(value)

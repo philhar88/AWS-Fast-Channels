@@ -84,8 +84,8 @@ class FindAssetsOutput(BaseModel):
 @tool("library", access=Access.READ)
 def find_assets(request: FindAssetsInput, ctx: ToolContext) -> FindAssetsOutput:
     """List library assets matching every given filter (kind, status, ladder_version, content_id), one compact row
-    each. Use it to find READY content of a channel's ladder version before planning, or to check what is still
-    ingesting."""
+    each, paged with next_token. Use it to find READY content encoded with a channel's ladder version before
+    planning, or to see what is still ingesting; library___get_asset has the full asset."""
     page = store.find_assets(
         **request.model_dump(exclude={"limit", "next_token"}), limit=request.limit, next_token=request.next_token
     )
@@ -119,7 +119,8 @@ class AssetDetail(AssetSummary):
 
 @tool("library", access=Access.READ)
 def get_asset(request: GetAssetInput, ctx: ToolContext) -> AssetDetail:
-    """Get one asset in full, including its valid ad-break offsets, VOD source and ingest error if any."""
+    """Get one asset in full: its valid ad-break offsets (ms), VOD source, package paths, the other ladder versions
+    it is encoded with, and the ingest error if it FAILED."""
     versions = store.asset_versions(request.asset_id)
     if not versions:
         raise ToolError(
@@ -156,7 +157,8 @@ class IngestInput(BaseModel):
     source_uri: str = Field(
         pattern=r"^(s3|https)://\S+$",
         max_length=2048,
-        description="Mezzanine file: an object in the ingest bucket (s3://<ingest bucket>/<key>) or an https:// URL.",
+        description="Mezzanine file: an object in the ingest bucket (s3://<ingest bucket>/<key>, case-sensitive, no "
+        "spaces) or an https:// URL.",
     )
     kind: Literal[AssetKind.CONTENT, AssetKind.AD] = Field(
         AssetKind.CONTENT, description="content for a program; ad for a house-ad creative."
@@ -167,15 +169,15 @@ class IngestInput(BaseModel):
         None, pattern=ASSET_ID_PATTERN, description="Library id; omit to derive a stable id from the file name."
     )
     cue_points_ms: list[int] = Field(
-        [], description="Editorial ad cue points of the title (catalog cue_points_ms); snapped to the GOP grid."
+        [], description="Editorial ad-break positions in ms (catalog cue_points_ms); snapped to the GOP grid."
     )
     duration_ms: int | None = Field(
-        None, gt=0, description="Running time of the title (catalog duration_ms); only used for the cost estimate."
+        None, gt=0, description="Running time in ms (catalog duration_ms); only used for the cost estimate."
     )
     ladder_version: str | None = Field(
         None,
         pattern=LADDER_VERSION_PATTERN,
-        description="Ladder to encode with; omit for the deployment default. Use the ladder of the target channel.",
+        description="Ladder version to encode with (PROVISIONING or READY); omit for the deployment default.",
     )
 
 
@@ -193,10 +195,11 @@ class IngestOutput(BaseModel):
 
 @tool("library", access=Access.WRITE, approval=Approval.CONFIRM)
 def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
-    """Encode a mezzanine file into the library with a ladder (MediaConvert, billed per output minute) and return
-    the cost estimate. Returns as soon as the ingest pipeline starts; poll library___get_ingest_status until the
-    asset is READY (minutes). Refuses assets that are already in the library unless they FAILED. Requires human
-    approval."""
+    """Encode a mezzanine file into the media library with a ladder version (MediaConvert, billed per output
+    minute). Encode with the ladder of the channel that will air it; pass the catalog duration_ms to get
+    estimated_cost_usd. Returns as soon as the ingest pipeline starts; poll library___get_ingest_status with the
+    execution_name until done (minutes). Refuses assets already in the library unless they FAILED, and S3 sources
+    outside the ingest bucket."""
     config = settings()
     config.require("ingest_state_machine_arn", "ingest_bucket")
     ladder_version = request.ladder_version or _default_ladder_version()
@@ -335,7 +338,8 @@ class IngestStatusOutput(BaseModel):
 @tool("library", access=Access.READ)
 def get_ingest_status(request: IngestStatusInput, ctx: ToolContext) -> IngestStatusOutput:
     """Check an ingest: the pipeline run (status, error) and the library asset it produces (status, VOD source,
-    duration, break offsets). Pass the execution_name from library___ingest, or the asset_id."""
+    duration, number of break offsets); done is true once the run has finished. Pass the execution_name from
+    library___ingest, or the asset_id."""
     settings().require("ingest_state_machine_arn")
     ladder_version = request.ladder_version or settings().default_ladder_version
     asset = store.get_asset(request.asset_id, ladder_version) if request.asset_id else None

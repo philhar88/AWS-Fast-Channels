@@ -3,7 +3,7 @@
  * `approval_required` interrupt before publishing, and the resumed run after the operator decides.
  */
 import type { AgentClient, AgentSnapshot, AgUiEvent, RunAgentInput } from "../lib/agui";
-import { CHANNELS, mockEpg, mockPlan } from "./fixtures";
+import { CATALOG, CHANNELS, mockPlan, mockPublished, mockSchedule, summary } from "./fixtures";
 
 /** Simulated latency; rejects with the abort reason when the run is cancelled. */
 export function pause(ms: number, signal?: AbortSignal): Promise<void> {
@@ -55,39 +55,46 @@ async function* toolCall(name: string, args: object, result: unknown, signal: Ab
 }
 
 async function* channelStatus(signal: AbortSignal): AsyncGenerator<AgUiEvent> {
-  yield* toolCall("channels___list_channels", {}, { channels: CHANNELS }, signal);
-  const lines = CHANNELS.map((c) => `- **${c.name}** is ${c.state.toLowerCase()} on ladder \`${c.ladder_version ?? "?"}\``);
+  yield* toolCall("channels___list_channels", {}, { ok: true, channels: CHANNELS.map(summary) }, signal);
+  const lines = CHANNELS.map((c) => `- **${c.name}** is ${c.state.toLowerCase()} on ladder \`${c.ladder_version}\``);
   yield* say(`Here are your channels:\n\n${lines.join("\n")}\n\nAsk me to plan or extend a schedule when you are ready.`, signal);
 }
 
 async function* planBlock(signal: AbortSignal): AsyncGenerator<AgUiEvent> {
   const channel = "fast-demo";
-  const schedule = mockEpg(channel);
+  const schedule = mockSchedule(channel);
   const plan = mockPlan(channel);
+  const family = CATALOG.filter((item) => item.rating !== "TV-14");
   yield* say(`I'll check the published schedule of **${channel}** and fill the next block with family titles.`, signal);
-  yield* toolCall("schedule___get_schedule", { channel }, { programs: schedule.programs.length, gaps: [], ends_at: schedule.programs.at(-1)?.end }, signal);
-  yield* toolCall("catalog___search_content", { ratings: ["TV-G", "TV-PG"], limit: 20 }, { items: plan.programs.map((p) => ({ content_id: p.content_id })) }, signal);
-  yield* toolCall("schedule___plan", { channel, after: "end", picks: plan.programs.map((p) => p.asset_id), break_policy: { cadence_minutes: 5 } }, plan, signal);
-  yield { type: "STATE_SNAPSHOT", snapshot: { channel, plan, schedule: null } };
+  yield* toolCall("schedule___get_schedule", { channel }, { ok: true, ...schedule }, signal);
+  yield { type: "STATE_SNAPSHOT", snapshot: { channel, plan: null, schedule } };
+  yield* toolCall("catalog___search_content", { ratings: ["TV-G", "TV-PG"], limit: 20 }, { ok: true, items: family }, signal);
+  const picks = plan.programs.map((p) => p.asset_id);
+  yield* toolCall("schedule___plan", { channel, picks, start: plan.start }, { ok: true, ...plan }, signal);
+  yield { type: "STATE_SNAPSHOT", snapshot: { channel, plan, schedule } };
   const breaks = plan.programs.reduce((sum, p) => sum + p.breaks.length, 0);
-  yield* say(`The plan has **${plan.programs.length} programs** with **${breaks} ad breaks** and one warning (a repeat). Publishing changes what airs, so I need your approval.`, signal);
+  yield* say(
+    `The plan has **${plan.programs.length} programs** with **${breaks} ad breaks** and one warning (two minutes of filler before the block). Publishing changes what airs, so I need your approval.`,
+    signal,
+  );
   yield {
     type: "CUSTOM",
     name: "approval_required",
     value: {
       interrupt_id: crypto.randomUUID(),
       tool: "schedule___publish",
-      arguments: { plan_id: plan.plan_id, channel },
-      reason: `Publish ${plan.programs.length} programs to ${channel}, appended after the current schedule.`,
-      cost_estimate_usd: 0,
+      arguments: { plan_id: plan.plan_id },
+      reason: "Publish a plan to the channel's live schedule; this changes what airs.",
     },
   };
 }
 
+/** Like the agent: the published block replaces the plan in the shared state (re-read the EPG for the guide). */
 async function* publish(state: RunAgentInput["state"], signal: AbortSignal): AsyncGenerator<AgUiEvent> {
   const snapshot = "plan" in state ? (state as AgentSnapshot) : null;
   const plan = snapshot?.plan ?? mockPlan("fast-demo");
-  yield* toolCall("schedule___publish", { plan_id: plan.plan_id, channel: plan.channel }, { published: plan.programs.length, epg_key: `epg/${plan.channel}.json` }, signal);
-  yield { type: "STATE_SNAPSHOT", snapshot: { channel: plan.channel, plan: null, schedule: mockEpg(plan.channel) } };
-  yield* say(`Published ${plan.programs.length} programs to **${plan.channel}**; the EPG feed is updated.`, signal);
+  const published = mockPublished(plan);
+  yield* toolCall("schedule___publish", { plan_id: plan.plan_id }, { ok: true, ...published }, signal);
+  yield { type: "STATE_SNAPSHOT", snapshot: { channel: plan.channel, plan: null, schedule: published } };
+  yield* say(`Published ${published.published} programs to **${plan.channel}**; the EPG feed is updated.`, signal);
 }

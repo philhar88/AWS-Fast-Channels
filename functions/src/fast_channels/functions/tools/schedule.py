@@ -33,8 +33,10 @@ from fast_channels.core.catalog import ContentItem
 from fast_channels.core.events import SchedulePublished, put_events_entry
 from fast_channels.core.ingest import AssetKind
 from fast_channels.core.timeline import (
+    BREAK_SLATE_GOPS,
     LEAD_TIME_MS,
     BreakPolicy,
+    Daypart,
     Plan,
     PlanInputAsset,
     PlannedProgram,
@@ -49,9 +51,35 @@ from fast_channels.functions.custom_resources.channel_lifecycle import SCHEDULE_
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
+from fast_channels.functions.tools._alerts import Alert, relevant
+from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, describe_fields, tool
 
 logger = Logger()
+
+describe_fields(
+    BreakPolicy,
+    cadence_minutes="Target minutes from the end of one ad break to the next, counted across programs.",
+    min_gap_minutes="Minimum minutes between the end of one break and the next break.",
+    max_breaks="Most breaks per program; omit for no limit.",
+    slate_gops=f"Break length in GOPs, one of {', '.join(map(str, BREAK_SLATE_GOPS))}: about 30, 60, 90 or 120 s "
+    "with 2 s GOPs.",
+)
+describe_fields(
+    ProgrammingBrief,
+    ratings="Allowed content ratings, e.g. TV-G and TV-PG; empty allows every rating.",
+    genres_allow="A program needs at least one of these genres; empty allows every genre.",
+    genres_deny="Programs with any of these genres are refused.",
+    dayparts="Extra rules for programs that start inside UTC time-of-day windows.",
+    break_policy="Ad-break policy of every plan on the channel; a plan can override it.",
+    notes="Free-text guidance for the agent; the tools do not check it.",
+)
+describe_fields(
+    Daypart,
+    start="UTC start of the window, HH:MM (inclusive).",
+    end="UTC end of the window, HH:MM (exclusive); may wrap past midnight, equal to start means all day.",
+    ratings="Ratings allowed for programs starting in the window; empty adds no rating rule.",
+    genres="A program starting in the window needs one of these genres; empty adds no genre rule.",
+)
 
 PLAN_TTL_S: Final = 3600
 LEASE_TTL_S: Final = 360
@@ -61,9 +89,6 @@ CONFLICT_RETRIES: Final = 4
 GC_WINDOW_MS: Final = 15 * 60_000  # aired programs linger in Channel Assembly ~15 min (channel-assembly.md §5.6)
 EPG_HISTORY_MS: Final = 6 * 3600_000
 MAX_PICKS: Final = 100
-NOISE_ALERTS: Final = frozenset({"SEGMENT_DURATION_MISMATCH", "BANDWIDTH_MISMATCH"})
-"""Harmless with GOP-snapped ESAM splits and normalised BANDWIDTH; they hide real alerts (_review.md, e2e.md §8)."""
-MAX_ALERTS: Final = 20
 
 
 def now_ms() -> int:
@@ -79,7 +104,7 @@ def _epoch_ms(moment: datetime) -> int:
 
 
 class ChannelInput(BaseModel):
-    channel: str = Field(description="Channel name, e.g. fast-demo.", min_length=1, max_length=64)
+    channel: str = Field(description="Channel name from channels___list_channels.", min_length=1, max_length=64)
 
 
 class Gap(BaseModel):
@@ -90,15 +115,6 @@ class Gap(BaseModel):
     end_ms: int
     end: str
     duration_ms: int
-
-
-class Alert(BaseModel):
-    """A Channel Assembly alert (ListAlerts), noise codes removed."""
-
-    code: str
-    category: str
-    message: str
-    resource_arn: str
 
 
 class BriefOutput(BaseModel):
@@ -219,23 +235,6 @@ def channel_arn(record: store.ChannelRecord) -> str:
     return record.arn or str(aws.client("mediatailor").describe_channel(ChannelName=record.name)["Arn"])
 
 
-def alerts(resource_arn: str) -> list[Alert]:
-    """ListAlerts of a resource without the noise codes, at most :data:`MAX_ALERTS`."""
-    pages = aws.client("mediatailor").get_paginator("list_alerts").paginate(ResourceArn=resource_arn)
-    found = [
-        Alert(
-            code=item["AlertCode"],
-            category=item.get("Category", ""),
-            message=item.get("AlertMessage", "")[:300],
-            resource_arn=item.get("ResourceArn", resource_arn),
-        )
-        for page in pages
-        for item in page.get("Items", [])
-        if not any(code in f"{item['AlertCode']} {item.get('AlertMessage', '')}" for code in NOISE_ALERTS)
-    ]
-    return found[:MAX_ALERTS]
-
-
 # --- MediaLibrary helpers --------------------------------------------------------------------------------------------
 
 
@@ -334,8 +333,9 @@ class ScheduleOutput(epg.Epg):
 
 @tool("schedule", access=Access.READ)
 def get_schedule(payload: ChannelInput, ctx: ToolContext) -> ScheduleOutput:
-    """Get a channel's published schedule from now on: programs with UTC start/end, title, rating and breaks,
-    the end of the schedule (plan from there to extend it) and the filler gaps between programs."""
+    """Get a channel's published schedule from now on: programs with UTC start/end, title, rating and ad breaks,
+    the end of the schedule (end; schedule___plan appends there by default) and the filler gaps between
+    programs."""
     channel = require_channel(payload.channel)
     at = now_ms()
     upcoming = recent_programs(channel.name, at)
@@ -355,17 +355,25 @@ def get_schedule(payload: ChannelInput, ctx: ToolContext) -> ScheduleOutput:
 
 
 class PlanInput(BaseModel):
-    channel: str = Field(description="Channel name.", min_length=1, max_length=64)
+    channel: str = Field(description="Channel name from channels___list_channels.", min_length=1, max_length=64)
     picks: list[str] = Field(
         min_length=1,
         max_length=MAX_PICKS,
-        description="Asset ids in air order (from library___find_assets, READY on the channel's ladder version).",
+        description="Asset ids in air order: READY content encoded with the channel's ladder version "
+        "(library___find_assets). An id listed twice airs twice.",
     )
     start: datetime | None = Field(
-        None, description="UTC ISO-8601 start of the block. Omit start and after to append to the schedule."
+        None,
+        description="UTC ISO-8601 start of the block, e.g. 2026-10-16T18:00:00Z. Omit start and after to append "
+        "to the published schedule.",
     )
-    after: str | None = Field(None, description="Name of a published program the block starts right after.")
-    break_policy: BreakPolicy | None = Field(None, description="Overrides the brief's ad-break policy for this block.")
+    after: str | None = Field(
+        None,
+        description="Name of an upcoming program, from schedule___get_schedule, that the block starts right after.",
+    )
+    break_policy: BreakPolicy | None = Field(
+        None, description="Ad-break policy for this block only; omit to use the channel brief's."
+    )
 
     @model_validator(mode="after")
     def _one_anchor(self) -> Self:
@@ -559,10 +567,13 @@ def plan_output(stored: StoredPlan) -> PlanOutput:
 
 @tool("schedule", access=Access.WRITE)
 def plan(payload: PlanInput, ctx: ToolContext) -> PlanOutput:
-    """Plan a block of programs: the ordered picks start at `start`, right after the program `after`, or (by
-    default) at the end of the published schedule. Computes every start time, on-air duration, ad break and
-    SCTE-35 id, checks the brief (ratings, genres, dayparts) and the schedule, and returns a plan_id with the
-    program table and violations. Errors block publishing; warnings do not. Nothing changes on air."""
+    """Plan a block of programs on a channel; nothing changes on air. The picks air back to back in the given
+    order from start, right after the program named in after, or by default where the published schedule ends
+    (10 minutes from now when it is empty). Computes every start time, on-air duration (content plus ad breaks),
+    ad break and SCTE-35 id, and checks the brief (ratings, genres, dayparts) and the schedule (overlaps, lead
+    time). Returns a plan_id with the program table in UTC, the violations and publishable. Error violations block
+    publishing: change the picks or the start and plan again; warnings are for the operator to accept. Publish
+    with schedule___publish within the hour."""
     channel = require_channel(payload.channel)
     at = now_ms()
     ladder = store.ladder_definition(channel.ladder_version)
@@ -692,8 +703,10 @@ def _emit(event: SchedulePublished) -> None:
 
 @tool("schedule", access=Access.WRITE, approval=Approval.CONFIRM)
 def publish(payload: PublishInput, ctx: ToolContext) -> PublishOutput:
-    """Publish a plan to the channel's live schedule (changes what airs). Takes only the plan_id from
-    schedule___plan; fails with PLAN_STALE when the schedule changed since planning, then plan again."""
+    """Publish a plan to the channel's live schedule; this changes what airs. Takes only the plan_id of a
+    publishable plan from schedule___plan (plans expire after an hour). Fails with PLAN_STALE when the schedule
+    changed since planning: call schedule___get_schedule and plan again. Returns the published programs as guide
+    entries and the channel's alerts."""
     stored = StoredPlan.load(payload.plan_id)
     channel = require_channel(stored.channel)
     config = settings()
@@ -749,7 +762,7 @@ def publish(payload: PublishInput, ctx: ToolContext) -> PublishOutput:
         start=store.iso(plan.start_ms),
         end_ms=plan.end_ms,
         end=store.iso(plan.end_ms),
-        alerts=alerts(channel_arn(channel)),
+        alerts=relevant(channel_arn(channel)),
     )
 
 
@@ -757,8 +770,12 @@ def publish(payload: PublishInput, ctx: ToolContext) -> PublishOutput:
 
 
 class RemoveProgramsInput(BaseModel):
-    channel: str = Field(description="Channel name.", min_length=1, max_length=64)
-    programs: list[str] = Field(min_length=1, max_length=MAX_PICKS, description="Program names to remove.")
+    channel: str = Field(description="Channel name from channels___list_channels.", min_length=1, max_length=64)
+    programs: list[str] = Field(
+        min_length=1,
+        max_length=MAX_PICKS,
+        description="Names of upcoming programs to remove, from schedule___get_schedule.",
+    )
 
 
 class RemoveProgramsOutput(BaseModel):
@@ -789,7 +806,8 @@ def reflow(programs: Sequence[store.ProgramRecord], removed: set[str]) -> list[s
 @tool("schedule", access=Access.WRITE, approval=Approval.CONFIRM)
 def remove_programs(payload: RemoveProgramsInput, ctx: ToolContext) -> RemoveProgramsOutput:
     """Remove programs that have not started yet from a channel's live schedule and guide. Later programs of the
-    same block move up to close the hole; the next block keeps its start (filler slate airs in between)."""
+    same block move up to close the hole; the next block keeps its start, so filler airs in between. Programs that
+    are on air or over are reported in not_found."""
     channel = require_channel(payload.channel)
     with lease(channel.name, f"remove.{ctx.correlation_id}"):
         at = now_ms()
@@ -819,19 +837,21 @@ def remove_programs(payload: RemoveProgramsInput, ctx: ToolContext) -> RemovePro
 
 @tool("schedule", access=Access.READ)
 def get_brief(payload: ChannelInput, ctx: ToolContext) -> BriefOutput:
-    """Get a channel's programming brief: allowed ratings and genres, dayparts (UTC) and the ad-break policy."""
+    """Get a channel's programming brief: allowed ratings and genres, dayparts (UTC) and the ad-break policy that
+    every plan is checked against. Read it before picking content."""
     channel = require_channel(payload.channel)
     return BriefOutput(channel=channel.name, brief=channel.brief or ProgrammingBrief(), default=channel.brief is None)
 
 
 class UpdateBriefInput(BaseModel):
-    channel: str = Field(description="Channel name.", min_length=1, max_length=64)
+    channel: str = Field(description="Channel name from channels___list_channels.", min_length=1, max_length=64)
     brief: ProgrammingBrief = Field(description="The complete new brief; it replaces the current one.")
 
 
 @tool("schedule", access=Access.WRITE, approval=Approval.CONFIRM)
 def update_brief(payload: UpdateBriefInput, ctx: ToolContext) -> BriefOutput:
-    """Replace a channel's programming brief (the standing rules every future plan is checked against)."""
+    """Replace a channel's programming brief, the standing rules every future plan is checked against. Pass the
+    complete brief: start from schedule___get_brief and change only what the operator asked for."""
     channel = require_channel(payload.channel)
     updated = channel.model_copy(update={"brief": payload.brief, "correlation_id": ctx.correlation_id})
     store.put(updated, condition=Attr("pk").exists())

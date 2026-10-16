@@ -10,8 +10,9 @@ description: MediaTailor ad insertion for FAST channels - SSAI versus SGAI (HLS 
   - **SSAI** (server-side, stitched): ads are spliced into the stream; works on every player, HLS and DASH.
   - **SGAI** (server-guided, HLS Interstitials): the playlist carries `EXT-X-DATERANGE` interstitials and the
     player fetches the ads itself. Same URL plus `?aws.insertionMode=GUIDED`. **HLS only**; DASH stays SSAI.
-- `channels___get_channel` returns the playback URLs per output (`ssai`, `sgai`, `dash`). Give operators those
-  exact URLs; never build URLs yourself.
+- `channels___get_channel` returns the playback URLs per output (`ssai`, `sgai`, `dash`) through the primary
+  CDN, and `cdn_playback` with the same URLs through every other configured CDN. Give operators those exact
+  URLs; never build URLs yourself.
 
 ## Preconditioned ads
 - Ads are encoded on the channel's own ladder ahead of time (house ads in the ladder kit), and MediaTailor
@@ -26,6 +27,6 @@ description: MediaTailor ad insertion for FAST channels - SSAI versus SGAI (HLS 
   the break duration, so every ad request can be traced to a program and break.
 
 ## Troubleshooting
-- No ads at all: check the channel is running, the program has breaks, and `origins___list_alerts` for the
-  channel.
+- No ads at all: check the channel is running (`channels___get_channel`), the program has breaks
+  (`schedule___get_schedule`), and `origins___list_alerts` for the channel.
 - Ads in SSAI but not SGAI: the player must support HLS Interstitials (hls.js 1.6+, Shaka, Apple 16.4+).

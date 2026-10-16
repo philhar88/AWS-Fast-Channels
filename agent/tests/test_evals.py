@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import json
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from ag_ui.core import RunAgentInput
 from strands.session import FileSessionManager
 
 from fast_channels.agent.evals.catalog import by_asset
-from fast_channels.agent.evals.fake_tools import CHANNEL, FakeScheduleTools, iso, serve
+from fast_channels.agent.evals.fake_tools import CHANNEL, TOOLS, FakeScheduleTools, gateway_definitions, iso, serve
 from fast_channels.agent.evals.runner import RunRecord, rescore, save, summarise
 from fast_channels.agent.evals.scenarios import HOUR_MS, SCENARIOS
 from fast_channels.agent.evals.scoring import score, tool_calls
@@ -18,29 +19,54 @@ from fast_channels.agent.scheduler import Scheduler
 from fast_channels.agent.settings import Settings
 from fast_channels.agent.testing import OPERATOR_CLAIMS, ScriptedModel, kinds, text, tool_use, unsigned_jwt
 
-START = 1_792_166_400_000  # 2026-10-16T16:00:00Z
+START = (int(time.time() * 1000) // HOUR_MS + 2) * HOUR_MS  # a full hour, beyond the lead-time warning
 
 
-def test_plan_computes_contiguous_airtime_and_breaks() -> None:
+def test_plan_computes_contiguous_on_air_durations_and_breaks() -> None:
     tools = FakeScheduleTools()
 
-    plan = tools.plan(CHANNEL, ["ff-002-a1b2c3", "ff-004-a1b2c3"], start=iso(START))
+    plan = tools.plan(channel=CHANNEL, picks=["ff-002-a1b2c3", "ff-004-a1b2c3"], start=iso(START))
 
     first, second = plan["programs"]
     assert first["start_ms"] == START
-    assert second["start_ms"] == START + first["airtime_ms"]
-    assert plan["end_ms"] == second["start_ms"] + second["airtime_ms"]
-    assert first["airtime_ms"] == first["duration_ms"] + 60_060 * len(first["breaks"])
+    assert second["start_ms"] == START + first["duration_ms"]
+    assert plan["end_ms"] == second["start_ms"] + second["duration_ms"]
+    title = by_asset()["ff-002-a1b2c3"]
+    assert first["duration_ms"] == title.duration_ms + 60_060 * len(first["breaks"])  # on air: content plus breaks
     offsets = [b["offset_ms"] for b in first["breaks"]]
-    assert set(offsets) <= set(by_asset()["ff-002-a1b2c3"].break_offsets_ms)
+    assert set(offsets) <= set(title.break_offsets_ms)
     assert all(b - a >= 8 * 60_000 for a, b in itertools.pairwise(offsets))
-    assert plan["violations"] == []
+    assert (plan["violations"], plan["publishable"]) == ([], True)
+    assert plan["plan_id"].startswith(f"{CHANNEL}.")
+
+
+def test_plan_follows_a_named_program_and_refuses_ambiguous_anchors() -> None:
+    tools = FakeScheduleTools()
+    first = tools.plan(channel=CHANNEL, picks=["ff-004-a1b2c3"], start=iso(START))
+    tools.publish(first["plan_id"])
+    (program,) = first["programs"]
+
+    after = tools.plan(channel=CHANNEL, picks=["ff-012-a1b2c3"], after=program["name"])
+
+    assert after["start_ms"] == first["end_ms"]
+    assert tools.plan(channel=CHANNEL, picks=["ff-012-a1b2c3"], after="nope")["error"]["code"] == "NOT_FOUND"
+    both = tools.plan(channel=CHANNEL, picks=["ff-012-a1b2c3"], start=iso(START), after=program["name"])
+    assert both["error"]["code"] == "VALIDATION"
+
+
+def test_publishing_after_the_schedule_changed_is_stale() -> None:
+    tools = FakeScheduleTools()
+    first = tools.plan(channel=CHANNEL, picks=["ff-004-a1b2c3"], start=iso(START))
+    second = tools.plan(channel=CHANNEL, picks=["ff-012-a1b2c3"], start=iso(START + HOUR_MS))
+    tools.publish(first["plan_id"])
+
+    assert tools.publish(second["plan_id"])["error"]["code"] == "PLAN_STALE"
 
 
 def test_plan_flags_unknown_assets_and_ratings_and_publish_refuses_them() -> None:
     tools = FakeScheduleTools()
 
-    plan = tools.plan(CHANNEL, ["nope", "ff-003-a1b2c3"], start=iso(START))
+    plan = tools.plan(channel=CHANNEL, picks=["nope", "ff-003-a1b2c3"], start=iso(START))
 
     assert [(v["code"], v["severity"]) for v in plan["violations"]] == [("UNKNOWN_ASSET", "error"), ("RATING", "error")]
     assert tools.publish(plan["plan_id"])["error"]["code"] == "VALIDATION"
@@ -50,10 +76,10 @@ def test_plan_flags_unknown_assets_and_ratings_and_publish_refuses_them() -> Non
 
 def test_publish_appends_and_the_next_plan_follows() -> None:
     tools = FakeScheduleTools()
-    first = tools.plan(CHANNEL, ["ff-004-a1b2c3"], start=iso(START))
+    first = tools.plan(channel=CHANNEL, picks=["ff-004-a1b2c3"], start=iso(START))
     tools.publish(first["plan_id"])
 
-    follow_up = tools.plan(CHANNEL, ["ff-012-a1b2c3"])
+    follow_up = tools.plan(channel=CHANNEL, picks=["ff-012-a1b2c3"])
 
     assert follow_up["start_ms"] == first["end_ms"]
     assert tools.get_schedule(CHANNEL)["end_ms"] == first["end_ms"]
@@ -75,7 +101,7 @@ def test_every_scenario_has_a_passing_lineup(name: str, lineup: list[str]) -> No
 
 def _transcript(picks: list[str]) -> list[dict[str, Any]]:
     tools = FakeScheduleTools()
-    plan = tools.plan(CHANNEL, picks, start=iso(START))
+    plan = tools.plan(channel=CHANNEL, picks=picks, start=iso(START))
     published = tools.publish(plan["plan_id"])
     return [
         *_call("p", "schedule___plan", {"picks": picks}, plan),
@@ -90,6 +116,18 @@ def _call(call_id: str, name: str, arguments: dict[str, Any], result: dict[str, 
         {"type": "TOOL_CALL_ARGS", "toolCallId": call_id, "delta": json.dumps(arguments)},
         {"type": "TOOL_CALL_RESULT", "toolCallId": call_id, "content": json.dumps(result)},
     ]
+
+
+def test_the_fake_server_advertises_the_gateway_definitions() -> None:
+    advertised = asyncio.run(FakeScheduleTools().server().list_tools())
+
+    definitions = gateway_definitions()
+    assert [t.name for t in advertised] == list(TOOLS)
+    for tool in advertised:
+        assert (tool.description, tool.input_schema) == (
+            definitions[tool.name]["description"],
+            definitions[tool.name]["inputSchema"],
+        )
 
 
 def test_score_fails_unpublished_and_rule_breaking_runs() -> None:
@@ -148,7 +186,7 @@ def test_scheduler_runs_over_the_fake_mcp_server(tmp_path: Path) -> None:
     picks = ["ff-002-a1b2c3", "ff-004-a1b2c3"]
     turns = [
         [tool_use("p", "schedule___plan", {"channel": CHANNEL, "picks": picks, "start": iso(START)})],
-        [tool_use("q", "schedule___publish", {"plan_id": "plan-0001"})],
+        [tool_use("q", "schedule___publish", {"plan_id": f"{CHANNEL}.00000001"})],
         [text("Published.")],
     ]
     tools = FakeScheduleTools()

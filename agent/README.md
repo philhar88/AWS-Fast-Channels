@@ -12,7 +12,9 @@ the same protocol to the same Gateway.
 2. `identity.Caller` reads the token's claims: `actor_id` is `sub`, or `client_id` for machine tokens. Identity is
    never taken from the payload.
 3. `gateway.gateway_tools` opens one MCP connection to `GATEWAY_URL` with the caller's token. Cedar authorizes each
-   call as that operator. Tool definitions are cached per principal for 5 minutes. Only `<target>___<tool>`
+   call as that operator. Tool definitions are cached per principal for 5 minutes. An empty `tools/list` is
+   never cached: it is asked again after 1 s, and a second empty answer ends the run with `GATEWAY_UNAVAILABLE`
+   (right after a deployment the Gateway can list nothing for a few minutes). Only `<target>___<tool>`
    tools are exposed to the model, and `correlation_id` is hidden from their schemas.
 4. `scheduler.Scheduler` rebuilds the Strands agent from the AgentCore Memory session: history, active skills
    and pending approvals. The process holds no conversation state. The agent gets the system prompt
@@ -90,12 +92,20 @@ uv run scripts/eval_model.py --model-id us.anthropic.claude-haiku-5-5 --runs 3
 
 This runs the standard (3 h) and hard (6 h, genre alternation, prime-time title) scheduling scenarios through
 the real agent. The tools are a local fake MCP server by default, or a live Gateway with `--gateway-url`
-and `--token-file`. A model should pass every run before it enters `ALLOWED_MODELS`.
+and `--token-file`. The fake server advertises the real Gateway definitions of its tools
+(`evals/gateway_tools.json`, generated from the tool registry by `functions/tests/test_agent_contract.py`) and
+answers in the registry's output shapes, so the model reads what it reads in production. A model should pass every
+run before it enters `ALLOWED_MODELS`.
 
 Measured on 2026-10-16 with 3 runs per scenario:
 
 | Model | Passed | Cost per run |
 |---|---|---|
-| Haiku 5.5 | 6/6 | about $0.005 |
+| Haiku 5.5 (`us.` profile) | 6/6, twice | about $0.005 |
 | Sonnet 5.5 | 6/6 | about $0.05 |
 | Nova 2 Lite | 0/6 | n/a |
+
+Sonnet 5.5 and Nova 2 Lite were measured before the fake server advertised the real Gateway definitions. With the
+real definitions, Haiku once answered "Shall I publish it?" in text instead of calling `schedule___publish`; the
+approval note in every CONFIRM tool description and the system prompt now say that the call itself asks the
+operator.
