@@ -17,6 +17,7 @@ from fast_channels.infra.config import (
     PreconditionedAds,
     Removal,
     TransactionSearchMode,
+    geo_prefix,
 )
 
 type Load = Callable[..., FastChannelsConfig]
@@ -24,6 +25,9 @@ type Load = Callable[..., FastChannelsConfig]
 SHIPPED: dict[str, Any] = json.loads((Path(__file__).resolve().parents[2] / "cdk.json").read_text())["context"][
     "fast-channels"
 ]
+
+
+US_HAIKU = "us.anthropic.claude-haiku-5-5"
 
 
 def with_shipped(**overrides: Any) -> dict[str, Any]:
@@ -47,13 +51,14 @@ def test_shipped_configuration(load_config: Load) -> None:
     assert channel.outputs == DEFAULT_PACKAGE_PROFILES
     assert config.ads == PreconditionedAds()
     assert config.agent.enabled
-    assert config.agent.model == "us.anthropic.claude-haiku-5-5"
+    assert config.agent.model == US_HAIKU  # {geo} in cdk.json, resolved for us-east-1
     assert config.agent.allowed_models == (
-        "us.anthropic.claude-haiku-5-5",
+        US_HAIKU,
         "us.anthropic.claude-sonnet-5-5",
         "global.anthropic.claude-haiku-5-5",
         "global.anthropic.claude-sonnet-5-5",
     )
+    assert config.agent.console_dev_url is None
     assert config.observability.transaction_search is TransactionSearchMode.OFF
 
 
@@ -220,7 +225,7 @@ def test_external_vast_needs_a_url(load_config: Load) -> None:
         ("af-south-1", {}, "region af-south-1: Amazon Bedrock AgentCore is not available; set agent.enabled=false"),
         (
             "eu-west-1",
-            {},
+            {"agent.model": US_HAIKU, "agent.allowed_models": [US_HAIKU]},
             "'us.anthropic.claude-haiku-5-5' is a us. inference profile, which eu-west-1 cannot invoke; "
             "use eu.anthropic.claude-haiku-5-5 or global.anthropic.claude-haiku-5-5",
         ),
@@ -239,6 +244,88 @@ def test_region_checks_follow_the_agent_plane(load_config: Load) -> None:
     )
 
     assert config.agent.model == eu
+
+
+@pytest.mark.parametrize(
+    ("region", "geo"),
+    [
+        ("us-east-1", "us"),
+        ("us-west-2", "us"),
+        ("ca-central-1", "us"),  # a source region of the us. profiles
+        ("eu-west-1", "eu"),
+        ("eu-central-1", "eu"),
+        ("ap-southeast-2", "au"),
+        ("ap-northeast-1", "global"),  # jp. has no Sonnet 5.5
+        ("ap-south-1", "global"),  # no apac. profile of the 5.5 models
+        ("sa-east-1", "global"),
+    ],
+)
+def test_shipped_models_resolve_to_the_regions_geography(load_config: Load, region: str, geo: str) -> None:
+    config = load_config({"fast-channels": SHIPPED}, region=region)
+
+    assert geo_prefix(region) == geo
+    assert config.agent.model == f"{geo}.anthropic.claude-haiku-5-5"
+    assert config.agent.allowed_models == tuple(
+        dict.fromkeys(
+            [
+                f"{geo}.anthropic.claude-haiku-5-5",
+                f"{geo}.anthropic.claude-sonnet-5-5",
+                "global.anthropic.claude-haiku-5-5",
+                "global.anthropic.claude-sonnet-5-5",
+            ]
+        )
+    )
+
+
+def test_geo_placeholder_waits_for_a_region(load_config: Load) -> None:
+    unresolved = load_config({"fast-channels": SHIPPED})
+    resolved = unresolved.for_region("eu-west-1")
+
+    assert unresolved.agent.unresolved
+    assert unresolved.agent.model == "{geo}.anthropic.claude-haiku-5-5"
+    assert not resolved.agent.unresolved
+    assert resolved.agent.model == "eu.anthropic.claude-haiku-5-5"
+    assert FastChannelsConfig().for_region("us-east-1").agent.model == US_HAIKU
+
+
+def test_for_region_reports_the_regions_problems(load_config: Load) -> None:
+    config = load_config(with_shipped(**{"agent.model": US_HAIKU, "agent.allowed_models": [US_HAIKU]}))
+
+    with pytest.raises(ConfigError, match="which eu-west-1 cannot invoke"):
+        config.for_region("eu-west-1")
+
+
+def test_duplicate_models_are_still_refused(load_config: Load) -> None:
+    message = config_error(load_config, with_shipped(**{"agent.allowed_models": [US_HAIKU, US_HAIKU]}))
+
+    assert "duplicate entries: us.anthropic.claude-haiku-5-5" in message
+
+
+@pytest.mark.parametrize("url", ["http://localhost:5173/", "http://127.0.0.1:4173/"])
+def test_console_dev_url_accepts_local_origins_only(load_config: Load, url: str) -> None:
+    assert load_config(with_shipped(**{"agent.console_dev_url": url})).agent.console_dev_url == url
+    assert "String should match pattern" in config_error(
+        load_config, with_shipped(**{"agent.console_dev_url": "http://evil.example.com:5173/"})
+    )
+
+
+def test_console_dev_url_is_off_by_default(load_config: Load) -> None:
+    assert load_config({"fast-channels": SHIPPED}).agent.console_dev_url is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "recorded"),
+    [
+        ({}, False),
+        ({"observability.transaction_search": "enable"}, True),
+        ({"observability.transaction_search": "existing", "observability.capture_prompts": False}, False),
+        ({"observability.capture_prompts": True}, True),
+    ],
+)
+def test_prompts_are_recorded_only_with_evaluations_or_on_request(
+    load_config: Load, overrides: dict[str, Any], recorded: bool
+) -> None:
+    assert load_config(with_shipped(**overrides)).observability.records_prompts is recorded
 
 
 def test_configuration_is_immutable(load_config: Load) -> None:

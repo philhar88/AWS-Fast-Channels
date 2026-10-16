@@ -1,11 +1,13 @@
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 from aws_cdk import App, Environment, Stack
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_ssm as ssm
+from aws_cdk.assertions import Template
 
 from fast_channels.infra.app import build
 from fast_channels.infra.config import ConfigError, FastChannelsConfig
@@ -13,7 +15,9 @@ from fast_channels.infra.stage import FastChannelsStage, stage_id
 
 type GetDeployment = Callable[..., Any]
 
-# The shipped us. inference profiles cannot be invoked outside the US (config region checks).
+CDK_JSON = Path(__file__).resolve().parents[2] / "cdk.json"
+
+# A single global profile: one model id whatever the deployment region.
 GLOBAL_MODELS = {
     "agent.model": "global.anthropic.claude-haiku-5-5",
     "agent.allowed_models": ["global.anthropic.claude-haiku-5-5"],
@@ -186,3 +190,41 @@ def test_other_cdns_reach_the_channels_tool(deployment: GetDeployment) -> None:
         if "CDN_ENDPOINTS" in fn["Properties"].get("Environment", {}).get("Variables", {})
     ]
     assert json.loads(variables["CDN_ENDPOINTS"]) == cdns
+
+
+def runtime_environment(deployment: Any) -> dict[str, str]:
+    [runtime] = deployment.template(deployment.stage.operator).find_resources("AWS::BedrockAgentCore::Runtime").values()
+    return dict(runtime["Properties"]["EnvironmentVariables"])
+
+
+@pytest.mark.parametrize(
+    ("region", "geo"), [("us-east-1", "us"), ("eu-west-1", "eu"), ("ap-southeast-2", "au"), ("sa-east-1", "global")]
+)
+def test_shipped_configuration_deploys_in_every_agentcore_geography(
+    deployment: GetDeployment, region: str, geo: str
+) -> None:
+    environment = runtime_environment(deployment(region=region))  # no model overrides: cdk.json uses {geo}
+
+    assert environment["DEFAULT_MODEL_ID"] == f"{geo}.anthropic.claude-haiku-5-5"
+    assert "{geo}" not in environment["ALLOWED_MODELS"]
+
+
+def test_stage_resolves_a_configuration_validated_without_a_region() -> None:
+    flags = {k: v for k, v in json.loads(CDK_JSON.read_text())["context"].items() if k != "fast-channels"}
+    app = App(context={**flags, "aws:cdk:bundling-stacks": []})
+    stage = FastChannelsStage(
+        app, "S", config=FastChannelsConfig(), env=Environment(account="123456789012", region="eu-west-1")
+    )
+    assert stage.operator is not None
+    [runtime] = Template.from_stack(stage.operator).find_resources("AWS::BedrockAgentCore::Runtime").values()
+
+    assert runtime["Properties"]["EnvironmentVariables"]["DEFAULT_MODEL_ID"] == "eu.anthropic.claude-haiku-5-5"
+
+
+def test_stage_checks_the_region_of_a_configuration_built_in_code() -> None:
+    config = FastChannelsConfig.model_validate(
+        {"agent": {"model": "us.anthropic.claude-haiku-5-5", "allowed_models": ["us.anthropic.claude-haiku-5-5"]}}
+    )
+
+    with pytest.raises(ConfigError, match="which eu-west-1 cannot invoke"):
+        FastChannelsStage(App(), "S", config=config, env=Environment(account="123456789012", region="eu-west-1"))

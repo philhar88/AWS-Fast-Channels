@@ -29,7 +29,15 @@ if TYPE_CHECKING:
     from constructs import Node
 
 CONTEXT_KEY: Final = "fast-channels"
-DEFAULT_MODEL: Final = "us.anthropic.claude-haiku-5-5"
+GEO_PLACEHOLDER: Final = "{geo}"
+"""Stands for the deployment region's inference-profile geography in model ids (:func:`geo_prefix`)."""
+DEFAULT_MODEL: Final = f"{GEO_PLACEHOLDER}.anthropic.claude-haiku-5-5"
+DEFAULT_ALLOWED_MODELS: Final = (
+    DEFAULT_MODEL,
+    f"{GEO_PLACEHOLDER}.anthropic.claude-sonnet-5-5",
+    "global.anthropic.claude-haiku-5-5",
+    "global.anthropic.claude-sonnet-5-5",
+)
 MAX_PACKAGE_PROFILES: Final = 5  # package configurations per VOD source, default quota (channel-assembly.md §3.3)
 
 # MediaTailor (Channel Assembly) ∩ MediaConvert, from the botocore endpoint data (2026-10).
@@ -78,14 +86,19 @@ AGENTCORE_REGIONS: Final = frozenset(
     }
 )
 # Geographic cross-Region inference profile prefix -> region-name prefixes allowed to call it (``global.`` = any).
+# ca-central-1 is a source region of the us. profiles (get-inference-profile there lists it among the destinations).
 _GEO_PROFILE_REGIONS: Final = {
-    "us": ("us-",),
+    "us": ("us-", "ca-central-1"),
     "eu": ("eu-",),
     "apac": ("ap-",),
     "ca": ("ca-",),
     "jp": ("ap-northeast-1", "ap-northeast-3"),
     "au": ("ap-southeast-2", "ap-southeast-4"),
 }
+# Region-name prefix -> the geography ``{geo}`` stands for there: where a geographic profile of both default models
+# (Claude Haiku 5.5 and Sonnet 5.5) exists, from ``aws bedrock list-inference-profiles`` in every AgentCore region
+# (2026-10-16). APAC regions have no apac. profile of them and jp. has no Sonnet, so they fall back to global.
+_DEFAULT_GEOGRAPHIES: Final = (("us-", "us"), ("ca-central-1", "us"), ("eu-", "eu"), ("ap-southeast-2", "au"))
 _RETENTION: Final = {
     1: logs.RetentionDays.ONE_DAY,
     3: logs.RetentionDays.THREE_DAYS,
@@ -116,6 +129,18 @@ _EMAIL: Final = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 class ConfigError(ValueError):
     """The ``fast-channels`` configuration is invalid; the message lists every problem with its context path."""
+
+
+def geo_prefix(region: str) -> str:
+    """The inference-profile geography that :data:`GEO_PLACEHOLDER` stands for in ``region``: ``us`` in the US and
+    ca-central-1, ``eu`` in Europe, ``au`` in ap-southeast-2, ``global`` elsewhere."""
+    return next((geo for start, geo in _DEFAULT_GEOGRAPHIES if region.startswith(start)), "global")
+
+
+def resolve_geo(model: str, region: str) -> str:
+    """``model`` with :data:`GEO_PLACEHOLDER` replaced for ``region`` (``{geo}.anthropic.claude-haiku-5-5`` ->
+    ``eu.anthropic.claude-haiku-5-5`` in eu-west-1)."""
+    return model.replace(GEO_PLACEHOLDER, geo_prefix(region))
 
 
 class Removal(StrEnum):
@@ -320,24 +345,44 @@ type AdsConfig = Annotated[PreconditionedAds | ExternalVastAds, Field(discrimina
 class AgentConfig(_Section):
     enabled: bool = True
     """Deploy the operator plane (Cognito, agent tools, Gateway, AgentCore Runtime and Memory, console)."""
-    model: str = DEFAULT_MODEL
-    """Default Bedrock model id or inference profile of the scheduler agent; one of ``allowed_models``."""
-    allowed_models: tuple[str, ...] = (
-        DEFAULT_MODEL,
-        "us.anthropic.claude-sonnet-5-5",
-        "global.anthropic.claude-haiku-5-5",
-        "global.anthropic.claude-sonnet-5-5",
-    )
-    """Models the agent may be switched to at runtime (SSM ModelSpec); the runtime role may invoke only these."""
+    model: str = Field(default=DEFAULT_MODEL, validate_default=True)
+    """Default Bedrock model id or inference profile of the scheduler agent; one of ``allowed_models``. ``{geo}``
+    stands for the deployment region's geography: ``us`` (US regions and ca-central-1), ``eu`` (Europe), ``au``
+    (ap-southeast-2) or ``global`` (elsewhere)."""
+    allowed_models: tuple[str, ...] = Field(default=DEFAULT_ALLOWED_MODELS, validate_default=True)
+    """Models the agent may be switched to at runtime (SSM ModelSpec); the runtime role may invoke only these.
+    ``{geo}`` as in ``model``; entries that resolve to the same id are kept once."""
     admin_email: str | None = Field(default=None, pattern=_EMAIL)
     """Email of the first ``fast-admins`` user (invited by Cognito). Omit to create users yourself."""
+    console_dev_url: str | None = Field(default=None, pattern=r"^http://(localhost|127\.0\.0\.1):\d{2,5}/$")
+    """Local console dev server (``http://localhost:5173/``) to accept as a sign-in and sign-out redirect, for
+    ``npm run dev`` against this deployment. Off by default: with it, any process listening on that port of an
+    operator's machine can receive their authorization codes."""
+
+    @field_validator("model", mode="after")
+    @classmethod
+    def _resolve_model(cls, model: str, info: ValidationInfo) -> str:
+        region = (info.context or {}).get("region")
+        return resolve_geo(model, region) if region else model
+
+    @field_validator("allowed_models", mode="after")
+    @classmethod
+    def _resolve_allowed(cls, models: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
+        _unique(models)
+        region = (info.context or {}).get("region")
+        return tuple(dict.fromkeys(resolve_geo(model, region) for model in models)) if region else models
 
     @model_validator(mode="after")
     def _model_is_allowed(self) -> Self:
-        _unique(self.allowed_models)
         if self.model not in self.allowed_models:
             raise ValueError(f"model {self.model!r} is not in allowed_models {list(self.allowed_models)}")
         return self
+
+    @property
+    def unresolved(self) -> bool:
+        """Whether a model id still holds ``{geo}``: validated without a region (see
+        :meth:`FastChannelsConfig.for_region`)."""
+        return any(GEO_PLACEHOLDER in model for model in (self.model, *self.allowed_models))
 
 
 class ObservabilityConfig(_Section):
@@ -348,6 +393,17 @@ class ObservabilityConfig(_Section):
     """Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs)."""
     mediatailor_log_percent: int = Field(default=100, ge=0, le=100)
     """Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production)."""
+    capture_prompts: bool | None = None
+    """Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent
+    runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation.
+    Default: only when ``transaction_search`` is not ``off``, because the online evaluations score that content."""
+
+    @property
+    def records_prompts(self) -> bool:
+        """``capture_prompts``, with its default applied."""
+        if self.capture_prompts is not None:
+            return self.capture_prompts
+        return self.transaction_search is not TransactionSearchMode.OFF
 
     @field_validator("log_retention_days")
     @classmethod
@@ -450,6 +506,17 @@ class FastChannelsConfig(_Section):
             and not region.startswith(_GEO_PROFILE_REGIONS[geo])
             for name in [model.partition(".")[2]]
         ]
+
+    def for_region(self, region: str) -> Self:
+        """This configuration validated for ``region``: ``{geo}`` resolved and the region's limits checked.
+
+        Raises:
+            ConfigError: listing every problem, as :meth:`from_context` does.
+        """
+        try:
+            return self.model_validate(self.model_dump(), context={"region": region})
+        except ValidationError as error:
+            raise ConfigError(_describe(error)) from None
 
     @classmethod
     def from_context(cls, node: Node, *, region: str | None = None) -> Self:

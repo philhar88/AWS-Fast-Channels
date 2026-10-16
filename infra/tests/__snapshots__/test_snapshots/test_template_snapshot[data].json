@@ -1228,7 +1228,7 @@
               "Action": "s3:GetObject",
               "Condition": {
                 "ArnLike": {
-                  "aws:SourceArn": "arn:aws:mediatailor:us-east-1:123456789012:sourceLocation/fast*"
+                  "aws:SourceArn": "arn:aws:mediatailor:us-east-1:123456789012:sourceLocation/fast-media"
                 },
                 "StringEquals": {
                   "aws:SourceAccount": "123456789012"

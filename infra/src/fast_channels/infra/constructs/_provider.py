@@ -1,13 +1,21 @@
-"""Shared shaping of CDK custom-resource ``Provider`` frameworks: waiter tracing and their cdk-nag findings."""
+"""Custom-resource ``Provider`` frameworks, built one way: INFO-level framework logs, a traced and logged waiter,
+and their cdk-nag findings acknowledged."""
 
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
+from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk import custom_resources as cr
 
 from fast_channels.infra import nag
+
+if TYPE_CHECKING:
+    from constructs import Construct
+
+    from fast_channels.infra.constructs.functions import FastFunction
 
 XRAY_ACTIONS: Final = (
     "xray:PutTraceSegments",
@@ -16,6 +24,70 @@ XRAY_ACTIONS: Final = (
     "xray:GetSamplingTargets",
 )
 FRAMEWORK_DLQ: Final = "Provider framework function, invoked by CloudFormation, which reports failures back to it"
+PROVIDER_INVOKED: Final = "Invoked synchronously by the custom-resource Provider framework, which reports failures"
+QUERY_INTERVAL: Final = Duration.seconds(30)
+TOTAL_TIMEOUT: Final = Duration.minutes(30)
+
+
+def provider(
+    scope: Construct,
+    id: str,
+    *,
+    on_event: FastFunction,
+    is_complete: FastFunction | None = None,
+    waiter_log_group_name: str | None = None,
+    waiter_logs_id: str = "WaiterLogs",
+    query_interval: Duration = QUERY_INTERVAL,
+    total_timeout: Duration = TOTAL_TIMEOUT,
+    log_retention: logs.RetentionDays,
+    removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
+) -> cr.Provider:
+    """A ``cr.Provider`` for ``on_event`` (and ``is_complete``, which makes it asynchronous).
+
+    Its framework functions log at INFO (the L2 default is FATAL, which leaves no trace of a failed or timed-out
+    resource). An asynchronous provider polls every ``query_interval`` for up to ``total_timeout``; its waiter state
+    machine logs ALL events with execution data to ``waiter_log_group_name`` (construct ``waiter_logs_id`` in
+    ``scope``) and is traced with X-Ray.
+
+    Raises:
+        ValueError: ``is_complete`` without ``waiter_log_group_name``.
+    """
+    handlers = [on_event, *([is_complete] if is_complete else [])]
+    for handler in handlers:
+        nag.acknowledge(handler, {nag.LAMBDA_DLQ: PROVIDER_INVOKED})
+    if is_complete is None:
+        created = cr.Provider(
+            scope,
+            id,
+            on_event_handler=on_event.function,
+            framework_lambda_logging_level=lambda_.ApplicationLogLevel.INFO,
+        )
+    else:
+        if waiter_log_group_name is None:
+            raise ValueError("an asynchronous provider needs waiter_log_group_name")
+        waiter_logs = logs.LogGroup(
+            scope,
+            waiter_logs_id,
+            log_group_name=waiter_log_group_name,
+            retention=log_retention,
+            removal_policy=removal_policy,
+        )
+        created = cr.Provider(
+            scope,
+            id,
+            on_event_handler=on_event.function,
+            is_complete_handler=is_complete.function,
+            query_interval=query_interval,
+            total_timeout=total_timeout,
+            framework_lambda_logging_level=lambda_.ApplicationLogLevel.INFO,
+            disable_waiter_state_machine_logging=False,
+            waiter_state_machine_log_options=cr.LogOptions(
+                destination=waiter_logs, level=sfn.LogLevel.ALL, include_execution_data=True
+            ),
+        )
+        trace_waiter(created)
+    acknowledge_framework(created, *(handler.function for handler in handlers))
+    return created
 
 
 def trace_waiter(provider: cr.Provider) -> None:

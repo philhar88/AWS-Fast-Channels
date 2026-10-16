@@ -8,8 +8,9 @@ autopilot's client-credentials token: ``tools/list`` and ``tools/call`` follow t
 alternatives and forbids always win:
 
 - READ tools: every operator group; WRITE: ``fast-operators`` and ``fast-admins``; DESTRUCTIVE: ``fast-admins``.
-- The autopilot client (machine token, no groups) may call READ tools plus :data:`AUTOPILOT_TOOLS`, and is
-  forbidden every other approval-gated tool.
+- The autopilot client (machine token, no groups), which exists only when some channel has an autopilot schedule,
+  may call READ tools plus :data:`AUTOPILOT_TOOLS` on the channels it schedules (``plan`` by its ``channel``,
+  ``publish`` by the ``<channel>.`` prefix of its ``plan_id``), and is forbidden every other approval-gated tool.
 - Destructive ``channels`` tools are forbidden for every caller unless the channel is agent-owned
   (``<prefix>-agent-*``), so CloudFormation-owned channels cannot be deleted through the agent.
 """
@@ -42,6 +43,9 @@ AUTOPILOT_TOOLS: Final = ("schedule___plan", "schedule___publish")
 """Tools beyond READ the autopilot may call: it extends schedules, nothing else (SPEC §6 Autopilot)."""
 AUTOPILOT_CONFIRM_TOOLS: Final = ("schedule___publish",)
 """Approval-gated tools the autopilot may call without a human (its schedule is the approval)."""
+AUTOPILOT_SCOPE: Final = {"schedule___plan": ("channel", "{channel}"), "schedule___publish": ("plan_id", "{channel}.*")}
+"""Per :data:`AUTOPILOT_TOOLS` entry: the input field that names the channel, and its ``like`` pattern (plan ids are
+``<channel>.<hex>``)."""
 CHANNEL_TARGET: Final = "channels"
 CHANNEL_FIELD: Final = "channel"
 GROUPS_CLAIM: Final = "cognito:groups"
@@ -64,25 +68,29 @@ class CedarPolicy:
 
 
 def gateway_policies(
-    tools: Iterable[ToolSpec[Any, Any]], *, gateway_arn: str, autopilot_client_id: str, agent_channel_prefix: str
+    tools: Iterable[ToolSpec[Any, Any]],
+    *,
+    gateway_arn: str,
+    agent_channel_prefix: str,
+    autopilot_client_id: str | None = None,
+    autopilot_channels: Sequence[str] = (),
 ) -> list[CedarPolicy]:
     """The Gateway's Cedar policies for ``tools``.
 
     Args:
         tools: every tool the Gateway exposes.
         gateway_arn: the Gateway ARN; tool-specific policies must name it (``resource ==``).
-        autopilot_client_id: Cognito app client id of the autopilot (its tokens' ``client_id`` claim).
         agent_channel_prefix: name prefix of agent-owned channels, e.g. ``fast-agent-``.
+        autopilot_client_id: Cognito app client id of the autopilot (its tokens' ``client_id`` claim); ``None``
+            when there is no autopilot, which leaves out every autopilot policy.
+        autopilot_channels: the channels the autopilot schedules, the only ones it may plan and publish on.
 
     Raises:
-        ValueError: an :data:`AUTOPILOT_TOOLS` entry is not a registered tool, or a value would break out of a
-            Cedar string literal.
+        ValueError: an autopilot without channels, an :data:`AUTOPILOT_TOOLS` entry that is not a registered tool,
+            or a value that would break out of a Cedar string literal.
     """
     specs = list(tools)
-    names = {spec.qualified_name for spec in specs}
-    if missing := sorted(set(AUTOPILOT_TOOLS) - names):
-        raise ValueError(f"autopilot tools {missing} are not in the tool registry")
-    gateway, autopilot = _literal(gateway_arn), _literal(autopilot_client_id)
+    gateway = _literal(gateway_arn)
     agent_channels = f"{_literal(agent_channel_prefix)}*"
 
     def named(access: Access) -> list[str]:
@@ -98,28 +106,8 @@ def gateway_policies(
         for access, groups in GROUPS_BY_ACCESS.items()
         if named(access)
     ]
-    policies.append(
-        CedarPolicy(
-            name="permit_autopilot",
-            description="Autopilot client: READ tools plus schedule planning and publishing",
-            statement=_statement("permit", [*named(Access.READ), *AUTOPILOT_TOOLS], gateway, when=_is(autopilot)),
-            forbid=False,
-        )
-    )
-    gated = [
-        s.qualified_name
-        for s in specs
-        if s.approval is Approval.CONFIRM and s.qualified_name not in AUTOPILOT_CONFIRM_TOOLS
-    ]
-    if gated:
-        policies.append(
-            CedarPolicy(
-                name="forbid_autopilot_confirm",
-                description="Autopilot client: no approval-gated tool except schedule publishing",
-                statement=_statement("forbid", gated, gateway, when=_is(autopilot)),
-                forbid=True,
-            )
-        )
+    if autopilot_client_id is not None:
+        policies += _autopilot_policies(specs, gateway, _literal(autopilot_client_id), autopilot_channels)
     destructive = [
         s.qualified_name
         for s in specs
@@ -139,6 +127,55 @@ def gateway_policies(
                         f'context.input has {CHANNEL_FIELD} && context.input.{CHANNEL_FIELD} like "{agent_channels}"'
                     ),
                 ),
+                forbid=True,
+            )
+        )
+    return policies
+
+
+def _autopilot_policies(
+    specs: Sequence[ToolSpec[Any, Any]], gateway: str, client_id: str, channels: Sequence[str]
+) -> list[CedarPolicy]:
+    """READ tools for the autopilot client, :data:`AUTOPILOT_TOOLS` on ``channels`` only, no other gated tool."""
+    if not channels:
+        raise ValueError("the autopilot needs the channels it schedules")
+    if missing := sorted(set(AUTOPILOT_TOOLS) - {spec.qualified_name for spec in specs}):
+        raise ValueError(f"autopilot tools {missing} are not in the tool registry")
+    autopilot = _is(client_id)
+    reads = [spec.qualified_name for spec in specs if spec.access is Access.READ]
+    policies = [
+        CedarPolicy(
+            name="permit_autopilot",
+            description="Autopilot client: READ tools",
+            statement=_statement("permit", reads, gateway, when=autopilot),
+            forbid=False,
+        )
+    ]
+    for tool in AUTOPILOT_TOOLS:
+        field, pattern = AUTOPILOT_SCOPE[tool]
+        matches = " || ".join(
+            f'context.input.{field} like "{pattern.format(channel=_literal(channel))}"' for channel in channels
+        )
+        policies.append(
+            CedarPolicy(
+                name=f"permit_autopilot_{tool.partition('___')[2]}",
+                description=f"Autopilot client: {tool} on {', '.join(channels)}",
+                statement=_statement(
+                    "permit", [tool], gateway, when=f"{autopilot} && context.input has {field} && ({matches})"
+                ),
+                forbid=False,
+            )
+        )
+    if gated := [
+        s.qualified_name
+        for s in specs
+        if s.approval is Approval.CONFIRM and s.qualified_name not in AUTOPILOT_CONFIRM_TOOLS
+    ]:
+        policies.append(
+            CedarPolicy(
+                name="forbid_autopilot_confirm",
+                description="Autopilot client: no approval-gated tool except schedule publishing",
+                statement=_statement("forbid", gated, gateway, when=autopilot),
                 forbid=True,
             )
         )

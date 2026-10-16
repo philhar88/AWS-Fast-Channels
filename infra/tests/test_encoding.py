@@ -17,7 +17,7 @@ from PIL import Image
 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.mediaconvert import compile_job_settings
-from fast_channels.core.naming import ladder_key
+from fast_channels.core.naming import ladder_path
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.app import build as app_build
 from fast_channels.infra.bundling import REPO_ROOT
@@ -120,7 +120,7 @@ def actions(statements: list[dict[str, Any]]) -> set[str]:
 def test_job_template_is_the_compiled_ladder(template: Template) -> None:
     props = resource(template, "AWS::MediaConvert::JobTemplate", "Standard")["Properties"]
 
-    assert props["Name"] == f"fast-{ladder_key(STANDARD.version)}"
+    assert props["Name"] == f"fast-{ladder_path(STANDARD.version)}"
     assert props["Category"] == "fast"
     assert props["SettingsJson"] == cfn_settings(compile_job_settings(STANDARD))
     cmfc = props["SettingsJson"]["OutputGroups"][0]["Outputs"][0]["ContainerSettings"]["CmfcSettings"]

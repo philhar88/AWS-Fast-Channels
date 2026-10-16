@@ -1,4 +1,8 @@
-"""Stateful storage of a deployment: the ingest, media and logs buckets and the two DynamoDB tables (SPEC §4)."""
+"""Stateful storage of a deployment: the ingest, media and logs buckets and the two DynamoDB tables (SPEC §4).
+
+The tables' index name ``GSI1`` and TTL attribute come from the MediaLibrary schema module
+(``fast_channels.functions.media_library``) that the functions read and write the items with.
+"""
 
 from collections.abc import Sequence
 from typing import Any, Final
@@ -9,12 +13,19 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
+from fast_channels.functions.media_library import GSI1, TTL_ATTRIBUTE
 from fast_channels.infra import nag
+from fast_channels.infra.arns import arn
 
-GSI1: Final = "GSI1"
-"""Name of the generic secondary index (``gsi1pk``/``gsi1sk``) of both tables."""
-TTL_ATTRIBUTE: Final = "expires_at"
-"""Epoch-seconds expiry attribute of plans, leases and proposals in the media library."""
+__all__ = [
+    "ASSETS_PREFIX",
+    "DEFAULT_LOG_EXPIRATION",
+    "GSI1",
+    "TTL_ATTRIBUTE",
+    "MediaLibrary",
+    "MediaStorage",
+    "ReferenceCatalogTable",
+]
 ASSETS_PREFIX: Final = "assets/"
 """Encoder outputs ``assets/<asset_id>/<ladder_version>/``; their manifests are for Channel Assembly only."""
 
@@ -114,8 +125,13 @@ class MediaStorage(Construct):
 
     def allow_cloudfront_read(self) -> None:
         """Let CloudFront distributions of this account read the media bucket through OAC, except content
-        manifests: ``assets/*.m3u8`` and ``assets/*.mpd`` are only for Channel Assembly, so viewers cannot play
-        content directly from the CDN and bypass ad insertion."""
+        manifests: ``assets/*.m3u8`` and ``assets/*.mpd`` are only for Channel Assembly.
+
+        The deny stops casual direct playback of an asset from the CDN; it does not make ads mandatory. Content
+        segments stay public at predictable names (``assets/<asset>/<ladder>/main_<rendition>_<n>.cmfv``, and every
+        SSAI playlist shows the prefix), so anyone can rebuild an ad-free playlist. Where that matters, protect
+        ``/assets/*`` with CloudFront signed cookies or URLs, or a token check at the edge.
+        """
         stack = Stack.of(self)
         cloudfront = iam.ServicePrincipal("cloudfront.amazonaws.com")
         self.media_bucket.add_to_resource_policy(
@@ -143,10 +159,13 @@ class MediaStorage(Construct):
             )
         )
 
-    def allow_channel_assembly_read(self, prefix: str) -> None:
-        """Let Channel Assembly source locations named ``<prefix>*`` read asset manifests (S3_SIGV4 access).
+    def allow_channel_assembly_read(self, source_location: str) -> None:
+        """Let the Channel Assembly source location named ``source_location`` read assets (S3_SIGV4 access).
 
-        MediaTailor presents the source location ARN as ``aws:SourceArn`` (verified, channel-assembly.md §2.3).
+        Exactly that one: the agent's own source locations never point at this bucket (``create_source_location``
+        refuses it), and a name pattern would also admit other deployments' locations (``fast*`` matches
+        ``fastci-media``). MediaTailor presents the source location ARN as ``aws:SourceArn`` (verified,
+        channel-assembly.md §2.3); the name is a synth-time string, so the policy references no other stack.
         """
         stack = Stack.of(self)
         self.media_bucket.add_to_resource_policy(
@@ -157,11 +176,7 @@ class MediaStorage(Construct):
                 resources=[self.media_bucket.arn_for_objects(f"{ASSETS_PREFIX}*")],
                 conditions={
                     "StringEquals": {"aws:SourceAccount": stack.account},
-                    "ArnLike": {
-                        "aws:SourceArn": stack.format_arn(
-                            service="mediatailor", resource="sourceLocation", resource_name=f"{prefix}*"
-                        )
-                    },
+                    "ArnLike": {"aws:SourceArn": arn(self, "mediatailor", "sourceLocation", source_location)},
                 },
             )
         )

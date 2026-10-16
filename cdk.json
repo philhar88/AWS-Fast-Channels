@@ -65,19 +65,21 @@
       },
       "agent": {
         "enabled": true,
-        "model": "us.anthropic.claude-haiku-5-5",
+        "model": "{geo}.anthropic.claude-haiku-5-5",
         "allowed_models": [
-          "us.anthropic.claude-haiku-5-5",
-          "us.anthropic.claude-sonnet-5-5",
+          "{geo}.anthropic.claude-haiku-5-5",
+          "{geo}.anthropic.claude-sonnet-5-5",
           "global.anthropic.claude-haiku-5-5",
           "global.anthropic.claude-sonnet-5-5"
         ],
-        "admin_email": null
+        "admin_email": null,
+        "console_dev_url": null
       },
       "observability": {
         "transaction_search": "off",
         "log_retention_days": 7,
-        "mediatailor_log_percent": 100
+        "mediatailor_log_percent": 100,
+        "capture_prompts": null
       },
       "notifications": {
         "email": null

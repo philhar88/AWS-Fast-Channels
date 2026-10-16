@@ -5,15 +5,15 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aws_cdk import Stack
 
+from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION, alert_topic, cdn_error_alarm
 from fast_channels.infra.constructs.delivery import CdnAccessLogs
-from fast_channels.infra.constructs.observability import CLOUDFRONT_REGION, alert_topic, cdn_error_alarm
 
 if TYPE_CHECKING:
     from aws_cdk import aws_cloudfront as cloudfront
     from constructs import Construct
 
     from fast_channels.infra.config import FastChannelsConfig
-    from fast_channels.infra.stacks.data import DataExports
+    from fast_channels.infra.exports import DataExports
 
 EDGE_REGION: Final = CLOUDFRONT_REGION
 """Region of CloudFront's control plane: standard-logs v2 delivery sources, metrics (and so alarms), ACM
@@ -35,7 +35,7 @@ class EdgeStack(Stack):
     us-east-1, whose Media stack then owns ``<prefix>-cdn-access`` and ``<prefix>-cdn-5xx``.
 
     Args:
-        config: deployment configuration (``prefix``, ``observability``, ``notifications``, ``removal``).
+        config: deployment configuration (``prefix``, ``notifications``).
         data: DataStack references (``logs_bucket`` receives the CloudFront logs).
         distribution: the Media stack's distribution.
 
@@ -59,12 +59,7 @@ class EdgeStack(Stack):
         )
         name = f"{config.prefix}-{distribution.stack.region}"
         self.access_logs = CdnAccessLogs(
-            self,
-            "AccessLogs",
-            distribution=distribution,
-            logs_bucket=data.logs_bucket,
-            name=name,
-            removal_policy=config.removal_policy,
+            self, "AccessLogs", distribution=distribution, logs_bucket=data.logs_bucket, name=name
         )
         self.topic = alert_topic(self, "Alerts", name=f"{name}-alerts", email=config.notifications.email)
         cdn_error_alarm(self, "CdnErrors", distribution=distribution, topic=self.topic, name=f"{name}-cdn-5xx")

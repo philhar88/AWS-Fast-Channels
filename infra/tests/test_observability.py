@@ -9,12 +9,14 @@ import pytest
 from aws_cdk import App, Environment, Stack, Validations
 from aws_cdk import aws_cloudfront as cf
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_sqs as sqs
 from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk.assertions import Match, Template
 from cdk_nag import AwsSolutionsChecks, ServerlessChecks
 
 from fast_channels.infra.constructs.observability import (
     TRACE_QUERIES,
+    ChannelCensus,
     FastEventBus,
     MediaObservability,
     TraceQuery,
@@ -87,6 +89,12 @@ def alarms(template: Template) -> dict[str, Mapping[str, Any]]:
     return {
         a["Properties"]["AlarmName"]: a["Properties"] for a in resources(template, "AWS::CloudWatch::Alarm").values()
     }
+
+
+def dashboard_text(template: Template) -> str:
+    """The dashboard body's literal parts (references left out)."""
+    [dashboard] = resources(template, "AWS::CloudWatch::Dashboard").values()
+    return "".join(part for part in dashboard["Properties"]["DashboardBody"]["Fn::Join"][1] if isinstance(part, str))
 
 
 def test_event_bus_with_archive_and_info_logs(template: Template) -> None:
@@ -234,6 +242,38 @@ def test_every_alarm_notifies_the_topic(template: Template) -> None:
     )
 
 
+def test_only_this_deployments_rules_can_publish_alerts(template: Template) -> None:
+    [policy] = resources(template, "AWS::SNS::TopicPolicy").values()
+    statements = policy["Properties"]["PolicyDocument"]["Statement"]
+    rules = [r for r in resources(template, "AWS::Events::Rule").values() if "EventBusName" in r["Properties"]]
+
+    assert "events.amazonaws.com" not in json.dumps(statements)  # no service-principal grant to spoof
+    assert [s["Effect"] for s in statements] == ["Deny"]  # enforce_ssl only
+    for rule in rules:
+        [target] = rule["Properties"]["Targets"]
+        role = target["RoleArn"]["Fn::GetAtt"][0]
+        assert resources(template, "AWS::IAM::Role")[role]["Properties"]["AssumeRolePolicyDocument"]["Statement"][0][
+            "Principal"
+        ] == {"Service": "events.amazonaws.com"}
+
+
+def test_dead_letter_queues_raise_alarms() -> None:
+    stack = new_stack()
+    queue = sqs.Queue(stack, "Letters")
+    observability(stack, dead_letter_queues={"ingest": queue, "kit encodes": queue})
+    found = alarms(Template.from_stack(stack))
+
+    assert {"fast-ingest-dead-letters", "fast-kit-encodes-dead-letters"} <= set(found)
+    letters = found["fast-ingest-dead-letters"]
+    assert (letters["Namespace"], letters["MetricName"], letters["Statistic"], letters["Threshold"]) == (
+        "AWS/SQS",
+        "ApproximateNumberOfMessagesVisible",
+        "Maximum",
+        1,
+    )
+    assert letters["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+
+
 def test_failed_assets_ladders_and_autopilot_runs_are_notified(template: Template) -> None:
     patterns = [
         r["Properties"]["EventPattern"]
@@ -286,6 +326,14 @@ def test_census_counts_running_channels_every_five_minutes(template: Template) -
     log_group(template, "/aws/vendedlogs/states/fast-channel-census")
 
 
+def test_census_log_group_is_deleted_with_the_stack_by_default() -> None:
+    stack = new_stack()
+    ChannelCensus(stack, "Census", prefix="fast", log_retention=logs.RetentionDays.ONE_WEEK)
+    [group] = resources(Template.from_stack(stack), "AWS::Logs::LogGroup").values()
+
+    assert group["DeletionPolicy"] == "Delete"
+
+
 def test_census_definition_counts_only_this_prefix() -> None:
     states = census_definition("acme")["States"]
 
@@ -331,9 +379,14 @@ def test_dashboard(template: Template) -> None:
         "NEW_WARNING",
     ):
         assert needle in body
-    assert template.to_json()["Outputs"]["DashboardName"]["Value"] == {
-        "Ref": next(iter(resources(template, "AWS::CloudWatch::Dashboard")))
-    }
+    assert '"value":12000,"label":"80 % of the 50 TPS quota"' in dashboard_text(template)
+    assert "Outputs" not in template.to_json()  # MediaStack outputs DashboardName
+
+
+def test_dashboard_quota_line_follows_the_configured_quota() -> None:
+    stack = new_stack()
+    observability(stack, channel_manifest_tps_quota=100)
+    assert '"value":24000,"label":"80 % of the 100 TPS quota"' in dashboard_text(Template.from_stack(stack))
 
 
 def test_no_unacknowledged_nag_findings(tmp_path: Path) -> None:

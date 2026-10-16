@@ -5,20 +5,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from aws_cdk import Duration, Fn, RemovalPolicy, Stack, Token
+from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3deploy
 from constructs import Construct
 
-from fast_channels.core.specs import playback_urls
 from fast_channels.infra import nag
 from fast_channels.infra.bundling import REPO_ROOT
+from fast_channels.infra.exports import channel_playback
 from fast_channels.infra.nag import acknowledge_references, file_asset_objects
 
 if TYPE_CHECKING:
-    from fast_channels.infra.stacks.media import ChannelExports
+    from fast_channels.infra.exports import ChannelExports
+
+__all__ = [
+    "CONSOLE_DIST",
+    "ENTRY_OBJECTS",
+    "IMMUTABLE",
+    "PLACEHOLDER",
+    "ConsoleConfig",
+    "OperatorConsole",
+    "channel_playback",
+    "content_security_policy",
+]
 
 CONSOLE_DIST: Final = REPO_ROOT / "console" / "dist"
 """Output of ``cd console && npm ci && npm run build`` (built before synth, never during it)."""
@@ -29,9 +40,6 @@ PLACEHOLDER: Final = (
     "<!doctype html><title>FAST Channels</title><p>Console not built: run <code>npm ci &amp;&amp; npm run build</code>"
     " in <code>console/</code> and deploy again.</p>"
 )
-_PREFIX_PARTS: Final = 8
-"""``https://<id>.mediatailor.<r>.amazonaws.com/v1/{master|dash}/<hash>/<config>/`` split on ``/``
-(ad-insertion.md §1): indexes 3 to 6 are the path."""
 
 
 def content_security_policy(*, region: str, url_suffix: str, connect_sources: Sequence[str]) -> str:
@@ -69,26 +77,6 @@ def content_security_policy(*, region: str, url_suffix: str, connect_sources: Se
     return "; ".join(f"{name} {value}" for name, value in directives.items())
 
 
-def channel_playback(cdn_base_url: str, channel: ChannelExports) -> dict[str, dict[str, str]]:
-    """Viewer URLs per output of an IaC channel through the CDN (``core.specs.playback_urls``).
-
-    The playback-configuration prefixes are CloudFormation attributes; their path is cut out with ``Fn::Split`` so
-    the core builder still composes the URLs.
-    """
-    return playback_urls(
-        cdn_base=cdn_base_url,
-        playback_prefix_hls=_resolvable_prefix(channel.hls_prefix),
-        playback_prefix_dash=_resolvable_prefix(channel.dash_prefix),
-        outputs=channel.outputs,
-    )
-
-
-def _resolvable_prefix(prefix: str) -> str:
-    if not Token.is_unresolved(prefix):
-        return prefix
-    return "https://mediatailor/" + Fn.join("/", Fn.split("/", prefix, _PREFIX_PARTS)[3:7])
-
-
 @dataclass(frozen=True, slots=True)
 class ConsoleConfig:
     """``config.json`` of the console (CONTRACTS §H; validated by console/src/lib/config.ts)."""
@@ -121,7 +109,7 @@ class ConsoleConfig:
                 {
                     "name": channel.name,
                     "ladderVersion": channel.ladder_version,
-                    "playback": channel_playback(self.cdn_base_url, channel),
+                    "playback": channel.playback(self.cdn_base_url),
                 }
                 for channel in self.channels
             ],

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aws_cdk import Aspects, Environment, Stage, Tags
 
+from fast_channels.core.tags import Owner, resource_tags
 from fast_channels.infra.config import FastChannelsConfig, Removal, TransactionSearchMode
 from fast_channels.infra.constructs.functions import (
     FunctionLogGroups,
@@ -21,8 +22,9 @@ if TYPE_CHECKING:
     from constructs import Construct
 
 DEFAULT_PREFIX: Final = "fast"
-OWNER_TAG: Final = "iac"
-"""``fast:owner`` of CloudFormation-managed resources; runtime resources carry ``pipeline`` or ``agent``."""
+OWNER_TAG: Final = Owner.IAC.value
+"""``fast:owner`` of CloudFormation-managed resources (``core.tags.Owner.IAC``); runtime resources carry
+``pipeline`` or ``agent``."""
 
 
 def stage_id(prefix: str) -> str:
@@ -42,13 +44,15 @@ class FastChannelsStage(Stage):
     ``fast:owner``. With ``removal: retain`` the stacks are termination protected.
 
     Args:
-        config: validated deployment configuration.
+        config: validated deployment configuration; it is validated again for ``env.region``
+            (:meth:`~fast_channels.infra.config.FastChannelsConfig.for_region`), which resolves ``{geo}`` model ids.
         env: account (may be unresolved) and region (required) of the deployment.
     """
 
     def __init__(self, scope: Construct, id: str, *, config: FastChannelsConfig, env: Environment) -> None:
         if not env.region:
             raise ValueError("the deployment region must be known at synth time (set AWS_REGION or a profile region)")
+        config = config.for_region(env.region)
         log_groups = LogGroupDefaults(config.observability.log_retention, config.removal_policy)
         super().__init__(
             scope,
@@ -57,7 +61,7 @@ class FastChannelsStage(Stage):
             # jsii hands InjectionContext to Python injectors positionally; its stubs show lifted keywords.
             property_injectors=[LambdaDefaults(log_groups), StateMachineDefaults(log_groups)],  # type: ignore[list-item]
         )
-        tags = {"fast:app": config.prefix, "fast:owner": OWNER_TAG}
+        tags = resource_tags(config.prefix, Owner.IAC)
         stacks: dict[str, Any] = {"tags": tags, "termination_protection": config.removal is Removal.RETAIN}
 
         self.data = DataStack(self, "Data", config=config, **stacks)

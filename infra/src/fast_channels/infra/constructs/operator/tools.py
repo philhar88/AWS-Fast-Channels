@@ -19,18 +19,21 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_scheduler as scheduler
 from constructs import Construct
 
+from fast_channels.core.naming import agent_namespace
+from fast_channels.core.tags import TAG_APP
 from fast_channels.functions.tools.registry import TARGETS, ToolSpec, load
 from fast_channels.infra import nag
+from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.functions import FastFunction
 from fast_channels.infra.constructs.storage import GSI1
-from fast_channels.infra.nag import acknowledge_references
+from fast_channels.infra.grants import allow
 
 if TYPE_CHECKING:
     from fast_channels.infra.config import CdnEndpoint
-    from fast_channels.infra.stacks.data import DataExports
-    from fast_channels.infra.stacks.media import MediaExports
+    from fast_channels.infra.exports import DataExports, MediaExports
 
-APP_TAG: Final = "fast:app"
+APP_TAG: Final = TAG_APP
+"""``core.tags.TAG_APP`` (kept for v3.0 imports)."""
 _TABLE_READ: Final = ("GetItem", "BatchGetItem", "Query", "Scan", "ConditionCheckItem")
 _TABLE_WRITE: Final = ("PutItem", "UpdateItem", "DeleteItem", "BatchWriteItem")
 _CHANNELS: Final = "every channel of the deployment is named <prefix>-* (config validation)"
@@ -57,7 +60,7 @@ ENVIRONMENT: Final = {
         "LIBRARY_TABLE",
         "MEDIA_BUCKET",
         "SOURCE_LOCATION",
-        "CDN_DOMAIN",
+        "CDN_BASE_URL",
         "CDN_ENDPOINTS",
         "PACKAGE_PROFILES",
         "DEFAULT_LADDER_VERSION",
@@ -92,7 +95,8 @@ class AgentTools(Construct):
     """The tool Lambdas (``fast_channels.functions.tools.<target>.handler``) and their least-privilege roles.
 
     Also owns the EventBridge Scheduler group and role that ``channels___start_channel`` uses to stop a channel
-    after ``auto_stop_hours`` (universal target ``mediatailor:stopChannel``).
+    after ``auto_stop_hours`` (universal target ``mediatailor:stopChannel``); the role trusts only schedules of that
+    group, and the channels function may pass it to Scheduler only.
 
     Args:
         prefix: deployment prefix (``FAST_PREFIX``, name partitions).
@@ -139,16 +143,13 @@ class AgentTools(Construct):
             description="EventBridge Scheduler: stop channels started by the agent tools after their maximum runtime",
             assumed_by=iam.ServicePrincipal(
                 "scheduler.amazonaws.com",
-                conditions={"StringEquals": {"aws:SourceAccount": self._stack.account}},
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": self._stack.account},
+                    "ArnEquals": {"aws:SourceArn": self.auto_stop_group.schedule_group_arn},
+                },
             ),
         )
-        self.auto_stop_role.add_to_policy(
-            iam.PolicyStatement(actions=_mt("StopChannel"), resources=[self._arn("channel", f"{prefix}-*")])
-        )
-        acknowledge_references(
-            self.auto_stop_role,
-            {nag.wildcard_resource(self._arn("channel", f"{prefix}-*")): _CHANNELS},
-        )
+        allow(self.auto_stop_role, _mt("StopChannel"), [self._mediatailor("channel", f"{prefix}-*")], why=_CHANNELS)
         values = {
             "FAST_PREFIX": prefix,
             "LIBRARY_TABLE": data.library_table.table_name,
@@ -160,7 +161,7 @@ class AgentTools(Construct):
             "PROVISION_STATE_MACHINE_ARN": media.ladder_provisioner.state_machine_arn,
             "MEDIACONVERT_QUEUE_ARN": media.mediaconvert_queue_arn,
             "SOURCE_LOCATION": media.source_location_name,
-            "CDN_DOMAIN": media.cdn_base_url,
+            "CDN_BASE_URL": media.cdn_base_url,
             "CDN_ENDPOINTS": json.dumps([cdn.model_dump(mode="json") for cdn in cdns]),
             "PACKAGE_PROFILES": ",".join(package_profiles),
             "DEFAULT_LADDER_VERSION": media.default_ladder_version,
@@ -170,7 +171,7 @@ class AgentTools(Construct):
             "SCHEDULER_GROUP": self.auto_stop_group.schedule_group_name,
             "SCHEDULER_ROLE_ARN": self.auto_stop_role.role_arn,
         }
-        grants: Mapping[str, Callable[[lambda_.IFunction], None]] = {
+        grants: Mapping[str, Callable[[FastFunction], None]] = {
             "catalog": self._grant_catalog,
             "library": self._grant_library,
             "origins": self._grant_origins,
@@ -192,7 +193,7 @@ class AgentTools(Construct):
                 log_retention=log_retention,
                 removal_policy=removal_policy,
             )
-            grants[target](function.function)
+            grants[target](function)
             nag.acknowledge(
                 function, {nag.LAMBDA_DLQ: "Invoked synchronously by the AgentCore Gateway, which returns errors"}
             )
@@ -202,101 +203,92 @@ class AgentTools(Construct):
 
     # --- per-target permissions (derived from each tool module's AWS calls) ------------------------------------
 
-    def _grant_catalog(self, fn: lambda_.IFunction) -> None:
+    def _grant_catalog(self, fn: FastFunction) -> None:
         self._table(fn, self._data.catalog_table, write=False)
 
-    def _grant_library(self, fn: lambda_.IFunction) -> None:
+    def _grant_library(self, fn: FastFunction) -> None:
         self._table(fn, self._data.library_table, write=False)
-        self._allow(
-            fn,
+        fn.allow(
             ["s3:GetObject"],  # HeadObject of the requested mezzanine
             [self._data.ingest_bucket.arn_for_objects("*")],
-            "ingest refuses sources that are missing from the ingest bucket (any key)",
+            why="ingest refuses sources that are missing from the ingest bucket (any key)",
         )
-        self._media.ingest_state_machine.grant_start_execution(fn)
+        self._media.ingest_state_machine.grant_start_execution(fn.function)
         machine = self._stack.split_arn(
             self._media.ingest_state_machine.state_machine_arn, ArnFormat.COLON_RESOURCE_NAME
         ).resource_name
-        executions = self._arn("execution", f"{machine}:*", service="states", colon=True)
-        self._allow(fn, ["states:DescribeExecution"], [executions], "ingest status of the pipeline's executions")
+        fn.allow(
+            ["states:DescribeExecution"],
+            [arn(self, "states", "execution", f"{machine}:*", colon=True)],
+            why="ingest status of the pipeline's executions",
+        )
 
-    def _grant_origins(self, fn: lambda_.IFunction) -> None:
-        prefix = self._prefix
+    def _grant_origins(self, fn: FastFunction) -> None:
+        mt, prefix = self._mediatailor, self._prefix
         self._table(fn, self._data.library_table, write=True)
-        self._allow(
-            fn,
+        fn.allow(
             ["s3:GetObject"],
             [self._data.media_bucket.arn_for_objects("assets/*")],
-            "CreateVodSource checks that the caller can read the encoded manifests (channel-assembly.md §2.1)",
+            why="CreateVodSource checks that the caller can read the encoded manifests (channel-assembly.md §2.1)",
         )
-        self._allow(fn, _mt("ListSourceLocations", "ListAlerts"), ["*"], "")
-        self._allow(fn, _mt("CreateSourceLocation", "CreateVodSource"), ["*"], "", conditions=self._tagged())
-        self._allow(
-            fn,
+        fn.allow(_mt("ListSourceLocations", "ListAlerts"), ["*"])
+        fn.allow(_mt("CreateSourceLocation", "CreateVodSource"), ["*"], conditions=self._tagged())
+        fn.allow(
             _mt("TagResource"),
-            [self._arn("sourceLocation", f"{prefix}-agent-*"), self._arn("vodSource", f"{prefix}*/*")],
-            "tags of the source locations and VOD sources the tools create",
+            [mt("sourceLocation", f"{agent_namespace(prefix)}*"), mt("vodSource", f"{prefix}-*/*")],
+            why="tags of the source locations and VOD sources the tools create",
             conditions=self._tagged(),
         )
-        self._allow(
-            fn,
+        fn.allow(
             _mt("DescribeSourceLocation"),
-            [self._arn("sourceLocation", f"{prefix}*")],
-            "the deployment's own source location and the agent's bring-your-own ones",
+            [mt("sourceLocation", f"{prefix}-*")],
+            why="the deployment's own source location and the agent's bring-your-own ones",
         )
-        self._allow(
-            fn,
+        fn.allow(
             _mt("DescribeVodSource", "UpdateVodSource"),
-            [self._arn("vodSource", f"{prefix}*/*")],
-            "package configurations of VOD sources in the deployment's source locations",
+            [mt("vodSource", f"{prefix}-*/*")],
+            why="package configurations of VOD sources in the deployment's source locations",
         )
-        self._allow(fn, _mt("DescribeChannel"), [self._arn("channel", f"{prefix}-*")], _CHANNELS)
+        fn.allow(_mt("DescribeChannel"), [mt("channel", f"{prefix}-*")], why=_CHANNELS)
 
-    def _grant_schedule(self, fn: lambda_.IFunction) -> None:
-        prefix = self._prefix
+    def _grant_schedule(self, fn: FastFunction) -> None:
+        mt, prefix = self._mediatailor, self._prefix
         self._table(fn, self._data.library_table, write=True)
         self._table(fn, self._data.catalog_table, write=False)
         self._epg(fn, "s3:PutObject", "s3:DeleteObject")
-        self._media.event_bus.grant_put_events_to(fn)
-        self._allow(fn, _mt("ListAlerts", "CreateProgram"), ["*"], "")
-        self._allow(fn, _mt("DescribeChannel", "GetChannelSchedule"), [self._arn("channel", f"{prefix}-*")], _CHANNELS)
-        self._allow(
-            fn, _mt("DeleteProgram"), [self._arn("program", f"{prefix}-*/*")], "programs of the deployment's channels"
-        )
+        self._media.event_bus.grant_put_events_to(fn.function)
+        fn.allow(_mt("ListAlerts", "CreateProgram"), ["*"])
+        fn.allow(_mt("DescribeChannel", "GetChannelSchedule"), [mt("channel", f"{prefix}-*")], why=_CHANNELS)
+        fn.allow(_mt("DeleteProgram"), [mt("program", f"{prefix}-*/*")], why="programs of the deployment's channels")
 
-    def _grant_channels(self, fn: lambda_.IFunction) -> None:
-        prefix, agent = self._prefix, f"{self._prefix}-agent-*"
-        agent_channels = self._arn("channel", agent)
-        agent_configurations = self._arn("playbackConfiguration", agent)
-        agent_sources = self._arn("delivery-source", agent, service="logs", colon=True)
-        deliveries = self._arn("delivery", "*", service="logs", colon=True)
+    def _grant_channels(self, fn: FastFunction) -> None:
+        mt, prefix, agent = self._mediatailor, self._prefix, f"{agent_namespace(self._prefix)}*"
+        agent_channels, agent_configurations = mt("channel", agent), mt("playbackConfiguration", agent)
+        agent_sources = arn(self, "logs", "delivery-source", agent, colon=True)
+        deliveries = arn(self, "logs", "delivery", "*", colon=True)
         destination = self._media.mediatailor_log_destination_arn
         owned = f"agent-owned {agent} resources only"
         self._table(fn, self._data.library_table, write=True)
         self._epg(fn, "s3:DeleteObject")  # the guide of a deleted channel
-        self._allow(fn, _mt("ListChannels", "ListAlerts"), ["*"], "")
-        self._allow(
-            fn,
+        fn.allow(_mt("ListChannels", "ListAlerts"), ["*"])
+        fn.allow(
             _mt("DescribeChannel", "GetChannelSchedule", "StartChannel", "StopChannel"),
-            [self._arn("channel", f"{prefix}-*")],
-            _CHANNELS,
+            [mt("channel", f"{prefix}-*")],
+            why=_CHANNELS,
         )
-        self._allow(
-            fn,
+        fn.allow(
             _mt("GetPlaybackConfiguration"),
-            [self._arn("playbackConfiguration", f"{prefix}-*")],
-            "playback configurations of the deployment's channels",
+            [mt("playbackConfiguration", f"{prefix}-*")],
+            why="playback configurations of the deployment's channels",
         )
-        self._allow(fn, _mt("CreateChannel", "PutPlaybackConfiguration"), ["*"], "", conditions=self._tagged())
-        self._allow(fn, _mt("TagResource"), [agent_channels, agent_configurations], owned, conditions=self._tagged())
-        self._allow(
-            fn,
+        fn.allow(_mt("CreateChannel", "PutPlaybackConfiguration"), ["*"], conditions=self._tagged())
+        fn.allow(_mt("TagResource"), [agent_channels, agent_configurations], why=owned, conditions=self._tagged())
+        fn.allow(
             _mt("ConfigureLogsForChannel", "PutChannelPolicy", "DeleteChannelPolicy", "DeleteChannel"),
             [agent_channels],
-            owned,
+            why=owned,
         )
-        self._allow(
-            fn,
+        fn.allow(
             # AllowVendedLogDeliveryForResource: delivery sources of playback configurations (ad-insertion.md §7.1)
             _mt(
                 "ConfigureLogsForPlaybackConfiguration",
@@ -304,110 +296,70 @@ class AgentTools(Construct):
                 "DeletePlaybackConfiguration",
             ),
             [agent_configurations],
-            owned,
+            why=owned,
         )
-        self._allow(fn, _mt("DeleteProgram"), [self._arn("program", f"{agent}/*")], owned)
-        self._allow(fn, ["logs:PutDeliverySource", "logs:DeleteDeliverySource"], [agent_sources, destination], owned)
-        self._allow(
-            fn,
+        fn.allow(_mt("DeleteProgram"), [mt("program", f"{agent}/*")], why=owned)
+        fn.allow(["logs:PutDeliverySource", "logs:DeleteDeliverySource"], [agent_sources, destination], why=owned)
+        fn.allow(
             ["logs:CreateDelivery"],
             [agent_sources, destination, deliveries],
-            "delivery ids are generated; deliveries must carry this deployment's tag",
+            why="delivery ids are generated; deliveries must carry this deployment's tag",
         )
-        self._allow(
-            fn,
+        fn.allow(
             ["logs:TagResource"],
             [agent_sources, deliveries],
-            "tags of the delivery sources and deliveries of agent channels",
+            why="tags of the delivery sources and deliveries of agent channels",
             conditions=self._tagged(),
         )
-        self._allow(
-            fn,
+        fn.allow(
             ["logs:DeleteDelivery"],
             [deliveries],
-            "delivery ids are generated; only deliveries tagged with this deployment",
-            conditions={"StringEquals": {f"aws:ResourceTag/{APP_TAG}": prefix}},
+            why="delivery ids are generated; only deliveries tagged with this deployment",
+            conditions={"StringEquals": {f"aws:ResourceTag/{TAG_APP}": prefix}},
         )
-        self._allow(fn, ["logs:DescribeDeliveries"], ["*"], "")
-        self._allow(
-            fn,
+        fn.allow(["logs:DescribeDeliveries"], ["*"])
+        fn.allow(
             [f"scheduler:{action}" for action in ("CreateSchedule", "UpdateSchedule", "GetSchedule", "DeleteSchedule")],
-            [
-                self._stack.format_arn(
-                    service="scheduler",
-                    resource="schedule",
-                    resource_name=f"{self.auto_stop_group.schedule_group_name}/*",
-                )
-            ],
-            "one-time auto-stop schedules (named after their channel) in the auto-stop group",
+            [arn(self, "scheduler", "schedule", f"{self.auto_stop_group.schedule_group_name}/*")],
+            why="one-time auto-stop schedules (named after their channel) in the auto-stop group",
         )
-        self.auto_stop_role.grant_pass_role(fn.grant_principal)
+        fn.allow(
+            ["iam:PassRole"],
+            [self.auto_stop_role.role_arn],
+            conditions={"StringEquals": {"iam:PassedToService": "scheduler.amazonaws.com"}},
+        )
 
-    def _grant_encoding(self, fn: lambda_.IFunction) -> None:
+    def _grant_encoding(self, fn: FastFunction) -> None:
         self._table(fn, self._data.library_table, write=True)
-        self._media.ladder_provisioner.grant_start_execution(fn)
-        self._allow(fn, ["mediaconvert:CreateJobTemplate"], ["*"], "", conditions=self._tagged())
-        self._allow(
-            fn,
+        self._media.ladder_provisioner.grant_start_execution(fn.function)
+        fn.allow(["mediaconvert:CreateJobTemplate"], ["*"], conditions=self._tagged())
+        fn.allow(
             ["mediaconvert:TagResource"],
-            [self._arn("jobTemplates", f"{self._prefix}-*", service="mediaconvert")],
-            "runtime job templates are named <prefix>-<ladder> (the reaper deletes them by that prefix)",
+            [arn(self, "mediaconvert", "jobTemplates", f"{self._prefix}-*")],
+            why="runtime job templates are named <prefix>-<ladder> (the reaper deletes them by that prefix)",
             conditions=self._tagged(),
         )
 
     # --- helpers -----------------------------------------------------------------------------------------------
 
-    def _allow(
-        self,
-        fn: lambda_.IFunction,
-        actions: Sequence[str],
-        resources: Sequence[str],
-        reason: str,
-        *,
-        conditions: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Allow ``actions`` on ``resources`` and acknowledge each wildcard resource with ``reason``.
-
-        ``*`` itself needs no reason here: these actions have no resource-level permissions (service
-        authorization reference) and the FastFunction role already acknowledges ``Resource::*``.
-        """
-        fn.add_to_role_policy(
-            iam.PolicyStatement(actions=list(actions), resources=list(resources), conditions=conditions)
-        )
-        wildcards = {nag.wildcard_resource(r): reason for r in resources if "*" in r and r != "*"}
-        if wildcards:
-            assert fn.role is not None
-            acknowledge_references(fn.role, wildcards)
-
-    def _table(self, fn: lambda_.IFunction, table: dynamodb.ITableV2, *, write: bool) -> None:
+    def _table(self, fn: FastFunction, table: dynamodb.ITableV2, *, write: bool) -> None:
         """Item access to ``table`` and its ``GSI1`` (no ``index/*``, no ``DescribeTable``)."""
         actions = [*_TABLE_READ, *(_TABLE_WRITE if write else ())]
-        fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=[f"dynamodb:{action}" for action in actions],
-                resources=[table.table_arn, f"{table.table_arn}/index/{GSI1}"],
-            )
-        )
+        fn.allow([f"dynamodb:{action}" for action in actions], [table.table_arn, f"{table.table_arn}/index/{GSI1}"])
 
-    def _epg(self, fn: lambda_.IFunction, *actions: str) -> None:
-        self._allow(
-            fn,
+    def _epg(self, fn: FastFunction, *actions: str) -> None:
+        fn.allow(
             actions,
             [self._data.media_bucket.arn_for_objects("epg/*")],
-            "EPG feeds epg/<channel>.json and .xml (CONTRACTS §I)",
+            why="EPG feeds epg/<channel>.json and .xml (CONTRACTS §I)",
         )
 
-    def _arn(self, resource: str, name: str, *, service: str = "mediatailor", colon: bool = False) -> str:
-        return self._stack.format_arn(
-            service=service,
-            resource=resource,
-            resource_name=name,
-            arn_format=ArnFormat.COLON_RESOURCE_NAME if colon else ArnFormat.SLASH_RESOURCE_NAME,
-        )
+    def _mediatailor(self, resource: str, name: str) -> str:
+        return arn(self, "mediatailor", resource, name)
 
     def _tagged(self) -> dict[str, Any]:
         """Requests must tag what they create with this deployment's ``fast:app`` (CONTRACTS §E)."""
-        return {"StringEquals": {f"aws:RequestTag/{APP_TAG}": self._prefix}}
+        return {"StringEquals": {f"aws:RequestTag/{TAG_APP}": self._prefix}}
 
 
 def _mt(*actions: str) -> list[str]:

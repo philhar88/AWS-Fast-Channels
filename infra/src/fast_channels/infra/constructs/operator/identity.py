@@ -15,7 +15,8 @@ INVOKE_SCOPE: Final = "agent.invoke"
 AGENT_SCOPE: Final = f"{RESOURCE_SERVER}/{INVOKE_SCOPE}"
 """The OAuth scope the Gateway and the Runtime require of every access token."""
 LOCAL_CONSOLE_URL: Final = "http://localhost:5173/"
-"""Vite dev server of the console (console/README.md), allowed as a sign-in and sign-out redirect."""
+"""Vite dev server of the console (console/README.md); pass it as ``console_dev_url`` (config
+``agent.console_dev_url``) to sign in to a local console."""
 _GROUP_DESCRIPTIONS: Final = {
     Group.VIEWERS: "Read channels, schedules, the library and ladders",
     Group.OPERATORS: "Viewers, plus plan and publish schedules, ingest, and start or stop channels",
@@ -35,20 +36,29 @@ class OperatorIdentity(Construct):
       ``fast-operators`` and ``fast-admins`` drive the Gateway's Cedar policies (``cognito:groups`` claim).
     - ``console_client``: public SPA client, Authorization Code with PKCE, scopes ``openid email profile`` and
       :data:`AGENT_SCOPE`; refresh tokens rotate and can be revoked (the console revokes on sign-out).
-    - ``autopilot_client``: confidential machine client (``client_credentials``, :data:`AGENT_SCOPE` only); the
-      autopilot Lambda reads its secret with ``cognito-idp:DescribeUserPoolClient``.
+    - ``autopilot_client`` (only with ``autopilot``): confidential machine client (``client_credentials``,
+      :data:`AGENT_SCOPE` only); the autopilot Lambda reads its secret with ``cognito-idp:DescribeUserPoolClient``.
+      Cognito returns the secret to *any* principal allowed that action on the pool, and the AWS managed
+      ``ReadOnlyAccess`` and ``SecurityAudit`` policies allow ``cognito-idp:Describe*``: whoever holds them can
+      mint autopilot tokens and plan and publish schedules on the autopilot's channels. Deny
+      ``cognito-idp:DescribeUserPoolClient`` on this pool to every other principal (SCP or permissions boundary)
+      where read-only AWS access is broader than schedule control.
 
     Args:
         domain_prefix: managed login domain prefix, unique in the region
             (``https://<prefix>.auth.<region>.amazoncognito.com``).
-        callback_urls: console origins (``https://<host>/``) to redirect to after sign-in and sign-out;
-            :data:`LOCAL_CONSOLE_URL` is always added.
+        callback_urls: console origins (``https://<host>/``) to redirect to after sign-in and sign-out.
+        console_dev_url: a local dev server origin (e.g. :data:`LOCAL_CONSOLE_URL`) to accept as well; any process
+            listening there on an operator's machine could receive their authorization codes.
+        autopilot: create the autopilot's machine client (some channel has an ``autopilot_cron``).
         admin_email: email of the first ``fast-admins`` user, who receives a temporary password; ``None`` creates
             no user.
         removal_policy: what happens to the user pool (and its users) when the stack is deleted.
 
     Attributes:
-        user_pool, console_client, autopilot_client, domain: the Cognito resources.
+        user_pool, console_client, domain: the Cognito resources.
+        autopilot_client: the autopilot's client, ``None`` without ``autopilot``.
+        clients: the app clients whose tokens the Gateway and the Runtime accept.
         domain_url: ``https://<prefix>.auth.<region>.amazoncognito.com`` (no trailing slash).
         token_endpoint: OAuth 2.0 token endpoint of the domain.
     """
@@ -60,6 +70,8 @@ class OperatorIdentity(Construct):
         *,
         domain_prefix: str,
         callback_urls: Sequence[str],
+        console_dev_url: str | None = None,
+        autopilot: bool = False,
         admin_email: str | None = None,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
@@ -98,7 +110,7 @@ class OperatorIdentity(Construct):
         invoke = cognito.ResourceServerScope(scope_name=INVOKE_SCOPE, scope_description="Use the scheduling agent")
         server = self.user_pool.add_resource_server("AgentApi", identifier=RESOURCE_SERVER, scopes=[invoke])
         agent_scope = cognito.OAuthScope.resource_server(server, invoke)
-        redirects = [*callback_urls, LOCAL_CONSOLE_URL]
+        redirects = [*callback_urls, *([console_dev_url] if console_dev_url else [])]
         self.console_client = self.user_pool.add_client(
             "Console",
             generate_secret=False,  # public SPA client: Authorization Code + PKCE
@@ -117,15 +129,21 @@ class OperatorIdentity(Construct):
             enable_token_revocation=True,
             prevent_user_existence_errors=True,
         )
-        self.autopilot_client = self.user_pool.add_client(
-            "Autopilot",
-            generate_secret=True,
-            o_auth=cognito.OAuthSettings(flows=cognito.OAuthFlows(client_credentials=True), scopes=[agent_scope]),
-            supported_identity_providers=[cognito.UserPoolClientIdentityProvider.COGNITO],
-            access_token_validity=Duration.minutes(60),
-            enable_token_revocation=True,
-            prevent_user_existence_errors=True,
-        )
+        self.autopilot_client: cognito.UserPoolClient | None = None
+        if autopilot:
+            self.autopilot_client = self.user_pool.add_client(
+                "Autopilot",
+                generate_secret=True,
+                o_auth=cognito.OAuthSettings(flows=cognito.OAuthFlows(client_credentials=True), scopes=[agent_scope]),
+                supported_identity_providers=[cognito.UserPoolClientIdentityProvider.COGNITO],
+                access_token_validity=Duration.minutes(60),
+                enable_token_revocation=True,
+                prevent_user_existence_errors=True,
+            )
+        self.clients: list[cognito.IUserPoolClient] = [
+            self.console_client,
+            *([self.autopilot_client] if self.autopilot_client else []),
+        ]
         self.domain = self._managed_login(domain_prefix)
         self.domain_url = managed_login_url(domain_prefix, Stack.of(self).region)
         self.token_endpoint = f"{self.domain_url}/oauth2/token"

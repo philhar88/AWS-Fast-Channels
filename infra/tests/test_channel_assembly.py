@@ -84,7 +84,7 @@ def _build(outdir: Path | None = None, removal: RemovalPolicy = RemovalPolicy.DE
     origin = ChannelAssemblyOrigin(
         stack, "Origin", name="fast-media", bucket=data.media_bucket, content_base_url=CONTENT
     )
-    vended_logs = MediaTailorLogs(stack, "MediaTailorLogs", prefix="fast", retention=RETENTION)
+    vended_logs = MediaTailorLogs(stack, "MediaTailorLogs", prefix="fast", log_retention=RETENTION)
     reaper = RuntimeResourceReaper(
         stack,
         "Reaper",
@@ -225,7 +225,7 @@ def test_token_content_hosts_survive_the_spec_builders() -> None:
         outputs=("hls",),
         filler_slate="f",
         origin=origin,
-        vended_logs=MediaTailorLogs(stack, "Logs", prefix="fast", retention=RETENTION),
+        vended_logs=MediaTailorLogs(stack, "Logs", prefix="fast", log_retention=RETENTION),
         library=table,
         content_base_url=f"https://{bucket.bucket_regional_domain_name}",
         log_retention=RETENTION,
@@ -343,8 +343,12 @@ def test_one_log_group_scoped_destination_for_every_playback_configuration(templ
     assert log_group["Properties"]["RetentionInDays"] == 7
     [statement] = log_group["Properties"]["ResourcePolicyDocument"]["Statement"]
     assert statement["Principal"] == {"Service": "delivery.logs.amazonaws.com"}
-    assert statement["Resource"]["Fn::Join"][1][-1] == ":log-group:/aws/vendedlogs/mediatailor/fast:log-stream:*"
-    assert statement["Condition"]["ArnLike"]["aws:SourceArn"]["Fn::Join"][1][-1] == ":delivery-source:fast-*"
+    logs_arn = "arn:aws:logs:us-east-1:123456789012"
+    assert statement["Resource"] == f"{logs_arn}:log-group:/aws/vendedlogs/mediatailor/fast:log-stream:*"
+    assert statement["Condition"] == {
+        "StringEquals": {"aws:SourceAccount": "123456789012"},
+        "ArnLike": {"aws:SourceArn": f"{logs_arn}:delivery-source:fast-*"},
+    }
     template.resource_count_is("AWS::Logs::ResourcePolicy", 0)  # never the account-wide policy (_review.md)
     sources = template.find_resources("AWS::Logs::DeliverySource")
     assert sorted((s["Properties"]["Name"], s["Properties"]["LogType"]) for s in sources.values()) == sorted(
@@ -461,6 +465,10 @@ def test_reaper_is_disabled_when_data_is_retained() -> None:
     assert reaper["Properties"]["Enabled"] is False
 
 
+def as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else [value]
+
+
 def test_reaper_permissions_are_scoped_to_runtime_names(template: Template) -> None:
     [statements] = [
         v["Properties"]["PolicyDocument"]["Statement"]
@@ -473,12 +481,17 @@ def test_reaper_permissions_are_scoped_to_runtime_names(template: Template) -> N
         for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])
     }
 
-    assert by_action["mediatailor:DeleteChannel"].endswith(':channel/fast-agent-*"]]}')
-    assert by_action["mediatailor:DeleteVodSource"].endswith(':vodSource/fast*/*"]]}')
+    by_condition = {a: s.get("Condition") for s in statements for a in as_list(s["Action"])}
+
+    # "fast-" with its hyphen: deployment fast must never reach fastci-* resources.
+    assert by_action["mediatailor:DeleteChannel"].endswith(':channel/fast-agent-*"')
+    assert by_action["mediatailor:DeleteVodSource"].endswith(':vodSource/fast-*/*"')
     # ListVodSources is authorized on vodSource/<location>/*, not on the source location (observed live).
     assert by_action["mediatailor:ListVodSources"] == by_action["mediatailor:DeleteVodSource"]
-    assert by_action["mediaconvert:DeleteJobTemplate"].endswith(':jobTemplates/fast*"]]}')
-    assert by_action["logs:DeleteDeliverySource"].endswith(':delivery-source:fast-agent-*"]]}')
+    assert by_action["mediatailor:DeleteSourceLocation"].endswith(':sourceLocation/fast-*"')
+    assert by_action["mediaconvert:DeleteJobTemplate"].endswith(':jobTemplates/fast-*"')
+    assert by_action["logs:DeleteDeliverySource"].endswith(':delivery-source:fast-agent-*"')
+    assert by_condition["logs:DeleteDelivery"] == {"StringEquals": {"aws:ResourceTag/fast:app": "fast"}}
     assert by_action["cloudformation:DescribeStacks"] == json.dumps({"Ref": "AWS::StackId"})
     assert by_action["mediatailor:ListChannels"] == '"*"'
 

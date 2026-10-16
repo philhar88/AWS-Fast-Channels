@@ -20,24 +20,27 @@ from pydantic import BaseModel
 
 from fast_channels.functions.tools.registry import Access, Approval, ToolSpec, all_tools, confirm_tools
 from fast_channels.infra.config import FastChannelsConfig
+from fast_channels.infra.constructs.alerts import alert_topic
 from fast_channels.infra.constructs.functions import (
     FunctionLogGroups,
     LambdaDefaults,
     LogGroupDefaults,
     StateMachineDefaults,
 )
+from fast_channels.infra.constructs.logs import vended_log_group
 from fast_channels.infra.constructs.operator import agent_bundle, cedar
 from fast_channels.infra.constructs.operator.console import ConsoleConfig, OperatorConsole, content_security_policy
-from fast_channels.infra.constructs.operator.deliveries import LogDelivery, LogType, vended_log_group
+from fast_channels.infra.constructs.operator.deliveries import LogDelivery, LogType
 from fast_channels.infra.constructs.operator.gateway import CONTROL_PLANE_WRITES, INSTRUCTIONS
 from fast_channels.infra.constructs.operator.runtime import model_invoke_statements
 from fast_channels.infra.constructs.operator.tools import ENVIRONMENT, registry_tools
+from fast_channels.infra.exports import ChannelExports, MediaExports
 from fast_channels.infra.nag import flatten
 from fast_channels.infra.stacks.data import MEMORY_PREFERENCE_NAMESPACE, DataStack
-from fast_channels.infra.stacks.media import ChannelExports, MediaExports
 from fast_channels.infra.stacks.operator import OperatorStack
 
 ACCOUNT, REGION = "123456789012", "us-east-1"
+CAPTURE = "CAPTURE_PROMPTS"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CDK_CONTEXT: dict[str, Any] = json.loads((REPO_ROOT / "cdk.json").read_text())["context"]
 LADDER = "standard@86bf8088e0"
@@ -82,13 +85,13 @@ def _media_exports(stack: Stack) -> MediaExports:
         cdn_base_url=CDN,
         content_base_url=CDN,
         event_bus=events.EventBus(stack, "Bus", event_bus_name="fast-fast-channels"),
+        alert_topic=alert_topic(stack, "Alerts", name="fast-alerts", email=None),
         ingest_state_machine=sfn.StateMachine.from_state_machine_arn(
             stack, "Ingest", f"arn:aws:states:{REGION}:{ACCOUNT}:stateMachine:fast-ingest"
         ),
         ladder_provisioner=sfn.StateMachine.from_state_machine_arn(
             stack, "Provisioner", f"arn:aws:states:{REGION}:{ACCOUNT}:stateMachine:fast-provision-ladder"
         ),
-        mediaconvert_role_arn=f"arn:aws:iam::{ACCOUNT}:role/fast-mediaconvert",
         mediaconvert_queue_arn=f"arn:aws:mediaconvert:{REGION}:{ACCOUNT}:queues/fast",
         source_location_name="fast-media",
         default_ladder_version=LADDER,
@@ -171,6 +174,11 @@ def only(template: Template, type_: str) -> dict[str, Any]:
     return dict(found["Properties"])
 
 
+def only_runtime(template: Template) -> dict[str, Any]:
+    [runtime] = resources(template, "AWS::BedrockAgentCore::Runtime").values()
+    return dict(runtime)
+
+
 def statements(template: Template) -> Iterator[dict[str, Any]]:
     for policy in resources(template, "AWS::IAM::Policy").values():
         yield from policy["Properties"]["PolicyDocument"]["Statement"]
@@ -192,12 +200,12 @@ def actions_of(statements_: list[dict[str, Any]], effect: str = "Allow") -> set[
 # --- Cedar --------------------------------------------------------------------------------------------------------
 
 
-def _policies() -> dict[str, cedar.CedarPolicy]:
+def _policies(*, autopilot: bool = True) -> dict[str, cedar.CedarPolicy]:
     policies = cedar.gateway_policies(
         all_tools(),
         gateway_arn="arn:aws:bedrock-agentcore:us-east-1:1:gateway/g",
-        autopilot_client_id="auto123",
         agent_channel_prefix="fast-agent-",
+        **({"autopilot_client_id": "auto123", "autopilot_channels": ("fast-demo", "fast-news")} if autopilot else {}),
     )
     return {p.name: p for p in policies}
 
@@ -219,15 +227,43 @@ def test_cedar_permits_each_access_level_to_its_groups() -> None:
     assert 'resource == AgentCore::Gateway::"arn:aws:bedrock-agentcore:us-east-1:1:gateway/g"' in policy.statement
 
 
-def test_cedar_limits_the_autopilot_to_reads_plan_and_publish() -> None:
+def test_cedar_limits_the_autopilot_to_reads_and_scheduling_its_own_channels() -> None:
     policies = _policies()
     reads = {s.qualified_name for s in all_tools() if s.access is Access.READ}
     gated = {s.qualified_name for s in all_tools() if s.approval is Approval.CONFIRM}
+    plan, publish = policies["permit_autopilot_plan"].statement, policies["permit_autopilot_publish"].statement
 
-    assert _actions(policies["permit_autopilot"].statement) == reads | {"schedule___plan", "schedule___publish"}
-    assert 'principal.getTag("client_id") == "auto123"' in policies["permit_autopilot"].statement
+    assert _actions(policies["permit_autopilot"].statement) == reads
+    assert all('principal.getTag("client_id") == "auto123"' in p.statement for n, p in policies.items() if "auto" in n)
+    assert _actions(plan) == {"schedule___plan"}
+    assert plan.endswith(
+        'context.input has channel && (context.input.channel like "fast-demo" || context.input.channel like '
+        '"fast-news") };'
+    )
+    assert _actions(publish) == {"schedule___publish"}
+    assert 'context.input has plan_id && (context.input.plan_id like "fast-demo.*" ||' in publish
     assert _actions(policies["forbid_autopilot_confirm"].statement) == gated - {"schedule___publish"}
     assert policies["forbid_autopilot_confirm"].forbid
+
+
+def test_cedar_has_no_autopilot_policies_without_an_autopilot() -> None:
+    assert not [name for name in _policies(autopilot=False) if "autopilot" in name]
+
+
+def test_cedar_autopilot_needs_its_channels_and_safe_names() -> None:
+    def policies(channels: tuple[str, ...]) -> list[cedar.CedarPolicy]:
+        return cedar.gateway_policies(
+            all_tools(),
+            gateway_arn="g",
+            agent_channel_prefix="p-",
+            autopilot_client_id="a",
+            autopilot_channels=channels,
+        )
+
+    with pytest.raises(ValueError, match="channels it schedules"):
+        policies(())
+    with pytest.raises(ValueError, match="cannot be embedded"):
+        policies(('x" || true || "',))
 
 
 def test_cedar_forbids_destructive_channel_tools_on_iac_channels() -> None:
@@ -242,9 +278,7 @@ def test_cedar_forbids_destructive_channel_tools_on_iac_channels() -> None:
 
 def test_cedar_rejects_values_that_would_escape_a_string_literal() -> None:
     with pytest.raises(ValueError, match="cannot be embedded"):
-        cedar.gateway_policies(
-            all_tools(), gateway_arn='x" || true', autopilot_client_id="a", agent_channel_prefix="p-"
-        )
+        cedar.gateway_policies(all_tools(), gateway_arn='x" || true', agent_channel_prefix="p-")
 
 
 def test_cedar_requires_the_autopilot_tools_to_exist() -> None:
@@ -254,7 +288,9 @@ def test_cedar_requires_the_autopilot_tools_to_exist() -> None:
     lone = ToolSpec("channels", "list_channels", "d", Empty, Empty, Access.READ, Approval.NONE, lambda i, c: Empty())
 
     with pytest.raises(ValueError, match="autopilot tools"):
-        cedar.gateway_policies([lone], gateway_arn="g", autopilot_client_id="a", agent_channel_prefix="p-")
+        cedar.gateway_policies(
+            [lone], gateway_arn="g", agent_channel_prefix="p-", autopilot_client_id="a", autopilot_channels=("c",)
+        )
 
 
 # --- identity -------------------------------------------------------------------------------------------------------
@@ -295,8 +331,10 @@ def test_console_client_is_a_pkce_code_flow_client_redirecting_to_the_console(te
 
     assert console["GenerateSecret"] is False
     assert console["CallbackURLs"] == console["LogoutURLs"]
-    assert console["CallbackURLs"][1] == "http://localhost:5173/"
     distribution = logical(template, "AWS::CloudFront::Distribution")
+    assert console["CallbackURLs"] == [  # no local dev server unless configured
+        {"Fn::Join": ["", ["https://", {"Fn::GetAtt": [distribution, "DomainName"]}, "/"]]}
+    ]
     assert console["CallbackURLs"][0] == {
         "Fn::Join": ["", ["https://", {"Fn::GetAtt": [distribution, "DomainName"]}, "/"]]
     }
@@ -306,15 +344,32 @@ def test_console_client_is_a_pkce_code_flow_client_redirecting_to_the_console(te
     assert console["RefreshTokenRotation"] == {"Feature": "ENABLED", "RetryGracePeriodSeconds": 30}
 
 
-def test_autopilot_client_is_a_confidential_client_credentials_client(template: Template) -> None:
+def test_console_accepts_a_local_dev_server_only_when_configured(dist: Path) -> None:
+    template = build({"agent.console_dev_url": "http://localhost:5173/"}, dist=dist).template
+    [console] = [c["Properties"] for c in resources(template, "AWS::Cognito::UserPoolClient").values()]
+
+    assert console["CallbackURLs"][1:] == console["LogoutURLs"][1:] == ["http://localhost:5173/"]
+
+
+def test_autopilot_client_is_a_confidential_client_credentials_client(everything: Template) -> None:
     [autopilot] = [
         c["Properties"]
-        for c in resources(template, "AWS::Cognito::UserPoolClient").values()
+        for c in resources(everything, "AWS::Cognito::UserPoolClient").values()
         if c["Properties"]["AllowedOAuthFlows"] == ["client_credentials"]
     ]
 
     assert autopilot["GenerateSecret"] is True
     assert len(autopilot["AllowedOAuthScopes"]) == 1
+
+
+def test_no_autopilot_credential_without_an_autopilot(template: Template, named_outputs: Any) -> None:
+    clients = resources(template, "AWS::Cognito::UserPoolClient").values()
+
+    assert [c["Properties"]["AllowedOAuthFlows"] for c in clients] == [["code"]]
+    assert "AutopilotClientId" not in named_outputs(template)
+    for resource in (*resources(template, "AWS::BedrockAgentCore::Gateway").values(), only_runtime(template)):
+        assert len(resource["Properties"]["AuthorizerConfiguration"]["CustomJWTAuthorizer"]["AllowedClients"]) == 1
+    assert not [p for p in resources(template, "AWS::BedrockAgentCore::Policy").values() if "autopilot" in str(p)]
 
 
 def test_admin_user_is_created_in_fast_admins(everything: Template) -> None:
@@ -377,12 +432,23 @@ def test_creations_without_resource_permissions_require_the_deployment_tag(templ
 
 def test_auto_stop_role_may_only_stop_channels_and_is_passed_by_the_channels_tool(template: Template) -> None:
     [role] = [r for k, r in resources(template, "AWS::IAM::Role").items() if k.startswith("ToolsAutoStopRole")]
+    [trust] = role["Properties"]["AssumeRolePolicyDocument"]["Statement"]
+    [pass_role] = [
+        s for s in role_statements(template, "ToolsChannelsRoleDefaultPolicy") if s["Action"] == "iam:PassRole"
+    ]
 
-    assert role["Properties"]["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {
-        "Service": "scheduler.amazonaws.com"
-    }
+    assert trust["Principal"] == {"Service": "scheduler.amazonaws.com"}
+    group = logical(template, "AWS::Scheduler::ScheduleGroup", "ToolsAutoStop")
+    assert trust["Condition"]["ArnEquals"] == {"aws:SourceArn": {"Fn::GetAtt": [group, "Arn"]}}
     assert actions_of(role_statements(template, "ToolsAutoStopRoleDefaultPolicy")) == {"mediatailor:StopChannel"}
-    assert "iam:PassRole" in actions_of(role_statements(template, "ToolsChannelsRoleDefaultPolicy"))
+    assert pass_role["Condition"] == {"StringEquals": {"iam:PassedToService": "scheduler.amazonaws.com"}}
+
+
+def test_origins_tools_reach_only_this_deployments_source_locations(template: Template) -> None:
+    origins = json.dumps(role_statements(template, "ToolsOriginsRoleDefaultPolicy"))
+
+    assert "sourceLocation/fast*" not in origins and "vodSource/fast*/" not in origins
+    assert "sourceLocation/fast-*" in origins and "vodSource/fast-*/*" in origins
 
 
 def test_tables_are_granted_item_access_and_their_one_index(template: Template) -> None:
@@ -401,12 +467,31 @@ def test_gateway_authorizes_cognito_tokens_without_semantic_search(template: Tem
     assert gateway["AuthorizerType"] == "CUSTOM_JWT"
     jwt = gateway["AuthorizerConfiguration"]["CustomJWTAuthorizer"]
     assert jwt["AllowedScopes"] == ["fast-channels/agent.invoke"]
-    assert len(jwt["AllowedClients"]) == 2
+    assert len(jwt["AllowedClients"]) == 1  # the console; the autopilot client only exists with an autopilot
     assert jwt["DiscoveryUrl"]["Fn::Join"][1][-1] == "/.well-known/openid-configuration"
     assert gateway["ProtocolConfiguration"] == {
         "Mcp": {"Instructions": INSTRUCTIONS, "SupportedVersions": ["2025-03-26", "2025-06-18"]}
     }
     assert gateway["PolicyEngineConfiguration"]["Mode"] == "ENFORCE"
+
+
+def test_gateway_role_is_assumable_only_by_this_accounts_gateways(template: Template) -> None:
+    [role] = [r for k, r in resources(template, "AWS::IAM::Role").items() if k.startswith("GatewayServiceRole")]
+    gateway = only(template, "AWS::BedrockAgentCore::Gateway")
+
+    assert role["Properties"]["AssumeRolePolicyDocument"]["Statement"] == [
+        {
+            "Action": "sts:AssumeRole",
+            "Effect": "Allow",
+            "Principal": {"Service": "bedrock-agentcore.amazonaws.com"},
+            "Condition": {
+                "StringEquals": {"aws:SourceAccount": ACCOUNT},
+                "ArnLike": {"aws:SourceArn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:gateway/fast-tools-*"},
+            },
+        }
+    ]
+    assert gateway["RoleArn"]["Fn::GetAtt"][0].startswith("GatewayServiceRole")
+    assert "lambda:InvokeFunction" in actions_of(role_statements(template, "GatewayServiceRoleDefaultPolicy"))
 
 
 def test_gateway_targets_expose_every_registry_tool_with_correlation_id(template: Template) -> None:
@@ -424,10 +509,13 @@ def test_policies_depend_on_every_target_and_only_forbids_ignore_findings(templa
     targets = set(resources(template, "AWS::BedrockAgentCore::GatewayTarget"))
     policies = resources(template, "AWS::BedrockAgentCore::Policy")
 
-    assert sorted(p["Properties"]["Name"] for p in policies.values()) == sorted(p for p in _policies())
+    # Policy names are unique per account: the engine name keeps two deployments apart.
+    assert sorted(p["Properties"]["Name"] for p in policies.values()) == sorted(
+        f"fast_tools_{name}" for name in _policies(autopilot=False)
+    )
     for policy in policies.values():
         assert targets <= set(policy["DependsOn"])
-        forbid = policy["Properties"]["Name"].startswith("forbid_")
+        forbid = policy["Properties"]["Name"].startswith("fast_tools_forbid_")
         assert policy["Properties"]["ValidationMode"] == ("IGNORE_ALL_FINDINGS" if forbid else "FAIL_ON_ANY_FINDINGS")
 
 
@@ -473,7 +561,7 @@ def test_runtime_is_an_agui_code_zip_behind_the_cognito_authorizer(template: Tem
     code = runtime["AgentRuntimeArtifact"]["CodeConfiguration"]
     assert (code["Runtime"], code["EntryPoint"]) == ("PYTHON_3_14", ["opentelemetry-instrument", "main.py"])
     jwt = runtime["AuthorizerConfiguration"]["CustomJWTAuthorizer"]
-    assert (len(jwt["AllowedClients"]), jwt["AllowedScopes"]) == (2, ["fast-channels/agent.invoke"])
+    assert (len(jwt["AllowedClients"]), jwt["AllowedScopes"]) == (1, ["fast-channels/agent.invoke"])
     assert runtime["RequestHeaderConfiguration"] == {"RequestHeaderAllowlist": ["Authorization"]}
     assert runtime["LifecycleConfiguration"] == {"IdleRuntimeSessionTimeout": 600, "MaxLifetime": 7200}
 
@@ -490,14 +578,42 @@ def test_runtime_environment_is_the_agent_settings_contract(template: Template, 
         "MODEL_SPEC_PARAMETER",
         "DEFAULT_MODEL_ID",
         "ALLOWED_MODELS",
-        "FAST_PREFIX",
         "OTEL_TRACES_EXPORTER",
+        "CAPTURE_PROMPTS",
     }
     assert env["CONFIRM_TOOLS"] == ",".join(confirm_tools())
     assert env["MEMORY_PREFERENCE_NAMESPACE"] == MEMORY_PREFERENCE_NAMESPACE
     assert env["OTEL_TRACES_EXPORTER"] == "none"
     assert env["DEFAULT_MODEL_ID"] in env["ALLOWED_MODELS"].split(",")
     assert "OTEL_TRACES_EXPORTER" not in traced
+
+
+def test_message_content_stays_out_of_the_logs_unless_evaluated_or_asked_for(
+    template: Template, everything: Template, dist: Path
+) -> None:
+    def captured(t: Template) -> str:
+        return str(only(t, "AWS::BedrockAgentCore::Runtime")["EnvironmentVariables"][CAPTURE])
+
+    asked = build({"observability.capture_prompts": True}, dist=dist).template
+    declined = build({**EVERYTHING, "observability.capture_prompts": False}, dist=dist).template
+
+    assert (captured(template), captured(everything), captured(asked), captured(declined)) == (
+        "false",
+        "true",  # online evaluations score the content
+        "true",
+        "false",
+    )
+
+
+def test_runtime_role_reads_no_object_but_its_code_zip(template: Template) -> None:
+    runtime = only(template, "AWS::BedrockAgentCore::Runtime")
+    code = runtime["AgentRuntimeArtifact"]["CodeConfiguration"]["Code"]["S3"]
+    [deny] = [
+        s for s in role_statements(template, "AgentExecutionRoleDefaultPolicy") if s.get("Sid") == "OnlyItsOwnCode"
+    ]
+
+    assert (deny["Action"], deny["NotResource"]) == ("s3:GetObject*", f"arn:aws:s3:::{code['Bucket']}/{code['Prefix']}")
+    assert "AgentExecutionRoleDefaultPolicy" in only_runtime(template)["DependsOn"][0]
 
 
 def test_model_spec_parameter_holds_the_default_spec(template: Template) -> None:
@@ -604,8 +720,15 @@ def test_agentcore_logs_go_to_scoped_vendedlogs_groups(template: Template) -> No
     assert len(vended) == 4
     for group in vended:
         [statement] = group["ResourcePolicyDocument"]["Statement"]
+        resource, _, log_type = (
+            group["LogGroupName"].removeprefix("/aws/vendedlogs/bedrock-agentcore/fast/").partition("/")
+        )
+        own_source = f"fast-{resource}-{log_type.lower().replace('_', '-')}"
         assert statement["Principal"] == {"Service": "delivery.logs.amazonaws.com"}
         assert statement["Resource"].endswith(f"{group['LogGroupName']}:log-stream:*")
+        assert statement["Condition"]["ArnLike"] == {  # only its own delivery source, not any in the account
+            "aws:SourceArn": f"arn:aws:logs:{REGION}:{ACCOUNT}:delivery-source:{own_source}"
+        }
     template.resource_count_is("AWS::Logs::ResourcePolicy", 0)
 
 
@@ -618,6 +741,7 @@ def test_traces_need_transaction_search(template: Template, everything: Template
 
     assert len(traces) == 3
     assert "delivery.logs.amazonaws.com" in json.dumps(policy["PolicyDocument"])
+    assert "delivery-source:fast-*-traces" in json.dumps(policy["PolicyDocument"])
     everything.resource_count_is("AWS::Logs::ResourcePolicy", 0)
 
 
@@ -630,7 +754,12 @@ def test_vended_log_destinations_must_be_vendedlogs_groups() -> None:
 
     with pytest.raises(ValueError, match="/aws/vendedlogs/"):
         vended_log_group(
-            stack, "G", name="/fast/logs", retention=logs.RetentionDays.ONE_DAY, removal_policy=RemovalPolicy.DESTROY
+            stack,
+            "G",
+            name="/fast/logs",
+            delivery_sources="fast-*",
+            retention=logs.RetentionDays.ONE_DAY,
+            removal_policy=RemovalPolicy.DESTROY,
         )
     with pytest.raises(ValueError, match="X-Ray"):
         LogDelivery(stack, "D", name="d", resource_arn="arn", log_type=LogType.APPLICATION_LOGS)
@@ -676,8 +805,47 @@ def test_autopilot_reads_only_its_pool_clients_and_knows_the_runtime(everything:
     assert describe["Resource"] == {"Fn::GetAtt": [logical(everything, "AWS::Cognito::UserPool"), "Arn"]}
 
 
+def test_autopilot_schedules_assume_their_role_only_from_its_group(everything: Template) -> None:
+    [role] = [r for k, r in resources(everything, "AWS::IAM::Role").items() if k.startswith("AutopilotScheduleRole")]
+    [trust] = role["Properties"]["AssumeRolePolicyDocument"]["Statement"]
+
+    group = logical(everything, "AWS::Scheduler::ScheduleGroup", "AutopilotGroup")
+    assert trust["Condition"] == {
+        "StringEquals": {"aws:SourceAccount": ACCOUNT},
+        "ArnEquals": {"aws:SourceArn": {"Fn::GetAtt": [group, "Arn"]}},
+    }
+
+
+def test_autopilot_failures_alarm_on_the_media_alert_topic(everything: Template) -> None:
+    alarms = {
+        a["Properties"]["AlarmName"]: a["Properties"] for a in resources(everything, "AWS::CloudWatch::Alarm").values()
+    }
+    queue = logical(everything, "AWS::SQS::Queue", "AutopilotDeadLetters")
+
+    assert set(alarms) == {"fast-autopilot-errors", "fast-autopilot-dead-letters"}
+    errors, letters = alarms["fast-autopilot-errors"], alarms["fast-autopilot-dead-letters"]
+    assert (errors["Namespace"], errors["MetricName"], errors["Threshold"]) == ("AWS/Lambda", "Errors", 1)
+    assert (letters["MetricName"], letters["Statistic"], letters["Threshold"]) == (
+        "ApproximateNumberOfMessagesVisible",
+        "Maximum",
+        1,
+    )
+    assert letters["Dimensions"] == [{"Name": "QueueName", "Value": {"Fn::GetAtt": [queue, "QueueName"]}}]
+    for alarm in (errors, letters):
+        assert alarm["AlarmActions"] == alarm["OKActions"]
+        assert "Fn::GetStackOutput" in json.dumps(alarm["AlarmActions"])  # the Media stack's topic
+
+
+def test_autopilot_dead_letters_follow_the_removal_policy(dist: Path) -> None:
+    template = build({**EVERYTHING, "removal": "retain"}, dist=dist).template
+    [queue] = [q for k, q in resources(template, "AWS::SQS::Queue").items() if k.startswith("AutopilotDeadLetters")]
+
+    assert queue["DeletionPolicy"] == "Retain"
+
+
 def test_no_autopilot_without_crons(template: Template) -> None:
     template.resource_count_is("AWS::Scheduler::Schedule", 0)
+    template.resource_count_is("AWS::CloudWatch::Alarm", 0)
 
 
 # --- console --------------------------------------------------------------------------------------------------------
@@ -852,7 +1020,7 @@ def test_flatten_matches_cdk_nag(value: Any, flat: str) -> None:
 
 
 def test_agent_zip_has_the_shim_at_its_root_and_the_package(tmp_path: Path) -> None:
-    assert agent_bundle._UvAgentBundling().try_bundle(str(tmp_path), None)  # type: ignore[arg-type]
+    assert agent_bundle.agent_bundling().local.try_bundle(str(tmp_path), None)  # type: ignore[union-attr, arg-type]
 
     assert (tmp_path / "main.py").read_text() == (REPO_ROOT / "agent" / "main.py").read_text()
     assert (tmp_path / "fast_channels" / "agent" / "main.py").is_file()

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
-from aws_cdk import Annotations, CfnOutput, Duration, RemovalPolicy, Stack, Token
+from aws_cdk import Annotations, Duration, Stack, Token
 from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_cloudfront as cf
 from aws_cdk import aws_cloudfront_origins as origins
@@ -23,7 +23,8 @@ from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
 from fast_channels.infra import nag
-from fast_channels.infra.constructs.observability import CLOUDFRONT_REGION, log_group_arn, vended_log_group
+from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
+from fast_channels.infra.constructs.logs import deliver
 
 CONTRACT_VERSION: Final = 1
 DEFAULT_PATH: Final = "*"
@@ -330,8 +331,8 @@ class MediaDistribution(Construct):
     The media bucket's policy belongs to its owner: pass an imported reference (``DataExports.media_bucket``)
     whose policy comes from ``MediaStorage.allow_cloudfront_read()``, which admits every distribution of the
     account and denies content manifests. CDK then adds no statement of its own (its "imported bucket" warning is
-    acknowledged here). MediaTailor endpoints are public; ``mediatailor_oac_id`` attaches an origin access control
-    to both of them once CloudFront offers a MediaTailor type (none exists today: cdn.md §1).
+    acknowledged here). MediaTailor endpoints are public: CloudFront has no origin access control type for them
+    (cdn.md §1).
 
     Policies: managed ones everywhere, plus one custom response headers policy (:attr:`Cors.MEDIA`) and no custom
     cache policy, because accounts have only 20 of each.
@@ -342,7 +343,6 @@ class MediaDistribution(Construct):
             an alternate domain name of this distribution. Requires ``certificate_arn``.
         certificate_arn: ACM certificate in us-east-1 covering ``content_domain``.
         price_class: edge locations to serve from.
-        mediatailor_oac_id: origin access control for the MediaTailor origins.
         publish_additional_metrics: CloudFront's paid per-distribution metrics (cache hit rate, origin latency).
 
     Attributes:
@@ -352,7 +352,7 @@ class MediaDistribution(Construct):
         content_base_url: ``https://<domain_name>``: Channel Assembly's default segment delivery, the ad segment
             prefix and VAST/ADS URLs. Identical to ``cdn_base_url`` in v3.0; the names keep the playback CDN and the
             CDN-neutral content host apart, as ``MediaExports`` does.
-        path_contract: :func:`path_contract` for this distribution (also the ``PathContract`` stack output).
+        path_contract: :func:`path_contract` for this distribution (``MediaStack`` outputs it as ``PathContract``).
     """
 
     def __init__(
@@ -364,7 +364,6 @@ class MediaDistribution(Construct):
         content_domain: str | None = None,
         certificate_arn: str | None = None,
         price_class: cf.PriceClass = cf.PriceClass.PRICE_CLASS_ALL,
-        mediatailor_oac_id: str | None = None,
         publish_additional_metrics: bool = False,
     ) -> None:
         super().__init__(scope, id)
@@ -389,7 +388,7 @@ class MediaDistribution(Construct):
             ),
             server_timing_sampling_rate=100,
         )
-        targets = _origins(media_bucket, region=stack.region, mediatailor_oac_id=mediatailor_oac_id)
+        targets = _origins(media_bucket, region=stack.region)
         behaviours = {route.path: self._behaviour(route, targets) for route in ROUTES}
         self.distribution = cf.Distribution(
             self,
@@ -420,12 +419,6 @@ class MediaDistribution(Construct):
         self.cdn_base_url = f"https://{self.domain_name}"
         self.content_base_url = self.cdn_base_url
         self.path_contract = path_contract(region=stack.region, media_host=self.distribution.distribution_domain_name)
-        for key, value, description in (
-            ("CdnBaseUrl", self.cdn_base_url, "Base URL of playback and media through CloudFront"),
-            ("DistributionId", self.distribution.distribution_id, "Media CloudFront distribution"),
-            ("PathContract", stack.to_json_string(self.path_contract), "Routes for configuring another CDN"),
-        ):
-            CfnOutput(self, key, key=key, value=value, description=description)
 
     def _behaviour(self, route: Route, targets: Mapping[Origin, cf.IOrigin]) -> cf.BehaviorOptions:
         cors = self.cors_policy if route.cors is Cors.MEDIA else _PREFLIGHT_HEADERS
@@ -441,7 +434,7 @@ class MediaDistribution(Construct):
         )
 
 
-def _origins(bucket: s3.IBucket, *, region: str, mediatailor_oac_id: str | None) -> dict[Origin, cf.IOrigin]:
+def _origins(bucket: s3.IBucket, *, region: str) -> dict[Origin, cf.IOrigin]:
     def mediatailor(origin: Origin, host: str) -> cf.IOrigin:
         # Timeouts and retries as deployed in e2e.md §2.3.
         return origins.HttpOrigin(
@@ -453,7 +446,6 @@ def _origins(bucket: s3.IBucket, *, region: str, mediatailor_oac_id: str | None)
             keepalive_timeout=Duration.seconds(5),
             connection_attempts=3,
             connection_timeout=Duration.seconds(10),
-            origin_access_control_id=mediatailor_oac_id,
         )
 
     return {
@@ -534,8 +526,8 @@ S3_SUFFIX_PATH: Final = "{DistributionId}/{yyyy}/{MM}/{dd}/{HH}"
 class CdnAccessLogs(Construct):
     """CloudFront standard logging v2 of one distribution: Parquet objects with Hive-style partitions in the logs
     bucket (``AWSLogs/aws-account-id=<acct>/CloudFront/DistributionId=<id>/year=…/month=…/day=…/hour=…/``; Parquet
-    column names use ``_`` for ``-``, ``(`` and ``)``, e.g. ``cache_behavior_path_pattern``, ``cs_User_Agent``) and,
-    optionally, JSON records in an Infrequent Access log group for Logs Insights (no FilterLogEvents on that class).
+    column names use ``_`` for ``-``, ``(`` and ``)``, e.g. ``cache_behavior_path_pattern``, ``cs_User_Agent``), for
+    Athena.
 
     CloudFront's log delivery sources exist only in us-east-1, so this construct must be in a us-east-1 stack: the
     Media stack when the deployment runs there, the Edge stack otherwise. The bucket may be in any region; its
@@ -545,14 +537,11 @@ class CdnAccessLogs(Construct):
     Args:
         distribution: the distribution to log.
         logs_bucket: bucket receiving the Parquet objects.
-        name: prefix of the delivery source, destination and log-group names, unique per account (the deployment
-            prefix).
-        cloudwatch_retention: also deliver to ``/aws/vendedlogs/cloudfront/<name>`` with this retention.
-        removal_policy: what happens to that log group when the stack is deleted.
+        name: prefix of the delivery source and destination names, unique per account (the deployment prefix).
 
     Attributes:
         source: the delivery source.
-        log_group: the Logs Insights log group, if ``cloudwatch_retention`` is set.
+        delivery: its delivery to the logs bucket.
     """
 
     def __init__(
@@ -563,8 +552,6 @@ class CdnAccessLogs(Construct):
         distribution: cf.IDistribution,
         logs_bucket: s3.IBucket,
         name: str,
-        cloudwatch_retention: logs.RetentionDays | None = None,
-        removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
         stack = Stack.of(self)
@@ -577,48 +564,19 @@ class CdnAccessLogs(Construct):
             log_type="ACCESS_LOGS",
             resource_arn=distribution.distribution_arn,
         )
-        to_s3 = self._deliver(
-            "S3",
-            destination_name=f"{name}-cdn-access-s3",
-            destination_arn=logs_bucket.bucket_arn,
-            output_format="parquet",
-            s3_suffix_path=S3_SUFFIX_PATH,
-            s3_enable_hive_compatible_path=True,
-        )
-        self.log_group: logs.LogGroup | None = None
-        if cloudwatch_retention is not None:
-            self.log_group = vended_log_group(
-                self,
-                "Logs",
-                name=f"/aws/vendedlogs/cloudfront/{name}",
-                delivery_sources=f"{name}-cdn-*",
-                retention=cloudwatch_retention,
-                removal_policy=removal_policy,
-                log_group_class=logs.LogGroupClass.INFREQUENT_ACCESS,
-            )
-            to_logs = self._deliver(
-                "Logs",
-                destination_name=f"{name}-cdn-access-logs",
-                destination_arn=log_group_arn(self, self.log_group.log_group_name),
-                output_format="json",
-            )
-            to_logs.add_resource_dependency(to_s3)  # deliveries of one source are created one at a time
-
-    def _deliver(
-        self, id: str, *, destination_name: str, destination_arn: str, output_format: str, **options: Any
-    ) -> logs.CfnDelivery:
         destination = logs.CfnDeliveryDestination(
             self,
-            f"{id}Destination",
-            name=destination_name,
-            destination_resource_arn=destination_arn,
-            output_format=output_format,
+            "S3Destination",
+            name=f"{name}-cdn-access-s3",
+            destination_resource_arn=logs_bucket.bucket_arn,
+            output_format="parquet",
         )
-        return logs.CfnDelivery(
+        self.delivery = deliver(
             self,
-            f"{id}Delivery",
-            delivery_source_name=self.source.ref,
-            delivery_destination_arn=destination.attr_arn,
+            "S3Delivery",
+            source=self.source,
+            destination_arn=destination.attr_arn,
             record_fields=list(ACCESS_LOG_FIELDS),
-            **options,
+            s3_suffix_path=S3_SUFFIX_PATH,
+            s3_enable_hive_compatible_path=True,
         )

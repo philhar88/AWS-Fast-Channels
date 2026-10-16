@@ -1,17 +1,15 @@
 """``FastChannels-Media``: the media plane (SPEC §5)."""
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_cdk import CfnOutput, Duration, Stack
 from aws_cdk import aws_cloudfront as cloudfront
-from aws_cdk import aws_events as events
 from aws_cdk import aws_logs as logs
-from aws_cdk import aws_stepfunctions as sfn
 
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.naming import mediatailor_name
+from fast_channels.core.naming import source_location_name
 from fast_channels.infra.config import AdsMode, PriceClass
+from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.channel_assembly import (
     AS_RUN_LOG_GROUP,
     AsRunLogging,
@@ -23,60 +21,23 @@ from fast_channels.infra.constructs.channel_assembly import (
 )
 from fast_channels.infra.constructs.delivery import CdnAccessLogs, MediaDistribution
 from fast_channels.infra.constructs.encoding import EncodingLadder, IngestPipeline, LadderKit, LadderProvisioner
-from fast_channels.infra.constructs.observability import CLOUDFRONT_REGION, FastEventBus, MediaObservability
-from fast_channels.infra.constructs.operator.console import channel_playback
+from fast_channels.infra.constructs.events import FastEventBus
+from fast_channels.infra.constructs.observability import MediaObservability
+from fast_channels.infra.exports import ChannelExports, MediaExports
 
 if TYPE_CHECKING:
     from constructs import Construct
 
     from fast_channels.infra.config import ChannelConfig, FastChannelsConfig
-    from fast_channels.infra.stacks.data import DataExports
+    from fast_channels.infra.exports import DataExports
+
+__all__ = ["ChannelExports", "MediaExports", "MediaStack"]
 
 _PRICE_CLASSES: Final = {
     PriceClass.ALL: cloudfront.PriceClass.PRICE_CLASS_ALL,
     PriceClass.P200: cloudfront.PriceClass.PRICE_CLASS_200,
     PriceClass.P100: cloudfront.PriceClass.PRICE_CLASS_100,
 }
-
-
-@dataclass(frozen=True, slots=True)
-class ChannelExports:
-    """An IaC linear channel and its per-channel MediaTailor playback configuration."""
-
-    name: str
-    arn: str
-    ladder_version: str
-    outputs: tuple[str, ...]
-    """Channel output (= source group = rendition profile) names, e.g. ``("hls", "hls-avc", "dash-avc")``."""
-    playback_configuration_name: str
-    hls_prefix: str
-    """``HlsConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
-    dash_prefix: str
-    """``DashConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
-
-
-@dataclass(frozen=True, slots=True)
-class MediaExports:
-    """What the operator plane consumes from the media plane (set as ``MediaStack.exports``)."""
-
-    distribution: cloudfront.IDistribution
-    cdn_base_url: str
-    """``https://<CloudFront domain>`` (or the custom domain), no trailing slash."""
-    content_base_url: str
-    """CDN-neutral base URL of content and ad segments (``delivery.content_domain`` or ``cdn_base_url``)."""
-    event_bus: events.IEventBus
-    ingest_state_machine: sfn.IStateMachine
-    ladder_provisioner: sfn.IStateMachine
-    mediaconvert_role_arn: str
-    mediaconvert_queue_arn: str
-    source_location_name: str
-    default_ladder_version: str
-    channels: tuple[ChannelExports, ...]
-    playback_configuration_template: str
-    """JSON of the shared playback-configuration settings that agent-created channels reuse
-    (``core.specs.playback_configuration`` inputs other than the channel-specific ones)."""
-    mediatailor_log_destination_arn: str
-    """Vended-logs delivery destination that agent-created playback configurations deliver to."""
 
 
 class MediaStack(Stack):
@@ -129,25 +90,20 @@ class MediaStack(Stack):
         self.access_logs: CdnAccessLogs | None = None
         if self.region == CLOUDFRONT_REGION:
             self.access_logs = CdnAccessLogs(
-                self,
-                "CdnAccessLogs",
-                distribution=self.distribution,
-                logs_bucket=data.logs_bucket,
-                name=prefix,
-                removal_policy=removal,
+                self, "CdnAccessLogs", distribution=self.distribution, logs_bucket=data.logs_bucket, name=prefix
             )
         content_base_url = self.delivery.content_base_url
 
-        # The name must match the Data bucket policy's sourceLocation/<prefix>*.
+        # The Data bucket policy admits exactly this source location (by the same name).
         self.origin = ChannelAssemblyOrigin(
             self,
             "Origin",
-            name=mediatailor_name(prefix, "media"),
+            name=source_location_name(prefix),
             bucket=data.media_bucket,
             content_base_url=content_base_url,
         )
         self.vended_logs = MediaTailorLogs(
-            self, "MediaTailorLogs", prefix=prefix, retention=retention, removal_policy=removal
+            self, "MediaTailorLogs", prefix=prefix, log_retention=retention, removal_policy=removal
         )
         self.pipeline = IngestPipeline(
             self,
@@ -226,15 +182,16 @@ class MediaStack(Stack):
             removal_policy=removal,
             notification_email=config.notifications.email,
             trace_log_groups=self._trace_log_groups(),
+            dead_letter_queues={"ingest": self.pipeline.dead_letter_queue},
         )
         self.exports = MediaExports(
             distribution=self.distribution,
             cdn_base_url=self.delivery.cdn_base_url,
             content_base_url=content_base_url,
             event_bus=self.events.bus,
+            alert_topic=self.observability.topic,
             ingest_state_machine=self.pipeline.state_machine,
             ladder_provisioner=self.provisioner.state_machine,
-            mediaconvert_role_arn=self.pipeline.role_arn,
             mediaconvert_queue_arn=self.pipeline.queue_arn,
             source_location_name=self.origin.name,
             default_ladder_version=default_ladder_version,
@@ -293,9 +250,16 @@ class MediaStack(Stack):
         ]
 
     def _outputs(self) -> None:
-        """Values for scripts, e2e tests and operators; ``CdnBaseUrl``, ``DistributionId``, ``PathContract`` and
-        ``DashboardName`` come from their constructs. The Operator stack consumes :attr:`exports` instead."""
+        """Values for scripts, e2e tests and operators (``scripts/_stack.py``); the Operator stack consumes
+        :attr:`exports` instead. Constructs never create outputs, so any of them can be used twice in a stack."""
         exports = self.exports
+        described = {
+            "CdnBaseUrl": (exports.cdn_base_url, "Base URL of playback and media through CloudFront"),
+            "DistributionId": (self.distribution.distribution_id, "Media CloudFront distribution"),
+            "PathContract": (self.to_json_string(self.delivery.path_contract), "Routes for configuring another CDN"),
+        }
+        for name, (value, description) in described.items():
+            CfnOutput(self, name, value=value, description=description)
         outputs = {
             "ContentBaseUrl": exports.content_base_url,
             "EventBusName": exports.event_bus.event_bus_name,
@@ -309,7 +273,7 @@ class MediaStack(Stack):
                         "name": channel.name,
                         "ladderVersion": channel.ladder_version,
                         "outputs": list(channel.outputs),
-                        "playback": channel_playback(exports.cdn_base_url, channel),
+                        "playback": channel.playback(exports.cdn_base_url),
                     }
                     for channel in exports.channels
                 ]
@@ -318,6 +282,7 @@ class MediaStack(Stack):
                 f"https://{self.region}.console.aws.amazon.com/cloudwatch/home?region={self.region}"
                 f"#dashboards/dashboard/{self.observability.dashboard.dashboard_name}"
             ),
+            "DashboardName": self.observability.dashboard.dashboard_name,
         }
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)

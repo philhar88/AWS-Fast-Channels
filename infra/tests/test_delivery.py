@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from aws_cdk import App, Environment, Stack, Validations
 from aws_cdk import aws_cloudfront as cf
-from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk.assertions import Annotations, Match, Template
 from cdk_nag import AwsSolutionsChecks, ServerlessChecks
@@ -179,13 +178,11 @@ def test_media_bucket_is_read_through_origin_access_control_without_a_second_buc
     assert Annotations.from_stack(Stack.of(construct)).find_warning("*", Match.any_value()) == []
 
 
-def test_mediatailor_oac_slot_signs_both_mediatailor_origins() -> None:
-    stack = new_stack()
-    media_distribution(stack, mediatailor_oac_id="E2OACMEDIATAILOR")
+def test_mediatailor_origins_have_no_origin_access_control(template: Template) -> None:
+    origins = {o["Id"]: o for o in distribution_config(template)["Origins"]}
 
-    origins = {o["Id"]: o for o in distribution_config(Template.from_stack(stack))["Origins"]}
-    assert origins[Origin.MANIFESTS]["OriginAccessControlId"] == "E2OACMEDIATAILOR"
-    assert origins[Origin.SEGMENTS]["OriginAccessControlId"] == "E2OACMEDIATAILOR"
+    assert "OriginAccessControlId" not in origins[Origin.MANIFESTS]
+    assert "OriginAccessControlId" not in origins[Origin.SEGMENTS]
 
 
 def test_one_custom_response_headers_policy_and_no_custom_cache_policy(template: Template) -> None:
@@ -242,17 +239,23 @@ def test_base_urls_default_to_the_cloudfront_domain(delivery: tuple[MediaDistrib
     assert construct.cdn_base_url == construct.content_base_url
 
 
-def test_stack_outputs_for_scripts_and_other_cdns(delivery: tuple[MediaDistribution, Template]) -> None:
+def test_the_construct_creates_no_stack_outputs(delivery: tuple[MediaDistribution, Template]) -> None:
     construct, template = delivery
-    outputs = template.to_json()["Outputs"]
     contract = Stack.of(construct).resolve(construct.path_contract)
-
     distribution = Stack.of(construct).resolve(construct.distribution.distribution_domain_name)
 
-    assert set(outputs) == {"CdnBaseUrl", "DistributionId", "PathContract"}
-    assert outputs["DistributionId"]["Value"] == {"Ref": distribution["Fn::GetAtt"][0]}
+    assert "Outputs" not in template.to_json()  # MediaStack outputs CdnBaseUrl, DistributionId and PathContract
     assert contract["origins"]["media"]["host"] == distribution
     assert contract["origins"]["mediatailor-manifests"]["host"] == "manifests.mediatailor.us-east-1.amazonaws.com"
+
+
+def test_two_distributions_fit_in_one_stack() -> None:
+    stack = new_stack()
+    bucket = imported_bucket(stack, "media")
+    for id in ("One", "Two"):
+        MediaDistribution(stack, id, media_bucket=bucket)
+
+    Template.from_stack(stack).resource_count_is("AWS::CloudFront::Distribution", 2)
 
 
 def test_path_contract_mirrors_the_routes() -> None:
@@ -299,7 +302,6 @@ def access_logs() -> tuple[str, Template]:
         distribution=construct.distribution,
         logs_bucket=imported_bucket(stack, "logs"),
         name="fast",
-        cloudwatch_retention=logs.RetentionDays.ONE_WEEK,
     )
     return stack.resolve(construct.distribution.distribution_id)["Ref"], Template.from_stack(stack)
 
@@ -331,29 +333,11 @@ def test_access_logs_go_to_s3_as_hive_partitioned_parquet(access_logs: tuple[str
     assert not {"cs(Cookie)", "fle-status"} & set(ACCESS_LOG_FIELDS)
 
 
-def test_optional_infrequent_access_log_group_with_a_scoped_policy(access_logs: tuple[str, Template]) -> None:
+def test_access_logs_stay_in_s3(access_logs: tuple[str, Template]) -> None:
     _, template = access_logs
-    log_group = only(template, "AWS::Logs::LogGroup")
-    deliveries = template.find_resources("AWS::Logs::Delivery")
-    [(s3_id, _)] = [(k, d) for k, d in deliveries.items() if "S3EnableHiveCompatiblePath" in d["Properties"]]
-    [to_logs] = [d for k, d in deliveries.items() if k != s3_id]
-    [statement] = log_group["Properties"]["ResourcePolicyDocument"]["Statement"]
 
-    assert log_group["Properties"]["LogGroupName"] == "/aws/vendedlogs/cloudfront/fast"
-    assert (log_group["Properties"]["LogGroupClass"], log_group["Properties"]["RetentionInDays"]) == (
-        "INFREQUENT_ACCESS",
-        7,
-    )
-    assert statement["Principal"] == {"Service": "delivery.logs.amazonaws.com"}
-    assert (
-        statement["Resource"]
-        == "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/cloudfront/fast:log-stream:*"
-    )
-    assert statement["Condition"] == {
-        "StringEquals": {"aws:SourceAccount": ACCOUNT},
-        "ArnLike": {"aws:SourceArn": "arn:aws:logs:us-east-1:123456789012:delivery-source:fast-cdn-*"},
-    }
-    assert to_logs["DependsOn"] == [s3_id]
+    template.resource_count_is("AWS::Logs::LogGroup", 0)
+    template.resource_count_is("AWS::Logs::Delivery", 1)
     template.resource_count_is("AWS::Logs::ResourcePolicy", 0)
 
 
@@ -445,7 +429,6 @@ def test_no_unacknowledged_nag_findings(tmp_path: Path, domain: str | None) -> N
         distribution=construct.distribution,
         logs_bucket=imported_bucket(stack, "logs"),
         name="fast",
-        cloudwatch_retention=logs.RetentionDays.ONE_DAY,
     )
     app = stack.node.root
     assert isinstance(app, App)

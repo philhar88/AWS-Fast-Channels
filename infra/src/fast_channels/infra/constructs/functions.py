@@ -9,7 +9,7 @@ with retention. ``LambdaDefaults`` and ``StateMachineDefaults`` are property inj
 the deletion order of function roles and log groups.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, cast
 
@@ -25,6 +25,7 @@ from constructs import Construct, IConstruct
 
 from fast_channels.infra import nag
 from fast_channels.infra.bundling import workspace_code
+from fast_channels.infra.grants import allow
 
 FUNCTIONS_PACKAGE: Final = "fast-channels-functions"
 METRICS_NAMESPACE: Final = "FastChannels"
@@ -54,8 +55,9 @@ class FastFunction(Construct):
     deletion cannot re-create the group). Active tracing adds ``xray:PutTraceSegments``/``PutTelemetryRecords`` on
     ``*`` (X-Ray has no resource-level permissions) to the role's default policy; that
     ``AwsSolutions-IAM5[Resource::*]`` finding is acknowledged here, so review any other ``*`` grant to
-    ``function.role``. cdk-nag's ``Serverless-LambdaDLQ`` remains: acknowledge it with how the invoker handles
-    failures, e.g. ``nag.acknowledge(fn, {nag.LAMBDA_DLQ: "Invoked synchronously by Step Functions"})``.
+    ``function.role``. Grant with :meth:`allow`, which explains every other wildcard to cdk-nag in the same call.
+    cdk-nag's ``Serverless-LambdaDLQ`` remains: acknowledge it with how the invoker handles failures, e.g.
+    ``nag.acknowledge(fn, {nag.LAMBDA_DLQ: "Invoked synchronously by Step Functions"})``.
 
     Args:
         handler: dotted path of the handler in ``fast_channels.functions``, e.g.
@@ -118,6 +120,18 @@ class FastFunction(Construct):
                 nag.wildcard_resource(): "Active tracing: xray:PutTraceSegments/PutTelemetryRecords only support '*'",
             },
         )
+
+    def allow(
+        self,
+        actions: Sequence[str],
+        resources: Sequence[str],
+        *,
+        why: str | None = None,
+        conditions: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Allow the function ``actions`` on ``resources``, explaining wildcard resources with ``why``
+        (:func:`fast_channels.infra.grants.allow`)."""
+        allow(self.function, actions, resources, why=why, conditions=conditions)
 
 
 @dataclass(frozen=True, slots=True)

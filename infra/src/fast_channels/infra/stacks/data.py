@@ -1,6 +1,5 @@
 """``FastChannels-Data``: every stateful resource of a deployment, deployed first and protected in production."""
 
-from dataclasses import dataclass
 from typing import Any, Final, cast
 
 from aws_cdk import CfnOutput, Duration, Stack
@@ -10,36 +9,24 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
-from fast_channels.core.naming import agentcore_name
+from fast_channels.core.naming import agentcore_name, source_location_name
 from fast_channels.infra.config import FastChannelsConfig, Removal
 from fast_channels.infra.constructs.storage import GSI1, MediaLibrary, MediaStorage, ReferenceCatalogTable
+from fast_channels.infra.exports import DataExports
+
+__all__ = [
+    "MEMORY_EVENT_EXPIRY_DAYS",
+    "MEMORY_PREFERENCE_NAMESPACE",
+    "MEMORY_PREFERENCE_STRATEGY",
+    "DataExports",
+    "DataStack",
+]
 
 MEMORY_EVENT_EXPIRY_DAYS: Final = 30
 MEMORY_PREFERENCE_STRATEGY: Final = "operator_preferences"
 MEMORY_PREFERENCE_NAMESPACE: Final = "/users/{actorId}/preferences/"
 """USER_PREFERENCE records per operator. No ``{memoryStrategyId}``: the agent's recall formats the template with
 ``actorId`` only, so that variable would become an empty path segment (stage-1 agent-runtime finding)."""
-
-
-@dataclass(frozen=True, slots=True)
-class DataExports:
-    """References to DataStack's resources, for the consumer stacks (Media, Operator, Edge).
-
-    They are imported from L1 attribute tokens, which guarantees two things. Consumers get weak
-    ``Fn::GetStackOutput`` references, which also work across regions (EdgeStack runs in us-east-1). And nothing a
-    consumer does (grants, ``S3BucketOrigin.with_origin_access_control``) can add a statement to a DataStack
-    resource policy, so no cross-stack cycle can form; grants land on the consumer's own principals.
-    """
-
-    ingest_bucket: s3.IBucket
-    media_bucket: s3.IBucket
-    logs_bucket: s3.IBucket
-    library_table: dynamodb.ITableV2
-    catalog_table: dynamodb.ITableV2
-    memory: agentcore.IMemory | None
-    """AgentCore Memory of the scheduler agent; ``None`` when ``agent.enabled`` is false."""
-    memory_preference_namespace: str = MEMORY_PREFERENCE_NAMESPACE
-    """Namespace template of the Memory's USER_PREFERENCE strategy (the runtime's ``MEMORY_PREFERENCE_NAMESPACE``)."""
 
 
 class DataStack(Stack):
@@ -66,7 +53,7 @@ class DataStack(Stack):
             log_expiration=Duration.days(config.observability.log_retention_days),
         )
         self.storage.allow_cloudfront_read()
-        self.storage.allow_channel_assembly_read(config.prefix)
+        self.storage.allow_channel_assembly_read(source_location_name(config.prefix))
         self.storage.allow_log_delivery()
         self.library = MediaLibrary(self, "Library", removal_policy=config.removal_policy, deletion_protection=protect)
         self.catalog = ReferenceCatalogTable(
@@ -119,6 +106,7 @@ class DataStack(Stack):
             library_table=table("LibraryTable", self.library),
             catalog_table=table("CatalogTable", self.catalog),
             memory=memory,
+            memory_preference_namespace=MEMORY_PREFERENCE_NAMESPACE,
         )
 
     def _outputs(self) -> None:

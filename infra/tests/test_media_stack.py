@@ -93,6 +93,7 @@ def export_tokens(exports: MediaExports) -> list[str]:
         exports.event_bus.event_bus_arn,
         exports.ingest_state_machine.state_machine_arn,
         exports.ladder_provisioner.state_machine_arn,
+        exports.alert_topic.topic_arn,
     ]
     return [*strings, *channels, *resources]
 
@@ -177,7 +178,7 @@ def test_channels_depend_on_their_ladder_kit_and_use_its_filler(deployment: GetD
 
 
 def test_source_location_is_named_for_the_data_bucket_policy(media: MediaStack) -> None:
-    assert media.origin.name == "fast-media"  # DataStack admits sourceLocation/<prefix>*
+    assert media.origin.name == "fast-media"  # DataStack admits exactly sourceLocation/<prefix>-media
     assert media.exports.source_location_name == media.origin.name
 
 
@@ -253,7 +254,6 @@ def test_operator_outputs(default: Any, named_outputs: Callable[[Template], set[
         "ConsoleUrl",
         "UserPoolId",
         "ConsoleClientId",
-        "AutopilotClientId",
         "CognitoDomain",
         "RuntimeArn",
         "RuntimeInvokeUrl",
@@ -269,6 +269,41 @@ def test_operator_outputs(default: Any, named_outputs: Callable[[Template], set[
         "channels",
         "encoding",
     }
+
+
+def test_autopilot_outputs_its_client_and_alarms_on_the_media_topic(deployment: GetDeployment) -> None:
+    stage = deployment(
+        {**GLOBAL_MODELS, "channels.iac": [{"name": "fast-demo", "autopilot_cron": "rate(6 hours)"}]}
+    ).stage
+    operator = Template.from_stack(stage.operator).to_json()
+    media = stage.media
+    topic = {r["OutputName"] for r in weak_references(operator["Resources"]) if r["StackName"] == media.stack_name}
+
+    assert "AutopilotClientId" in operator["Outputs"]
+    assert any(
+        media.resolve(media.exports.alert_topic.topic_arn)
+        == Template.from_stack(media).to_json()["Outputs"][name]["Value"]
+        for name in topic
+    )
+
+
+def test_ingest_dead_letters_raise_an_alarm(media: MediaStack, template: Mapping[str, Any]) -> None:
+    alarm = media.observability.alarms["fast-ingest-dead-letters"]
+    properties = template["Resources"][logical_id(alarm)]["Properties"]
+
+    assert (properties["MetricName"], properties["Statistic"], properties["Threshold"]) == (
+        "ApproximateNumberOfMessagesVisible",
+        "Maximum",
+        1,
+    )
+    assert properties["Dimensions"] == [
+        {"Name": "QueueName", "Value": {"Fn::GetAtt": [logical_id(media.pipeline.dead_letter_queue), "QueueName"]}}
+    ]
+    assert properties["AlarmActions"] == [{"Ref": logical_id(media.observability.topic)}]
+
+
+def test_media_exports_carry_no_dead_fields(media: MediaStack) -> None:
+    assert not hasattr(media.exports, "mediaconvert_role_arn")  # read by no consumer
 
 
 # --- CloudFront logs -----------------------------------------------------------------------------------------------
@@ -296,3 +331,14 @@ def test_distribution_uses_the_configured_price_class(deployment: GetDeployment,
     Template.from_stack(media).has_resource_properties(
         "AWS::CloudFront::Distribution", {"DistributionConfig": Match.object_like({"PriceClass": price_class})}
     )
+
+
+def test_every_provider_framework_function_logs_at_info(template: Mapping[str, Any]) -> None:
+    framework = {
+        logical: f["Properties"]["LoggingConfig"]["ApplicationLogLevel"]
+        for logical, f in template["Resources"].items()
+        if f["Type"] == "AWS::Lambda::Function" and "framework" in logical
+    }
+
+    assert len(framework) == 8  # kit (3), reaper (3), channel and as-run providers (1 each)
+    assert set(framework.values()) == {"INFO"}

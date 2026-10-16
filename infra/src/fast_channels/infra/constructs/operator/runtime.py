@@ -4,15 +4,18 @@ import json
 from collections.abc import Sequence
 from typing import Final
 
-from aws_cdk import ArnFormat, Duration, RemovalPolicy, Stack
+from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_s3_assets as s3_assets
 from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 from fast_channels.infra import nag
-from fast_channels.infra.constructs.operator.agent_bundle import agent_code
+from fast_channels.infra.arns import arn
+from fast_channels.infra.config import GEO_PLACEHOLDER
+from fast_channels.infra.constructs.operator.agent_bundle import agent_artifact, agent_asset
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
 from fast_channels.infra.nag import acknowledge_references, file_asset_objects
 
@@ -30,19 +33,27 @@ EVALUATORS: Final = (
 EVALUATION_SAMPLING_PERCENT: Final = 10
 INVOKE_ACTIONS: Final = ("bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream")
 """Strands streams with ConverseStream, which needs the streaming action too (models-ui.md §1.3)."""
+CAPTURE_PROMPTS: Final = "CAPTURE_PROMPTS"
+"""The agent's content switch (``fast_channels.agent.telemetry``): unless ``true`` it turns off ADOT's default
+message capture (``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``) and redacts content on Strands spans."""
 _PROFILE_PREFIXES: Final = frozenset({"global", "us", "eu", "apac", "ca", "jp", "au", "us-gov"})
 
 
 class SchedulerAgent(Construct):
     """The ``fast_channels.agent`` app as an AgentCore Runtime.
 
-    - Code zip of the agent package (:func:`~.agent_bundle.agent_code`), ``PYTHON_3_14``, ADOT entry point,
+    - Code zip of the agent package (:func:`~.agent_bundle.agent_asset`), ``PYTHON_3_14``, ADOT entry point,
       ProtocolType ``AGUI`` (verified live in stage 1, ADR-0010).
-    - Inbound: Cognito access tokens of the console and autopilot clients with :data:`AGENT_SCOPE`; the
-      ``Authorization`` header is forwarded to the code. Sessions idle out after 10 min and end after 2 h.
+    - Inbound: Cognito access tokens of the identity's clients (console, autopilot if any) with
+      :data:`AGENT_SCOPE`; the ``Authorization`` header is forwarded to the code. Sessions idle out after 10 min and
+      end after 2 h.
     - Model: a ``ModelSpec`` JSON SSM parameter (switchable without a redeploy) whose model must be in
       ``allowed_models``; the role may invoke exactly those models (3-statement pattern for ``global.`` profiles).
     - Memory: read and write of the AgentCore Memory (events and preference records).
+    - Code: the role reads its own code zip and no other object: the L2 grants read on the whole CDK assets bucket
+      (every CDK app's code in the account), so a deny covers everything else.
+    - Message content (prompts, tool results, replies) is kept out of the runtime's OpenTelemetry logs and spans
+      unless ``record_prompts`` (``CAPTURE_PROMPTS``).
     - The service creates ``/aws/bedrock-agentcore/runtimes/<id>-DEFAULT`` with the runtime and without a
       retention; a ``LogRetention`` resource sets it (and deletes the group with the stack unless retained).
 
@@ -54,16 +65,21 @@ class SchedulerAgent(Construct):
         model: default model id (DEFAULT_MODEL_ID and the initial ModelSpec).
         allowed_models: model ids the ModelSpec may name.
         confirm_tools: qualified names of tools that need operator approval.
-        prefix: deployment prefix (``FAST_PREFIX`` and the SSM parameter path).
+        prefix: deployment prefix (the SSM parameter path).
         traces: CloudWatch Transaction Search is on: spans are exported and :data:`EVALUATORS` score 10 % of the
             sessions online (evaluations read spans); otherwise ADOT exports no spans.
         log_retention, removal_policy: of the runtime log group.
+        record_prompts: keep message content in the runtime's logs (``otel-rt-logs``) and spans (config
+            ``observability.capture_prompts``); readable by anyone with ``logs:GetLogEvents`` on the group.
 
     Attributes:
         runtime: the Runtime; ``invoke_url`` is its HTTPS invocation endpoint (DEFAULT qualifier).
         model_spec: the ModelSpec parameter.
-        log_retention: retention of the runtime's service-created log group.
+        log_group_retention: the ``LogRetention`` of the runtime's service-created log group.
         evaluation: the online evaluation configuration (``None`` without traces).
+
+    Raises:
+        ValueError: ``model`` is not in ``allowed_models``, or a model id still holds ``{geo}``.
     """
 
     def __init__(
@@ -83,10 +99,13 @@ class SchedulerAgent(Construct):
         traces: bool,
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
+        record_prompts: bool = False,
     ) -> None:
         super().__init__(scope, id)
         if model not in allowed_models:
             raise ValueError(f"default model {model!r} is not in allowed_models")
+        if unresolved := [m for m in allowed_models if GEO_PLACEHOLDER in m]:
+            raise ValueError(f"{unresolved}: resolve {{geo}} for the region first (FastChannelsConfig.for_region)")
         self.model_spec = ssm.StringParameter(
             self,
             "ModelSpec",
@@ -102,23 +121,22 @@ class SchedulerAgent(Construct):
             "MODEL_SPEC_PARAMETER": self.model_spec.parameter_name,
             "DEFAULT_MODEL_ID": model,
             "ALLOWED_MODELS": ",".join(allowed_models),
-            "FAST_PREFIX": prefix,
+            CAPTURE_PROMPTS: "true" if record_prompts else "false",
         }
         if not traces:
             # Without Transaction Search the X-Ray OTLP endpoint rejects every span batch (HTTP 400, stage-1 spike);
             # ADOT only sets a default, and OTel maps "none" to no exporter (aws-opentelemetry-distro 0.21 source).
             environment["OTEL_TRACES_EXPORTER"] = "none"
+        code = agent_asset(self, "Code")
         self.runtime = agentcore.Runtime(
             self,
             "Resource",
             runtime_name=runtime_name,
             description="FAST Channels scheduling agent (AG-UI)",
-            agent_runtime_artifact=agent_code(),
+            agent_runtime_artifact=agent_artifact(code),
             protocol_configuration=agentcore.ProtocolType.AGUI,
             authorizer_configuration=agentcore.RuntimeAuthorizerConfiguration.using_cognito(
-                identity.user_pool,
-                [identity.console_client, identity.autopilot_client],
-                allowed_scopes=[AGENT_SCOPE],
+                identity.user_pool, identity.clients, allowed_scopes=[AGENT_SCOPE]
             ),
             request_header_configuration=agentcore.RequestHeaderConfiguration(
                 allowlisted_headers=list(FORWARDED_HEADERS)
@@ -130,7 +148,7 @@ class SchedulerAgent(Construct):
         )
         # AgentCore creates the endpoint's log group together with the runtime (CreateLogGroup with no retention;
         # pre-creating it fails with AlreadyExists, observed), so its retention is set afterwards.
-        self.log_retention = logs.LogRetention(
+        self.log_group_retention = logs.LogRetention(
             self,
             "Logs",
             log_group_name=f"/aws/bedrock-agentcore/runtimes/{self.runtime.agent_runtime_id}-DEFAULT",
@@ -163,18 +181,27 @@ class SchedulerAgent(Construct):
                 iam.PolicyStatement(
                     actions=["logs:PutResourcePolicy"],
                     resources=[
-                        stack.format_arn(
-                            service="logs",
-                            resource="log-group",
-                            resource_name=f"/aws/bedrock-agentcore/runtimes/{runtime_name}-*",
-                            arn_format=ArnFormat.COLON_RESOURCE_NAME,
-                        )
+                        arn(self, "logs", "log-group", f"/aws/bedrock-agentcore/runtimes/{runtime_name}-*", colon=True)
                     ],
                 )
             )
         acknowledge_references(self.runtime.role, _role_wildcards(stack, allowed_models, runtime_name, traces))
         if self.evaluation is not None and self.evaluation.execution_role is not None:
             acknowledge_references(self.evaluation.execution_role, _evaluation_wildcards(stack, self.runtime))
+        self._read_only(code)
+
+    def _read_only(self, code: s3_assets.Asset) -> None:
+        """Deny reading any S3 object but the runtime's code zip ``code``: the L2 grants ``s3:GetObject*`` on the
+        whole CDK assets bucket. The Runtime depends on its role's policy, so a new zip is readable before it is
+        fetched."""
+        self.runtime.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="OnlyItsOwnCode",
+                effect=iam.Effect.DENY,
+                actions=["s3:GetObject*"],
+                not_resources=[code.bucket.arn_for_objects(code.s3_object_key)],
+            )
+        )
 
     def _acknowledge_log_retention_provider(self, stack: Stack) -> None:
         """CDK's LogRetention provider is a stack-level singleton (``LogRetention<uuid>``) without an accessor."""

@@ -117,7 +117,7 @@ def test_cloudfront_reads_media_but_never_content_manifests(data: Template) -> N
         assert (bucket_arn["Fn::GetAtt"][0][:12], key) == ("StorageMedia", suffix)
 
 
-def test_channel_assembly_reads_asset_manifests_of_prefixed_source_locations(data: Template) -> None:
+def test_channel_assembly_reads_assets_of_the_deployments_source_location_only(data: Template) -> None:
     statement = statements_by_sid(data, "StorageMedia")["ChannelAssemblyRead"]
 
     assert statement["Principal"] == {"Service": "mediatailor.amazonaws.com"}
@@ -125,7 +125,8 @@ def test_channel_assembly_reads_asset_manifests_of_prefixed_source_locations(dat
     assert statement["Resource"]["Fn::Join"][1][1] == "/assets/*"
     assert statement["Condition"] == {
         "StringEquals": {"aws:SourceAccount": "123456789012"},
-        "ArnLike": {"aws:SourceArn": "arn:aws:mediatailor:us-east-1:123456789012:sourceLocation/fast*"},
+        # Exactly <prefix>-media: "fast*" also admitted other deployments' locations, such as fastci-media.
+        "ArnLike": {"aws:SourceArn": "arn:aws:mediatailor:us-east-1:123456789012:sourceLocation/fast-media"},
     }
 
 

@@ -3,15 +3,17 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from aws_cdk import Stack
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_iam as iam
 from constructs import Construct
 
+from fast_channels.core.naming import agentcore_name
 from fast_channels.functions.tools.registry import gateway_tool_schema
 from fast_channels.infra import nag
+from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.operator.cedar import gateway_policies
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
-from fast_channels.infra.nag import acknowledge_references
 
 if TYPE_CHECKING:
     from fast_channels.infra.constructs.operator.tools import ToolTarget
@@ -46,13 +48,18 @@ _SCHEMA_TYPES: Final = {
 class AgentGateway(Construct):
     """MCP Gateway with one Lambda target per tool target and a Cedar policy engine in ENFORCE mode.
 
-    - Inbound: Cognito access tokens of the console and autopilot clients carrying :data:`AGENT_SCOPE`
-      (CUSTOM_JWT). The agent forwards the operator's own token, so Cedar authorizes the human, not the agent.
+    - Inbound: Cognito access tokens of the identity's clients (console, autopilot if any) carrying
+      :data:`AGENT_SCOPE` (CUSTOM_JWT). The agent forwards the operator's own token, so Cedar authorizes the
+      human, not the agent.
+    - Service role: trusted by ``bedrock-agentcore.amazonaws.com`` only for this account's gateways named
+      ``<name>-*`` (the L2's own role adds an unconditioned trust statement); it may invoke the tool functions.
     - Protocol: MCP without semantic search. The L2 default turns it on; the agent only exposes
       ``<target>___<tool>`` names to the model, and the extra search tool costs per call (agentcore.md §5.1).
     - Tool schemas come from the registry (``gateway_tool_schema``); Cedar policies from
-      :func:`~fast_channels.infra.constructs.operator.cedar.gateway_policies`. Policies depend on every target,
-      because the engine's Cedar schema is generated from the attached Gateway's tools.
+      :func:`~fast_channels.infra.constructs.operator.cedar.gateway_policies`, named
+      ``<policy_engine_name>_<policy>`` because policy names are unique per account, not per engine (CreatePolicy
+      returns 409 for a second deployment's ``permit_read``, observed). Policies depend on every target, because the
+      engine's Cedar schema is generated from the attached Gateway's tools.
 
     No role is granted ``UpdateGateway`` or policy writes: whoever holds them can switch enforcement to
     ``LOG_ONLY`` (agentcore.md §6.1).
@@ -63,9 +70,12 @@ class AgentGateway(Construct):
         identity: the Cognito user pool and app clients.
         targets: the Lambda tool targets.
         agent_channel_prefix: name prefix of agent-owned channels (``<prefix>-agent-``).
+        autopilot_channels: channels the autopilot client may plan and publish on (it needs
+            ``identity.autopilot_client``).
 
     Attributes:
         gateway: the Gateway.
+        role: its service role.
         url: its MCP endpoint (``https://<id>.gateway.bedrock-agentcore.<region>.amazonaws.com/mcp``).
         targets: Gateway targets by target name.
         policy_engine: the Cedar policy engine.
@@ -81,8 +91,24 @@ class AgentGateway(Construct):
         identity: OperatorIdentity,
         targets: Sequence[ToolTarget],
         agent_channel_prefix: str,
+        autopilot_channels: Sequence[str] = (),
     ) -> None:
         super().__init__(scope, id)
+        autopilot = identity.autopilot_client
+        if (autopilot is None) != (not autopilot_channels):
+            raise ValueError("autopilot_channels and the identity's autopilot client go together")
+        self.role = iam.Role(
+            self,
+            "ServiceRole",
+            description=f"FAST Channels AgentCore Gateway {name}: invokes the agent tool functions",
+            assumed_by=iam.ServicePrincipal(
+                "bedrock-agentcore.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": Stack.of(self).account},
+                    "ArnLike": {"aws:SourceArn": arn(self, "bedrock-agentcore", "gateway", f"{name}-*")},
+                },
+            ),
+        )
         self.policy_engine = agentcore.PolicyEngine(
             self,
             "Policies",
@@ -94,10 +120,9 @@ class AgentGateway(Construct):
             "Resource",
             gateway_name=name,
             description="FAST Channels agent tools",
+            role=self.role,
             authorizer_configuration=agentcore.GatewayAuthorizer.using_cognito(
-                user_pool=identity.user_pool,
-                allowed_clients=[identity.console_client, identity.autopilot_client],
-                allowed_scopes=[AGENT_SCOPE],
+                user_pool=identity.user_pool, allowed_clients=identity.clients, allowed_scopes=[AGENT_SCOPE]
             ),
             protocol_configuration=agentcore.McpProtocolConfiguration(
                 instructions=INSTRUCTIONS, supported_versions=list(MCP_VERSIONS)
@@ -122,12 +147,13 @@ class AgentGateway(Construct):
         for policy in gateway_policies(
             (spec for target in targets for spec in target.tools),
             gateway_arn=self.gateway.gateway_arn,
-            autopilot_client_id=identity.autopilot_client.user_pool_client_id,
             agent_channel_prefix=agent_channel_prefix,
+            autopilot_client_id=autopilot.user_pool_client_id if autopilot else None,
+            autopilot_channels=autopilot_channels,
         ):
             resource = self.policy_engine.add_policy(
                 policy.name.title().replace("_", ""),
-                policy_name=policy.name,
+                policy_name=agentcore_name(policy_engine_name, policy.name),
                 description=policy.description,
                 statement=agentcore.PolicyStatement.from_cedar(policy.statement),
                 validation_mode=(
@@ -138,8 +164,8 @@ class AgentGateway(Construct):
             )
             for target in self.targets.values():
                 resource.node.add_dependency(target)
-        acknowledge_references(
-            self.gateway.role,
+        nag.acknowledge_references(
+            self.role,
             {
                 nag.wildcard_resource(f"{target.function.function_arn}:*"): "Gateway L2 grant: invoke the target "
                 "function and its versions"
