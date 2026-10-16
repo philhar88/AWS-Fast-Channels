@@ -15,6 +15,10 @@ from fast_channels.infra.config import FastChannelsConfig, Removal
 from fast_channels.infra.constructs.storage import GSI1, MediaLibrary, MediaStorage, ReferenceCatalogTable
 
 MEMORY_EVENT_EXPIRY_DAYS: Final = 30
+MEMORY_PREFERENCE_STRATEGY: Final = "operator_preferences"
+MEMORY_PREFERENCE_NAMESPACE: Final = "/users/{actorId}/preferences/"
+"""USER_PREFERENCE records per operator. No ``{memoryStrategyId}``: the agent's recall formats the template with
+``actorId`` only, so that variable would become an empty path segment (stage-1 agent-runtime finding)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +38,8 @@ class DataExports:
     catalog_table: dynamodb.ITableV2
     memory: agentcore.IMemory | None
     """AgentCore Memory of the scheduler agent; ``None`` when ``agent.enabled`` is false."""
+    memory_preference_namespace: str = MEMORY_PREFERENCE_NAMESPACE
+    """Namespace template of the Memory's USER_PREFERENCE strategy (the runtime's ``MEMORY_PREFERENCE_NAMESPACE``)."""
 
 
 class DataStack(Stack):
@@ -76,7 +82,13 @@ class DataStack(Stack):
                 expiration_duration=Duration.days(MEMORY_EVENT_EXPIRY_DAYS),
                 # USER_PREFERENCE only: semantic extraction would turn catalog text into "facts" (_review.md,
                 # agent lens).
-                memory_strategies=[agentcore.MemoryStrategy.using_built_in_user_preference()],
+                memory_strategies=[
+                    agentcore.MemoryStrategy.using_user_preference(
+                        strategy_name=MEMORY_PREFERENCE_STRATEGY,
+                        description="Scheduling preferences each operator states in conversation",
+                        namespaces=[MEMORY_PREFERENCE_NAMESPACE],
+                    )
+                ],
             )
             # The L2's own apply_removal_policy fails: its CfnMemory child is not named "Resource".
             _cfn_memory(self.memory).apply_removal_policy(config.removal_policy)
