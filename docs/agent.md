@@ -159,7 +159,7 @@ Operators are Cognito users (administrator-created only) in one of three groups:
 | `fast-viewers` | Read tools (14) | `permit_read` |
 | `fast-operators` | Read and write tools (26) | `permit_read`, `permit_write` |
 | `fast-admins` | Everything (27) | adds `permit_destructive` |
-| Autopilot client (only with an `autopilot_cron`) | Read tools, plus `schedule___plan` and `schedule___publish` on the channels that have an autopilot schedule | `permit_autopilot`, `permit_autopilot_plan`, `permit_autopilot_publish`, `forbid_autopilot_confirm` |
+| Machine client (with an `autopilot_cron`, or `agent.machine_client`) | Read tools, plus `schedule___plan` and `schedule___publish` on the channels that have an autopilot schedule (none without one) | `permit_autopilot`, `permit_autopilot_plan`, `permit_autopilot_publish`, `forbid_autopilot_confirm` |
 | A user in no group | Nothing | |
 
 The Gateway authorises every `tools/list` and `tools/call` against the policy engine, so the agent sees only the tools

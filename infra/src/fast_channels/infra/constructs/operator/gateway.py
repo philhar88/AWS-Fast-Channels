@@ -95,8 +95,8 @@ class AgentGateway(Construct):
     ) -> None:
         super().__init__(scope, id)
         autopilot = identity.autopilot_client
-        if (autopilot is None) != (not autopilot_channels):
-            raise ValueError("autopilot_channels and the identity's autopilot client go together")
+        if autopilot is None and autopilot_channels:
+            raise ValueError("autopilot_channels need the identity's autopilot (machine) client")
         self.role = iam.Role(
             self,
             "ServiceRole",

@@ -81,7 +81,7 @@ class OperatorStack(Stack):
             domain_prefix=domain_prefix,
             callback_urls=[self.console.url],
             console_dev_url=config.agent.console_dev_url,
-            autopilot=bool(crons),
+            autopilot=bool(crons) or config.agent.machine_client,
             admin_email=config.agent.admin_email,
             removal_policy=removal,
         )
@@ -173,8 +173,8 @@ class OperatorStack(Stack):
         self._outputs()
 
     def _outputs(self) -> None:
-        """Values for operators and scripts (e2e, eval_model.py --gateway-url); ``AutopilotClientId`` only with an
-        autopilot."""
+        """Values for operators and scripts (e2e, eval_model.py --gateway-url); ``AutopilotClientId`` only when the
+        machine client exists (an autopilot, or ``agent.machine_client``)."""
         outputs = {
             "ConsoleUrl": self.console.url,
             "UserPoolId": self.identity.user_pool.user_pool_id,

@@ -342,3 +342,12 @@ def test_every_provider_framework_function_logs_at_info(template: Mapping[str, A
 
     assert len(framework) == 8  # kit (3), reaper (3), channel and as-run providers (1 each)
     assert set(framework.values()) == {"INFO"}
+
+
+def test_machine_client_without_an_autopilot(deployment: GetDeployment) -> None:
+    """``agent.machine_client`` creates the machine client (integrations, e2e) without any autopilot schedule."""
+    stage = deployment({**GLOBAL_MODELS, "agent.machine_client": True}).stage
+    operator = Template.from_stack(stage.operator)
+
+    assert "AutopilotClientId" in operator.to_json()["Outputs"]
+    operator.resource_count_is("AWS::Scheduler::Schedule", 0)

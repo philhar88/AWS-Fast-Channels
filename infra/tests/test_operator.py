@@ -250,7 +250,7 @@ def test_cedar_has_no_autopilot_policies_without_an_autopilot() -> None:
     assert not [name for name in _policies(autopilot=False) if "autopilot" in name]
 
 
-def test_cedar_autopilot_needs_its_channels_and_safe_names() -> None:
+def test_cedar_machine_client_without_channels_reads_only_and_names_are_safe() -> None:
     def policies(channels: tuple[str, ...]) -> list[cedar.CedarPolicy]:
         return cedar.gateway_policies(
             all_tools(),
@@ -260,8 +260,9 @@ def test_cedar_autopilot_needs_its_channels_and_safe_names() -> None:
             autopilot_channels=channels,
         )
 
-    with pytest.raises(ValueError, match="channels it schedules"):
-        policies(())
+    machine = {policy.name: policy for policy in policies(()) if "autopilot" in policy.name}
+    assert set(machine) == {"permit_autopilot", "forbid_autopilot_confirm"}
+    assert "schedule___publish" not in machine["permit_autopilot"].statement
     with pytest.raises(ValueError, match="cannot be embedded"):
         policies(('x" || true || "',))
 

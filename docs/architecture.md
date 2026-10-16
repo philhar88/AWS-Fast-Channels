@@ -45,7 +45,7 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 |---|---|
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
 | Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai?, sgai?, dash?}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
-| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only when an IaC channel has an `autopilot_cron`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
+| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
 
 ```bash
 aws cloudformation describe-stacks --stack-name FastChannels-Media \

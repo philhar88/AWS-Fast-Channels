@@ -73,6 +73,7 @@
           "global.anthropic.claude-sonnet-5-5"
         ],
         "admin_email": null,
+        "machine_client": false,
         "console_dev_url": null
       },
       "observability": {

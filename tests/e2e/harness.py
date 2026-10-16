@@ -33,7 +33,9 @@ from playback import (
 from fast_channels.functions.tools.registry import CORRELATION_FIELD, SEPARATOR
 
 # The scenario: a 70 s test pattern with a cue point, aired three times with one break each.
-ASSET_ID: Final = "e2e-pattern"
+CONTENT_ID: Final = "e2e-pattern"
+ASSET_ID: Final = f"{CONTENT_ID}-{datetime.now(UTC):%Y%m%d%H%M%S}"
+"""A new asset per run: the pipeline refuses to re-encode a READY asset in place (its VOD source serves that media)."""
 PATTERN_SECONDS: Final = 70
 CUE_POINT_MS: Final = 30_000
 PROGRAMS: Final = 3

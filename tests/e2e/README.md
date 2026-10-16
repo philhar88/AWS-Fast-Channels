@@ -20,10 +20,9 @@ given. The report header prints the run id. That id is the correlation id of the
 - A deployed stage with its default ladder kit READY. The kit is provisioned during the deployment. Run in the
   stage's region (`AWS_REGION`). The shipped IaC channel is named `{prefix}-demo`, so it follows any prefix:
   `npx cdk deploy '**' -c fast-channels.prefix=<prefix>`.
-- An autopilot schedule on that channel, for `test_05_agent`: it signs in as the autopilot's machine client, which
-  exists only for a channel with an `autopilot_cron`. The workflow deploys with
-  `-c 'fast-channels.channels.iac.0.autopilot_cron=cron(0 0 1 1 ? *)'`, which fires only on 1 January.
-- No `e2e-pattern` asset in the stage yet (see [What a run leaves behind](#what-a-run-leaves-behind)).
+- The machine client, for `test_05_agent`: it signs in with Cognito `client_credentials`, and the client exists
+  only with an autopilot or `agent.machine_client`. Deploy with `-c fast-channels.agent.machine_client=true`
+  (the workflow does); without it the test is skipped.
 - AWS credentials allowed to:
   - read the stacks (`cloudformation:DescribeStacks`);
   - put objects into the ingest bucket, and read the media bucket and the media library table;
@@ -46,7 +45,7 @@ Session fixtures (`conftest.py`) do each slow step once, when a test first needs
 | Module | Step | Checks |
 |---|---|---|
 | `test_01_outputs` | Read the stacks | Every output the scripts and the console rely on is present and well formed. The keys are listed in `scripts/_stack.py` `OUTPUT_KEYS`. |
-| `test_02_ingest` | Render a 70 s 1080p30 `testsrc2` pattern with a 1 kHz tone. Upload its sidecar (`content_id` e2e-pattern, `cue_points_ms` [30000]), then the file, to the ingest bucket. Wait until the asset is READY. | Every rendition profile manifest is in S3, with the ladder's exact signature. The break offsets include the snapped cue point (30030 ms at 29.97 fps). The VOD source has a package configuration for every source group, every channel output among them, each pointing at an existing manifest. |
+| `test_02_ingest` | Render a 70 s 1080p30 `testsrc2` pattern with a 1 kHz tone. Upload its sidecar (`asset_id` e2e-pattern-<UTC timestamp>, `content_id` e2e-pattern, `cue_points_ms` [30000]), then the file, to the ingest bucket. Wait until the asset is READY. | Every rendition profile manifest is in S3, with the ladder's exact signature. The break offsets include the snapped cue point (30030 ms at 29.97 fps). The VOD source has a package configuration for every source group, every channel output among them, each pointing at an existing manifest. |
 | `test_03_ladder_kit` | — | The default ladder is READY. Its filler and break-slate VOD sources exist. The VAST pod lists the house ads. Every creative, `b.gif` and an SGAI ad segment are readable through the CDN. |
 | `test_04_channel` | Call `schedule___plan` and `schedule___publish` for three programs, starting in about 2.5 minutes, with one 30 s break each. Then `channels___start_channel`. The tool Lambdas are invoked the way AgentCore Gateway invokes them (`bedrockAgentCoreToolName` in the client context). One SSAI, one SGAI and one DASH session then watch the breaks air. | The SSAI multivariant lists every codec family (`avc1`, `hvc1`, `av01`). A media playlist per family and per audio group plays. Each single-codec output carries only its codec. SSAI stitches ads from the second break on. SGAI shows an `com.apple.hls.interstitial` DATERANGE, and its asset lists carry ads that are readable via `/preconditioned-ads/*`. The DASH MPD is dynamic, uses its output's codec, and gets ad periods. Neither the channel nor the VOD source has a `SCHEDULING_ERROR`. |
 | `test_05_agent` | Get a client-credentials token for the autopilot app client. Send one AG-UI `RunAgentInput`, "List the channels.", to the runtime. | `RUN_STARTED` … `RUN_FINISHED`, a `channels___list_channels` tool call, and no `RUN_ERROR`. |
@@ -67,10 +66,10 @@ Timing and behaviour worth knowing:
 
 ## What a run leaves behind
 
-- The asset `e2e-pattern`: its encode under `assets/e2e-pattern/`, its VOD source, and its upload
-  `e2e/e2e-pattern.mp4` (with `.json`) in the ingest bucket. The pipeline refuses to encode a `READY` asset again
-  in place (it would overwrite the media its VOD source serves), so a second run against the same stage fails at
-  ingest with `IngestRefusedError … is already READY`. Run the suite against a fresh stage, as the workflow does.
+- One asset per run, `e2e-pattern-<UTC timestamp>` (content id `e2e-pattern`): its encode under `assets/`, its VOD
+  source and its upload under `e2e/` in the ingest bucket. Each run uses a new asset id because the pipeline
+  refuses to re-encode a `READY` asset in place (that would overwrite the media its VOD source serves). The stage's
+  reaper removes these VOD sources when the stage is destroyed; on a long-lived stage, delete old ones as needed.
 - Its five programs (the late start's first one `SKIPPED`). Channel Assembly deletes aired programs about 15
   minutes later. Their EPG entries stay in the media library and in `epg/<channel>.json`.
 - The channel, stopped.

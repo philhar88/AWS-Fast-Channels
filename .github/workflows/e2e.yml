@@ -29,7 +29,6 @@ env:
   PREFIX: ${{ inputs.prefix }}
   # The agent test signs in as the autopilot's machine client, which exists only for a channel with an autopilot
   # schedule. This one fires once a year (1 January, 00:00 UTC), not during a test run.
-  AUTOPILOT_CRON: "cron(0 0 1 1 ? *)"
 
 jobs:
   e2e:
@@ -58,8 +57,8 @@ jobs:
       - run: uv sync --locked --all-packages && npm ci && (cd console && npm ci && npm run build)
       - name: Deploy
         run: >-
-          npx cdk deploy '**' --require-approval never --concurrency 2 -c "fast-channels.prefix=$PREFIX"
-          -c "fast-channels.channels.iac.0.autopilot_cron=$AUTOPILOT_CRON"
+          npx cdk deploy '**' --require-approval never --concurrency 2
+          -c "fast-channels.prefix=$PREFIX" -c fast-channels.agent.machine_client=true
       - name: End-to-end tests
         run: uv run pytest tests/e2e -m e2e --prefix "$PREFIX" -v
       - name: Destroy

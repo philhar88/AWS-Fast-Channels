@@ -354,6 +354,10 @@ class AgentConfig(_Section):
     ``{geo}`` as in ``model``; entries that resolve to the same id are kept once."""
     admin_email: str | None = Field(default=None, pattern=_EMAIL)
     """Email of the first ``fast-admins`` user (invited by Cognito). Omit to create users yourself."""
+    machine_client: bool = False
+    """Create the confidential machine client (Cognito ``client_credentials``) that integrations and the end-to-end
+    tests use to call the agent and the Gateway; always created when a channel has an ``autopilot_cron``. Anyone
+    allowed ``cognito-idp:DescribeUserPoolClient`` can read its secret, so it is off by default."""
     console_dev_url: str | None = Field(default=None, pattern=r"^http://(localhost|127\.0\.0\.1):\d{2,5}/$")
     """Local console dev server (``http://localhost:5173/``) to accept as a sign-in and sign-out redirect, for
     ``npm run dev`` against this deployment. Off by default: with it, any process listening on that port of an

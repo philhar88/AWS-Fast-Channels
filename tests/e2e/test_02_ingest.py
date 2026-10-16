@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from _stack import Plane, Stage
-from harness import ASSET_ID, CUE_POINT_MS, PATTERN_SECONDS, Channel
+from harness import ASSET_ID, CONTENT_ID, CUE_POINT_MS, PATTERN_SECONDS, Channel
 
 from fast_channels.core.ingest import AssetKind
 from fast_channels.core.manifests import BOUNDARY_TOLERANCE_MS, expected_signature, ladder_signature
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.e2e
 
 def test_ingest_is_ready(ingested: Asset) -> None:
     assert ingested.status is AssetStatus.READY
-    assert (ingested.kind, ingested.content_id) == (AssetKind.CONTENT, ASSET_ID)
+    assert (ingested.kind, ingested.content_id) == (AssetKind.CONTENT, CONTENT_ID)
     assert ingested.duration_ms is not None
     assert abs(ingested.duration_ms - PATTERN_SECONDS * 1000) < 1000, ingested.duration_ms
 

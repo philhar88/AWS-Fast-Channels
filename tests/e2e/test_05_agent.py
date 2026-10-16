@@ -1,5 +1,8 @@
-"""The scheduling agent over AG-UI, called as the autopilot calls it: a client-credentials token of the autopilot app
-client, one ``RunAgentInput`` to the AgentCore Runtime, Server-Sent Events back (CONTRACTS §G)."""
+"""The scheduling agent over AG-UI, called as the autopilot calls it: a client-credentials token of the machine app
+client, one ``RunAgentInput`` to the AgentCore Runtime, Server-Sent Events back (CONTRACTS §G).
+
+The machine client exists only with an autopilot or ``agent.machine_client`` (its secret is readable through
+``cognito-idp:DescribeUserPoolClient``); deploy the e2e stage with ``-c fast-channels.agent.machine_client=true``."""
 
 import pytest
 from _stack import Plane, Stage
@@ -13,6 +16,8 @@ EXPECTED_TOOL = "channels___list_channels"
 
 
 def test_agent_lists_the_channels(stage: Stage, player: Player) -> None:
+    if "AutopilotClientId" not in stage.outputs(Plane.OPERATOR):
+        pytest.skip("no machine client: deploy with -c fast-channels.agent.machine_client=true to test the agent")
     pool, client_id = (stage.output(Plane.OPERATOR, key) for key in ("UserPoolId", "AutopilotClientId"))
     cognito = stage.session.client("cognito-idp", region_name=stage.region)
     secret = cognito.describe_user_pool_client(UserPoolId=pool, ClientId=client_id)["UserPoolClient"]["ClientSecret"]

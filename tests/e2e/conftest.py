@@ -28,6 +28,7 @@ from _stack import Plane, StackError, Stage, configured_prefix  # noqa: E402
 from harness import (  # noqa: E402
     ASSET_ID,
     BREAK_POLICY,
+    CONTENT_ID,
     CUE_POINT_MS,
     LEAD,
     PATTERN_SECONDS,
@@ -145,7 +146,7 @@ def ingested(
     bucket, key = stage.output(Plane.DATA, "IngestBucketName"), f"e2e/{ASSET_ID}.mp4"
     sidecar = {
         "asset_id": ASSET_ID,
-        "content_id": ASSET_ID,
+        "content_id": CONTENT_ID,
         "cue_points_ms": [CUE_POINT_MS],
         "ladder_version": channel.ladder_version,
         "correlation_id": run_id,

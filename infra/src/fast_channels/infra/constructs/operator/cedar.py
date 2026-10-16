@@ -83,11 +83,12 @@ def gateway_policies(
         agent_channel_prefix: name prefix of agent-owned channels, e.g. ``fast-agent-``.
         autopilot_client_id: Cognito app client id of the autopilot (its tokens' ``client_id`` claim); ``None``
             when there is no autopilot, which leaves out every autopilot policy.
-        autopilot_channels: the channels the autopilot schedules, the only ones it may plan and publish on.
+        autopilot_channels: the channels the autopilot schedules, the only ones it may plan and publish on; none for
+            a machine client without an autopilot (``agent.machine_client``), which may then call READ tools only.
 
     Raises:
-        ValueError: an autopilot without channels, an :data:`AUTOPILOT_TOOLS` entry that is not a registered tool,
-            or a value that would break out of a Cedar string literal.
+        ValueError: an :data:`AUTOPILOT_TOOLS` entry that is not a registered tool, or a value that would break out
+            of a Cedar string literal.
     """
     specs = list(tools)
     gateway = _literal(gateway_arn)
@@ -136,9 +137,8 @@ def gateway_policies(
 def _autopilot_policies(
     specs: Sequence[ToolSpec[Any, Any]], gateway: str, client_id: str, channels: Sequence[str]
 ) -> list[CedarPolicy]:
-    """READ tools for the autopilot client, :data:`AUTOPILOT_TOOLS` on ``channels`` only, no other gated tool."""
-    if not channels:
-        raise ValueError("the autopilot needs the channels it schedules")
+    """READ tools for the machine client, :data:`AUTOPILOT_TOOLS` on the autopilot's ``channels`` only (none
+    without an autopilot), no other gated tool."""
     if missing := sorted(set(AUTOPILOT_TOOLS) - {spec.qualified_name for spec in specs}):
         raise ValueError(f"autopilot tools {missing} are not in the tool registry")
     autopilot = _is(client_id)
@@ -151,7 +151,7 @@ def _autopilot_policies(
             forbid=False,
         )
     ]
-    for tool in AUTOPILOT_TOOLS:
+    for tool in AUTOPILOT_TOOLS if channels else ():
         field, pattern = AUTOPILOT_SCOPE[tool]
         matches = " || ".join(
             f'context.input.{field} like "{pattern.format(channel=_literal(channel))}"' for channel in channels
