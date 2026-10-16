@@ -1030,3 +1030,19 @@ def test_agent_zip_has_the_shim_at_its_root_and_the_package(tmp_path: Path) -> N
     assert (tmp_path / "main.py").stat().st_mode & 0o777 == 0o644
     assert not (tmp_path / "requirements.txt").exists()
     assert not list(tmp_path.glob("fast_channels/core"))  # the agent does not depend on core
+
+
+def test_start_channel_may_skip_missed_programs_on_every_deployment_channel(everything: Template) -> None:
+    """``channels___start_channel`` deletes missed programs of IaC channels too, and rewrites their guide."""
+    statements = [
+        s
+        for policy in resources(everything, "AWS::IAM::Policy").values()
+        if "ToolsChannels" in json.dumps(policy["Properties"]["Roles"])
+        for s in policy["Properties"]["PolicyDocument"]["Statement"]
+    ]
+
+    def allowed(action: str) -> str:
+        return json.dumps([s["Resource"] for s in statements if action in json.dumps(s["Action"])])
+
+    assert "program/fast-*/*" in allowed("mediatailor:DeleteProgram")
+    assert "epg/*" in allowed("s3:PutObject")

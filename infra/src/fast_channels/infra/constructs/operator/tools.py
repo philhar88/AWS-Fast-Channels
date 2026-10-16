@@ -269,7 +269,8 @@ class AgentTools(Construct):
         destination = self._media.mediatailor_log_destination_arn
         owned = f"agent-owned {agent} resources only"
         self._table(fn, self._data.library_table, write=True)
-        self._epg(fn, "s3:DeleteObject")  # the guide of a deleted channel
+        # start_channel rewrites a channel's guide after skipping missed programs; delete_channel removes it
+        self._epg(fn, "s3:PutObject", "s3:DeleteObject")
         fn.allow(_mt("ListChannels", "ListAlerts"), ["*"])
         fn.allow(
             _mt("DescribeChannel", "GetChannelSchedule", "StartChannel", "StopChannel"),
@@ -298,7 +299,11 @@ class AgentTools(Construct):
             [agent_configurations],
             why=owned,
         )
-        fn.allow(_mt("DeleteProgram"), [mt("program", f"{agent}/*")], why=owned)
+        fn.allow(
+            _mt("DeleteProgram"),
+            [mt("program", f"{prefix}-*/*")],
+            why="start_channel removes missed programs of the deployment's channels; delete_channel drains its own",
+        )
         fn.allow(["logs:PutDeliverySource", "logs:DeleteDeliverySource"], [agent_sources, destination], why=owned)
         fn.allow(
             ["logs:CreateDelivery"],
