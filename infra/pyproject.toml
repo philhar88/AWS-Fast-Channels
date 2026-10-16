@@ -3,7 +3,15 @@ name = "fast-channels-infra"
 version = "3.0.0"
 description = "AWS CDK constructs and stacks for FAST Channels on AWS."
 requires-python = ">=3.14"
-dependencies = ["fast-channels-core", "aws-cdk-lib==2.273.0", "constructs>=10.8.1,<11", "cdk-nag>=3.0.2,<4"]
+dependencies = [
+    "fast-channels-core",
+    # Synth time only: the Gateway tool schemas and Cedar policies are generated from the tool registry.
+    "fast-channels-functions",
+    "aws-cdk-lib==2.273.0",
+    "constructs>=10.8.1,<11",
+    "cdk-nag>=3.0.2,<4",
+    "pydantic>=2.12,<3",
+]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.14"]
@@ -14,3 +22,4 @@ module-name = "fast_channels.infra"
 
 [tool.uv.sources]
 fast-channels-core = { workspace = true }
+fast-channels-functions = { workspace = true }

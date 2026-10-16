@@ -16,6 +16,74 @@
     ]
   },
   "context": {
+    "fast-channels": {
+      "prefix": "fast",
+      "removal": "destroy",
+      "ladders": {
+        "builtin": [
+          "standard"
+        ],
+        "default": "standard"
+      },
+      "channel_assembly": {
+        "package_profiles": [
+          "hls",
+          "hls-avc",
+          "hls-hevc",
+          "hls-av1",
+          "dash-avc"
+        ]
+      },
+      "channels": {
+        "iac": [
+          {
+            "name": "fast-demo",
+            "ladder": "standard",
+            "outputs": [
+              "hls",
+              "hls-avc",
+              "hls-hevc",
+              "hls-av1",
+              "dash-avc"
+            ],
+            "tier": "BASIC",
+            "autopilot_cron": null,
+            "brief": null
+          }
+        ],
+        "max_runtime_hours": 4,
+        "max_agent_channels": 3
+      },
+      "delivery": {
+        "content_domain": null,
+        "certificate_arn": null,
+        "price_class": "PriceClass_All",
+        "cdns": []
+      },
+      "ads": {
+        "mode": "preconditioned"
+      },
+      "agent": {
+        "enabled": true,
+        "model": "us.anthropic.claude-haiku-5-5",
+        "allowed_models": [
+          "us.anthropic.claude-haiku-5-5",
+          "us.anthropic.claude-sonnet-5-5",
+          "global.anthropic.claude-haiku-5-5",
+          "global.anthropic.claude-sonnet-5-5"
+        ],
+        "admin_email": null,
+        "guardrail_checks": false
+      },
+      "observability": {
+        "transaction_search": "off",
+        "log_retention_days": 7,
+        "mediatailor_log_percent": 100
+      },
+      "notifications": {
+        "email": null
+      }
+    },
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
     "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
     "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,

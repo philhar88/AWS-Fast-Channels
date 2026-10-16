@@ -15,6 +15,7 @@ members = ["core", "functions", "agent", "infra"]
 [dependency-groups]
 dev = [
     "boto3>=1.42",
+    "boto3-stubs[bedrock-agentcore,bedrock-agentcore-control,cloudformation,cognito-idp,dynamodb,events,logs,mediaconvert,mediatailor,s3,scheduler,ssm,stepfunctions]>=1.42",
     "mypy>=1.18",
     "pytest>=8.4",
     "pytest-cov>=7",
@@ -23,7 +24,7 @@ dev = [
 ]
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py314"
 extend-exclude = ["cdk.out", "console", "**/node_modules"]
 

@@ -1,0 +1,96 @@
+"""``FastChannelsStage``: one FAST Channels deployment, as a set of stacks."""
+
+from typing import TYPE_CHECKING, Final
+
+from aws_cdk import Aspects, Environment, Stage, Tags
+
+from fast_channels.infra.config import FastChannelsConfig, Removal, TransactionSearchMode
+from fast_channels.infra.constructs.functions import (
+    FunctionLogGroups,
+    LambdaDefaults,
+    LogGroupDefaults,
+    StateMachineDefaults,
+)
+from fast_channels.infra.stacks.baseline import AccountBaselineStack
+from fast_channels.infra.stacks.data import DataStack
+from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
+from fast_channels.infra.stacks.media import MediaStack
+from fast_channels.infra.stacks.operator import OperatorStack
+
+if TYPE_CHECKING:
+    from constructs import Construct
+
+DEFAULT_PREFIX: Final = "fast"
+OWNER_TAG: Final = "iac"
+"""``fast:owner`` of CloudFormation-managed resources; runtime resources carry ``pipeline`` or ``agent``."""
+
+
+def stage_id(prefix: str) -> str:
+    """Stage id, which prefixes every stack name: ``FastChannels`` (``FastChannels-Data``, ...) for the default
+    prefix, ``FastChannels-<prefix>`` for further deployments in the same account and region."""
+    return "FastChannels" if prefix == DEFAULT_PREFIX else f"FastChannels-{prefix}"
+
+
+class FastChannelsStage(Stage):
+    """Data → Media → Operator (if ``agent.enabled``), plus Edge (in us-east-1, when ``env.region`` is another
+    region) and AccountBaseline (if ``observability.transaction_search`` is ``enable``).
+
+    Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
+    without export locks. Every Lambda function and state machine in the stage gets the
+    :mod:`~fast_channels.infra.constructs.functions` runtime defaults; every resource is tagged ``fast:app`` and
+    ``fast:owner``. With ``removal: retain`` the stacks are termination protected.
+
+    Args:
+        config: validated deployment configuration.
+        env: account (may be unresolved) and region (required) of the deployment.
+    """
+
+    def __init__(self, scope: Construct, id: str, *, config: FastChannelsConfig, env: Environment) -> None:
+        if not env.region:
+            raise ValueError("the deployment region must be known at synth time (set AWS_REGION or a profile region)")
+        log_groups = LogGroupDefaults(config.observability.log_retention, config.removal_policy)
+        super().__init__(
+            scope,
+            id,
+            env=env,
+            # jsii hands InjectionContext to Python injectors positionally; its stubs show lifted keywords.
+            property_injectors=[LambdaDefaults(log_groups), StateMachineDefaults(log_groups)],  # type: ignore[list-item]
+        )
+        tags = {"fast:app": config.prefix, "fast:owner": OWNER_TAG}
+        stacks = {"tags": tags, "termination_protection": config.removal is Removal.RETAIN}
+
+        self.data = DataStack(self, "Data", config=config, **stacks)
+        self.media = MediaStack(self, "Media", config=config, data=self.data.exports, **stacks)
+        self.media.add_stack_dependency(self.data)
+
+        self.baseline: AccountBaselineStack | None = None
+        if config.observability.transaction_search is TransactionSearchMode.ENABLE:
+            self.baseline = AccountBaselineStack(self, "AccountBaseline", tags=tags)
+
+        self.operator: OperatorStack | None = None
+        if config.agent.enabled:
+            self.operator = OperatorStack(
+                self, "Operator", config=config, data=self.data.exports, media=self.media, **stacks
+            )
+            self.operator.add_stack_dependency(self.data, "AgentCore Memory is ACTIVE before the agent plane")
+            self.operator.add_stack_dependency(self.media)
+            if self.baseline is not None:
+                self.operator.add_stack_dependency(self.baseline, "Gateway and Memory traces need Transaction Search")
+
+        self.edge: EdgeStack | None = None
+        if env.region != EDGE_REGION:
+            # Integration point: also pass distribution=self.media.distribution once MediaStack exposes it.
+            self.edge = EdgeStack(
+                self,
+                "Edge",
+                config=config,
+                data=self.data.exports,
+                env=Environment(account=env.account, region=EDGE_REGION),
+                **stacks,
+            )
+            self.edge.add_stack_dependency(self.data)
+            self.edge.add_stack_dependency(self.media)
+
+        Aspects.of(self).add(FunctionLogGroups(log_groups))
+        for key, value in tags.items():
+            Tags.of(self).add(key, value)

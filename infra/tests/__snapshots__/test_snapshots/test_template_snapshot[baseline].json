@@ -1,0 +1,59 @@
+{
+  "Description": "FAST Channels: account baseline (CloudWatch Transaction Search)",
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "TransactionSearchConfig7812D3D6": {
+      "DeletionPolicy": "Retain",
+      "DependsOn": [
+        "TransactionSearchSpansPolicy1FFAAE2C"
+      ],
+      "Properties": {
+        "IndexingPercentage": 1
+      },
+      "Type": "AWS::XRay::TransactionSearchConfig",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "TransactionSearchSpansPolicy1FFAAE2C": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "PolicyDocument": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"TransactionSearchXRayAccess\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"xray.amazonaws.com\"},\"Action\":\"logs:PutLogEvents\",\"Resource\":[\"arn:aws:logs:us-east-1:123456789012:log-group:aws/spans:*\",\"arn:aws:logs:us-east-1:123456789012:log-group:/aws/application-signals/data:*\"],\"Condition\":{\"ArnLike\":{\"aws:SourceArn\":\"arn:aws:xray:us-east-1:123456789012:*\"},\"StringEquals\":{\"aws:SourceAccount\":\"123456789012\"}}}]}",
+        "PolicyName": "FastChannels-TransactionSearch"
+      },
+      "Type": "AWS::Logs::ResourcePolicy",
+      "UpdateReplacePolicy": "Retain"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}
