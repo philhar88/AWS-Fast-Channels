@@ -17,6 +17,7 @@ cdk.out/
 .cdk.staging/
 
 # Console (Node)
+node_modules/
 console/node_modules/
 console/dist/
 console/.vite/

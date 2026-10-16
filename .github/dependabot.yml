@@ -1,29 +1,27 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"
-    directory: "/source/layers/boto3"
-    schedule:
-      interval: "weekly"
+  - package-ecosystem: uv
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    target-branch: develop
     groups:
-      aws-sdk:
-        patterns:
-          - "boto*"
-
-  - package-ecosystem: "pip"
-    directory: "/source/layers/crhelper"
-    schedule:
-      interval: "monthly"
-
-  - package-ecosystem: "pip"
-    directory: "/source/scripts"
-    schedule:
-      interval: "monthly"
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
+      aws-cdk: { patterns: ["aws-cdk-lib", "constructs", "cdk-nag"] }
+      agents: { patterns: ["strands-agents*", "bedrock-agentcore*", "ag-ui-*", "aws-opentelemetry-distro", "mcp"] }
+      python-tooling: { patterns: ["ruff", "mypy", "pytest*", "syrupy", "boto3-stubs*"] }
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    target-branch: develop
+  - package-ecosystem: npm
+    directory: /console
+    schedule: { interval: weekly, day: monday }
+    target-branch: develop
     groups:
-      github-actions:
-        patterns:
-          - "*"
+      cloudscape: { patterns: ["@cloudscape-design/*"] }
+      build-tooling: { patterns: ["vite*", "@vitejs/*", "typescript*", "eslint*", "@eslint/*", "typescript-eslint", "vitest", "@playwright/*"] }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    target-branch: develop
+    groups:
+      actions: { patterns: ["*"] }
