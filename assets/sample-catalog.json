@@ -1,0 +1,60 @@
+{
+  "$comment": "Open-licensed sample titles for the demo channel. MediaConvert reads the mezzanines over HTTPS from the Blender Foundation's servers. Attribution: see NOTICE.",
+  "titles": [
+    {
+      "content_id": "sintel",
+      "title": "Sintel",
+      "synopsis": "A lonely young woman searches the world for the baby dragon she once rescued.",
+      "rating": "TV-14",
+      "genres": ["animation", "fantasy", "adventure"],
+      "duration_ms": 888000,
+      "cue_points_ms": [246000, 494000, 690000],
+      "mezzanine_uri": "https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv",
+      "license": "CC BY 3.0 — © Blender Foundation | durian.blender.org"
+    },
+    {
+      "content_id": "tears-of-steel",
+      "title": "Tears of Steel",
+      "synopsis": "In a future Amsterdam, a group of scientists tries to save the world from destructive robots.",
+      "rating": "TV-14",
+      "genres": ["sci-fi", "action", "live-action"],
+      "duration_ms": 734000,
+      "cue_points_ms": [254000, 488000],
+      "mezzanine_uri": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+      "license": "CC BY 3.0 — © Blender Foundation | mango.blender.org"
+    },
+    {
+      "content_id": "elephants-dream",
+      "title": "Elephants Dream",
+      "synopsis": "Two strange characters explore a capricious and seemingly infinite machine.",
+      "rating": "TV-PG",
+      "genres": ["animation", "surreal"],
+      "duration_ms": 654000,
+      "cue_points_ms": [218000, 440000],
+      "mezzanine_uri": "https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov",
+      "license": "CC BY 2.5 — © Orange Open Movie Project | elephantsdream.org"
+    },
+    {
+      "content_id": "sintel-trailer",
+      "title": "Sintel (trailer)",
+      "synopsis": "Trailer for the Blender Foundation's open movie Sintel.",
+      "rating": "TV-PG",
+      "genres": ["animation", "fantasy", "trailer"],
+      "duration_ms": 52000,
+      "cue_points_ms": [],
+      "mezzanine_uri": "https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4",
+      "license": "CC BY 3.0 — © Blender Foundation | durian.blender.org"
+    },
+    {
+      "content_id": "big-buck-bunny-trailer",
+      "title": "Big Buck Bunny (trailer)",
+      "synopsis": "A giant rabbit takes revenge on three bullying rodents.",
+      "rating": "TV-G",
+      "genres": ["animation", "comedy", "family", "trailer"],
+      "duration_ms": 33000,
+      "cue_points_ms": [],
+      "mezzanine_uri": "https://download.blender.org/peach/trailer/trailer_1080p.mov",
+      "license": "CC BY 3.0 — © 2008 Blender Foundation | www.bigbuckbunny.org"
+    }
+  ]
+}

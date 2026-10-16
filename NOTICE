@@ -1,0 +1,16 @@
+FAST Channels on AWS
+Copyright (c) 2023-2026 philhar88 and contributors. Licensed under the MIT License (see LICENSE).
+
+Sample content
+--------------
+scripts/seed_sample_content.py ingests open movies by the Blender Foundation and the Orange Open Movie Project directly
+from their public servers. They are not redistributed in this repository. When you broadcast them, credit them:
+
+  Sintel                   CC BY 3.0  © Blender Foundation | durian.blender.org
+  Tears of Steel           CC BY 3.0  © Blender Foundation | mango.blender.org
+  Big Buck Bunny (trailer) CC BY 3.0  © 2008 Blender Foundation | www.bigbuckbunny.org
+  Elephants Dream          CC BY 2.5  © Orange Open Movie Project | elephantsdream.org
+
+Licence texts: https://creativecommons.org/licenses/by/3.0/ and https://creativecommons.org/licenses/by/2.5/
+
+Third-party software is listed in uv.lock, package-lock.json and console/package-lock.json under its own licences.
