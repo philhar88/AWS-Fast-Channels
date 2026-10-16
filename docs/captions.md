@@ -205,20 +205,17 @@ are no sound or music descriptions or speaker labels, which is why every generat
 | SSAI HLS | During an ad MediaTailor serves one blank WebVTT (`/v1/webvtt/.../web.vtt`) in every subtitle rendition; content captions resume after the break. |
 | SGAI (HLS Interstitials) | The primary stream keeps the slate's (empty) track under the interstitial; the house ad's own multivariant lists the same tracks. |
 | SSAI DASH | Every period, ad periods included, has the `stpp` AdaptationSet: house ads carry the empty track. |
-| Console | Both players show a CC toggle (on by default) when the stream has caption tracks; hls.js renders IMSC1 as text tracks. |
+| Console | Both players show a CC toggle (on by default) when the stream has caption tracks; hls.js renders IMSC1 as text tracks, until one of the hls.js bugs below stops them. |
 
-hls.js 1.7.3 (and its canary in October 2026) needs three fixes to play live IMSC1. The console applies them when
-it bundles hls.js (`hlsSubtitleFixes` in `console/vite.config.ts`); other hls.js players need the same:
+hls.js 1.7.3 (and its canary in October 2026) has three subtitle bugs that stop caption display on a live channel
+for the rest of the session. The console uses stock hls.js, so its players show them until hls.js fixes them:
 
-- A subtitle fragment that fails to parse stalled subtitle loading for the rest of the session: it stayed loaded but
-  never buffered, so the controller waited on it. SSAI's blank WebVTT ad segments in the IMSC1 rendition fail to
-  parse at every break. The patch counts such a fragment as buffered (it has no cues).
-- An IMSC1 fragment that arrived before the video's timestamps of its discontinuity read `initPTS.baseTime` of
-  undefined, which also stalled loading, at programme and slate boundaries. The patch defers it until those
-  timestamps are known, as hls.js already does for WebVTT.
-- An SGAI interstitial borrows the media element from the primary player. Handing it over dropped the primary's
-  record of buffered subtitles, which only new subtitle tracks recreate, so the first caption fragment after every
-  break was never buffered and loading stalled. The patch starts that record over, as for new tracks.
+- A subtitle fragment that fails to parse is never buffered, so the subtitle controller waits on it. SSAI's blank
+  WebVTT ad segments in the IMSC1 rendition fail to parse at every break.
+- An IMSC1 fragment that arrives before the video's timestamps of its discontinuity throws (`initPTS.baseTime` of
+  undefined), at programme and slate boundaries. hls.js defers WebVTT fragments in that case, but not IMSC1.
+- After an SGAI interstitial hands the media element back, the primary player has lost its record of buffered
+  subtitles (only new subtitle tracks recreate it), so the first caption fragment after every break is never buffered.
 
 The deployed suite checks all of this (`tests/e2e`: the provided track, its grid and its separate CMAF track,
 subtitle continuity through SSAI breaks, SGAI ad tracks, DASH text periods, and a speaking clip captioned by

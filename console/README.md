@@ -184,26 +184,18 @@ stops. A missing feed (403/404 from S3) means "nothing published yet".
 - *On air* marks the program scheduled now only while the channel runs, and never a skipped one, since filler plays
   in its slot.
 
-### hls.js patch
+### Known hls.js caption bugs
 
-`vite.config.ts` (`hlsSubtitleFixes`) edits `hls.js/dist/hls.mjs` as Vite bundles or serves it, in three places.
-They fix three subtitle bugs that stopped captions on a live channel, still present in the hls.js canary in October 2026
-([captions.md](../docs/captions.md#through-channel-assembly-ad-insertion-and-players)):
+The players use stock hls.js 1.7.3, whose subtitle loading stops for the rest of a session in three cases, still
+present in its canary in October 2026 ([captions.md](../docs/captions.md#through-channel-assembly-ad-insertion-and-players)):
 
-- `onSubtitleFragProcessed` returned on a failed fragment, which then stayed loaded but never buffered, so subtitle
-  loading stalled for the session. SSAI's blank WebVTT ad segments in IMSC1 renditions fail at every break. The fix
-  counts a failed fragment as buffered.
-- `_parseIMSC1` parsed a fragment before the main stream had the initial PTS of its discontinuity
-  (`initPTS.baseTime` of undefined). The fix queues it as `_parseVTTs` does for WebVTT.
-- `onMediaDetaching` reset `tracksBuffered` to an empty array, which only `onSubtitleTracksUpdated` refills. After an
-  SGAI interstitial borrowed the media element (`transferMedia`), `onSubtitleFragProcessed` found no buffered list
-  for the track and returned, so loading stalled at the first fragment after the break. The fix keeps an empty list
-  per track and removes the subtitle fragments from the fragment tracker, as `onSubtitleTracksUpdated` does.
-
-Each edit must match exactly once, so another hls.js version fails the build until they are reviewed; drop them
-once hls.js ships equivalent fixes. A plugin rather than patch-package keeps the console free of new dependencies
-(patch-package's dependency tree carried a high-severity npm advisory in October 2026). `optimizeDeps.exclude` makes
-the dev server serve hls.js through the plugin too.
+- `SubtitleStreamController.onSubtitleFragProcessed` returns on a failed fragment, which then stays loaded but never
+  buffered, so the controller waits on it. SSAI's blank WebVTT ad segments in IMSC1 renditions fail at every break.
+- `TimelineController._parseIMSC1` parses a fragment before the main stream has the initial PTS of its discontinuity
+  (`initPTS.baseTime` of undefined); `_parseVTTs` queues WebVTT fragments in that case.
+- `SubtitleStreamController.onMediaDetaching` resets `tracksBuffered` to an empty array, which only
+  `onSubtitleTracksUpdated` refills. After an SGAI interstitial borrows the media element (`transferMedia`),
+  `onSubtitleFragProcessed` finds no buffered list for the track and returns.
 
 ### Known player caveat
 
