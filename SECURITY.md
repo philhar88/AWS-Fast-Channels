@@ -16,9 +16,9 @@ through the [AWS vulnerability reporting process](https://aws.amazon.com/securit
 
 | Version | Branch | Supported |
 |---|---|---|
-| 3.x | `main` | ✅ |
-| 2.x | `release/2.x` | ❌ (legacy, SAM) |
-| 1.x | `release/1.x` | ❌ (legacy, SAM) |
+| 3.x | `main` | Yes |
+| 2.x | `release/2.x` | No (legacy, SAM) |
+| 1.x | `release/1.x` | No (legacy, SAM) |
 
 ## Security model in brief
 

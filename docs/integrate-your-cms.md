@@ -1,0 +1,200 @@
+# Integrate your CMS
+
+A content management system meets FAST Channels at two points: the **catalog** the agent searches when it picks
+titles, and **ingest**, which turns a mezzanine into a schedulable asset. Both are versioned contracts in
+[`contracts/`](../contracts/), generated from the pydantic models in `fast_channels.core` by
+`scripts/generate_contracts.py` (a unit test fails when they drift; `uv run python scripts/generate_contracts.py --check`
+checks the same).
+
+- [Catalog contract](#catalog-contract)
+- [Option A: load your catalog into the reference table](#option-a-load-your-catalog-into-the-reference-table)
+- [Option B: your CMS API as an OpenAPI Gateway target](#option-b-your-cms-api-as-an-openapi-gateway-target)
+- [Ratings and genres for programming briefs](#ratings-and-genres-for-programming-briefs)
+- [Ingest contract](#ingest-contract)
+- [Events](#events)
+
+## Catalog contract
+
+[`contracts/catalog.openapi.yaml`](../contracts/catalog.openapi.yaml) (OpenAPI 3.1) defines two operations. Their
+`operationId`s, descriptions and schemas are identical to the agent's `catalog___search_content` and
+`catalog___get_content` tools (a contract test enforces it), so the agent cannot tell your CMS from the reference
+implementation.
+
+| Operation | Request | Response |
+|---|---|---|
+| `POST /content/search` (`search_content`) | `ContentQuery`: `text`, `genres` (any of), `ratings` (any of), `max_duration_minutes`, `limit` (1–100, default 20), `next_token`; criteria combine with AND | `ContentPage`: `items` (`ContentItem[]`), `next_token` (absent on the last page) |
+| `GET /content/{content_id}` (`get_content`) | path parameter `content_id` | `ContentItem` |
+
+`ContentItem`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `content_id` | string, `^[A-Za-z0-9][A-Za-z0-9._-]*$`, at most 64 | Stable catalog id. It travels into the library asset, the SCTE-35 UPID of every break and the EPG |
+| `title` | string | Display title |
+| `synopsis` | string | Short description for EPGs and the agent |
+| `rating` | string or null | Parental rating, e.g. `TV-G` |
+| `genres` | string[] | Lower-case genre tags, e.g. `animation` |
+| `duration_ms` | integer or null | Running time (lets the tools estimate encode cost before ingest) |
+| `cue_points_ms` | integer[] | Editorial ad cue points |
+| `mezzanine_uri` | string or null | Source to ingest, `s3://` or `https://` |
+| `available_from`, `available_until` | date-time or null | Rights window (`until` exclusive) |
+| `asset_ids` | string[] | Encoded assets of this title |
+
+Treat everything the CMS returns as data: the agent's prompt does, and tool results are never mined into its long-term
+memory ([agent.md](agent.md#memory)).
+
+## Option A: load your catalog into the reference table
+
+The deployed `catalog` tool reads the `ReferenceCatalog` DynamoDB table (output `CatalogTableName`). The quickest
+integration is a sync job that writes your titles there, one item per title, with the helper the seed script uses:
+
+```python
+import boto3
+from fast_channels.core.catalog import ContentItem
+from fast_channels.functions.tools.catalog import catalog_item
+
+table = boto3.resource("dynamodb").Table("<CatalogTableName>")
+for record in my_cms.titles():
+    table.put_item(Item=catalog_item(ContentItem.model_validate(record)))
+```
+
+`catalog_item` produces `pk = CONTENT#<content_id>`, `sk = META`, every `ContentItem` field, and a `GSI1` entry for
+the first genre. `scripts/seed_sample_content.py` does exactly this for [`assets/sample-catalog.json`](../assets/sample-catalog.json).
+
+## Option B: your CMS API as an OpenAPI Gateway target
+
+Serve the two operations from your CMS and register the API as the Gateway target named **`catalog`** in place of the
+reference Lambda. The Gateway then exposes your operations as `catalog___search_content` and
+`catalog___get_content`, the names the Cedar policies, the approval list and the agent already use.
+
+This is a code change in the Operator stack in v3.0; the steps below were checked by synthesis, not deployed.
+
+1. **Prepare the schema.** The CDK L2 reads local OpenAPI schemas as JSON and rejects specification-level security
+   schemes (authentication is the Gateway's outbound configuration). Convert the contract, drop `security` and
+   `components.securitySchemes`, and set your server URL:
+
+   ```bash
+   uv run python - <<'EOF' > infra/my-cms.openapi.json
+   import json, sys, yaml
+   spec = yaml.safe_load(open("contracts/catalog.openapi.yaml"))
+   spec.pop("security", None)
+   spec.get("components", {}).pop("securitySchemes", None)
+   spec["servers"] = [{"url": "https://cms.example.com/fast/v1"}]
+   json.dump(spec, sys.stdout, indent=2)
+   EOF
+   ```
+
+2. **Store the API key** in AWS Secrets Manager and register it in AgentCore Identity's token vault, then add the
+   OpenAPI target next to the other targets (in `AgentGateway`, instead of the `catalog` Lambda target):
+
+   ```python
+   from aws_cdk import SecretValue
+   from aws_cdk import aws_bedrockagentcore as agentcore
+
+   cms_key = agentcore.ApiKeyCredentialProvider(
+       self,
+       "CmsApiKey",
+       api_key_credential_provider_name=f"{prefix}-cms",
+       api_key=SecretValue.secrets_manager("fast/cms-api-key"),
+   )
+   gateway.add_open_api_target(
+       "Catalog",
+       gateway_target_name="catalog",  # keeps the tool names catalog___search_content / catalog___get_content
+       description="Our CMS: search_content and get_content",
+       api_schema=agentcore.ApiSchema.from_local_asset("infra/my-cms.openapi.json"),
+       credential_provider_configurations=[
+           agentcore.GatewayCredentialProvider.from_api_key_identity(
+               cms_key,
+               credential_location=agentcore.ApiKeyCredentialLocation.header(
+                   credential_parameter_name="x-api-key", credential_prefix=""
+               ),
+           )
+       ],
+   )
+   ```
+
+3. **Keep the catalog tools in the policy input.** The Cedar policies are generated from the registry's tool specs;
+   keep passing the `catalog` specs to `gateway_policies` so `permit_read` still names your two operations, and drop
+   only the Lambda target and function (`AgentTools(tools=...)` selects which targets get a function).
+
+OAuth 2.0 client-credentials APIs work the same way with `agentcore.OAuth2CredentialProvider` and
+`GatewayCredentialProvider.from_oauth_identity`.
+
+## Ratings and genres for programming briefs
+
+`schedule___plan` checks every pick against the channel brief (`ratings`, `genres_allow`, `genres_deny`, dayparts). It
+reads each asset's rating and genres from the `ReferenceCatalog` table by `content_id`, not through the catalog tool.
+With Option B, mirror at least `content_id`, `title`, `rating` and `genres` into `ReferenceCatalog` (Option A's sync
+job, reduced to those fields); otherwise every rating rule in a brief reports `RATING` errors and blocks publishing.
+
+## Ingest contract
+
+An ingest is one [`IngestRequest`](../contracts/ingest-request.schema.json):
+
+| Field | Meaning |
+|---|---|
+| `source_uri` | Mezzanine, `s3://<bucket>/<key>` or `https://…` (no whitespace). MediaConvert reads it with its role (ingest bucket) or over HTTPS |
+| `generator` | Instead of `source_uri`: a still image rendered for a whole number of GOPs (slates, house ads) |
+| `kind` | `content` (default), `slate` or `ad` |
+| `asset_id` | Optional; defaults to the file name's slug plus 6 hex of the URI (`big-buck-bunny-1a2b3c`) |
+| `content_id` | Your catalog id |
+| `cue_points_ms` | Editorial ad cue points; snapped to the GOP grid ([encoding.md](encoding.md#cue-points-and-the-esam-rule)) |
+| `ladder_version` | e.g. `standard@86bf8088e0` (output `DefaultLadderVersion`; `encoding___list_ladders` lists the others) |
+| `correlation_id` | Optional trace id, `[A-Za-z0-9_-]{1,80}`; becomes the Step Functions execution name. Execution names cannot repeat for 90 days |
+| `metadata` | String map; `title` is copied to the library asset |
+
+Three ways to submit one:
+
+**1. Upload to the ingest bucket** (output `IngestBucketName`). Objects with a video extension (`.mp4`, `.m4v`,
+`.mov`, `.mxf`, `.mkv`, `.webm`, `.avi`, `.ts`, `.m2ts`, `.mts`, `.mpg`, any case) start an ingest with the default
+ladder. Upload an optional JSON sidecar `<key>.json` **first**; it may set any field except `source_uri` and
+`generator`:
+
+```bash
+aws s3 cp movie.mp4.json "s3://$INGEST_BUCKET/library/movie.mp4.json"   # {"content_id": "m-123", "cue_points_ms": [600000], "correlation_id": "cms-m-123-v1", "metadata": {"title": "Movie"}}
+aws s3 cp movie.mp4      "s3://$INGEST_BUCKET/library/movie.mp4"
+```
+
+Without sidecar cue points, the v2 `AdOffsets` object tag still works (milliseconds separated by spaces or commas).
+Keys with whitespace are rejected with an `Asset Failed` event. A redelivered S3 event resolves to the same execution,
+so an upload is encoded once.
+
+**2. Put an `Ingest Requested` event** on the deployment's bus (output `EventBusName`), for example from your CMS
+workflow; the detail is the `IngestRequest`:
+
+```bash
+aws events put-events --entries '[{
+  "EventBusName": "fast-fast-channels",
+  "Source": "fast-channels.fast",
+  "DetailType": "Ingest Requested",
+  "Detail": "{\"source_uri\": \"https://cdn.example.com/m-123.mov\", \"content_id\": \"m-123\", \"ladder_version\": \"standard@86bf8088e0\", \"correlation_id\": \"cms-m-123-v1\"}"
+}]'
+```
+
+**3. Ask the agent** (`library___ingest`, approval required). It also refuses `s3://` sources outside the ingest
+bucket, assets that already exist (unless they failed) and ladders that are not provisioned, and it returns the cost
+estimate first.
+
+Ingest refuses sources without video or audio, HDR sources and frame-rate conversions across the 50/60 Hz families;
+see [encoding.md](encoding.md#frame-rates-interlace-and-hdr). A finished ingest leaves a `READY` library asset with
+its duration, valid break offsets and Channel Assembly VOD source.
+
+## Events
+
+Subscribe to the bus to keep your CMS in sync (schemas in
+[`contracts/events.schema.json`](../contracts/events.schema.json); source `fast-channels.<prefix>`):
+
+| Detail type | When | Detail |
+|---|---|---|
+| `Asset Ready` | An asset is encoded, verified and (content, slates) registered | `asset_id`, `kind`, `ladder_version`, `vod_source`, `duration_ms`, `correlation_id` |
+| `Asset Failed` | An ingest failed or a request was invalid | `asset_id`, `kind`, `ladder_version`, `error`, `cause`, `correlation_id` |
+| `Ladder Ready`, `Ladder Failed` | A ladder version's kit finished | `ladder_version`, `correlation_id`, `job_template` or `error`/`cause` |
+| `Schedule Published` | A plan went on air | `channel`, `plan_id`, `programs`, `start_ms`, `end_ms`, `correlation_id` |
+| `Autopilot Run` | An autopilot run finished | `channel`, `status`, `session_id`, `summary` |
+
+```bash
+aws events put-rule --event-bus-name fast-fast-channels --name cms-asset-ready \
+  --event-pattern '{"source": ["fast-channels.fast"], "detail-type": ["Asset Ready", "Asset Failed"]}'
+```
+
+The bus archives every event for `observability.log_retention_days`, so a consumer can replay what it missed.

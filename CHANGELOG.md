@@ -1,6 +1,91 @@
-# Change Log
+# Changelog
 
-## [2.0.0] - 2026/01/30
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
+
+## [3.0.0] - 2026-10-16
+
+A rewrite of FAST Channels on AWS on the AWS CDK (Python), with agentic scheduling on Amazon Bedrock AgentCore, one
+multi-codec CMAF encode per asset, SSAI and SGAI, and end-to-end traceability. v2 deployments are not upgraded in
+place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
+
+### BREAKING
+
+- The AWS SAM templates (`deployment/`), the SAM Lambda functions and layers (`source/`) and the CloudFormation
+  parameters are gone. Deploy with `make deploy`; configure in the `fast-channels` block of `cdk.json`.
+- AWS Elemental MediaPackage VOD is no longer used. Channel Assembly reads CMAF manifests from S3 with SigV4. Content
+  encoded or packaged by v2 cannot be scheduled on v3 channels and must be re-encoded.
+- Stack, bucket and resource names, playback URLs and outputs are new.
+- The default ladder (`standard`) tops out at 1080p and adds AV1; 2160p moved to the optional `uhd` ladder.
+- Ads are preconditioned by default (MediaTailor `AdConditioning` `NONE`). A third-party ad server
+  (`ads.mode: external_vast`) requires single-codec channel outputs.
+- The per-asset notification email with playback URLs is replaced by EventBridge events and failure alerts.
+- Python 3.14 on arm64 and Node.js 24 are required.
+
+### Added
+
+- **Operator plane on Amazon Bedrock AgentCore**: a Strands scheduling agent on AgentCore Runtime (AG-UI protocol,
+  Cognito JWT authorizer), an AgentCore Gateway (MCP, CUSTOM_JWT) with 27 tools in six Lambda targets (`catalog`,
+  `library`, `origins`, `schedule`, `channels`, `encoding`), a Cedar policy engine in `ENFORCE` mode generated from
+  the tool registry, human approval for the 11 tools that change what airs or cost money, AgentCore Memory (sessions
+  and operator preferences, tool traffic excluded from extraction), and agent telemetry.
+- **Operator console** (React, Cloudscape, hls.js): chat with tool activity and approval cards; SSAI and SGAI players
+  side by side with ad, interstitial and beacon events; EPG timeline; channel start and stop; library and ladders.
+- **Autopilot**: per-channel EventBridge Scheduler schedules that keep a channel's schedule 24 hours ahead with a
+  machine token limited by Cedar to planning and publishing.
+- **Model choice**: Claude Haiku 5.5 by default; a validated ModelSpec in SSM switches among allow-listed models
+  without a redeploy; `make model-access` checks Bedrock access; `make eval` runs the scheduling conformance suite.
+- **Ladders as code**: validated, fingerprinted TOML ladders (`standard`, `uhd`) compiled to MediaConvert job
+  templates; agent-driven ladder proposals and provisioning; encode cost estimates.
+- **One CMAF encode** of AV1 (10-bit), HEVC and AVC with AAC, writing HLS and DASH manifests per rendition profile
+  (`hls`, `hls-avc`, `hls-hevc`, `hls-av1`, `hls-sd`, `hls-hd`, `hls-uhd`, `dash-avc`, `dash-hevc`, `dash-av1`).
+- **Ingest pipeline** (Step Functions, JSONata): uploads with JSON sidecars, `Ingest Requested` events or tool calls;
+  probe-based refusals (HDR, 50/60 Hz conversions); cue points snapped to the GOP grid with ESAM only off the segment
+  grid; output verification, AV1 `av1C` repair, nominal `BANDWIDTH`, break-offset discovery; VOD source registration.
+- **Ladder kits**: filler slate, four break slates, two house ads and a VAST 4.2 pod per ladder version, encoded at
+  deploy time or by the agent.
+- **Channels**: IaC LINEAR channels with per-channel `PLAYER_SELECT` playback configurations, SigV4-only channel
+  policies, update guards and lifecycle handling; agent-created channels from the same specifications; auto-stop after
+  a maximum runtime.
+- **Schedules**: deterministic planning with programming briefs (ratings, genres, dayparts, break cadence), SCTE-35
+  `TIME_SIGNAL` breaks with deterministic ids, idempotent publishing with leases and stale-plan detection, the
+  schedule of record in DynamoDB, EPG feeds in JSON and XMLTV, as-run reconciliation.
+- **SGAI** (HLS Interstitials) next to SSAI, including preconditioned ads re-hosted for asset lists.
+- **Bring-your-own content**: agent tools to create SigV4 source locations for your buckets, register pre-encoded
+  content after a ladder-signature check, and update package configurations.
+- **Delivery**: one CloudFront distribution (HTTP/2 and HTTP/3, IPv6, OAC) whose behaviours come from one routing
+  table, published as a CDN-neutral path contract; optional CDN-neutral content domain; standard logs v2 in Parquet
+  with CMCD fields.
+- **Observability**: logs with retention for every service, one correlation id from upload to ad request, saved
+  Logs Insights queries, `scripts/trace.py`, a dashboard, alarms (including Channel Assembly quota usage and running
+  channel-hours) and SNS alerts; optional CloudWatch Transaction Search for agent traces and online evaluations.
+- **Contracts**: catalog OpenAPI for bring-your-own CMS, `IngestRequest` and event JSON schemas, generated from the
+  domain models.
+- **Teardown**: a runtime-resource reaper that deletes runtime-created resources before their containers;
+  `scripts/cleanup.py` for interrupted teardowns.
+- **Engineering**: uv workspace (`core`, `functions`, `agent`, `infra`), ruff, strict mypy, unit and CDK assertion
+  tests, cdk-nag (AWS Solutions and Serverless) on every synth, a manual end-to-end release workflow, architecture
+  decision records, Dependabot.
+
+### Changed
+
+- Encoding moved from a CSV-generated preset list to validated ladders with 2 s GOPs, 6 s segments, QVBR, loudness
+  normalisation to −24 LKFS and frame-rate normalisation.
+- Ad-break placement keeps the v2 `AdOffsets` S3 object tag and adds sidecar and catalog cue points.
+- Tracing uses Lambda and Step Functions active tracing and AWS Distro for OpenTelemetry instead of the X-Ray SDK.
+- Documentation rewritten: README and `docs/` (architecture, encoding, Channel Assembly, ad insertion, delivery,
+  agent, CMS integration, observability, operations, migration).
+
+### Removed
+
+- AWS SAM templates and the nested MediaConvert application.
+- MediaPackage VOD packaging group and configurations, the Secrets Manager access token and the MediaTailor KMS key.
+- The boto3, crhelper and xmltodict Lambda layers, and the SNS email sender function.
+- `assets/presets.csv` and its preset generator scripts.
+
+## [2.0.0] - 2026-01-30
+
 ### Added
 - 4K (3840x2160) encoding support with HEVC and AVC codecs
 - 1080p (1920x1080) encoding support
@@ -42,6 +127,11 @@
 - Legacy Python 3.9 compatibility
 - Overly permissive IAM wildcard policies
 
-## [1.0.0] - 2023/02/01
+## [1.0.0] - 2023-02-01
+
 ### Added
 - Initial Version
+
+[3.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v2.0.0...v3.0.0
+[2.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/philhar88/AWS-Fast-Channels/releases/tag/v1.0.0
