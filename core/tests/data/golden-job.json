@@ -1,6 +1,6 @@
 {
-  "Role": "arn:aws:iam::898676505562:role/fastv3-exp-mediaconvert-role",
-  "Queue": "arn:aws:mediaconvert:us-east-1:898676505562:queues/Default",
+  "Role": "arn:aws:iam::123456789012:role/fastv3-exp-mediaconvert-role",
+  "Queue": "arn:aws:mediaconvert:us-east-1:123456789012:queues/Default",
   "StatusUpdateInterval": "SECONDS_10",
   "AccelerationSettings": {
     "Mode": "PREFERRED"
@@ -19,7 +19,7 @@
     "FollowSource": 1,
     "Inputs": [
       {
-        "FileInput": "s3://fastv3-exp-898676505562-media/sources/fastv3-test-source-1080p30-60s.mp4",
+        "FileInput": "s3://fastv3-exp-123456789012-media/sources/fastv3-test-source-1080p30-60s.mp4",
         "TimecodeSource": "ZEROBASED",
         "VideoSelector": {
           "ColorSpace": "FOLLOW",
@@ -39,7 +39,7 @@
         "OutputGroupSettings": {
           "Type": "CMAF_GROUP_SETTINGS",
           "CmafGroupSettings": {
-            "Destination": "s3://fastv3-exp-898676505562-media/vod/fastv3-test-source/cmaf/index",
+            "Destination": "s3://fastv3-exp-123456789012-media/vod/fastv3-test-source/cmaf/index",
             "SegmentControl": "SEGMENTED_FILES",
             "SegmentLength": 6,
             "SegmentLengthControl": "GOP_MULTIPLE",
