@@ -215,3 +215,10 @@ def vast_ads(text: str) -> list[str]:
     """Creative ids of a VAST pod, in sequence order."""
     root = ET.fromstring(text)
     return [element.get("id", "") for element in root.iter(f"{VAST}Creative")]
+
+
+def vast_durations(text: str) -> list[float]:
+    """Linear durations of a VAST pod's ads in seconds, in sequence order."""
+    root = ET.fromstring(text)
+    hours_minutes_seconds = (d.text.split(":") for d in root.iter(f"{VAST}Duration") if d.text)
+    return [int(h) * 3600 + int(m) * 60 + float(s) for h, m, s in hours_minutes_seconds]

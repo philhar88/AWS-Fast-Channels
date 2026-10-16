@@ -38,6 +38,16 @@ a person. Everything deploys from one AWS CDK (Python) app.
 - **Safe to run and to delete.** Channels never start on deploy and stop themselves after four hours; a reaper removes
   everything created at runtime before CloudFormation deletes the stacks; cdk-nag checks every synth.
 
+## The operator console
+
+Operators work with the agent in a Cognito-protected console. The agent plans in tools, shows the plan and asks
+before anything changes on air; the channel view plays the same channel through SSAI and SGAI side by side (here
+AV1 1080p in Chromium), with ad and interstitial events and the program guide.
+
+![Scheduling assistant asking for approval to publish a plan](docs/images/console-assistant.png)
+
+![Channel view: SSAI and SGAI players, ad events and the program guide](docs/images/console-channel.jpg)
+
 ## Prerequisites
 
 - An AWS account and credentials that can create the resources (administrator access is simplest for a first
