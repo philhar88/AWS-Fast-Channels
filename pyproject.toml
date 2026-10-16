@@ -17,6 +17,7 @@ dev = [
     "boto3>=1.42",
     "boto3-stubs[bedrock-agentcore,bedrock-agentcore-control,cloudformation,cognito-idp,dynamodb,events,logs,mediaconvert,mediatailor,s3,scheduler,ssm,stepfunctions]>=1.42",
     "mypy>=1.18",
+    "pillow>=12",
     "pytest>=8.4",
     "pytest-cov>=7",
     "ruff>=0.14",
