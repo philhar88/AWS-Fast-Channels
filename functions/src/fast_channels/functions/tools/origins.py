@@ -18,24 +18,19 @@ from botocore.exceptions import ClientError
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind
-from fast_channels.core.manifests import (
-    attributes,
-    expected_signature,
-    ladder_signature,
-    media_segment_durations,
-    parse_multivariant,
-    segment_boundaries_ms,
-)
+from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.mediaconvert import output_prefix
 from fast_channels.core.naming import agent_owned_name, is_agent_owned
 from fast_channels.core.profiles import ManifestFormat, applicable, profile
 from fast_channels.core.specs import http_package_configurations
+from fast_channels.core.tags import resource_tags
 from fast_channels.functions import aws
+from fast_channels.functions.encode_timeline import Timeline, timeline
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools._alerts import Alert, alerts_of, relevant
-from fast_channels.functions.tools._library_store import Asset, AssetStatus, Owner
+from fast_channels.functions.tools import library_store as store
+from fast_channels.functions.tools._alerts import Alert, after_change, alerts_of
+from fast_channels.functions.tools.library_store import Asset, AssetStatus, Owner
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
 
 if TYPE_CHECKING:
@@ -324,8 +319,8 @@ def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> Re
     location = _require_source_location(request.source_location)
     manifests = _S3Manifests.of(location)
     texts = {p.source_group: manifests.verified(p.source_group, p.path, ladder) for p in request.packages}
-    timeline = _timeline_package(request.packages)
-    duration_ms, offsets = manifests.timeline(timeline.path, texts[timeline.source_group])
+    reference = _timeline_package(request.packages)
+    encode = manifests.timeline(reference.path, texts[reference.source_group])
 
     name = agent_owned_name(config.prefix, request.asset_id, ladder_version.partition("@")[2])
     arn = _create_vod_source(request.source_location, name, request.packages, _tags(ctx, ladder_version))
@@ -338,9 +333,9 @@ def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> Re
             owner=Owner.AGENT,
             title=request.title,
             content_id=request.content_id,
-            duration_ms=duration_ms,
-            break_offsets_ms=offsets,
-            signature=[list(row) for row in ladder_signature(texts[timeline.source_group])],
+            duration_ms=encode.duration_ms,
+            break_offsets_ms=encode.boundaries_ms,
+            signature=[list(row) for row in ladder_signature(texts[reference.source_group])],
             vod_source=name,
             source_location=request.source_location,
             packages={p.source_group: p.path for p in request.packages},
@@ -356,11 +351,11 @@ def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> Re
         vod_source=name,
         vod_source_arn=arn,
         source_location=request.source_location,
-        duration_ms=duration_ms,
-        break_offset_count=len(offsets),
+        duration_ms=encode.duration_ms,
+        break_offset_count=len(encode.boundaries_ms),
         source_groups=groups,
         missing_source_groups=[g for g in settings().package_profiles if g not in groups],
-        alerts=relevant(arn),
+        alerts=after_change(lambda: arn),
     )
 
 
@@ -491,33 +486,16 @@ class _S3Manifests:
             )
         return text
 
-    def timeline(self, path: str, multivariant: str) -> tuple[int, list[int]]:
-        """Duration (ms) and the break offsets common to every track: the first video playlist of each codec and
-        the first rendition of each audio group, with the first variant's playlist as the reference timeline."""
-        uris = [*_first_video_uris(multivariant), *_audio_uris(multivariant)]
-        playlists = [self.read(_child(path, uri)) for uri in uris]
-        for uri, text in zip(uris, playlists, strict=True):
-            if "#EXT-X-ENDLIST" not in text or not media_segment_durations(text):
-                raise ToolError("VALIDATION", f"{uri} is not a complete VOD media playlist (#EXT-X-ENDLIST)")
-        duration_ms = round(sum(media_segment_durations(playlists[0])) * 1000)
-        return duration_ms, segment_boundaries_ms(*playlists)
+    def timeline(self, path: str, multivariant: str) -> Timeline:
+        """Duration and break offsets (``encode_timeline``) of the multivariant playlist at ``path``, whose media
+        playlists must be complete VOD playlists."""
+        return timeline(multivariant, lambda uri: self._vod_playlist(_child(path, uri), uri))
 
-
-def _first_video_uris(multivariant: str) -> list[str]:
-    """URI of the first variant of every video codec, in order."""
-    uris: dict[str | None, str] = {}
-    for variant in parse_multivariant(multivariant):
-        uris.setdefault(variant.video_codec, variant.uri)
-    return list(uris.values())
-
-
-def _audio_uris(multivariant: str) -> list[str]:
-    """URI of the first rendition of every audio group, in order."""
-    uris: dict[str, str] = {}
-    for line in multivariant.splitlines():
-        if line.startswith("#EXT-X-MEDIA:") and (a := attributes(line)).get("TYPE") == "AUDIO" and "URI" in a:
-            uris.setdefault(a.get("GROUP-ID", ""), a["URI"])
-    return list(uris.values())
+    def _vod_playlist(self, path: str, uri: str) -> str:
+        text = self.read(path)
+        if "#EXT-X-ENDLIST" not in text or "#EXTINF:" not in text:
+            raise ToolError("VALIDATION", f"{uri} is not a complete VOD media playlist (#EXT-X-ENDLIST)")
+        return text
 
 
 def _child(manifest_path: str, uri: str) -> str:
@@ -600,7 +578,7 @@ def update_package_configurations(request: UpdatePackagesInput, ctx: ToolContext
         source_groups=list(paths),
         added=sorted(paths.keys() - before),
         removed=sorted(before - paths.keys()),
-        alerts=relevant(updated["Arn"]),
+        alerts=after_change(lambda: str(updated["Arn"])),
     )
 
 
@@ -679,8 +657,7 @@ def _resource_arn(request: ListAlertsInput) -> str:
 
 def _tags(ctx: ToolContext, ladder_version: str | None = None) -> dict[str, str]:
     """CONTRACTS §E tags of an agent-created resource."""
-    tags = {"fast:app": settings().app, "fast:owner": Owner.AGENT.value, "fast:correlation-id": ctx.correlation_id}
-    return tags | ({"fast:ladder": ladder_version} if ladder_version else {})
+    return resource_tags(settings().app, Owner.AGENT, ladder_version=ladder_version, correlation_id=ctx.correlation_id)
 
 
 handler = dispatch.handler("origins")

@@ -17,7 +17,7 @@ from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import expected_signature
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
+from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools import origins
 from fast_channels.functions.tools.registry import Approval, ToolContext, ToolError, load
 
@@ -126,7 +126,7 @@ def serve(s3: Stubber, *files: str | tuple[str, bytes], folder: str = "shows/pil
         s3.add_response("get_object", body(data), {"Bucket": BUCKET, "Key": f"{folder}/{name}"})
 
 
-TIMELINE = (  # first video playlist per codec, then the first rendition of each audio group
+TIMELINE = (  # first video playlist per codec, then every audio rendition (encode_timeline)
     "main_avc-720p-a.m3u8",
     "main_hevc-1080p.m3u8",
     "main_av1-1080p.m3u8",
@@ -373,7 +373,7 @@ def test_register_checks_dash_manifests(ddb: Stubber, mt: Stubber, s3: Stubber) 
 def test_register_needs_complete_vod_playlists(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _prelude(ddb, mt)
     live = (SAMPLES / "main_avc-720p-a.m3u8").read_text().replace("#EXT-X-ENDLIST\n", "")
-    serve(s3, "main.m3u8", ("main_avc.mpd", MPD), ("main_avc-720p-a.m3u8", live.encode()), *TIMELINE[1:])
+    serve(s3, "main.m3u8", ("main_avc.mpd", MPD), ("main_avc-720p-a.m3u8", live.encode()))
     with pytest.raises(ToolError, match="EXT-X-ENDLIST"):
         origins.register_vod_source(_register(), CTX)
 

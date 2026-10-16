@@ -2,13 +2,13 @@ from fractions import Fraction
 from typing import Any
 
 import pytest
+from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.types import TypeSerializer
 from botocore.stub import ANY
 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.naming import digest
 from fast_channels.functions.ingest import prepare
-from fast_channels.functions.ingest.library import to_dynamo
 from fast_channels.functions.ingest.prepare import (
     IngestInProgressError,
     IngestRefusedError,
@@ -17,6 +17,7 @@ from fast_channels.functions.ingest.prepare import (
     refusals,
     warnings,
 )
+from fast_channels.functions.media_library import to_dynamo
 
 STANDARD = Ladder.builtin("standard")
 SOURCE = "s3://ingest/movies/big_buck_bunny.mp4"
@@ -242,18 +243,21 @@ def test_handler_refuses_invalid_requests(lambda_context: Any) -> None:
         prepare.handler({"request": {"ladder_version": STANDARD.version}, "execution": "x"}, lambda_context)
 
 
-def claim_conflict(stubs: Any, holder_status: str) -> None:
+def claim_conflict(stubs: Any, holder_status: str | None, item_status: str = "INGESTING") -> None:
+    """A claim that finds another execution's item; ``holder_status`` is that execution's (None: not asked)."""
     expect_ladder(stubs, ladder_item())
     stubs["mediaconvert"].add_response("probe", probe_result(), None)
     stubs["dynamodb"].add_client_error("put_item", "ConditionalCheckFailedException")
     holder = {
         "pk": "ASSET#x",
         "sk": "LADDER#y",
-        "status": "INGESTING",
+        "status": item_status,
         "correlation_id": "other",
         "execution_arn": OTHER,
     }
     stubs["dynamodb"].add_response("get_item", {"Item": {k: _typed(v) for k, v in holder.items()}}, None)
+    if holder_status is None:
+        return
     stubs["stepfunctions"].add_response(
         "describe_execution",
         {
@@ -297,3 +301,52 @@ def test_handler_loses_a_race_for_an_ended_claim(stubs: Any, lambda_context: Any
 
     with pytest.raises(IngestInProgressError):
         run_file(lambda_context)
+
+
+def test_a_ready_encode_of_a_file_is_never_encoded_again_in_place(stubs: Any, lambda_context: Any) -> None:
+    # A re-upload of the same key (or an Ingest Requested for an existing asset) would overwrite the manifests and
+    # segments its VOD source serves.
+    claim_conflict(stubs, holder_status=None, item_status="READY")
+
+    with pytest.raises(IngestRefusedError, match=r"already READY .* upload the file under a new key"):
+        run_file(lambda_context)
+
+
+def test_a_stale_encoded_claim_of_a_file_is_refused_too(stubs: Any, lambda_context: Any) -> None:
+    claim_conflict(stubs, "FAILED", item_status="ENCODED")
+
+    with pytest.raises(IngestRefusedError, match="already ENCODED"):
+        run_file(lambda_context)
+
+
+def test_a_file_claims_only_a_missing_failed_or_own_item(stubs: Any, lambda_context: Any) -> None:
+    expect_ladder(stubs, ladder_item())
+    stubs["mediaconvert"].add_response("probe", probe_result(), None)
+    condition = Attr("pk").not_exists() | Attr("status").is_in(["FAILED"]) | Attr("correlation_id").eq("x")
+    stubs["dynamodb"].add_response(
+        "put_item", {}, {"TableName": "library", "Item": ANY, "ConditionExpression": condition}
+    )
+
+    run_file(lambda_context)
+
+
+def test_a_kit_still_replaces_its_previous_encode(stubs: Any, lambda_context: Any) -> None:
+    # Kit stills are deterministic: their provisioner re-encodes them when the kit's other inputs change.
+    expect_ladder(stubs, ladder_item())
+    condition = (
+        Attr("pk").not_exists()
+        | Attr("status").is_in(["FAILED", "ENCODED", "READY"])
+        | Attr("correlation_id").eq("kit-filler")
+    )
+    stubs["dynamodb"].add_response(
+        "put_item", {}, {"TableName": "library", "Item": ANY, "ConditionExpression": condition}
+    )
+    generator = {"image_s3_uri": "s3://media/brand/filler.png", "duration_gops": 15, "label": "filler"}
+    request = {
+        "generator": generator,
+        "kind": "slate",
+        "ladder_version": STANDARD.version,
+        "correlation_id": "kit-filler",
+    }
+
+    prepare.handler({"request": request, "execution": "kit-filler", "execution_arn": EXECUTION}, lambda_context)

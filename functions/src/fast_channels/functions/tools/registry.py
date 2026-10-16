@@ -16,7 +16,7 @@ import inspect
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Final, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, Protocol, get_type_hints
 
 from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
@@ -46,6 +46,12 @@ class Approval(StrEnum):
     CONFIRM = "confirm"
 
 
+class Invocation(Protocol):
+    """The part of a Lambda context a tool may need: how much time the invocation has left."""
+
+    def get_remaining_time_in_millis(self) -> int: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ToolContext:
     """Per-invocation context handed to every tool implementation."""
@@ -53,7 +59,14 @@ class ToolContext:
     tool: str
     """Qualified tool name, e.g. ``schedule___publish``."""
     correlation_id: str
-    """Agent session id (injected by the agent) or the Lambda request id."""
+    """Agent session id (set by the agent runtime) or the Lambda request id. Caller-supplied: it links log lines
+    and items to a conversation, it does not identify a caller."""
+    invocation: Invocation | None = None
+    """The Lambda context, for tools that must stop before the function times out (absent outside Lambda)."""
+
+    def out_of_time(self, margin_ms: int) -> bool:
+        """Whether less than ``margin_ms`` of the invocation is left (never outside Lambda)."""
+        return self.invocation is not None and self.invocation.get_remaining_time_in_millis() < margin_ms
 
 
 type ToolHandler[I: BaseModel, O: BaseModel] = Callable[[I, ToolContext], O]

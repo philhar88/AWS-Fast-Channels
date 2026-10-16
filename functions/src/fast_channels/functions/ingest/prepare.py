@@ -6,8 +6,10 @@
    50 Hz and 60 Hz frame-rate families unless the ladder sets ``allow_frame_rate_conversion`` (_review.md, media).
 3. Snap the cue points to the GOP grid and build the sparse job overrides (ESAM only when a point is off the
    segment grid; ``core.mediaconvert.build_job_overrides``).
-4. Write the asset item as INGESTING (with the execution ARN), unless another execution that is still running is
-   ingesting the same encode.
+4. Write the asset item as INGESTING (with the execution ARN). Another execution that is still running the same
+   encode makes this one a duplicate. An encode that is already ENCODED or READY is refused for a source file:
+   its VOD source may be on air, and a second encode would overwrite the manifests and segments it serves in place
+   (``assets/<asset>/<ladder>/``). Generated kit stills are deterministic and re-encoded by their provisioner.
 
 Refusals raise :class:`IngestRefusedError` and duplicates :class:`IngestInProgressError`; the state machine
 catches both by name.
@@ -28,9 +30,8 @@ from fast_channels.core.ladder import Ladder
 from fast_channels.core.mediaconvert import build_job_overrides
 from fast_channels.core.naming import digest
 from fast_channels.functions import aws
-from fast_channels.functions.ingest.library import (
-    OWNER,
-    PARENT_EXECUTION_KEY,
+from fast_channels.functions.ingest.library import OWNER, PARENT_EXECUTION_KEY
+from fast_channels.functions.media_library import (
     AssetStatus,
     LadderStatus,
     asset_index,
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 HDR_TRANSFER: Final = frozenset({"SMPTE_2084", "ARIB_B67"})  # PQ (HDR10, Dolby Vision) and HLG
 _INGESTABLE: Final = frozenset({LadderStatus.PROVISIONING, LadderStatus.READY})
 _REFUSED_PROBE: Final = frozenset({"BadRequestException", "NotFoundException", "ForbiddenException"})
+_ENCODED: Final = (AssetStatus.ENCODED, AssetStatus.READY)
 
 logger = Logger()
 
@@ -122,7 +124,13 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         "warnings": notes,
         "estimated_cost_usd": encode_cost(ladder, duration_ms) if duration_ms else None,
     }
-    _claim(asset, metadata=request.metadata, job_template=job_template, execution_arn=event["execution_arn"])
+    _claim(
+        asset,
+        metadata=request.metadata,
+        job_template=job_template,
+        execution_arn=event["execution_arn"],
+        replaces_encodes=request.generator is not None,
+    )
     logger.info("prepared", extra={"esam": "Esam" in overrides.settings, "cue_points_ms": asset["cue_points_ms"]})
     return {
         **asset,
@@ -224,11 +232,14 @@ def warnings(source: Source, ladder: Ladder) -> list[str]:
     return notes
 
 
-def _claim(asset: dict[str, Any], *, metadata: dict[str, str], job_template: str, execution_arn: str) -> None:
-    """Put the INGESTING asset item, unless an execution that is still running owns it.
+def _claim(
+    asset: dict[str, Any], *, metadata: dict[str, str], job_template: str, execution_arn: str, replaces_encodes: bool
+) -> None:
+    """Put the INGESTING asset item: over nothing, a FAILED encode, this execution's own item or a stale claim.
 
     An execution that ended without reaching PublishFailure (a kit sibling aborted by its provisioner, a timeout)
-    leaves its item INGESTING; the execution ARN recorded on the item shows that it no longer runs.
+    leaves its item INGESTING (or ENCODED); the execution ARN recorded on the item shows that it no longer runs,
+    and its claim is taken over. ``replaces_encodes`` allows replacing an ENCODED or READY item (kit stills).
     """
     updated_at = now_iso()
     item = {
@@ -243,16 +254,27 @@ def _claim(asset: dict[str, Any], *, metadata: dict[str, str], job_template: str
         "updated_at": updated_at,
     }
     table = aws.table(settings().library_table)
+    claimable = [AssetStatus.FAILED, *(_ENCODED if replaces_encodes else ())]
     unclaimed = (
         Attr("pk").not_exists()
-        | Attr("status").ne(AssetStatus.INGESTING.value)
+        | Attr("status").is_in([status.value for status in claimable])
         | Attr("correlation_id").eq(asset["correlation_id"])
     )
     if _put_if(table, item, unclaimed):
         return
     holder = from_dynamo(table.get_item(Key=asset_key(asset["asset_id"], asset["ladder_version"])).get("Item") or {})
+    if holder.get("status") in {AssetStatus.INGESTING, AssetStatus.ENCODED} and _running(holder.get("execution_arn")):
+        raise IngestInProgressError(
+            f"{asset['asset_id']} is already being ingested with {asset['ladder_version']} by another execution"
+        )
+    if holder.get("status") in _ENCODED and not replaces_encodes:
+        raise IngestRefusedError(
+            f"{asset['asset_id']} is already {holder['status']} with {asset['ladder_version']}, and encoding it again "
+            "would overwrite the media its VOD source serves; upload the file under a new key, or pass a new "
+            "asset_id, to encode it again"
+        )
     same_holder = Attr("correlation_id").eq(holder["correlation_id"]) if holder else unclaimed
-    if _running(holder.get("execution_arn")) or not _put_if(table, item, same_holder):
+    if not _put_if(table, item, same_holder):
         raise IngestInProgressError(
             f"{asset['asset_id']} is already being ingested with {asset['ladder_version']} by another execution"
         )

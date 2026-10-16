@@ -7,8 +7,11 @@ publishing replays a stored plan against the live schedule:
 * one writer per channel: a conditional ``LEASE`` item with a TTL (concurrent edits raise ConflictException);
 * re-anchoring: the block is linked after the live program that precedes it *in time*, because list order beats
   wall-clock time for ABSOLUTE programs (channel-assembly.md §5.3);
-* ``PLAN_STALE`` when the live schedule from the anchor on changed since planning (fingerprint of that tail);
-* CreateProgram strictly sequential at ≤ 3 TPS; deterministic program names make a retried publish idempotent.
+* ``PLAN_STALE`` when the live schedule from the anchor on changed since planning (fingerprint of that tail), or an
+  asset of the plan is no longer READY with the VOD source it was planned with;
+* CreateProgram strictly sequential at ≤ 3 TPS (``channel_ops``), each program recorded in the media library as
+  soon as Channel Assembly has it: a publish that fails part-way leaves the guide in step with what airs, and
+  deterministic program names let the same plan be published again to resume.
 """
 
 import hashlib
@@ -18,14 +21,13 @@ import secrets
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from itertools import pairwise
 from typing import Any, Final, Self
 
 from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import Attr
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from fast_channels.core import specs
@@ -47,11 +49,20 @@ from fast_channels.core.timeline import (
     validate_plan,
 )
 from fast_channels.functions import aws, epg
-from fast_channels.functions.custom_resources.channel_lifecycle import SCHEDULE_MINUTES
+from fast_channels.functions.channel_ops import (
+    LiveProgram,
+    channel_arn,
+    create_programs,
+    delete_programs,
+    error_code,
+    live_programs,
+)
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools._alerts import Alert, relevant
+from fast_channels.functions.tools import library_store as store
+from fast_channels.functions.tools._alerts import Alert, after_change
+from fast_channels.functions.tools._guide import Gap, gaps, guide_entry, recent_programs, write_guide
+from fast_channels.functions.tools.library_store import ChannelInput, require_channel
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, describe_fields, tool
 
 logger = Logger()
@@ -59,10 +70,13 @@ logger = Logger()
 describe_fields(
     BreakPolicy,
     cadence_minutes="Target minutes from the end of one ad break to the next, counted across programs.",
-    min_gap_minutes="Minimum minutes between the end of one break and the next break.",
+    min_gap_minutes="Minimum minutes between the end of one break and the next break; omit for half the cadence.",
     max_breaks="Most breaks per program; omit for no limit.",
     slate_gops=f"Break length in GOPs, one of {', '.join(map(str, BREAK_SLATE_GOPS))}: about 30, 60, 90 or 120 s "
     "with 2 s GOPs.",
+    start_margin_seconds="No break this close to a program's start, unless the asset has editorial cue points.",
+    end_margin_seconds="No break this close to a program's end, unless the asset has editorial cue points.",
+    min_program_minutes="Programs shorter than this get no breaks, unless the asset has editorial cue points.",
 )
 describe_fields(
     ProgrammingBrief,
@@ -84,11 +98,14 @@ describe_fields(
 PLAN_TTL_S: Final = 3600
 LEASE_TTL_S: Final = 360
 """Longer than the schedule function's 5-minute timeout, so a crashed publish frees the channel by itself."""
-CREATE_PROGRAM_INTERVAL_S: Final = 0.34  # CreateProgram and DeleteProgram: 3 TPS (channel-assembly.md §5.6)
-CONFLICT_RETRIES: Final = 4
 GC_WINDOW_MS: Final = 15 * 60_000  # aired programs linger in Channel Assembly ~15 min (channel-assembly.md §5.6)
-EPG_HISTORY_MS: Final = 6 * 3600_000
 MAX_PICKS: Final = 100
+PUBLISH_TIME_MARGIN_MS: Final = 30_000
+"""A publish stops creating programs this long before the function times out (a create can back off for 15 s)."""
+RESUME_HINT: Final = (
+    "The programs published so far are in the guide (schedule___get_schedule). Call schedule___publish again with "
+    "the same plan_id to publish the rest, or schedule___remove_programs to take them off the schedule."
+)
 
 
 def now_ms() -> int:
@@ -103,20 +120,6 @@ def _epoch_ms(moment: datetime) -> int:
 # --- shared models ---------------------------------------------------------------------------------------------------
 
 
-class ChannelInput(BaseModel):
-    channel: str = Field(description="Channel name from channels___list_channels.", min_length=1, max_length=64)
-
-
-class Gap(BaseModel):
-    """Filler time between two published programs."""
-
-    start_ms: int
-    start: str
-    end_ms: int
-    end: str
-    duration_ms: int
-
-
 class BriefOutput(BaseModel):
     channel: str
     brief: ProgrammingBrief
@@ -124,32 +127,6 @@ class BriefOutput(BaseModel):
 
 
 # --- live schedule (Channel Assembly) --------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class LiveProgram:
-    """A program in Channel Assembly's schedule, in list (= air) order."""
-
-    name: str
-    start_ms: int
-    """The planned start from the MediaLibrary when known, else Channel Assembly's approximate start."""
-
-
-def live_programs(channel: str, *, known_starts: Mapping[str, int] | None = None) -> list[LiveProgram]:
-    """Programs of ``channel`` in schedule order (filler entries skipped).
-
-    Channel Assembly only approximates starts (a RELATIVE program created on a stopped channel reports 1970, and
-    sources it cannot read report zero durations; verified live), so the MediaLibrary's planned starts win.
-    """
-    known = known_starts or {}
-    paginator = aws.client("mediatailor").get_paginator("get_channel_schedule")
-    entries = paginator.paginate(ChannelName=channel, DurationMinutes=str(SCHEDULE_MINUTES))
-    return [
-        LiveProgram(entry["ProgramName"], known.get(entry["ProgramName"], _epoch_ms(entry["ApproximateStartTime"])))
-        for page in entries
-        for entry in page.get("Items", [])
-        if entry.get("ScheduleEntryType") == "PROGRAM"
-    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,71 +155,7 @@ def anchor(live: Sequence[LiveProgram], start_ms: int, *, exclude: Iterable[str]
     return Anchor(after=others[index].name, before=None, fingerprint=digest)
 
 
-@dataclass(slots=True)
-class Pacer:
-    """Spaces calls at least ``interval_s`` apart (MediaTailor per-API TPS quotas)."""
-
-    interval_s: float
-    _last: float = field(default=-math.inf)
-
-    def wait(self) -> None:
-        if (delay := self._last + self.interval_s - time.monotonic()) > 0:
-            time.sleep(delay)
-        self._last = time.monotonic()
-
-
-def _error_code(error: ClientError) -> str:
-    return str(error.response.get("Error", {}).get("Code", ""))
-
-
-def _already_exists(error: ClientError) -> bool:
-    # A duplicate ProgramName is BadRequestException "This program already exists." (verified live).
-    message = str(error.response.get("Error", {}).get("Message", ""))
-    return _error_code(error) in {"BadRequestException", "ConflictException"} and "already exists" in message
-
-
-def create_programs(requests: Sequence[Mapping[str, Any]], pacer: Pacer) -> list[str]:
-    """CreateProgram for each request in order; returns the names that already existed (idempotent retry).
-
-    ConflictException "The channel schedule has changed" is retried with backoff (channel-assembly.md §5.2).
-    """
-    mediatailor, existing = aws.client("mediatailor"), []
-    for request in requests:
-        for attempt in range(CONFLICT_RETRIES + 1):
-            pacer.wait()
-            try:
-                mediatailor.create_program(**request)
-                break
-            except ClientError as error:
-                if _already_exists(error):
-                    existing.append(request["ProgramName"])
-                    break
-                if _error_code(error) != "ConflictException" or attempt == CONFLICT_RETRIES:
-                    raise
-                time.sleep(2**attempt)
-    return existing
-
-
-def delete_programs(channel: str, names: Iterable[str], pacer: Pacer) -> None:
-    """DeleteProgram for each name (deleting a missing program succeeds, channel-assembly.md §5.1)."""
-    mediatailor = aws.client("mediatailor")
-    for name in names:
-        pacer.wait()
-        mediatailor.delete_program(ChannelName=channel, ProgramName=name)
-
-
-def channel_arn(record: store.ChannelRecord) -> str:
-    return record.arn or str(aws.client("mediatailor").describe_channel(ChannelName=record.name)["Arn"])
-
-
 # --- MediaLibrary helpers --------------------------------------------------------------------------------------------
-
-
-def require_channel(name: str) -> store.ChannelRecord:
-    record = store.get_channel(name)
-    if record is None:
-        raise ToolError("NOT_FOUND", f"channel {name} does not exist", hint="Call channels___list_channels.")
-    return record
 
 
 @contextmanager
@@ -256,7 +169,7 @@ def lease(channel: str, owner: str) -> Iterator[None]:
             condition=Attr("pk").not_exists() | Attr("expires_at").lt(now_s),
         )
     except ClientError as error:
-        if _error_code(error) != "ConditionalCheckFailedException":
+        if error_code(error) != "ConditionalCheckFailedException":
             raise
         raise ToolError(
             "CONFLICT",
@@ -270,54 +183,8 @@ def lease(channel: str, owner: str) -> Iterator[None]:
         try:
             store.table().delete_item(Key=key, ConditionExpression=Attr("owner").eq(owner))
         except ClientError as error:
-            if _error_code(error) != "ConditionalCheckFailedException":
+            if error_code(error) != "ConditionalCheckFailedException":
                 raise
-
-
-def guide_entry(program: store.ProgramRecord) -> epg.EpgProgram:
-    return epg.EpgProgram(
-        name=program.name,
-        title=program.title or program.content_id or program.asset_id,
-        content_id=program.content_id,
-        asset_id=program.asset_id,
-        start=store.iso(program.start_ms),
-        end=store.iso(program.end_ms),
-        rating=program.rating,
-        genres=program.genres,
-        breaks=[epg.EpgBreak(offset_ms=b.offset_ms, duration_ms=b.duration_ms) for b in program.breaks],
-        status=program.status.value,
-    )
-
-
-def recent_programs(channel: str, at_ms: int) -> list[store.ProgramRecord]:
-    """Programs that end after ``at_ms`` (anything starting more than a day earlier has long finished)."""
-    return [p for p in store.programs(channel, start_ms=max(0, at_ms - 86_400_000)) if p.end_ms > at_ms]
-
-
-def write_guide(channel: store.ChannelRecord, at_ms: int) -> epg.Epg:
-    """Render and upload ``epg/<channel>.{json,xml}`` from the MediaLibrary."""
-    guide = epg.feed(
-        channel=channel.name,
-        ladder_version=channel.ladder_version,
-        programs=[guide_entry(p) for p in recent_programs(channel.name, at_ms - EPG_HISTORY_MS)],
-        generated_at=store.iso(at_ms),
-    )
-    config = settings()
-    config.require("media_bucket")
-    epg.write(guide, bucket=config.media_bucket)
-    return guide
-
-
-def gaps(programs: Sequence[store.ProgramRecord], after_ms: int) -> list[Gap]:
-    """Filler stretches between consecutive programs that end after ``after_ms``."""
-    found = []
-    for a, b in pairwise(programs):
-        start, end = max(a.end_ms, after_ms), b.start_ms
-        if end > start:
-            found.append(
-                Gap(start_ms=start, start=store.iso(start), end_ms=end, end=store.iso(end), duration_ms=end - start)
-            )
-    return found
 
 
 # --- get_schedule ----------------------------------------------------------------------------------------------------
@@ -515,6 +382,7 @@ def resolve_picks(
             content_id=r.content_id,
             duration_ms=r.duration_ms or 0,
             break_offsets_ms=r.break_offsets_ms,
+            editorial_breaks=bool(r.cue_points_ms),
             ladder_version=r.ladder_version,
             rating=metadata[asset_id].rating,
             genres=metadata[asset_id].genres,
@@ -637,9 +505,23 @@ def _revalidate(stored: StoredPlan, upcoming: Sequence[store.ProgramRecord], at_
         raise ToolError("VALIDATION", "the plan has error violations", hint="Fix the picks and plan again.")
     names = {p.name for p in plan.programs}
     others = [p for p in upcoming if p.name not in names]
-    errors = [v for v in validate_plan(plan, now_ms=at_ms, existing=others) if v.severity == "error"]
-    if errors:
-        raise _stale("; ".join(f"{v.code}: {v.message}" for v in errors))
+    violations = validate_plan(plan, now_ms=at_ms, existing=others)
+    if errors := [f"{v.code}: {v.message}" for v in violations if v.severity == "error"]:
+        raise _stale("; ".join(errors))
+    if unready := _unready(plan):
+        raise _stale("; ".join(unready))
+
+
+def _unready(plan: Plan) -> list[str]:
+    """Assets of ``plan`` that are no longer READY with the VOD source they were planned with (CreateProgram would
+    fail part-way through the block)."""
+    problems = []
+    for asset_id, vod_source in dict.fromkeys((p.asset_id, p.vod_source) for p in plan.programs):
+        record = store.get_asset(asset_id, plan.ladder_version)
+        if record is None or record.status is not store.AssetStatus.READY or record.vod_source != vod_source:
+            state = f"{record.status} with VOD source {record.vod_source}" if record else "gone from the library"
+            problems.append(f"NOT_READY: {asset_id} is {state}, planned with {vod_source}")
+    return problems
 
 
 def _requests(
@@ -692,11 +574,64 @@ def _published(stored: StoredPlan) -> list[store.ProgramRecord]:
     ]
 
 
+@dataclass(frozen=True, slots=True)
+class Committed:
+    """The programs of a published plan as recorded, and the names this call created in Channel Assembly."""
+
+    records: list[store.ProgramRecord]
+    created: list[str]
+
+
+def commit(
+    stored: StoredPlan, requests: Sequence[Mapping[str, Any]], *, present: Iterable[str], ctx: ToolContext
+) -> Committed:
+    """Create the missing programs, recording each in the media library as soon as Channel Assembly has it.
+
+    The library therefore lists every program that airs even when a call fails part-way, the function runs out of
+    time or it is killed (at most the program being created is unrecorded). A failure raises a ToolError that says
+    how far the block got and how to resume (:data:`RESUME_HINT`).
+    """
+    planned = {record.name: record for record in _published(stored)}
+    live = set(present)
+    records = [store.put(record) for name, record in planned.items() if name in live]  # from an earlier attempt
+    created: list[str] = []
+    try:
+        for name, new in create_programs(requests):
+            records.append(store.put(planned[name]))
+            if new:
+                created.append(name)
+            if len(records) < len(planned) and ctx.out_of_time(PUBLISH_TIME_MARGIN_MS):
+                raise ToolError("UPSTREAM", "the function is running out of time", retryable=True)
+    except Exception as error:
+        logger.exception("publish stopped part-way", extra={"recorded": len(records), "planned": len(planned)})
+        cause = dispatch.as_tool_error(error)
+        raise ToolError(
+            cause.code,
+            f"published {len(records)} of {len(planned)} programs of {stored.plan_id}, then: {cause.message}",
+            retryable=cause.retryable,
+            hint=RESUME_HINT,
+        ) from error
+    return Committed(records=records, created=created)
+
+
+def _refresh_guide(channel: store.ChannelRecord, at_ms: int) -> None:
+    """Rewrite the guide after a partial publish without hiding the failure being reported."""
+    try:
+        write_guide(channel, at_ms)
+    except ClientError, BotoCoreError:
+        logger.exception("guide not rewritten after a partial publish")
+
+
 def _emit(event: SchedulePublished) -> None:
+    """Announce a publish; it has happened, so a failure to announce it is only logged."""
     config = settings()
-    response = aws.client("events").put_events(
-        Entries=[put_events_entry(event, prefix=config.prefix, event_bus=config.event_bus)]
-    )
+    try:
+        response = aws.client("events").put_events(
+            Entries=[put_events_entry(event, prefix=config.prefix, event_bus=config.event_bus)]
+        )
+    except ClientError, BotoCoreError:
+        logger.exception("SchedulePublished event not sent")
+        return
     if response.get("FailedEntryCount"):
         logger.error("SchedulePublished event rejected", extra={"entries": response.get("Entries")})
 
@@ -727,15 +662,18 @@ def publish(payload: PublishInput, ctx: ToolContext) -> PublishOutput:
             position=position,
             live=(p.name for p in live),
         )
-        existed = create_programs(requests, Pacer(CREATE_PROGRAM_INTERVAL_S))
-        records = [store.put(r) for r in _published(stored)]
+        try:
+            committed = commit(stored, requests, present=(p.name for p in live), ctx=ctx)
+        except ToolError:
+            _refresh_guide(channel, at)
+            raise
         write_guide(channel, at)
     plan = stored.plan
     _emit(
         SchedulePublished(
             channel=channel.name,
             plan_id=stored.plan_id,
-            programs=len(records),
+            programs=len(committed.records),
             start_ms=plan.start_ms,
             end_ms=plan.end_ms,
             correlation_id=ctx.correlation_id,
@@ -747,22 +685,21 @@ def publish(payload: PublishInput, ctx: ToolContext) -> PublishOutput:
             "plan_id": stored.plan_id,
             "after": position.after,
             "before": position.before,
-            "programs_created": len(requests) - len(existed),
-            "already_existed": existed,
+            "programs_created": committed.created,
         },
     )
     return PublishOutput(
         channel=channel.name,
         generated_at=store.iso(at),
         ladder_version=channel.ladder_version,
-        programs=[guide_entry(r) for r in records],
+        programs=[guide_entry(r) for r in committed.records],
         plan_id=stored.plan_id,
-        published=len(records),
+        published=len(committed.records),
         start_ms=plan.start_ms,
         start=store.iso(plan.start_ms),
         end_ms=plan.end_ms,
         end=store.iso(plan.end_ms),
-        alerts=relevant(channel_arn(channel)),
+        alerts=after_change(lambda: channel_arn(channel.name, channel.arn)),
     )
 
 
@@ -814,8 +751,7 @@ def remove_programs(payload: RemoveProgramsInput, ctx: ToolContext) -> RemovePro
         upcoming = recent_programs(channel.name, at - GC_WINDOW_MS)
         future = {p.name for p in upcoming if p.start_ms > at}
         wanted = list(dict.fromkeys(payload.programs))
-        removed = [name for name in wanted if name in future]
-        delete_programs(channel.name, removed, Pacer(CREATE_PROGRAM_INTERVAL_S))
+        removed = delete_programs(channel.name, [name for name in wanted if name in future])
         before = {p.name: p for p in upcoming}
         moved = [p for p in reflow(upcoming, set(removed)) if p.start_ms != before[p.name].start_ms]
         for name in [*removed, *(p.name for p in moved)]:

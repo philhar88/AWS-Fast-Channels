@@ -6,9 +6,10 @@ An agent channel is assembled from the same ``core.specs`` builders the CDK cons
 the ladder kit's filler slate, AS_RUN logs, a per-channel PLAYER_SELECT playback configuration with its three
 vended-log deliveries, and a SigV4-only channel policy for exactly that configuration (e2e.md §2.7-2.11).
 
-A started channel bills by the hour, so ``start_channel`` also creates a one-time EventBridge Scheduler schedule that
+A started channel bills by the hour, so ``start_channel`` first creates a one-time EventBridge Scheduler schedule that
 stops it after ``channels.max_runtime_hours`` (verified: the universal target ``mediatailor:stopChannel`` stops the
-channel and the schedule deletes itself).
+channel and the schedule deletes itself), then starts it: a channel never runs without a pending stop, and a stop
+that fires on a channel that never started is harmless.
 """
 
 import json
@@ -26,16 +27,16 @@ from pydantic import BaseModel, Field
 from fast_channels.core import specs
 from fast_channels.core.naming import agent_owned_name, is_agent_owned, mediatailor_name
 from fast_channels.core.profiles import applicable, profile
+from fast_channels.core.tags import resource_tags
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves field types at runtime
-from fast_channels.functions import aws, epg
-from fast_channels.functions.custom_resources import channel_lifecycle
+from fast_channels.functions import aws, channel_ops, epg
+from fast_channels.functions.channel_ops import ChannelStateTimeoutError, is_missing
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools._alerts import Alert, relevant
-from fast_channels.functions.tools.encoding import definition
+from fast_channels.functions.tools import library_store as store
+from fast_channels.functions.tools._alerts import Alert, after_change
+from fast_channels.functions.tools.library_store import ChannelInput, definition, require_channel
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
-from fast_channels.functions.tools.schedule import ChannelInput, channel_arn, require_channel
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
@@ -44,34 +45,38 @@ logger = Logger()
 
 STOP_CHANNEL_TARGET: Final = "arn:aws:scheduler:::aws-sdk:mediatailor:stopChannel"
 """EventBridge Scheduler universal target; the schedule's Input is the StopChannel request."""
-_MISSING: Final = frozenset({"NotFoundException", "ResourceNotFoundException"})
+DRAIN_TIME_MARGIN_MS: Final = 60_000
+"""``delete_channel`` stops deleting programs this long before the function times out, keeping the time to delete
+the playback configuration, its log deliveries and the channel once the drain is complete."""
 
 PRIMARY_CDN: Final = "cloudfront"
-"""Name of the deployment's own CloudFront distribution (``CDN_DOMAIN``) in per-CDN playback listings."""
+"""Name of the deployment's own CloudFront distribution (``CDN_BASE_URL``) in per-CDN playback listings."""
 
 type ChannelState = Literal["RUNNING", "STOPPED", "MISSING"]
-
-
-def _code(error: ClientError) -> str:
-    return channel_lifecycle.error_code(error)
 
 
 def _ignore_missing(operation: Callable[..., Any], **request: Any) -> None:
     try:
         operation(**request)
     except ClientError as error:
-        if _code(error) not in _MISSING:
+        if not is_missing(error):
             raise
 
 
 def _tags(ctx: ToolContext, ladder_version: str) -> dict[str, str]:
     """CONTRACTS §E tags of an agent-created resource (the reaper deletes by ``fast:app``)."""
-    return {
-        "fast:app": settings().app,
-        "fast:owner": store.Owner.AGENT.value,
-        "fast:ladder": ladder_version,
-        "fast:correlation-id": ctx.correlation_id,
-    }
+    return resource_tags(
+        settings().app, store.Owner.AGENT, ladder_version=ladder_version, correlation_id=ctx.correlation_id
+    )
+
+
+def _in_transition(error: ChannelStateTimeoutError, channel: str) -> ToolError:
+    return ToolError(
+        "UPSTREAM",
+        str(error),
+        retryable=True,
+        hint=f"The change is under way: check {channel} with channels___get_channel in a minute.",
+    )
 
 
 # --- models ----------------------------------------------------------------------------------------------------------
@@ -185,11 +190,6 @@ def list_channels(payload: ListChannelsInput, ctx: ToolContext) -> ListChannelsO
     )
 
 
-def _cdn_base() -> str:
-    domain = settings().cdn_domain
-    return domain if domain.startswith("https://") else f"https://{domain}"
-
-
 def _prefixes(record: store.ChannelRecord) -> tuple[str, str] | None:
     if record.hls_prefix and record.dash_prefix:
         return record.hls_prefix, record.dash_prefix
@@ -198,7 +198,7 @@ def _prefixes(record: store.ChannelRecord) -> tuple[str, str] | None:
     try:
         config = aws.client("mediatailor").get_playback_configuration(Name=record.playback_configuration_name)
     except ClientError as error:
-        if _code(error) in _MISSING:
+        if is_missing(error):
             return None
         raise
     return config["HlsConfiguration"]["ManifestEndpointPrefix"], config["DashConfiguration"]["ManifestEndpointPrefix"]
@@ -212,9 +212,9 @@ def playback_by_cdn(record: store.ChannelRecord) -> dict[str, Playback]:
     """
     config = settings()
     prefixes = _prefixes(record)
-    if prefixes is None or not config.cdn_domain:
+    if prefixes is None or not config.cdn_base_url:
         return {}
-    bases = {PRIMARY_CDN: _cdn_base()}
+    bases = {PRIMARY_CDN: config.cdn_base_url}
     for endpoint in config.cdn_endpoints:
         bases.setdefault(endpoint.name, endpoint.manifest_base)
     hls, dash = prefixes
@@ -238,7 +238,7 @@ def auto_stop_at(channel: str) -> str | None:
     try:
         schedule = aws.client("scheduler").get_schedule(Name=_auto_stop_name(channel), GroupName=group)
     except ClientError as error:
-        if _code(error) in _MISSING:
+        if is_missing(error):
             return None
         raise
     match = re.fullmatch(r"at\((.+)\)", schedule.get("ScheduleExpression", ""))
@@ -249,7 +249,7 @@ def _describe(name: str) -> dict[str, Any] | None:
     try:
         return dict(aws.client("mediatailor").describe_channel(ChannelName=name))
     except ClientError as error:
-        if _code(error) in _MISSING:
+        if is_missing(error):
             return None
         raise
 
@@ -302,7 +302,7 @@ def schedule_auto_stop(channel: str, *, at: datetime, ctx: ToolContext) -> None:
     try:
         scheduler.create_schedule(**request)
     except ClientError as error:
-        if _code(error) != "ConflictException":
+        if channel_ops.error_code(error) != "ConflictException":
             raise
         scheduler.update_schedule(**request)  # a restart moves the pending auto-stop
 
@@ -318,14 +318,22 @@ def start_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
     ~$0.35/h) and is stopped automatically after the deployment's maximum runtime (auto_stop_at); starting a running
     channel only moves the auto-stop. Returns the channel's alerts: SCHEDULING_ERROR alerts break playback."""
     record = require_channel(payload.channel)
-    channel_lifecycle.start_channel(record.name)  # idempotent; a missing channel raises NotFoundException
     stop_at = None
     if (hours := settings().auto_stop_hours) > 0:
         when = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=hours)
-        schedule_auto_stop(record.name, at=when, ctx=ctx)
+        schedule_auto_stop(record.name, at=when, ctx=ctx)  # before the start: billing never runs uncapped
         stop_at = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        channel_ops.start_channel(record.name)  # idempotent
+    except ChannelStateTimeoutError as error:
+        raise _in_transition(error, record.name) from error
+    except ClientError as error:
+        if is_missing(error):  # nothing to stop: the dispatcher reports NOT_FOUND
+            cancel_auto_stop(record.name)
+        raise
     logger.info("channel started", extra={"channel": record.name, "auto_stop_at": stop_at})
-    return StateChange(channel=record.name, state="RUNNING", auto_stop_at=stop_at, alerts=relevant(channel_arn(record)))
+    alerts = after_change(lambda: channel_ops.channel_arn(record.name, record.arn))
+    return StateChange(channel=record.name, state="RUNNING", auto_stop_at=stop_at, alerts=alerts)
 
 
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
@@ -333,7 +341,11 @@ def stop_channel(payload: ChannelInput, ctx: ToolContext) -> StateChange:
     """Stop a channel: playback ends for every viewer and billing stops. Published programs stay in the schedule
     and the guide; programs that have not aired yet play when the channel is started again."""
     record = require_channel(payload.channel)
-    if not channel_lifecycle.stop_channel(record.name):
+    try:
+        stopped = channel_ops.stop_channel(record.name)
+    except ChannelStateTimeoutError as error:
+        raise _in_transition(error, record.name) from error
+    if not stopped:
         raise ToolError("NOT_FOUND", f"channel {record.name} does not exist in Channel Assembly")
     cancel_auto_stop(record.name)
     logger.info("channel stopped", extra={"channel": record.name})
@@ -525,7 +537,7 @@ def _delete_vended_logs(playback_configuration: str) -> None:
 
 
 def _channel_items(channel: str) -> Iterator[store.ItemKey]:
-    for item in store.query_all(KeyConditionExpression=Key("pk").eq(f"CHANNEL#{channel}")):
+    for item in store.query_all(KeyConditionExpression=Key("pk").eq(store.channel_key(channel)["pk"])):
         yield {"pk": item["pk"], "sk": item["sk"]}
 
 
@@ -545,7 +557,20 @@ def delete_channel(payload: ChannelInput, ctx: ToolContext) -> DeleteChannelOutp
             hint="Stop it instead, or remove it from cdk.json and redeploy.",
         )
     mediatailor = aws.client("mediatailor")
-    programs = channel_lifecycle.drain_channel(record.name, table_name=config.library_table)
+    try:
+        drained = channel_ops.drain_channel(
+            record.name, table_name=config.library_table, out_of_time=lambda: ctx.out_of_time(DRAIN_TIME_MARGIN_MS)
+        )
+    except ChannelStateTimeoutError as error:
+        raise _in_transition(error, record.name) from error
+    if not drained.complete:
+        raise ToolError(
+            "UPSTREAM",
+            f"deleted {drained.deleted} programs of {record.name} before running out of time; "
+            f"{drained.remaining} remain",
+            retryable=True,
+            hint="Call channels___delete_channel again: it resumes with the programs that remain.",
+        )
     cancel_auto_stop(record.name)
     _ignore_missing(mediatailor.delete_channel_policy, ChannelName=record.name)
     playback_configuration = record.playback_configuration_name or record.name
@@ -556,8 +581,8 @@ def delete_channel(payload: ChannelInput, ctx: ToolContext) -> DeleteChannelOutp
         for key in _channel_items(record.name):
             batch.delete_item(Key=key)
     epg.delete(record.name, bucket=config.media_bucket)
-    logger.info("agent channel deleted", extra={"channel": record.name, "programs_deleted": programs})
-    return DeleteChannelOutput(channel=record.name, programs_deleted=programs)
+    logger.info("agent channel deleted", extra={"channel": record.name, "programs_deleted": drained.deleted})
+    return DeleteChannelOutput(channel=record.name, programs_deleted=drained.deleted)
 
 
 handler = dispatch.handler("channels")

@@ -100,6 +100,29 @@ def test_failed_lambda_step(stubs: Any, expect_event: Any, lambda_context: Any) 
     assert result == {"error": "IngestRefusedError", "cause": "HDR source"}
 
 
+def test_a_failure_still_reaches_the_bus_when_another_execution_owns_the_item(
+    stubs: Any, expect_event: Any, lambda_context: Any
+) -> None:
+    # Prepare refused to encode a READY asset again: its item stays as it is, the refusal is still announced.
+    request = {"source_uri": "s3://ingest/movie.mp4", "ladder_version": STANDARD.version}
+    asset_id = asset_id_for("s3://ingest/movie.mp4")
+    stubs["dynamodb"].add_client_error("update_item", "ConditionalCheckFailedException")
+    expect_event("Asset Failed", asset_id=asset_id, error="IngestRefusedError", correlation_id="run-3")
+    cause = json.dumps({"errorMessage": f"{asset_id} is already READY", "errorType": "IngestRefusedError"})
+
+    result = publish.handler(
+        {
+            "status": "FAILED",
+            "request": request,
+            "execution": "run-3",
+            "error": {"Error": "IngestRefusedError", "Cause": cause},
+        },
+        lambda_context,
+    )
+
+    assert result == {"error": "IngestRefusedError", "cause": f"{asset_id} is already READY"}
+
+
 def test_failed_invalid_request_only_publishes(expect_event: Any, lambda_context: Any) -> None:
     expect_event("Asset Failed", asset_id="unknown", ladder_version="", correlation_id="run-2")
 

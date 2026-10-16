@@ -1,3 +1,4 @@
+import itertools
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -128,12 +129,12 @@ def test_stack_deletion_reaps_agent_channels_vod_sources_locations_and_templates
     mediatailor.add_response("get_channel_schedule", {"Items": []}, {"ChannelName": agent, "DurationMinutes": ANY})
     dynamodb.add_response(
         "query",
-        {"Items": [typed({"name": "p1"})]},
+        {"Items": [typed({"name": "p1", "status": "PUBLISHED"})]},
         {
             "TableName": "library",
             "KeyConditionExpression": ANY,
-            "ProjectionExpression": "#n",
-            "ExpressionAttributeNames": {"#n": "name"},
+            "ProjectionExpression": "#n, #s, start_ms, duration_ms",
+            "ExpressionAttributeNames": {"#n": "name", "#s": "status"},
         },
     )
     mediatailor.add_response("delete_program", {}, {"ChannelName": agent, "ProgramName": "p1"})
@@ -208,6 +209,38 @@ def test_stack_deletion_reaps_agent_channels_vod_sources_locations_and_templates
     mediaconvert.add_response("delete_job_template", {}, {"Name": "fast-agent-lv"})
 
     assert is_complete(delete(cfn_event), context) == {"IsComplete": False}  # "show" is still locked
+
+
+def test_a_drain_that_runs_out_of_time_leaves_the_channel_for_the_next_poll(
+    stub: Stub, cfn_event: Event, context: Any, typed: Callable[..., dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stack_status(stub, "DELETE_IN_PROGRESS")
+    mediatailor, dynamodb = stub("mediatailor"), stub("dynamodb")
+    agent = "fast-agent-news"
+    mediatailor.add_response("list_channels", {"Items": [channel(agent, OURS)]}, {})
+    mediatailor.add_response("stop_channel", {}, {"ChannelName": agent})
+    mediatailor.add_response(
+        "describe_channel", {"ChannelState": "STOPPED", "LogConfiguration": {}}, {"ChannelName": agent}
+    )
+    entries = [
+        {
+            "Arn": "arn",
+            "ChannelName": agent,
+            "ProgramName": name,
+            "ScheduleEntryType": "PROGRAM",
+            "SourceLocationName": LOCATION,
+            "ApproximateDurationSeconds": 60,
+        }
+        for name in ("p1", "p2")
+    ]
+    mediatailor.add_response("get_channel_schedule", {"Items": entries}, {"ChannelName": agent, "DurationMinutes": ANY})
+    dynamodb.add_response("query", {"Items": []})
+    mediatailor.add_response("delete_program", {}, {"ChannelName": agent, "ProgramName": "p1"})
+    # Budget checks: before the step, before the channel, before p1; then the time is up.
+    left = itertools.chain([300_000] * 3, itertools.repeat(reaper.TIME_MARGIN_MS - 1))
+    monkeypatch.setattr(context, "get_remaining_time_in_millis", lambda: next(left))
+
+    assert is_complete(delete(cfn_event), context) == {"IsComplete": False}  # no DeleteChannel yet
 
 
 def test_reaping_stops_at_the_time_budget(stub: Stub, cfn_event: Event, context: Any) -> None:

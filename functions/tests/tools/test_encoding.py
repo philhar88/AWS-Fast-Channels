@@ -10,14 +10,15 @@ from typing import Any
 
 import pytest
 from boto3.dynamodb.types import TypeSerializer
+from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from fast_channels.core.cost import encode_cost_per_minute
 from fast_channels.core.ladder import Ladder, LadderOps, VideoCodec, propose
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import encoding
+from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools.registry import ToolContext, ToolError
 
 TABLE = "library-test"
@@ -236,6 +237,44 @@ def test_provision_ladder_creates_the_template_and_starts_the_kit(aws_stubs: Sim
     }
     assert execution["name"].startswith(f"kit-{ladder.version.replace('@', '_')}-")
     assert (result.status, result.job_template, result.execution_arn) == ("PROVISIONING", name, started["executionArn"])
+
+
+def test_a_concurrent_provision_of_the_same_version_starts_nothing(aws_stubs: SimpleNamespace) -> None:
+    # An agent retry after a Gateway timeout: the first call claimed the version between the read and the write.
+    item, ladder = proposal_item()
+    assert ladder is not None
+    get_item(aws_stubs.ddb, store.proposal_key("proposal-1"), item)
+    get_item(aws_stubs.ddb, store.ladder_key(ladder.version))
+    aws_stubs.mediaconvert.add_client_error("create_job_template", "ConflictException", "already exists")
+    aws_stubs.ddb.add_client_error("put_item", "ConditionalCheckFailedException")
+    claimed = store.LadderRecord(ladder_version=ladder.version, status="PROVISIONING", job_template="t", ladder=ladder)
+    get_item(aws_stubs.ddb, store.ladder_key(ladder.version), claimed.to_item())
+
+    result = encoding.provision_ladder(encoding.ProvisionLadderInput(proposal_id="proposal-1"), CTX)
+
+    assert (result.status, result.execution_arn) == ("PROVISIONING", None)
+    assert not aws_stubs.calls.of("StartExecution")
+    [claim] = aws_stubs.calls.of("PutItem")
+    assert "ConditionExpression" in claim
+
+
+def test_a_provisioner_that_does_not_start_releases_the_version(aws_stubs: SimpleNamespace) -> None:
+    item, ladder = proposal_item()
+    assert ladder is not None
+    get_item(aws_stubs.ddb, store.proposal_key("proposal-1"), item)
+    get_item(aws_stubs.ddb, store.ladder_key(ladder.version))
+    aws_stubs.mediaconvert.add_client_error("create_job_template", "ConflictException", "already exists")
+    aws_stubs.ddb.add_response("put_item", {})  # PROVISIONING
+    aws_stubs.sfn.add_client_error("start_execution", "ExecutionLimitExceeded", "too many executions")
+    aws_stubs.ddb.add_response("put_item", {})  # FAILED again: provision_ladder may be called again
+
+    with pytest.raises(ClientError, match="ExecutionLimitExceeded"):
+        encoding.provision_ladder(encoding.ProvisionLadderInput(proposal_id="proposal-1"), CTX)
+
+    claim, release = aws_stubs.calls.of("PutItem")
+    assert (claim["Item"]["status"], release["Item"]["status"]) == ("PROVISIONING", "FAILED")
+    assert release["Item"]["error"].startswith("the ladder provisioner did not start: ExecutionLimitExceeded")
+    assert release["Item"]["gsi1sk"] == f"FAILED#{ladder.version}"
 
 
 def test_provisioning_an_existing_version_starts_nothing(aws_stubs: SimpleNamespace) -> None:

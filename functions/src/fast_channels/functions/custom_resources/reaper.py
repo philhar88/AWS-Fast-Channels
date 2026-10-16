@@ -7,8 +7,9 @@ billing (agent channels) and block the containers' deletion (a source location w
 The resource is asynchronous: :func:`on_event` only acknowledges and :func:`is_complete` removes what it can within
 one invocation, and is polled until nothing is left:
 
-1. agent channels (``<prefix>-agent-*`` tagged ``fast:app=<prefix>``): stop, delete programs, the channel policy,
-   the playback configuration of the same name with its vended-log deliveries, then the channel;
+1. agent channels (``<prefix>-agent-*`` tagged ``fast:app=<prefix>``): stop, delete programs
+   (``channel_ops.drain_channel``, within the invocation's time budget), the channel policy, the playback
+   configuration of the same name with its vended-log deliveries, then the channel;
 2. remaining agent playback configurations (``<prefix>-agent-*``) and their deliveries;
 3. VOD sources of the deployment's source location and of runtime source locations, at the 1 TPS quota. Programs
    orphaned by a channel deleted out of band lock a VOD source for 6-8 minutes (channel-assembly.md §9.7); those
@@ -35,8 +36,9 @@ from aws_lambda_powertools.utilities.data_classes import CloudFormationCustomRes
 from botocore.exceptions import ClientError
 
 from fast_channels.core.naming import is_agent_owned
+from fast_channels.core.tags import TAG_APP, TAG_OWNER, owned_by, runtime_owned
 from fast_channels.functions import aws
-from fast_channels.functions.custom_resources.channel_lifecycle import drain_channel, error_code
+from fast_channels.functions.channel_ops import MISSING, drain_channel, error_code
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -44,14 +46,13 @@ if TYPE_CHECKING:
 RESOURCE_TYPE: Final = "Custom::RuntimeResourceReaper"
 REAPING_STACK_STATUSES: Final = frozenset({"DELETE_IN_PROGRESS", "ROLLBACK_IN_PROGRESS"})
 """ROLLBACK_IN_PROGRESS only follows a failed stack creation; an update rollback is UPDATE_ROLLBACK_IN_PROGRESS."""
-APP_TAG: Final = "fast:app"
-OWNER_TAG: Final = "fast:owner"
-RUNTIME_OWNERS: Final = frozenset({"pipeline", "agent"})
+APP_TAG: Final = TAG_APP
+"""Former names of the ``fast_channels.core.tags`` keys, kept for existing imports (``scripts/cleanup.py``)."""
+OWNER_TAG: Final = TAG_OWNER
 DELETE_VOD_SOURCE_INTERVAL_S: Final = 1.0
 """DeleteVodSource is limited to 1 TPS per account (channel-assembly.md §5.6)."""
 TIME_MARGIN_MS: Final = 60_000
 """Stop starting new deletions this long before the invocation times out."""
-_MISSING: Final = frozenset({"NotFoundException", "ResourceNotFoundException"})
 
 logger = Logger()
 metrics = Metrics()
@@ -77,11 +78,11 @@ class Deployment:
 
     def owns(self, tags: Mapping[str, str]) -> bool:
         """Tagged as this deployment's (``fast:app``)."""
-        return tags.get(APP_TAG) == self.prefix
+        return owned_by(tags, self.prefix)
 
     def created_at_runtime(self, tags: Mapping[str, str]) -> bool:
         """This deployment's and created by the pipeline or the agent (CONTRACTS §E)."""
-        return self.owns(tags) and tags.get(OWNER_TAG) in RUNTIME_OWNERS
+        return runtime_owned(tags, self.prefix)
 
     def owns_agent_resource(self, name: str, tags: Mapping[str, str]) -> bool:
         """An agent-owned MediaTailor resource (``<prefix>-agent-*``) of this deployment."""
@@ -169,9 +170,13 @@ def _agent_channels(deployment: Deployment, budget: Budget) -> list[str]:
         if deployment.owns_agent_resource(c["ChannelName"], c.get("Tags", {}))
     ]
     for done, channel in enumerate(channels):
-        if budget.exhausted:
+        if (
+            budget.exhausted
+            or not drain_channel(
+                channel, table_name=deployment.table_name, out_of_time=lambda: budget.exhausted
+            ).complete
+        ):
             return [f"channel/{c}" for c in channels[done:]]
-        drain_channel(channel, table_name=deployment.table_name)
         _ignore_missing(mediatailor.delete_channel_policy, ChannelName=channel)
         _delete_playback_configuration(channel, budget)
         _ignore_missing(mediatailor.delete_channel, ChannelName=channel)
@@ -200,7 +205,7 @@ def _vod_sources(deployment: Deployment, budget: Budget) -> list[str]:
         try:
             sources = [s["VodSourceName"] for s in _items(mediatailor, "list_vod_sources", SourceLocationName=location)]
         except ClientError as error:
-            if error_code(error) in _MISSING:
+            if error_code(error) in MISSING:
                 continue
             raise
         for done, source in enumerate(sources):
@@ -221,7 +226,7 @@ def _runtime_source_locations(deployment: Deployment, budget: Budget) -> list[st
             aws.client("mediatailor").delete_source_location(SourceLocationName=location)
             budget.count("SourceLocations")
         except ClientError as error:
-            if error_code(error) in _MISSING:
+            if error_code(error) in MISSING:
                 continue
             if error_code(error) != "BadRequestException":  # still has sources: retried on the next poll
                 raise
@@ -265,7 +270,7 @@ def _delete_vod_source(location: str, source: str) -> bool:
     try:
         aws.client("mediatailor").delete_vod_source(SourceLocationName=location, VodSourceName=source)
     except ClientError as error:
-        if error_code(error) in _MISSING:
+        if error_code(error) in MISSING:
             return True
         if error_code(error) != "BadRequestException":
             raise
@@ -280,7 +285,7 @@ def _delete_playback_configuration(name: str, budget: Budget) -> None:
     try:
         arn = mediatailor.get_playback_configuration(Name=name)["PlaybackConfigurationArn"]
     except ClientError as error:
-        if error_code(error) in _MISSING:
+        if error_code(error) in MISSING:
             return
         raise
     _delete_deliveries(arn)
@@ -313,5 +318,5 @@ def _ignore_missing(operation: Callable[..., Any], **request: Any) -> None:
     try:
         operation(**request)
     except ClientError as error:
-        if error_code(error) not in _MISSING:
+        if error_code(error) not in MISSING:
             raise

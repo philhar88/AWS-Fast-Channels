@@ -8,7 +8,6 @@ event of a start updates the program's ``PROGRAM`` item and the duplicates of th
 Programs the media library does not know (published outside the schedule tools) are ignored.
 """
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger, Metrics
@@ -19,14 +18,13 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fast_channels.functions import aws
+from fast_channels.functions.media_library import GSI1, ProgramStatus, now_iso, program_index
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
 
 PROGRAM_START: Final = "VodProgramStart"
-AIRED: Final = "AIRED"
-GSI1: Final = "GSI1"
 
 logger = Logger()
 metrics = Metrics()
@@ -66,9 +64,10 @@ def handler(event: CloudWatchLogsEvent, context: LambdaContext) -> None:
 def mark_aired(start: AsRunEvent) -> bool:
     """Set the program's status to AIRED (once); ``False`` if unknown or already aired."""
     table = aws.table(settings().library_table)
+    index = program_index(str(start.program), start.channel)
     items = table.query(
         IndexName=GSI1,
-        KeyConditionExpression=Key("gsi1pk").eq(f"PROGRAM#{start.program}") & Key("gsi1sk").eq(start.channel),
+        KeyConditionExpression=Key("gsi1pk").eq(index["gsi1pk"]) & Key("gsi1sk").eq(index["gsi1sk"]),
     ).get("Items", [])
     if not items:
         logger.info("program not in the media library", extra={"channel": start.channel, "program": start.program})
@@ -81,11 +80,7 @@ def mark_aired(start: AsRunEvent) -> bool:
             UpdateExpression="SET #status = :aired, aired_at = :at, updated_at = :now",
             ConditionExpression="attribute_exists(pk) AND #status <> :aired",
             ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":aired": AIRED,
-                ":at": start.timestamp,
-                ":now": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            },
+            ExpressionAttributeValues={":aired": ProgramStatus.AIRED.value, ":at": start.timestamp, ":now": now_iso()},
         )
     except ClientError as error:
         if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":

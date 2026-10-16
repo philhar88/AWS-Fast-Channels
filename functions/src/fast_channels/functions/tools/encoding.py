@@ -15,19 +15,23 @@ from datetime import UTC, datetime
 from typing import Final, Self
 
 from aws_lambda_powertools import Logger
+from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field
 
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ladder import AudioRendition, Ladder, LadderOps, LadderOptions, VideoRendition, propose
 from fast_channels.core.mediaconvert import job_template_props
-from fast_channels.core.naming import ladder_key
+from fast_channels.core.naming import job_template_name, ladder_path
 from fast_channels.core.profiles import applicable
+from fast_channels.core.tags import TAG_CORRELATION, TAG_OWNER, Owner
 from fast_channels.core.timeline import BREAK_SLATE_GOPS, HOUSE_AD_GOPS
 from fast_channels.functions import aws
+from fast_channels.functions.channel_ops import error_code
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
+from fast_channels.functions.tools import library_store as store
+from fast_channels.functions.tools.library_store import definition
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, describe_fields, tool
 
 logger = Logger()
@@ -44,6 +48,9 @@ describe_fields(
 )
 
 PROPOSAL_TTL_S: Final = 24 * 3600
+_UNDER_WAY: Final = frozenset({store.LadderStatus.PROVISIONING, store.LadderStatus.READY})
+_RETRYABLE: Final = [store.LadderStatus.PROPOSED.value, store.LadderStatus.FAILED.value]
+"""Ladder statuses provision_ladder may replace: never provisioned, or failed."""
 KIT_GOPS: Final = (*BREAK_SLATE_GOPS, *HOUSE_AD_GOPS)
 """Generated kit assets whose encode a provisioning run pays for (the filler slate comes on top)."""
 
@@ -79,17 +86,6 @@ class ListLaddersInput(BaseModel):
 
 class ListLaddersOutput(BaseModel):
     ladders: list[LadderSummary]
-
-
-def definition(record: store.LadderRecord) -> Ladder | None:
-    """The record's stored definition, else the built-in ladder of that version (None when neither exists)."""
-    if record.ladder is not None:
-        return record.ladder
-    try:
-        builtin = Ladder.builtin(record.ladder_id)
-    except OSError, ValueError:
-        return None
-    return builtin if builtin.version == record.ladder_version else None
 
 
 def _summary(record: store.LadderRecord, ladder: Ladder | None) -> LadderSummary:
@@ -284,23 +280,18 @@ class ProvisionLadderOutput(BaseModel):
     message: str
 
 
-def template_name(ladder_version: str) -> str:
-    """``<prefix>-<id>_<fingerprint>``: the reaper deletes runtime templates named ``<prefix>*``."""
-    return f"{settings().prefix}-{ladder_key(ladder_version)}"
-
-
 def _create_job_template(ladder: Ladder, ctx: ToolContext) -> str:
     """CreateJobTemplate for ``ladder`` (an existing template of that name has identical settings: the name
     carries the fingerprint)."""
     config = settings()
     config.require("mediaconvert_queue_arn")
-    name = template_name(ladder.version)
+    name = job_template_name(config.prefix, ladder.version)
     request = job_template_props(ladder, name=name, queue_arn=config.mediaconvert_queue_arn, category=config.prefix)
-    request["Tags"] |= {"fast:owner": store.Owner.AGENT.value, "fast:correlation-id": ctx.correlation_id}
+    request["Tags"] |= {TAG_OWNER: Owner.AGENT.value, TAG_CORRELATION: ctx.correlation_id}
     try:
         aws.client("mediaconvert").create_job_template(**request)
     except ClientError as error:
-        if error.response.get("Error", {}).get("Code") != "ConflictException":
+        if error_code(error) != "ConflictException":
             raise
         logger.info("job template already exists", extra={"job_template": name})
     return name
@@ -313,8 +304,7 @@ def provision_ladder(payload: ProvisionLadderInput, ctx: ToolContext) -> Provisi
     minutes: poll encoding___get_ladder until READY. Only then can channels___create_channel use the version, and
     content must be ingested with it (library___ingest) to air on such a channel. Nothing is started when the
     version is already PROVISIONING or READY."""
-    config = settings()
-    config.require("provision_state_machine_arn")
+    settings().require("provision_state_machine_arn")
     proposal = StoredProposal.load(payload.proposal_id)
     if proposal.ladder is None:
         raise ToolError(
@@ -324,46 +314,74 @@ def provision_ladder(payload: ProvisionLadderInput, ctx: ToolContext) -> Provisi
         )
     ladder = proposal.ladder
     existing = store.get_ladder(ladder.version)
-    if existing is not None and existing.status in {store.LadderStatus.PROVISIONING, store.LadderStatus.READY}:
-        return ProvisionLadderOutput(
-            ladder_version=ladder.version,
-            status=existing.status,
-            job_template=existing.job_template,
-            execution_arn=None,
-            message=f"{ladder.version} is already {existing.status}; nothing was started.",
-        )
+    if existing is not None and existing.status in _UNDER_WAY:
+        return _nothing_started(existing)
     job_template = _create_job_template(ladder, ctx)
-    store.put(
-        store.LadderRecord(
-            ladder_version=ladder.version,
-            status=store.LadderStatus.PROVISIONING,
-            ladder=ladder,
-            description=ladder.description or f"derived from {proposal.base_version}",
-            job_template=job_template,
-            owner=store.Owner.AGENT,
-            correlation_id=ctx.correlation_id,
-        )
+    record = store.LadderRecord(
+        ladder_version=ladder.version,
+        status=store.LadderStatus.PROVISIONING,
+        ladder=ladder,
+        description=ladder.description or f"derived from {proposal.base_version}",
+        job_template=job_template,
+        owner=store.Owner.AGENT,
+        correlation_id=ctx.correlation_id,
     )
-    # LadderProvisioner input (infra.constructs.encoding); the provisioner keeps the kit while it re-encodes.
-    request = {
-        "ladder": ladder.model_dump(mode="json"),
-        "job_template": job_template,
-        "owner": store.Owner.AGENT.value,
-        "correlation_id": ctx.correlation_id,
-    }
-    execution = aws.client("stepfunctions").start_execution(
-        stateMachineArn=config.provision_state_machine_arn,
-        name=f"kit-{ladder_key(ladder.version)}-{secrets.token_hex(4)}",
-        input=json.dumps(request),
-    )
+    try:  # one provisioner per version: a concurrent call (an agent retry) finds the claim and starts nothing
+        store.put(record, condition=Attr("pk").not_exists() | Attr("status").is_in(_RETRYABLE))
+    except ClientError as error:
+        current = store.get_ladder(ladder.version) if error_code(error) == "ConditionalCheckFailedException" else None
+        if current is None:
+            raise
+        return _nothing_started(current)
+    execution_arn = _start_provisioner(record)
     logger.info("ladder provisioning started", extra={"ladder_version": ladder.version})
     return ProvisionLadderOutput(
         ladder_version=ladder.version,
         status=store.LadderStatus.PROVISIONING,
         job_template=job_template,
-        execution_arn=execution["executionArn"],
+        execution_arn=execution_arn,
         message="Provisioning started; the ladder is READY when its kit is encoded (check encoding___get_ladder).",
     )
+
+
+def _nothing_started(record: store.LadderRecord) -> ProvisionLadderOutput:
+    return ProvisionLadderOutput(
+        ladder_version=record.ladder_version,
+        status=record.status,
+        job_template=record.job_template,
+        execution_arn=None,
+        message=f"{record.ladder_version} is already {record.status}; nothing was started.",
+    )
+
+
+def _start_provisioner(record: store.LadderRecord) -> str:
+    """Start the LadderProvisioner (``infra.constructs.encoding``) for this call's claim, which keeps the kit while
+    it re-encodes. If it does not start, the claim is marked FAILED so that the version can be provisioned again."""
+    request = {
+        "ladder": record.definition().model_dump(mode="json"),
+        "job_template": record.job_template,
+        "owner": Owner.AGENT.value,
+        "correlation_id": record.correlation_id,
+    }
+    try:
+        execution = aws.client("stepfunctions").start_execution(
+            stateMachineArn=settings().provision_state_machine_arn,
+            name=f"kit-{ladder_path(record.ladder_version)}-{secrets.token_hex(4)}",
+            input=json.dumps(request),
+        )
+    except Exception as error:
+        _release(record, f"the ladder provisioner did not start: {type(error).__name__}: {error}")
+        raise
+    return str(execution["executionArn"])
+
+
+def _release(record: store.LadderRecord, reason: str) -> None:
+    """Mark this call's PROVISIONING claim FAILED (best effort: the original error is what the agent needs)."""
+    failed = record.model_copy(update={"status": store.LadderStatus.FAILED, "error": reason[:1000]})
+    try:
+        store.put(failed, condition=Attr("correlation_id").eq(record.correlation_id))
+    except ClientError:
+        logger.exception("could not release the provisioning claim", extra={"ladder_version": record.ladder_version})
 
 
 handler = dispatch.handler("encoding")

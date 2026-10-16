@@ -24,3 +24,8 @@ def client(service: str) -> Any:
 def table(name: str) -> Table:
     """A DynamoDB table resource (the resource API handles attribute (de)serialisation)."""
     return boto3.resource("dynamodb", config=_CONFIG).Table(name)
+
+
+def execution_arn(state_machine_arn: str, name: str) -> str:
+    """ARN of execution ``name`` of a standard Step Functions state machine."""
+    return f"{state_machine_arn.replace(':stateMachine:', ':execution:', 1)}:{name}"

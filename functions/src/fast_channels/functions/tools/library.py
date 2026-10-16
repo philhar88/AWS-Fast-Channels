@@ -17,10 +17,11 @@ from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind, IngestRequest
 from fast_channels.core.naming import mediatailor_name
 from fast_channels.functions import aws
+from fast_channels.functions.aws import execution_arn
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools._library_store import Asset, AssetStatus, LadderStatus, Owner
+from fast_channels.functions.tools import library_store as store
+from fast_channels.functions.tools.library_store import Asset, AssetStatus, LadderStatus, Owner
 from fast_channels.functions.tools.registry import Access, Approval, ToolContext, ToolError, tool
 
 if TYPE_CHECKING:
@@ -356,11 +357,6 @@ def get_ingest_status(request: IngestStatusInput, ctx: ToolContext) -> IngestSta
     execution = _execution_info(described) if described else None
     done = execution.status != "RUNNING" if execution else asset is not None and asset.status in _FINAL
     return IngestStatusOutput(execution=execution, asset=AssetSummary.of(asset) if asset else None, done=done)
-
-
-def execution_arn(state_machine_arn: str, name: str) -> str:
-    """ARN of execution ``name`` of a standard state machine."""
-    return f"{state_machine_arn.replace(':stateMachine:', ':execution:', 1)}:{name}"
 
 
 def _describe_execution(name: str) -> dict[str, Any] | None:

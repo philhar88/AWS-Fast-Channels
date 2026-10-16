@@ -3,7 +3,8 @@
 * ``READY``: the asset item becomes READY with its VOD source, ``Asset Ready`` goes on the bus, and the summary
   returned is the execution's output (a ladder provisioner reads its children's outputs).
 * ``FAILED``: the item becomes FAILED with the error unless another execution owns it (a previous good encode
-  stays listed), ``Asset Failed`` goes on the bus, and ``{error, cause}`` feeds the execution's Fail state.
+  stays listed, e.g. when Prepare refused to encode a READY asset again), ``Asset Failed`` goes on the bus either
+  way, and ``{error, cause}`` feeds the execution's Fail state.
 """
 
 import json
@@ -17,16 +18,9 @@ from pydantic import ValidationError
 from fast_channels.core.events import AssetFailed, AssetReady
 from fast_channels.core.ingest import AssetKind, IngestRequest, asset_id_for
 from fast_channels.functions import aws
-from fast_channels.functions.ingest.library import (
-    OWNER,
-    PARENT_EXECUTION_KEY,
-    AssetStatus,
-    asset_index,
-    asset_key,
-    now_iso,
-    update_request,
-)
+from fast_channels.functions.ingest.library import OWNER, PARENT_EXECUTION_KEY
 from fast_channels.functions.ingest.notify import put_event
+from fast_channels.functions.media_library import AssetStatus, asset_index, asset_key, now_iso, update_request
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
@@ -103,7 +97,7 @@ def ready(asset: dict[str, Any], encoded: dict[str, Any], registered: list[dict[
 
 
 def failed(request: dict[str, Any], execution: str, error: dict[str, Any]) -> dict[str, str]:
-    """Mark the asset FAILED (if this execution owns it, or nothing does) and announce it."""
+    """Mark the asset FAILED (if this execution owns it, or nothing does) and announce it in every case."""
     correlation_id = str(request.get("correlation_id") or execution)
     logger.set_correlation_id(correlation_id)
     name, cause = str(error.get("Error") or "States.Unknown"), summarize_cause(error.get("Cause"))
@@ -114,25 +108,7 @@ def failed(request: dict[str, Any], execution: str, error: dict[str, Any]) -> di
     logger.append_keys(asset_id=asset_id, ladder_version=ladder_version)
     logger.error("ingest failed", extra={"error": name, "cause": cause})
     if parsed is not None:
-        updated_at = now_iso()
-        values = {
-            "asset_id": asset_id,
-            "ladder_version": ladder_version,
-            "kind": kind.value,
-            "owner": OWNER,
-            "correlation_id": correlation_id,
-            "status": AssetStatus.FAILED.value,
-            **asset_index(kind, ladder_version, AssetStatus.FAILED, updated_at),
-            "error": f"{name}: {cause}",
-            "updated_at": updated_at,
-        }
-        aws.table(settings().library_table).update_item(
-            **update_request(
-                asset_key(asset_id, ladder_version),
-                values,
-                ConditionExpression=Attr("pk").not_exists() | Attr("correlation_id").eq(correlation_id),
-            )
-        )
+        _record_failure(asset_id, ladder_version, kind, correlation_id, f"{name}: {cause}")
     put_event(
         AssetFailed(
             asset_id=asset_id,
@@ -146,6 +122,33 @@ def failed(request: dict[str, Any], execution: str, error: dict[str, Any]) -> di
     metrics.add_dimension(name="kind", value=kind.value)
     metrics.add_metric(name="AssetFailed", unit=MetricUnit.Count, value=1)
     return {"error": name, "cause": cause}
+
+
+def _record_failure(asset_id: str, ladder_version: str, kind: AssetKind, correlation_id: str, error: str) -> None:
+    """Write the FAILED item, unless another execution's item is there (it is left as it is)."""
+    updated_at = now_iso()
+    values = {
+        "asset_id": asset_id,
+        "ladder_version": ladder_version,
+        "kind": kind.value,
+        "owner": OWNER,
+        "correlation_id": correlation_id,
+        "status": AssetStatus.FAILED.value,
+        **asset_index(kind, ladder_version, AssetStatus.FAILED, updated_at),
+        "error": error,
+        "updated_at": updated_at,
+    }
+    table = aws.table(settings().library_table)
+    try:
+        table.update_item(
+            **update_request(
+                asset_key(asset_id, ladder_version),
+                values,
+                ConditionExpression=Attr("pk").not_exists() | Attr("correlation_id").eq(correlation_id),
+            )
+        )
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.warning("the asset item belongs to another execution; left unchanged")
 
 
 def summarize_cause(cause: Any) -> str:

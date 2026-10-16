@@ -1,9 +1,11 @@
+import json
 import re
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, Literal
 
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 from pydantic import BaseModel, Field
 
 from fast_channels.functions.tools import dispatch, registry
@@ -174,3 +176,86 @@ def test_dispatch_success_validation_and_tool_errors(fake_target: str, monkeypat
 
     unknown = handle({}, _context("schedule___nope"))
     assert unknown["error"]["code"] == "NOT_FOUND"
+
+
+class Failure(BaseModel):
+    kind: str
+
+
+@pytest.mark.parametrize(
+    ("kind", "code", "retryable"),
+    [
+        ("timeout", "UPSTREAM", True),
+        ("endpoint", "UPSTREAM", True),
+        ("throttled", "THROTTLED", True),
+        ("stored", "INTERNAL", False),  # a pydantic error inside the handler is no argument error
+        ("bug", "INTERNAL", False),
+    ],
+)
+def test_every_exception_becomes_an_envelope(
+    fake_target: str, kind: str, code: str, retryable: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    @registry.tool("schedule", access=Access.READ)
+    def explode(payload: Failure, ctx: ToolContext) -> PlanOutput:
+        """Fail in the requested way."""
+        match payload.kind:
+            case "timeout":
+                raise TimeoutError("channel fast-demo is still STOPPED after 120 s")
+            case "endpoint":
+                raise EndpointConnectionError(endpoint_url="https://api.mediatailor.us-east-1.amazonaws.com")
+            case "throttled":
+                raise ClientError({"Error": {"Code": "ThrottlingException", "Message": "slow down"}}, "CreateProgram")
+            case "stored":
+                return PlanOutput.model_validate({"plan_id": "p"})
+            case _:
+                raise KeyError("ladder")
+
+    result = dispatch.handler(fake_target)({"kind": kind}, _context("schedule___explode"))
+
+    assert result["ok"] is False
+    assert (result["error"]["code"], result["error"]["retryable"]) == (code, retryable)
+    if code == "INTERNAL":
+        assert "not in the arguments" in result["error"]["hint"]
+    [raised] = [r for r in caplog.records if r.getMessage() == "tool raised"]
+    assert raised.exc_info  # the traceback reaches the logs; the agent gets the envelope
+
+
+def test_write_tools_leave_an_audit_record_with_the_gateway_request(
+    fake_target: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    context = _context("schedule___plan")
+    context.client_context.custom |= {
+        "bedrockAgentCoreAwsRequestId": "gw-req-1",
+        "bedrockAgentCoreMcpMessageId": "7",
+        "bedrockAgentCoreGatewayId": "fast-tools-abc",
+        "bedrockAgentCoreTargetId": "T1",
+    }
+
+    dispatch.handler(fake_target)({"channel": "c", "picks": [], "correlation_id": "s1"}, context)
+
+    [record] = [r for r in caplog.records if r.getMessage() == "tool audit"]
+    audit = json.loads(dispatch.logger.registered_formatter.format(record))  # as it reaches CloudWatch
+    assert audit["audit"] == {
+        "access": "write",
+        "approval": "confirm",
+        "arguments": {"channel": "c", "picks": []},
+        "outcome": "ok",
+    }
+    assert (audit["gateway_request_id"], audit["mcp_message_id"], audit["gateway_id"]) == (
+        "gw-req-1",
+        "7",
+        "fast-tools-abc",
+    )
+    assert audit["correlation_id"] == "s1" and audit["tool"] == "schedule___plan"
+
+
+def test_tools_see_the_invocations_remaining_time(fake_target: str) -> None:
+    @registry.tool("schedule", access=Access.READ)
+    def clock(payload: Failure, ctx: ToolContext) -> PlanOutput:
+        """Report whether the invocation is nearly over."""
+        return PlanOutput(plan_id=str(ctx.out_of_time(5_000)), programs=0)
+
+    result = dispatch.handler(fake_target)({"kind": "x"}, _context("schedule___clock"))  # 1 s left
+
+    assert result["plan_id"] == "True"
+    assert ToolContext(tool="t", correlation_id="c").out_of_time(10**9) is False  # outside Lambda: never

@@ -11,19 +11,28 @@ Two rules invoke this function asynchronously (retries, then the pipeline's dead
 The sidecar is read here, before StartExecution, so that its ``correlation_id`` becomes the execution name
 (SPEC §9). Without one, the name is derived from the S3 sequencer (or the event id): a redelivered event then
 resolves to the same execution instead of starting a second encode.
+
+Execution names are unique for 90 days, so a name that exists already means one of two things. EventBridge
+delivers at least once: an event that occurred before the execution started is the one that started it, and is
+ignored. A later event is a new request that reuses a correlation id (a CMS re-sending ``Ingest Requested``, a
+re-upload with an unchanged sidecar); it cannot start, and is reported as ``Asset Failed`` with
+``DuplicateCorrelationId`` so that the integration waiting for an outcome gets one.
 """
 
 import json
 import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger
+from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from fast_channels.core.events import DETAIL_TYPES, AssetFailed
 from fast_channels.core.ingest import AssetKind, IngestRequest, asset_id_for
 from fast_channels.core.naming import digest
 from fast_channels.functions import aws
+from fast_channels.functions.aws import execution_arn
 from fast_channels.functions.ingest.notify import put_event
 from fast_channels.functions.ingest.storage import S3Store
 from fast_channels.functions.settings import settings
@@ -36,6 +45,7 @@ AD_OFFSETS_TAG: Final = "adoffsets"
 ``ad_offsets``, ``adoffsets``)."""
 SIDECAR_SUFFIX: Final = ".json"
 INGEST_REQUESTED: Final = DETAIL_TYPES[IngestRequest]
+DUPLICATE_ERROR: Final = "DuplicateCorrelationId"
 
 logger = Logger()
 
@@ -64,10 +74,50 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, str]:
             input=request.model_dump_json(exclude_none=True),
         )
     except sfn.exceptions.ExecutionAlreadyExists:
-        logger.warning("an ingest execution with this correlation id already exists; event ignored")
-        return {"status": "DUPLICATE", "correlation_id": name}
+        return _already_started(event, request, execution_arn(config.ingest_state_machine_arn, name))
     logger.info("ingest started", extra={"execution_arn": execution["executionArn"]})
     return {"status": "STARTED", "correlation_id": name, "execution_arn": execution["executionArn"]}
+
+
+def _already_started(event: dict[str, Any], request: IngestRequest, arn: str) -> dict[str, str]:
+    """Ignore a redelivered event; report a new request that reuses the execution's name (see the module)."""
+    name = str(request.correlation_id)
+    existing = _describe(arn)
+    if existing is None or redelivered(event, existing, request):
+        logger.warning("event redelivered; the execution it started serves it", extra={"execution_arn": arn})
+        return {"status": "DUPLICATE", "correlation_id": name}
+    started = existing["startDate"].astimezone(UTC)
+    failed = AssetFailed(
+        asset_id=request.resolved_asset_id,
+        kind=request.kind,
+        ladder_version=request.ladder_version,
+        error=DUPLICATE_ERROR,
+        cause=f"ingest execution {name} already exists ({existing['status']}, started "
+        f"{started:%Y-%m-%dT%H:%M:%SZ}); send the request again with a new correlation_id",
+        correlation_id=name,
+    )
+    logger.error("correlation id reused by a new request", extra={"execution_arn": arn, "cause": failed.cause})
+    put_event(failed)
+    return {"status": "REJECTED", "correlation_id": name}
+
+
+def redelivered(event: dict[str, Any], execution: dict[str, Any], request: IngestRequest) -> bool:
+    """Whether ``event`` is the one that started ``execution`` (DescribeExecution).
+
+    An event occurs before the execution it starts; EventBridge ``time`` has second precision, so an event that
+    started it is never later than ``startDate``. Without a time, an identical input is taken as a redelivery.
+    """
+    if occurred := event.get("time"):
+        return bool(datetime.fromisoformat(str(occurred)) <= execution["startDate"])
+    return bool(execution.get("input") == request.model_dump_json(exclude_none=True))
+
+
+def _describe(arn: str) -> dict[str, Any] | None:
+    try:
+        return dict(aws.client("stepfunctions").describe_execution(executionArn=arn))
+    except ClientError:
+        logger.warning("cannot describe the existing execution", extra={"execution_arn": arn}, exc_info=True)
+        return None
 
 
 def request_for(event: dict[str, Any], *, default_ladder_version: str) -> IngestRequest:

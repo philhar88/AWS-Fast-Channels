@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger
 
-from fast_channels.core.naming import digest
-from fast_channels.core.naming import ladder_key as ladder_path
+from fast_channels.core.naming import digest, ladder_path
+from fast_channels.core.tags import Owner
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.functions import aws
-from fast_channels.functions.ingest.library import LadderStatus, from_dynamo, ladder_key
+from fast_channels.functions.media_library import LadderStatus, from_dynamo, ladder_key
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ def start(properties: Mapping[str, Any], *, request_id: str) -> dict[str, Any]:
                 "ladder": json.loads(properties["Ladder"]),
                 "job_template": properties["JobTemplate"],
                 "kit_fingerprint": fingerprint,
-                "owner": "iac",
+                "owner": Owner.IAC.value,
             }
         ),
     )

@@ -19,10 +19,10 @@ from fast_channels.core.ladder import Ladder
 from fast_channels.core.profiles import profile
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import channels
+from fast_channels.functions.tools import library_store as store
+from fast_channels.functions.tools.library_store import ChannelInput
 from fast_channels.functions.tools.registry import ToolContext, ToolError
-from fast_channels.functions.tools.schedule import ChannelInput
 
 TABLE, BUCKET = "library-test", "media-test"
 ACCOUNT = "111122223333"
@@ -82,7 +82,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "LIBRARY_TABLE": TABLE,
         "MEDIA_BUCKET": BUCKET,
         "SOURCE_LOCATION": "fast-origin",
-        "CDN_DOMAIN": "d111111abcdef8.cloudfront.net",
+        "CDN_BASE_URL": "https://d111111abcdef8.cloudfront.net/",
         "PACKAGE_PROFILES": "hls,hls-avc,hls-hevc,hls-av1,dash-avc",
         "DEFAULT_LADDER_VERSION": LV,
         "PLAYBACK_CONFIG_TEMPLATE": json.dumps(TEMPLATE),
@@ -310,6 +310,8 @@ def test_start_channel_schedules_the_auto_stop(aws_stubs: SimpleNamespace) -> No
     before = datetime.now(UTC)
     result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
 
+    names = aws_stubs.calls.names()
+    assert names.index("UpdateSchedule") < names.index("StartChannel")  # never running without a pending stop
     [created], [request] = aws_stubs.calls.of("CreateSchedule"), aws_stubs.calls.of("UpdateSchedule")
     assert {k: v for k, v in created.items() if k != "ClientToken"} == {
         k: v for k, v in request.items() if k != "ClientToken"
@@ -344,10 +346,44 @@ def test_start_channel_without_auto_stop_leaves_a_running_channel_alone(
 
 def test_start_channel_missing_in_channel_assembly(aws_stubs: SimpleNamespace) -> None:
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
     aws_stubs.mt.add_client_error("describe_channel", "NotFoundException", http_status_code=404)
     aws_stubs.mt.add_client_error("start_channel", "NotFoundException", http_status_code=404)
+    aws_stubs.scheduler.add_response(
+        "delete_schedule", {}, {"Name": "fast-demo-auto-stop", "GroupName": "fast-channels"}
+    )
     with pytest.raises(ClientError, match="NotFoundException"):  # the dispatcher reports NOT_FOUND
         channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
+
+
+def test_a_start_that_is_still_under_way_is_retryable_and_already_capped(
+    aws_stubs: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
+    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
+    aws_stubs.mt.add_response("start_channel", {}, {"ChannelName": "fast-demo"})
+    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
+    clock = iter([0.0, 1_000.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(ToolError) as raised:
+        channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
+
+    assert (raised.value.code, raised.value.retryable) == ("UPSTREAM", True)
+    assert "channels___get_channel" in raised.value.hint
+    assert aws_stubs.calls.names().index("CreateSchedule") < aws_stubs.calls.names().index("StartChannel")
+
+
+def test_start_channel_succeeds_when_its_alerts_cannot_be_read(aws_stubs: SimpleNamespace) -> None:
+    get_item(aws_stubs.ddb, store.channel_key("fast-demo"), channel().to_item())
+    aws_stubs.scheduler.add_response("create_schedule", {"ScheduleArn": "arn:aws:scheduler:us-east-1:1:schedule/g/s"})
+    aws_stubs.mt.add_response("describe_channel", described("fast-demo", "RUNNING"), {"ChannelName": "fast-demo"})
+    aws_stubs.mt.add_client_error("list_alerts", "TooManyRequestsException", http_status_code=429)
+
+    result = channels.start_channel(ChannelInput(channel="fast-demo"), CTX)
+
+    assert result.state == "RUNNING" and [a.code for a in result.alerts] == ["ALERTS_UNAVAILABLE"]
 
 
 def test_stop_channel_cancels_the_auto_stop(aws_stubs: SimpleNamespace) -> None:
@@ -546,3 +582,27 @@ def test_delete_channel_tears_down_in_reverse_order(aws_stubs: SimpleNamespace) 
     assert (result.channel, result.state, result.programs_deleted) == (AGENT, "DELETED", 2)
     [batch] = aws_stubs.calls.of("BatchWriteItem")
     assert [r["DeleteRequest"]["Key"]["sk"] for r in batch["RequestItems"][TABLE]] == ["META", "LEASE"]
+
+
+def test_delete_channel_that_runs_out_of_time_keeps_the_channel_and_resumes(aws_stubs: SimpleNamespace) -> None:
+    ddb, mt = aws_stubs.ddb, aws_stubs.mt
+    get_item(ddb, store.channel_key(AGENT), channel(AGENT, owner="agent").to_item())
+    mt.add_response("stop_channel", {}, {"ChannelName": AGENT})
+    mt.add_response("describe_channel", described(AGENT, "STOPPED"), {"ChannelName": AGENT})
+    entries = [{"Arn": "a", "ChannelName": AGENT, "ProgramName": n, "SourceLocationName": "o"} for n in ("p1", "p2")]
+    mt.add_response("get_channel_schedule", {"Items": entries})
+    query(ddb)
+    mt.add_response("delete_program", {}, {"ChannelName": AGENT, "ProgramName": "p1"})
+    left = iter([10**6, channels.DRAIN_TIME_MARGIN_MS - 1])
+    ctx = ToolContext(
+        tool="channels___delete_channel",
+        correlation_id="s",
+        invocation=SimpleNamespace(get_remaining_time_in_millis=lambda: next(left)),
+    )
+
+    with pytest.raises(ToolError) as raised:
+        channels.delete_channel(ChannelInput(channel=AGENT), ctx)
+
+    assert (raised.value.code, raised.value.retryable) == ("UPSTREAM", True)
+    assert "1 remain" in raised.value.message and "again" in raised.value.hint
+    assert "DeleteChannel" not in aws_stubs.calls.names()

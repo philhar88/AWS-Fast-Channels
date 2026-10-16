@@ -27,12 +27,13 @@ from fast_channels.core.ladder import Ladder
 from fast_channels.core.mediaconvert import GeneratorInput
 from fast_channels.core.naming import digest
 from fast_channels.core.specs import Creative, vast_key, vast_pod
+from fast_channels.core.tags import Owner
 from fast_channels.core.timeline import BREAK_SLATE_GOPS, HOUSE_AD_GOPS
 from fast_channels.functions import aws
-from fast_channels.functions.ingest.library import LadderStatus, ladder_index, ladder_key, now_iso, update_request
 from fast_channels.functions.ingest.notify import put_event
 from fast_channels.functions.ingest.publish import summarize_cause
 from fast_channels.functions.ingest.storage import S3Store
+from fast_channels.functions.media_library import LadderStatus, ladder_index, ladder_key, now_iso, update_request
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
@@ -138,7 +139,7 @@ def begin(provision: Mapping[str, Any], execution: str, images: KitImages) -> di
         "ladder": ladder.model_dump(mode="json"),
         "description": ladder.description,
         "job_template": provision["job_template"],
-        "owner": provision.get("owner", "iac"),
+        "owner": provision.get("owner", Owner.IAC.value),
         "codecs": sorted(ladder.codecs),
         "max_height": ladder.max_height,
         "renditions": len(ladder.video),

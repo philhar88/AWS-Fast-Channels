@@ -7,15 +7,16 @@ from typing import Any
 import pytest
 from botocore.stub import ANY, Stubber
 
-from fast_channels.functions.custom_resources import channel_lifecycle
+from fast_channels.functions import channel_ops
 from fast_channels.functions.custom_resources.channel_lifecycle import (
     ENDPOINT,
     GUARD,
     LIFECYCLE,
+    ChannelDrainIncompleteError,
     ChannelRunningError,
     handler,
-    update_expression,
 )
+from fast_channels.functions.media_library import update_request
 
 type Stub = Callable[[str], Stubber]
 type Event = Callable[..., dict[str, Any]]
@@ -41,9 +42,17 @@ def describe(state: str, outputs: list[dict[str, str]] | None = None) -> dict[st
     return {"ChannelState": state, "Outputs": outputs or [], "LogConfiguration": {"LogTypes": ["AS_RUN"]}}
 
 
-def guard_event(cfn_event: Event, spec: dict[str, Any], *, restart: str = "false", old_spec: Any = SPEC) -> Any:
+def guard_event(
+    cfn_event: Event,
+    spec: dict[str, Any],
+    *,
+    restart: str = "false",
+    old_spec: Any = SPEC,
+    old_restart: str | None = None,
+) -> Any:
     properties = {"ChannelName": CHANNEL, "RestartOnUpdate": restart, "Spec": spec}
-    return cfn_event(GUARD, "Update", properties, old={**properties, "Spec": old_spec}, physical_id=CHANNEL)
+    old = {**properties, "Spec": old_spec, "RestartOnUpdate": old_restart or restart}
+    return cfn_event(GUARD, "Update", properties, old=old, physical_id=CHANNEL)
 
 
 def lifecycle_props(**overrides: Any) -> dict[str, Any]:
@@ -99,6 +108,23 @@ def test_guard_lets_a_rollback_restore_the_running_channel_spec(stub: Stub, cfn_
     event = guard_event(cfn_event, SPEC, old_spec={**SPEC, "Tier": "STANDARD"})  # back to what the channel has
 
     assert handler(event, context)["Data"] == {"StoppedForUpdate": ""}
+
+
+@pytest.mark.parametrize("restart", ["true", "false"])
+def test_guard_stops_a_channel_restarted_by_the_update_being_rolled_back(
+    stub: Stub, cfn_event: Event, context: Any, restart: str
+) -> None:
+    # The forward update (now the "old" properties) allowed restarts, so the lifecycle restarted the channel with
+    # its new Spec; CloudFormation can only restore the previous Spec on a stopped channel.
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("describe_channel", describe("RUNNING"), {"ChannelName": CHANNEL})
+    stack_status(stub, "UPDATE_ROLLBACK_IN_PROGRESS")
+    mediatailor.add_response("stop_channel", {}, {"ChannelName": CHANNEL})
+    mediatailor.add_response("describe_channel", describe("STOPPED"), {"ChannelName": CHANNEL})
+
+    event = guard_event(cfn_event, SPEC, restart=restart, old_spec={**SPEC, "Tier": "STANDARD"}, old_restart="true")
+
+    assert handler(event, context)["Data"] == {"StoppedForUpdate": "update-request"}  # a fresh restart token
 
 
 def test_guard_ignores_stopped_channels_and_unchanged_specs(stub: Stub, cfn_event: Event, context: Any) -> None:
@@ -166,8 +192,8 @@ def record_update(*, brief: Any = None, remove_brief: bool = False) -> dict[str,
     }
     if brief is not None:
         attributes["brief"] = brief
-    expression = update_expression(attributes, ["brief"] if remove_brief else [])
-    return {"TableName": "library", "Key": {"pk": f"CHANNEL#{CHANNEL}", "sk": "META"}, **expression}
+    key = {"pk": f"CHANNEL#{CHANNEL}", "sk": "META"}
+    return {"TableName": "library", **update_request(key, attributes, remove=["brief"] if remove_brief else [])}
 
 
 def test_lifecycle_create_writes_the_channel_record_with_its_brief(
@@ -240,10 +266,11 @@ def test_lifecycle_delete_stops_the_channel_and_deletes_every_program(
     library_query = {
         "TableName": "library",
         "KeyConditionExpression": ANY,
-        "ProjectionExpression": "#n",
-        "ExpressionAttributeNames": {"#n": "name"},
+        "ProjectionExpression": "#n, #s, start_ms, duration_ms",
+        "ExpressionAttributeNames": {"#n": "name", "#s": "status"},
     }
-    dynamodb.add_response("query", {"Items": [typed({"name": "p2"}), typed({"name": "p3"})]}, library_query)
+    recent = [typed({"name": "p2", "status": "PUBLISHED"}), typed({"name": "p3", "status": "PUBLISHED"})]
+    dynamodb.add_response("query", {"Items": recent}, library_query)
     mediatailor.add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": "p1"})
     mediatailor.add_client_error("delete_program", **client_error("ConflictException"))
     mediatailor.add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": "p2"})
@@ -270,15 +297,56 @@ def test_lifecycle_delete_of_a_missing_channel_only_forgets_it(
     handler(cfn_event(LIFECYCLE, "Delete", lifecycle_props(), physical_id=CHANNEL), context)
 
 
+def test_lifecycle_delete_that_runs_out_of_time_fails_and_resumes_on_the_next_attempt(
+    stub: Stub,
+    cfn_event: Event,
+    context: Any,
+    typed: Callable[..., dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mediatailor, dynamodb = stub("mediatailor"), stub("dynamodb")
+    schedule = {"ChannelName": CHANNEL, "DurationMinutes": "20160"}
+    library_query = {
+        "TableName": "library",
+        "KeyConditionExpression": ANY,
+        "ProjectionExpression": ANY,
+        "ExpressionAttributeNames": ANY,
+    }
+    remaining = iter([300_000, 10_000])  # the second program finds less than the margin left
+    monkeypatch.setattr(context, "get_remaining_time_in_millis", lambda: next(remaining))
+    mediatailor.add_response("stop_channel", {}, {"ChannelName": CHANNEL})
+    mediatailor.add_response("describe_channel", describe("STOPPED"), {"ChannelName": CHANNEL})
+    entries = [{**_entry(), "ProgramName": name} for name in ("p1", "p2", "p3")]
+    mediatailor.add_response("get_channel_schedule", {"Items": entries}, schedule)
+    dynamodb.add_response("query", {"Items": []}, library_query)
+    mediatailor.add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": "p1"})
+
+    event = cfn_event(LIFECYCLE, "Delete", lifecycle_props(), physical_id=CHANNEL)
+    with pytest.raises(ChannelDrainIncompleteError, match="deleted 1 programs of fast-demo, 2 remain"):
+        handler(event, context)
+
+    # The next attempt (CloudFormation retries the deletion) finds only what is left.
+    monkeypatch.setattr(context, "get_remaining_time_in_millis", lambda: 300_000)
+    mediatailor.add_response("stop_channel", {}, {"ChannelName": CHANNEL})
+    mediatailor.add_response("describe_channel", describe("STOPPED"), {"ChannelName": CHANNEL})
+    mediatailor.add_response("get_channel_schedule", {"Items": entries[1:]}, schedule)
+    dynamodb.add_response("query", {"Items": []}, library_query)
+    for name in ("p2", "p3"):
+        mediatailor.add_response("delete_program", {}, {"ChannelName": CHANNEL, "ProgramName": name})
+    dynamodb.add_response("delete_item", {}, {"TableName": "library", "Key": ANY})
+
+    assert handler(event, context) == {"PhysicalResourceId": CHANNEL}
+
+
 def test_delete_program_gives_up_after_repeated_conflicts(
     stub: Stub, client_error: Callable[..., dict[str, Any]]
 ) -> None:
     mediatailor = stub("mediatailor")
-    for _ in range(channel_lifecycle.CONFLICT_RETRIES):
+    for _ in range(channel_ops.CONFLICT_ATTEMPTS):
         mediatailor.add_client_error("delete_program", **client_error("ConflictException"))
 
     with pytest.raises(Exception, match="ConflictException"):
-        channel_lifecycle.delete_program(CHANNEL, "p1")
+        channel_ops.delete_program(CHANNEL, "p1")
 
 
 def test_wait_for_state_times_out(stub: Stub, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,21 +355,13 @@ def test_wait_for_state_times_out(stub: Stub, monkeypatch: pytest.MonkeyPatch) -
     stub("mediatailor").add_response("describe_channel", describe("RUNNING"), {"ChannelName": CHANNEL})
     stub("mediatailor").add_response("describe_channel", describe("RUNNING"), {"ChannelName": CHANNEL})
 
-    with pytest.raises(TimeoutError, match="still RUNNING"):
-        channel_lifecycle.wait_for_state(CHANNEL, "STOPPED")
+    with pytest.raises(channel_ops.ChannelStateTimeoutError, match="still RUNNING"):
+        channel_ops.wait_for_state(CHANNEL, "STOPPED")
 
 
 def test_unknown_resource_types_fail(cfn_event: Event, context: Any) -> None:
     with pytest.raises(ValueError, match="unsupported resource type"):
         handler(cfn_event("Custom::Other", "Create", {"ChannelName": CHANNEL}), context)
-
-
-def test_update_expression_aliases_every_attribute() -> None:
-    assert update_expression({"name": "x", "owner": "iac"}, ["brief"]) == {
-        "UpdateExpression": "SET #a0 = :a0, #a1 = :a1 REMOVE #r0",
-        "ExpressionAttributeNames": {"#a0": "name", "#a1": "owner", "#r0": "brief"},
-        "ExpressionAttributeValues": {":a0": "x", ":a1": "iac"},
-    }
 
 
 def _entry() -> dict[str, Any]:

@@ -14,7 +14,7 @@ from fast_channels.core.ladder import Ladder
 from fast_channels.core.timeline import PlannedBreak
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
+from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools.registry import ToolError
 
 TABLE = "library-test"

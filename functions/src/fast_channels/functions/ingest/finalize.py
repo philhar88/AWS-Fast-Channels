@@ -22,7 +22,6 @@ directory instead of rewriting manifests MediaTailor has cached (_review.md, Fin
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
-from decimal import Decimal
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
 from xml.sax.saxutils import escape
@@ -41,21 +40,14 @@ from fast_channels.core.manifests import (
     nominal_bandwidths,
     normalize_bandwidth,
     parse_multivariant,
-    segment_boundaries_ms,
 )
 from fast_channels.core.mp4 import av1_level_idx, patch_av1c
-from fast_channels.core.naming import creative_id, ladder_key
+from fast_channels.core.naming import creative_id, ladder_path, vod_source_name
 from fast_channels.core.profiles import ManifestFormat, RenditionProfile, applicable, profile
 from fast_channels.functions import aws
-from fast_channels.functions.ingest.library import (
-    AssetStatus,
-    asset_index,
-    asset_key,
-    now_iso,
-    update_request,
-    vod_source_name,
-)
+from fast_channels.functions.encode_timeline import duration_ms, timeline
 from fast_channels.functions.ingest.storage import S3Store, Store, read_text
+from fast_channels.functions.media_library import AssetStatus, asset_index, asset_key, now_iso, update_request
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
@@ -141,9 +133,8 @@ def finalize(
     encode = read_encode(store, ladder, asset["output_prefix"])
     rewritten = [*patch_av1_inits(store, encode), *normalize(store, encode)]
     kind = AssetKind(asset["kind"])
-    videos = encode.video()
     result = Finalized(
-        duration_ms=duration_ms(encode.media[videos[0][0]]),
+        duration_ms=duration_ms(encode.media[encode.video()[0][0]]),
         break_offsets_ms=break_offsets(encode, asset.get("cue_points_ms", [])) if kind is AssetKind.CONTENT else [],
         signature=[list(row) for row in ladder_signature(encode.main)],
         rewritten=rewritten,
@@ -220,26 +211,14 @@ def normalize(store: Store, encode: Encode) -> list[str]:
     return rewritten
 
 
-def duration_ms(media_playlist: str) -> int:
-    """Exact duration of a media playlist (sum of its EXTINF values) in milliseconds."""
-    durations = (Decimal(line[8:].split(",", 1)[0]) for line in media_playlist.splitlines() if line[:8] == "#EXTINF:")
-    return round(sum(durations, Decimal(0)) * 1000)
-
-
 def break_offsets(encode: Encode, cue_points_ms: Iterable[int]) -> list[int]:
-    """Valid ad-break offsets: segment boundaries common to every track, restricted to the cue points if any.
+    """Valid ad-break offsets: segment boundaries common to every track (``encode_timeline``), restricted to the cue
+    points if any.
 
-    Renditions of one codec share their segment grid, so one video playlist per codec plus every audio playlist
-    stand for all tracks. A cue point maps to the nearest common boundary within half a GOP (ESAM puts it exactly
-    there); points without one are dropped with a warning.
+    A cue point maps to the nearest common boundary within half a GOP (ESAM puts it exactly there); points without
+    one are dropped with a warning.
     """
-    videos = encode.video()
-    per_codec: dict[VideoCodec, str] = {}
-    for uri, r in videos:
-        per_codec.setdefault(r.codec, uri)
-    first = videos[0][0]
-    others = [uri for uri in per_codec.values() if uri != first] + _audio_uris(encode.main)
-    boundaries = segment_boundaries_ms(encode.media[first], *(encode.media[uri] for uri in others))
+    boundaries = timeline(encode.main, encode.media.__getitem__).boundaries_ms
     cue_points = sorted(set(cue_points_ms))
     if not cue_points:
         return boundaries
@@ -258,7 +237,7 @@ def sgai_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str
     """Write the SGAI-ready manifests of an ad under ``ads/<ladder>/<creative id>/`` (see the module docstring)."""
     base = content_base_url.rstrip("/")
     creative = creative_id(asset_id, encode.ladder.version, content_base_url)
-    ad_prefix = f"ads/{ladder_key(encode.ladder.version)}/{creative}/"
+    ad_prefix = f"ads/{ladder_path(encode.ladder.version)}/{creative}/"
     segments = f"{base}/{encode.prefix}"
     for name, text in encode.multivariants.items():
         _write_text(store, f"{ad_prefix}{_file(profile(name))}", text)
@@ -313,11 +292,6 @@ def _dash_profile(ladder: Ladder, package_profiles: Sequence[str]) -> RenditionP
     (every ladder has ``dash-avc``: its first rendition is AVC)."""
     dash = [p for p in applicable(ladder) if p.format is ManifestFormat.DASH]
     return next((p for name in package_profiles for p in dash if p.name == name), dash[0])
-
-
-def _audio_uris(multivariant: str) -> list[str]:
-    media = [attributes(line) for line in multivariant.splitlines() if line.startswith("#EXT-X-MEDIA:")]
-    return [a["URI"] for a in media if a.get("TYPE") == "AUDIO" and "URI" in a]
 
 
 def _map_uri(media_playlist: str, uri: str) -> str:

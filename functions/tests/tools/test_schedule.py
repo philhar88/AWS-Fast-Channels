@@ -15,9 +15,9 @@ from botocore.stub import Stubber
 from fast_channels.core import timeline
 from fast_channels.core.ladder import Ladder
 from fast_channels.functions import aws
-from fast_channels.functions.custom_resources.channel_lifecycle import SCHEDULE_MINUTES
+from fast_channels.functions.channel_ops import SCHEDULE_MINUTES
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
+from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools import schedule
 from fast_channels.functions.tools.registry import ToolContext, ToolError
 
@@ -329,6 +329,27 @@ def test_plan_on_an_empty_schedule_starts_after_the_lead_time(aws_stubs: SimpleN
     assert result.programs[0].title == "bbb" and result.publishable
 
 
+@pytest.mark.parametrize(("cue_points_ms", "breaks"), [([20_020], 1), ([], 0)])
+def test_editorial_cue_points_place_breaks_where_the_policy_margins_would_not(
+    aws_stubs: SimpleNamespace, cue_points_ms: list[int], breaks: int
+) -> None:
+    # A 2-minute short is under the policy's 3-minute minimum, and 20 s is inside its 60 s start margin: only an
+    # editor's cue point (the asset's cue_points_ms) puts a break there.
+    short = asset("short", duration_ms=120_120, break_offsets_ms=[20_020], cue_points_ms=cue_points_ms, content_id=None)
+    ddb = aws_stubs.ddb
+    get_item(ddb, store.channel_key(CHANNEL), channel(brief=None).to_item())
+    get_item(ddb, store.ladder_key(LV), ladder().to_item())
+    query(ddb)
+    get_item(ddb, store.asset_key("short", LV), short.to_item())
+    ddb.add_response("put_item", {})
+    aws_stubs.mt.add_response("get_channel_schedule", {"Items": []}, schedule_request())
+
+    policy = timeline.BreakPolicy(cadence_minutes=0.25)
+    result = schedule.plan(schedule.PlanInput(channel=CHANNEL, picks=["short"], break_policy=policy), CTX)
+
+    assert len(result.programs[0].breaks) == breaks
+
+
 def test_plan_reports_assets_encoded_on_another_ladder(aws_stubs: SimpleNamespace) -> None:
     ddb = aws_stubs.ddb
     get_item(ddb, store.channel_key(CHANNEL), channel().to_item())
@@ -397,13 +418,30 @@ def test_a_block_before_the_whole_schedule_goes_in_front_of_its_first_program() 
     assert [r["ProgramName"] for r in resumed] == [second["ProgramName"]]
 
 
-def publish_stubs(aws_stubs: SimpleNamespace, plan: timeline.Plan, previous: store.ProgramRecord) -> None:
+def publish_stubs(
+    aws_stubs: SimpleNamespace,
+    plan: timeline.Plan,
+    previous: store.ProgramRecord,
+    *,
+    assets: dict[str, store.Asset] | None = None,
+) -> None:
+    """The reads of a publish up to its readiness check: ``assets`` (asset id -> record) are what the library holds
+    then, by default each planned asset READY; ``{}`` when the publish fails before the check."""
     fingerprint = schedule.anchor([schedule.LiveProgram(previous.name, previous.start_ms)], plan.start_ms).fingerprint
     ddb = aws_stubs.ddb
     get_item(ddb, store.plan_key(CHANNEL, PLAN_ID), stored(plan, fingerprint))
     get_item(ddb, store.channel_key(CHANNEL), channel().to_item())
     ddb.add_response("put_item", {})  # lease
     query(ddb, previous.to_item())
+    ids = dict.fromkeys(p.asset_id for p in plan.programs)
+    for asset_id, record in (assets if assets is not None else {a: asset(a) for a in ids}).items():
+        get_item(ddb, store.asset_key(asset_id, LV), record.to_item())
+
+
+def guide_written(aws_stubs: SimpleNamespace, *programs: store.ProgramRecord) -> None:
+    query(aws_stubs.ddb, *(p.to_item() for p in programs))  # the guide is rendered from the table
+    aws_stubs.s3.add_response("put_object", {})
+    aws_stubs.s3.add_response("put_object", {})
 
 
 def test_publish_links_the_block_after_the_preceding_program(aws_stubs: SimpleNamespace) -> None:
@@ -416,9 +454,7 @@ def test_publish_links_the_block_after_the_preceding_program(aws_stubs: SimpleNa
     for _ in plan.programs:
         mt.add_response("create_program", {})
         ddb.add_response("put_item", {})
-    query(ddb, previous.to_item())  # the guide is rendered from the table
-    aws_stubs.s3.add_response("put_object", {})
-    aws_stubs.s3.add_response("put_object", {})
+    guide_written(aws_stubs, previous)
     ddb.add_response("delete_item", {})  # lease
     aws_stubs.events.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "e"}]})
     noise = {"AlertCode": "PROGRAM_ALERT", "AlertMessage": "SEGMENT_DURATION_MISMATCH: harmless"}
@@ -455,6 +491,7 @@ def test_publish_links_the_block_after_the_preceding_program(aws_stubs: SimpleNa
     assert lease["Item"]["sk"] == "LEASE" and "ConditionExpression" in lease
     assert [p["Item"]["status"] for p in programs] == ["PUBLISHED", "PUBLISHED"]
     assert programs[0]["Item"]["gsi1pk"] == f"PROGRAM#{plan.programs[0].name}"
+    assert programs[0]["Item"]["expires_at"] == plan.programs[0].end_ms // 1000 + 30 * 86_400
     assert programs[0]["Item"]["plan_id"] == PLAN_ID and programs[0]["Item"]["title"] == "Bbb"
     assert [o["Key"] for o in aws_stubs.calls.of("PutObject")] == ["epg/fast-demo.json", "epg/fast-demo.xml"]
     [entry] = aws_stubs.calls.of("PutEvents")[0]["Entries"]
@@ -480,12 +517,10 @@ def test_a_retried_publish_creates_only_the_missing_programs(aws_stubs: SimpleNa
     ddb, mt = aws_stubs.ddb, aws_stubs.mt
     mt.add_response("get_channel_schedule", live(("prev", 0), (plan.programs[0].name, 0)), schedule_request())
     get_item(ddb, store.ladder_key(LV), ladder().to_item())
+    ddb.add_response("put_item", {})  # the program already on air is recorded first
     mt.add_response("create_program", {})
     ddb.add_response("put_item", {})
-    ddb.add_response("put_item", {})
-    query(ddb)
-    aws_stubs.s3.add_response("put_object", {})
-    aws_stubs.s3.add_response("put_object", {})
+    guide_written(aws_stubs)
     ddb.add_response("delete_item", {})
     aws_stubs.events.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "e"}]})
     mt.add_response("list_alerts", {"Items": []}, {"ResourceArn": ARN})
@@ -515,7 +550,7 @@ def test_publish_refuses_a_plan_with_errors(aws_stubs: SimpleNamespace) -> None:
     previous = program("prev", NOW + 1_200_000)
     rating = timeline.Violation(code="RATING", severity="error", message="TV-14 is not allowed")
     plan = plan_of(asset("bbb"), start_ms=previous.end_ms).model_copy(update={"violations": [rating]})
-    publish_stubs(aws_stubs, plan, previous)
+    publish_stubs(aws_stubs, plan, previous, assets={})
     aws_stubs.ddb.add_response("delete_item", {})
     with pytest.raises(ToolError) as raised:
         schedule.publish(schedule.PublishInput(plan_id=PLAN_ID), CTX)
@@ -524,7 +559,7 @@ def test_publish_refuses_a_plan_with_errors(aws_stubs: SimpleNamespace) -> None:
 
 def test_publish_revalidates_against_the_current_schedule(aws_stubs: SimpleNamespace) -> None:
     previous = program("prev", NOW + 1_200_000)  # published after the plan was made
-    publish_stubs(aws_stubs, plan_of(asset("bbb"), start_ms=previous.start_ms), previous)
+    publish_stubs(aws_stubs, plan_of(asset("bbb"), start_ms=previous.start_ms), previous, assets={})
     aws_stubs.ddb.add_response("delete_item", {})
     with pytest.raises(ToolError) as raised:
         schedule.publish(schedule.PublishInput(plan_id=PLAN_ID), CTX)
@@ -551,25 +586,91 @@ def test_expired_or_unknown_plans_are_not_found(aws_stubs: SimpleNamespace) -> N
         assert raised.value.code == "NOT_FOUND"
 
 
-def test_create_programs_is_idempotent_and_retries_schedule_conflicts(aws_stubs: SimpleNamespace) -> None:
-    mt = aws_stubs.mt
-    mt.add_client_error("create_program", "BadRequestException", "This program already exists. Create a unique...")
-    mt.add_client_error("create_program", "ConflictException", "The channel schedule has changed since your last")
+def test_publish_is_stale_when_an_asset_is_no_longer_ready(aws_stubs: SimpleNamespace) -> None:
+    previous = program("prev", NOW + 1_200_000)
+    plan = plan_of(asset("bbb"), asset("sintel"), start_ms=previous.end_ms)
+    failed = asset("sintel", status="FAILED")
+    publish_stubs(aws_stubs, plan, previous, assets={"bbb": asset("bbb"), "sintel": failed})
+    aws_stubs.ddb.add_response("delete_item", {})
+
+    with pytest.raises(ToolError) as raised:
+        schedule.publish(schedule.PublishInput(plan_id=PLAN_ID), CTX)
+
+    assert raised.value.code == "PLAN_STALE"
+    assert raised.value.message == "NOT_READY: sintel is FAILED with VOD source fast-sintel, planned with fast-sintel"
+    assert not aws_stubs.calls.of("CreateProgram")
+
+
+def test_a_publish_that_fails_part_way_records_what_airs_and_says_how_to_resume(aws_stubs: SimpleNamespace) -> None:
+    previous = program("prev", NOW + 1_200_000)
+    plan = plan_of(asset("bbb"), asset("sintel"), start_ms=previous.end_ms)
+    publish_stubs(aws_stubs, plan, previous)
+    ddb, mt = aws_stubs.ddb, aws_stubs.mt
+    mt.add_response("get_channel_schedule", live(("prev", 0)), schedule_request())
+    get_item(ddb, store.ladder_key(LV), ladder().to_item())
     mt.add_response("create_program", {})
-    requests = [
-        {
-            "ChannelName": CHANNEL,
-            "ProgramName": name,
-            "SourceLocationName": "s",
-            "VodSourceName": "v",
-            "ScheduleConfiguration": {"Transition": {"Type": "RELATIVE", "RelativePosition": "AFTER_PROGRAM"}},
-        }
-        for name in ("p1", "p2")
-    ]
-    assert schedule.create_programs(requests, schedule.Pacer(0)) == ["p1"]
-    mt.add_client_error("create_program", "BadRequestException", "RelativeProgram is required.")
-    with pytest.raises(Exception, match="RelativeProgram is required"):
-        schedule.create_programs(requests[:1], schedule.Pacer(0))
+    ddb.add_response("put_item", {})  # the first program, recorded as soon as it exists
+    mt.add_client_error("create_program", "BadRequestException", "VodSource fast-sintel does not exist")
+    guide_written(aws_stubs, previous)
+    ddb.add_response("delete_item", {})  # lease
+
+    with pytest.raises(ToolError) as raised:
+        schedule.publish(schedule.PublishInput(plan_id=PLAN_ID), CTX)
+
+    error = raised.value
+    assert (error.code, error.retryable) == ("VALIDATION", False)
+    assert error.message.startswith(f"published 1 of 2 programs of {PLAN_ID}, then: BadRequestException")
+    assert error.hint == schedule.RESUME_HINT
+    _, recorded = aws_stubs.calls.of("PutItem")
+    assert recorded["Item"]["name"] == plan.programs[0].name
+    assert [o["Key"] for o in aws_stubs.calls.of("PutObject")] == ["epg/fast-demo.json", "epg/fast-demo.xml"]
+
+
+def test_a_publish_running_out_of_time_stops_resumably(aws_stubs: SimpleNamespace) -> None:
+    previous = program("prev", NOW + 1_200_000)
+    plan = plan_of(asset("bbb"), asset("sintel"), start_ms=previous.end_ms)
+    publish_stubs(aws_stubs, plan, previous)
+    ddb, mt = aws_stubs.ddb, aws_stubs.mt
+    mt.add_response("get_channel_schedule", live(("prev", 0)), schedule_request())
+    get_item(ddb, store.ladder_key(LV), ladder().to_item())
+    mt.add_response("create_program", {})
+    ddb.add_response("put_item", {})
+    guide_written(aws_stubs, previous)
+    ddb.add_response("delete_item", {})
+    ending = ToolContext(
+        tool="schedule___publish",
+        correlation_id="s",
+        invocation=SimpleNamespace(get_remaining_time_in_millis=lambda: schedule.PUBLISH_TIME_MARGIN_MS - 1),
+    )
+
+    with pytest.raises(ToolError) as raised:
+        schedule.publish(schedule.PublishInput(plan_id=PLAN_ID), ending)
+
+    assert (raised.value.code, raised.value.retryable) == ("UPSTREAM", True)
+    assert "published 1 of 2 programs" in raised.value.message and "running out of time" in raised.value.message
+    assert len(aws_stubs.calls.of("CreateProgram")) == 1
+
+
+def test_publish_succeeds_when_its_follow_up_calls_fail(aws_stubs: SimpleNamespace) -> None:
+    previous = program("prev", NOW + 1_200_000)
+    plan = plan_of(asset("bbb"), start_ms=previous.end_ms)
+    publish_stubs(aws_stubs, plan, previous)
+    ddb, mt = aws_stubs.ddb, aws_stubs.mt
+    mt.add_response("get_channel_schedule", live(("prev", 0)), schedule_request())
+    get_item(ddb, store.ladder_key(LV), ladder().to_item())
+    mt.add_response("create_program", {})
+    ddb.add_response("put_item", {})
+    guide_written(aws_stubs, previous)
+    ddb.add_response("delete_item", {})
+    aws_stubs.events.add_client_error("put_events", "ThrottlingException")
+    mt.add_client_error("list_alerts", "TooManyRequestsException", http_status_code=429)
+
+    result = schedule.publish(schedule.PublishInput(plan_id=PLAN_ID), CTX)
+
+    assert result.published == 1
+    [alert] = result.alerts
+    assert (alert.code, alert.category) == ("ALERTS_UNAVAILABLE", "INFO")
+    assert "origins___list_alerts" in alert.message
 
 
 def test_plan_after_a_program_with_its_own_break_policy(aws_stubs: SimpleNamespace) -> None:

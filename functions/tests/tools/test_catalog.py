@@ -12,8 +12,8 @@ from botocore.stub import Stubber
 from fast_channels.core.catalog import ContentItem, ContentQuery
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
-from fast_channels.functions.tools import _library_store as store
 from fast_channels.functions.tools import catalog, registry
+from fast_channels.functions.tools import library_store as store
 from fast_channels.functions.tools.registry import ToolContext, ToolError, gateway_tool_schema
 
 if TYPE_CHECKING:

@@ -11,7 +11,7 @@ import pytest
 from botocore.stub import Stubber
 
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.naming import ladder_key
+from fast_channels.core.naming import ladder_path
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 
@@ -141,7 +141,7 @@ def store() -> type[MemoryStore]:
 
 
 def _encode(sample: str, asset_id: str, ladder: Ladder = STANDARD) -> tuple[str, dict[str, bytes]]:
-    prefix = f"assets/{asset_id}/{ladder_key(ladder.version)}/"
+    prefix = f"assets/{asset_id}/{ladder_path(ladder.version)}/"
     objects = {f"{prefix}{path.name}": path.read_bytes() for path in (DATA / sample).glob("*.m3u8")}
     mpd = (DATA / "main_avc.mpd").read_bytes()
     objects |= {f"{prefix}main_{codec}.mpd": mpd for codec in ("avc", "hevc", "av1")}

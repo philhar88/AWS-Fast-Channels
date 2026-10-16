@@ -19,7 +19,7 @@ from fast_channels.core.catalog import CONTENT_ID_PATTERN, ContentItem, ContentP
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import dispatch
-from fast_channels.functions.tools._library_store import TABLE_KEYS, Item, collect, plain
+from fast_channels.functions.tools.library_store import TABLE_KEYS, Item, collect, plain
 from fast_channels.functions.tools.registry import Access, ToolContext, ToolError, tool
 
 if TYPE_CHECKING:

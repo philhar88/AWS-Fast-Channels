@@ -5,9 +5,17 @@ import os
 from dataclasses import dataclass, field, fields
 from functools import cache
 
+from fast_channels.core.naming import agent_namespace
+
 
 def _env(name: str) -> str:
     return os.environ.get(name, "")
+
+
+def _cdn_base_url() -> str:
+    """``CDN_BASE_URL`` (``https://<host>``, no trailing slash); ``CDN_DOMAIN`` is its former name, which deployments
+    also set to the URL."""
+    return (_env("CDN_BASE_URL") or _env("CDN_DOMAIN")).rstrip("/")
 
 
 def _csv(name: str) -> tuple[str, ...]:
@@ -44,11 +52,11 @@ class Settings:
     event_bus: str = field(default_factory=lambda: _env("EVENT_BUS"))
     ingest_state_machine_arn: str = field(default_factory=lambda: _env("INGEST_STATE_MACHINE_ARN"))
     provision_state_machine_arn: str = field(default_factory=lambda: _env("PROVISION_STATE_MACHINE_ARN"))
-    mediaconvert_role_arn: str = field(default_factory=lambda: _env("MEDIACONVERT_ROLE_ARN"))
     mediaconvert_queue_arn: str = field(default_factory=lambda: _env("MEDIACONVERT_QUEUE_ARN"))
     source_location: str = field(default_factory=lambda: _env("SOURCE_LOCATION"))
     content_base_url: str = field(default_factory=lambda: _env("CONTENT_BASE_URL"))
-    cdn_domain: str = field(default_factory=lambda: _env("CDN_DOMAIN"))
+    cdn_base_url: str = field(default_factory=_cdn_base_url)
+    """Base URL of the deployment's own CloudFront distribution, e.g. ``https://d111111abcdef8.cloudfront.net``."""
     cdn_endpoints: tuple[CdnEndpoint, ...] = field(default_factory=_cdn_endpoints)
     package_profiles: tuple[str, ...] = field(default_factory=lambda: _csv("PACKAGE_PROFILES"))
     default_ladder_version: str = field(default_factory=lambda: _env("DEFAULT_LADDER_VERSION"))
@@ -67,13 +75,19 @@ class Settings:
     @property
     def agent_prefix(self) -> str:
         """Name prefix reserved for agent-owned MediaTailor resources."""
-        return f"{self.prefix}-agent-"
+        return agent_namespace(self.prefix)
 
     def require(self, *names: str) -> None:
-        """Fail fast with the environment variable names that are missing."""
+        """Fail fast with the environment variable names that are missing.
+
+        Raises:
+            ValueError: a name is not a setting (a typo in the caller).
+            RuntimeError: a setting is empty because its variable is not set on this function.
+        """
         known = {f.name for f in fields(self)}
-        missing = [name.upper() for name in names if name in known and not getattr(self, name)]
-        if missing:
+        if unknown := [name for name in names if name not in known]:
+            raise ValueError(f"unknown settings {unknown}; known: {sorted(known)}")
+        if missing := [name.upper() for name in names if not getattr(self, name)]:
             raise RuntimeError(f"missing environment configuration: {', '.join(missing)}")
 
 

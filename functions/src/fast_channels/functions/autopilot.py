@@ -6,16 +6,21 @@ DescribeUserPoolClient), runs one AG-UI conversation with the AgentCore Runtime 
 ``AutopilotRun`` event with the agent's closing summary.
 
 The agent pauses before every CONFIRM tool and waits for approval. Nobody watches an autopilot run, so this function
-answers those interrupts itself: it approves ``schedule___publish`` (the only CONFIRM tool the Gateway's Cedar policy
-allows the autopilot client, SPEC §6) and declines everything else, so an unattended run never starts channels,
-creates resources or changes ladders.
+answers those interrupts itself: it approves ``schedule___publish`` of a plan for its own channel (the only CONFIRM
+tool the Gateway's Cedar policy allows the autopilot client, SPEC §6) and declines everything else, so an
+unattended run never starts channels, creates resources, changes ladders or publishes on other channels.
+
+Every invocation publishes its ``AutopilotRun`` event, ``FAILED`` included: transport, token and protocol errors
+end the conversation as failed, and every run is given only the time the invocation has left (less a margin to
+report), so a hung stream cannot outlive the Lambda timeout silently. A failed invocation then raises, for the
+asynchronous retry and the dead-letter queue.
 """
 
 import json
 import os
 import time
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cache
@@ -24,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Final, Self
 import httpx
 from aws_lambda_powertools import Logger, Metrics
 from aws_lambda_powertools.metrics import MetricUnit
+from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, Field
 
 from fast_channels.core.events import AutopilotRun, put_events_entry
@@ -42,13 +48,18 @@ SESSION_ID_MIN: Final = 33  # AgentCore Runtime session ids are 33-256 character
 MAX_RUNS: Final = 30
 """Upper bound on AG-UI runs per invocation: the first prompt plus one resume per publish approval."""
 SAFETY_MARGIN_MS: Final = 90_000
-"""Stop resuming when less than this is left of the Lambda timeout (a run can take a minute or more)."""
-TOKEN_EXPIRY_MARGIN_S: Final = 60
+"""No run starts with less than this left of the Lambda timeout (a run can take a minute or more)."""
+REPORT_MARGIN_MS: Final = 30_000
+"""Time kept back from every run to publish the AutopilotRun event and log the outcome."""
+TOKEN_EXPIRY_MARGIN_S: Final = 900
+"""A cached token must outlive a whole invocation (the Lambda timeout): the Runtime forwards it to the Gateway,
+which checks its expiry on every tool call of the run."""
 SUMMARY_MAX: Final = 2_000
 DECLINE_NOTE: Final = (
     "Autopilot runs unattended and may only publish schedules. Leave this change for an operator and continue."
 )
-_TIMEOUT: Final = httpx.Timeout(connect=10, read=300, write=30, pool=10)  # SSE events can be minutes apart
+READ_TIMEOUT_S: Final = 300.0
+"""SSE events can be minutes apart while the agent works."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +92,7 @@ def autopilot_settings() -> AutopilotSettings:
 @cache
 def http() -> httpx.Client:
     """One pooled HTTPS client per execution environment."""
-    return httpx.Client(timeout=_TIMEOUT)
+    return httpx.Client(timeout=httpx.Timeout(connect=10, read=READ_TIMEOUT_S, write=30, pool=10))
 
 
 class AutopilotRequest(BaseModel):
@@ -191,22 +202,37 @@ def sse_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
             data.append(line.removeprefix("data:").removeprefix(" "))
 
 
-def answers(approvals: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """AG-UI ``resume`` entries: publish is approved, anything else declined with a note the model reads."""
+def answers(approvals: Iterable[dict[str, Any]], *, channel: str) -> list[dict[str, Any]]:
+    """AG-UI ``resume`` entries: publishing a plan of ``channel`` is approved, anything else declined with a note
+    the model reads. Plan ids are ``<channel>.<token>`` (``tools.schedule.new_plan_id``)."""
     entries = []
     for approval in approvals:
-        approved = approval.get("tool") == APPROVED_TOOL
-        payload = {"approved": True} if approved else {"approved": False, "note": DECLINE_NOTE}
+        plan_id = str((approval.get("arguments") or {}).get("plan_id", ""))
+        approved = approval.get("tool") == APPROVED_TOOL and plan_id.rpartition(".")[0] == channel
+        payload = {"approved": True} if approved else {"approved": False, "note": _decline_note(approval, channel)}
         entries.append({"interruptId": approval["interrupt_id"], "status": "resolved", "payload": payload})
     return entries
 
 
-def run_once(
-    cfg: AutopilotSettings, *, session_id: str, channel: str, prompt: str | None, resume: list[dict[str, Any]]
-) -> RunOutcome:
-    """POST one ``RunAgentInput`` and drain its SSE stream.
+def _decline_note(approval: dict[str, Any], channel: str) -> str:
+    if approval.get("tool") == APPROVED_TOOL:
+        return f"This autopilot run may only publish plans for {channel}. Leave other channels to an operator."
+    return DECLINE_NOTE
 
-    Platform failures (401/403) also arrive as an SSE ``RUN_ERROR`` body, so the body is parsed on every status.
+
+def run_once(
+    cfg: AutopilotSettings,
+    *,
+    session_id: str,
+    channel: str,
+    prompt: str | None,
+    resume: list[dict[str, Any]],
+    budget_s: float = READ_TIMEOUT_S,
+) -> RunOutcome:
+    """POST one ``RunAgentInput`` and drain its SSE stream for at most ``budget_s`` seconds.
+
+    Platform failures (401/403) also arrive as an SSE ``RUN_ERROR`` body, so the body is parsed on every status. A
+    run still streaming when its budget is spent ends with an error; no read waits longer than the budget left.
     """
     body = {
         "threadId": session_id,
@@ -226,9 +252,14 @@ def run_once(
     if trace := os.environ.get("_X_AMZN_TRACE_ID"):
         headers["X-Amzn-Trace-Id"] = trace  # joins the Runtime's spans to this invocation's trace
     outcome = RunOutcome()
-    with http().stream("POST", cfg.runtime_invoke_url, json=body, headers=headers) as response:
+    deadline = time.monotonic() + budget_s
+    timeout = httpx.Timeout(connect=10, read=min(READ_TIMEOUT_S, budget_s), write=30, pool=10)
+    with http().stream("POST", cfg.runtime_invoke_url, json=body, headers=headers, timeout=timeout) as response:
         for event in sse_events(response.iter_lines()):
             outcome.apply(event)
+            if time.monotonic() > deadline and not outcome.finished:
+                outcome.error = f"the run was still going after {budget_s:.0f} s, all the time this invocation had"
+                break
         if response.status_code != httpx.codes.OK and outcome.error is None:
             outcome.error = f"HTTP {response.status_code}"
     return outcome
@@ -248,32 +279,64 @@ class Conversation:
 def converse(
     cfg: AutopilotSettings, request: AutopilotRequest, *, session_id: str, context: LambdaContext
 ) -> Conversation:
-    """Prompt the agent, then answer its approval interrupts until it finishes, fails or time runs out."""
+    """Prompt the agent, then answer its approval interrupts until it finishes, fails or time runs out.
+
+    Never raises: a failure of any kind ends the conversation with ``error`` set, keeping what it achieved.
+    """
     result = Conversation()
     prompt: str | None = prompt_for(request)
     resume: list[dict[str, Any]] = []
+    pending = 0
     while True:
-        outcome = run_once(cfg, session_id=session_id, channel=request.channel, prompt=prompt, resume=resume)
+        if (left_ms := context.get_remaining_time_in_millis()) < SAFETY_MARGIN_MS:
+            waiting = f", {pending} approvals pending" if pending else ""
+            result.error = (
+                f"stopped after {result.runs} runs with {left_ms / 1000:.0f} s of the invocation left{waiting}"
+            )
+            return result
+        outcome = _reported(
+            run_once,
+            cfg,
+            session_id=session_id,
+            channel=request.channel,
+            prompt=prompt,
+            resume=resume,
+            budget_s=(left_ms - REPORT_MARGIN_MS) / 1000,
+        )
         result.runs += 1
         result.tools += outcome.tools
         result.summary = outcome.summary or result.summary
         if outcome.error or not outcome.finished:
             result.error = outcome.error or "the run ended without RUN_FINISHED"
             return result
-        if not outcome.approvals:
+        if not (pending := len(outcome.approvals)):
             return result
-        if result.runs >= MAX_RUNS or context.get_remaining_time_in_millis() < SAFETY_MARGIN_MS:
-            result.error = f"stopped after {result.runs} runs with {len(outcome.approvals)} approvals pending"
+        if result.runs >= MAX_RUNS:
+            result.error = f"stopped after {result.runs} runs with {pending} approvals pending"
             return result
-        resume = answers(outcome.approvals)
+        resume = answers(outcome.approvals, channel=request.channel)
         result.publishes_approved += sum(entry["payload"]["approved"] for entry in resume)
         prompt = None
 
 
+def _reported[**P](run: Callable[P, RunOutcome], *args: P.args, **kwargs: P.kwargs) -> RunOutcome:
+    """``run(...)``, with a transport, token or protocol failure (httpx, Cognito, malformed SSE) as its error."""
+    try:
+        return run(*args, **kwargs)
+    except Exception as error:  # every failure must still be reported as a FAILED run
+        logger.exception("autopilot run failed")
+        return RunOutcome(error=f"{type(error).__name__}: {error}")
+
+
 def _emit(detail: AutopilotRun) -> None:
+    """Publish the run's event; a failure to do so is logged, and the invocation's own outcome stands."""
     cfg = settings()
     entry = put_events_entry(detail, prefix=cfg.prefix, event_bus=cfg.event_bus)
-    response = client("events").put_events(Entries=[entry])
+    try:
+        response = client("events").put_events(Entries=[entry])
+    except ClientError, BotoCoreError:
+        logger.exception("AutopilotRun event not sent")
+        return
     if response.get("FailedEntryCount"):
         logger.error("AutopilotRun event rejected", extra={"entries": response.get("Entries")})
 
@@ -291,7 +354,11 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     logger.set_correlation_id(session_id)
     logger.append_keys(channel=request.channel)
 
-    result = converse(autopilot_settings(), request, session_id=session_id, context=context)
+    try:
+        result = converse(autopilot_settings(), request, session_id=session_id, context=context)
+    except Exception as error:  # e.g. missing configuration: still report the run as FAILED
+        logger.exception("autopilot could not run")
+        result = Conversation(error=f"{type(error).__name__}: {error}")
     status = "FAILED" if result.error else "SUCCEEDED"
     summary = (result.error + "\n" if result.error else "") + result.summary
     detail = AutopilotRun(channel=request.channel, status=status, session_id=session_id, summary=summary[:SUMMARY_MAX])

@@ -6,7 +6,7 @@ from botocore.stub import ANY
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import ladder_signature, parse_multivariant
 from fast_channels.core.mp4 import AV1C_PATH, find_boxes
-from fast_channels.core.naming import creative_id, ladder_key
+from fast_channels.core.naming import creative_id, ladder_path
 from fast_channels.functions.ingest import finalize
 from fast_channels.functions.ingest.finalize import InvalidOutputsError, child_uris, duration_ms, with_base_url
 
@@ -56,7 +56,7 @@ def test_slate_is_verified_and_fixed_up(store: Any, encode: Any) -> None:
         "asset_id": "break-15-1a2b3c",
         "ladder_version": STANDARD.version,
         "kind": "slate",
-        "vod_source": f"break-15-1a2b3c-{ladder_key(STANDARD.version)}",
+        "vod_source": f"break-15-1a2b3c-{ladder_path(STANDARD.version)}",
         "output_prefix": prefix,
         "profiles": list(PROFILES),
         "correlation_id": "break-15-1a2b3c-run",
@@ -134,7 +134,7 @@ def test_ad_gets_an_sgai_ready_copy(store: Any, encode: Any) -> None:
     result = run(s, asset("ad", "house-ad-2-1a2b3c", prefix))
 
     creative = creative_id("house-ad-2-1a2b3c", STANDARD.version, CONTENT_BASE)
-    ads = f"ads/{ladder_key(STANDARD.version)}/{creative}/"
+    ads = f"ads/{ladder_path(STANDARD.version)}/{creative}/"
     assert result.registrations == []
     assert result.creative == finalize.Creative(
         creative_id=creative,

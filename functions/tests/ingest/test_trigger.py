@@ -117,14 +117,67 @@ def test_ingest_requested_without_correlation_id_is_named_after_the_event(stubs:
     trigger.handler(requested(detail), lambda_context)
 
 
+def described(name: str, started: datetime, request: dict[str, Any], status: str = "RUNNING") -> dict[str, Any]:
+    return {
+        "executionArn": f"{MACHINE.replace(':stateMachine:', ':execution:')}:{name}",
+        "stateMachineArn": MACHINE,
+        "status": status,
+        "startDate": started,
+        "input": IngestRequest.model_validate(request).model_dump_json(exclude_none=True),
+    }
+
+
+REQUEST = {"source_uri": SOURCE, "ladder_version": STANDARD.version, "correlation_id": "c-1"}
+EXECUTION = {"executionArn": f"{MACHINE.replace(':stateMachine:', ':execution:')}:c-1"}
+
+
 def test_redelivered_event_is_ignored(stubs: Any, lambda_context: Any) -> None:
     stubs["stepfunctions"].add_client_error("start_execution", "ExecutionAlreadyExists")
+    started = datetime(2026, 10, 16, 12, 0, 0, 700_000, tzinfo=UTC)  # this event (12:00:00.4) started it
+    stubs["stepfunctions"].add_response("describe_execution", described("c-1", started, REQUEST), EXECUTION)
 
-    result = trigger.handler(
-        requested({"source_uri": SOURCE, "ladder_version": STANDARD.version, "correlation_id": "c-1"}), lambda_context
-    )
+    result = trigger.handler({**requested(REQUEST), "time": "2026-10-16T12:00:00Z"}, lambda_context)
 
     assert result == {"status": "DUPLICATE", "correlation_id": "c-1"}
+
+
+@pytest.mark.parametrize("status", ["RUNNING", "SUCCEEDED"])
+def test_a_new_request_reusing_a_correlation_id_is_reported(
+    stubs: Any, expect_event: Any, lambda_context: Any, status: str
+) -> None:
+    # A CMS re-sends Ingest Requested with the same id after fixing its source: the execution predates the event.
+    stubs["stepfunctions"].add_client_error("start_execution", "ExecutionAlreadyExists")
+    started = datetime(2026, 10, 16, 11, 0, tzinfo=UTC)
+    stubs["stepfunctions"].add_response("describe_execution", described("c-1", started, REQUEST, status), EXECUTION)
+    expect_event(
+        "Asset Failed",
+        asset_id=asset_id_for(SOURCE),
+        error="DuplicateCorrelationId",
+        correlation_id="c-1",
+        cause=lambda cause: (
+            f"already exists ({status}, started 2026-10-16T11:00:00Z)" in cause and "new correlation_id" in cause
+        ),
+    )
+
+    result = trigger.handler({**requested(REQUEST), "time": "2026-10-16T12:00:00Z"}, lambda_context)
+
+    assert result == {"status": "REJECTED", "correlation_id": "c-1"}
+
+
+def test_without_an_event_time_only_an_identical_request_is_a_redelivery() -> None:
+    request = IngestRequest.model_validate(REQUEST)
+    execution = described("c-1", datetime(2026, 10, 16, tzinfo=UTC), REQUEST)
+    other = request.model_copy(update={"cue_points_ms": [60_000]})
+
+    assert trigger.redelivered({}, execution, request)
+    assert not trigger.redelivered({}, execution, other)
+
+
+def test_an_execution_it_cannot_describe_is_taken_for_a_redelivery(stubs: Any, lambda_context: Any) -> None:
+    stubs["stepfunctions"].add_client_error("start_execution", "ExecutionAlreadyExists")
+    stubs["stepfunctions"].add_client_error("describe_execution", "AccessDeniedException", http_status_code=400)
+
+    assert trigger.handler(requested(REQUEST), lambda_context)["status"] == "DUPLICATE"
 
 
 def test_invalid_sidecar_is_rejected_as_asset_failed(stubs: Any, expect_event: Any, lambda_context: Any) -> None:
