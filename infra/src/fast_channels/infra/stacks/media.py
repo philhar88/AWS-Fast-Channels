@@ -3,9 +3,13 @@
 Skeleton: the constructs of CONTRACTS §F are added at the integration points below, in this order.
 """
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from aws_cdk import Stack
+from aws_cdk import aws_cloudfront as cloudfront
+from aws_cdk import aws_events as events
+from aws_cdk import aws_stepfunctions as sfn
 
 from fast_channels.infra import nag
 
@@ -14,6 +18,46 @@ if TYPE_CHECKING:
 
     from fast_channels.infra.config import FastChannelsConfig
     from fast_channels.infra.stacks.data import DataExports
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelExports:
+    """An IaC linear channel and its per-channel MediaTailor playback configuration."""
+
+    name: str
+    arn: str
+    ladder_version: str
+    outputs: tuple[str, ...]
+    """Channel output (= source group = rendition profile) names, e.g. ``("hls", "hls-avc", "dash-avc")``."""
+    playback_configuration_name: str
+    hls_prefix: str
+    """``HlsConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
+    dash_prefix: str
+    """``DashConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
+
+
+@dataclass(frozen=True, slots=True)
+class MediaExports:
+    """What the operator plane consumes from the media plane (set as ``MediaStack.exports``)."""
+
+    distribution: cloudfront.IDistribution
+    cdn_base_url: str
+    """``https://<CloudFront domain>`` (or the custom domain), no trailing slash."""
+    content_base_url: str
+    """CDN-neutral base URL of content and ad segments (``delivery.content_domain`` or ``cdn_base_url``)."""
+    event_bus: events.IEventBus
+    ingest_state_machine: sfn.IStateMachine
+    ladder_provisioner: sfn.IStateMachine
+    mediaconvert_role_arn: str
+    mediaconvert_queue_arn: str
+    source_location_name: str
+    default_ladder_version: str
+    channels: tuple[ChannelExports, ...]
+    playback_configuration_template: str
+    """JSON of the shared playback-configuration settings that agent-created channels reuse
+    (``core.specs.playback_configuration`` inputs other than the channel-specific ones)."""
+    mediatailor_log_destination_arn: str
+    """Vended-logs delivery destination that agent-created playback configurations deliver to."""
 
 
 class MediaStack(Stack):
