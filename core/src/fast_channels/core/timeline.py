@@ -125,18 +125,18 @@ class Grid(BaseModel):
         """Duration of exactly ``n`` GOPs, computed from frames so it never accumulates rounding drift."""
         return self.frame_rate.frames_to_ms(n * self.gop_frames)
 
-    def gop_index(self, ms: Millis) -> int:
-        """Index of the GOP boundary nearest to ``ms``."""
+    def segment_index(self, ms: Millis) -> int:
+        """Index of the segment boundary nearest to ``ms``."""
         rate = self.frame_rate
-        return round(Fraction(ms * rate.numerator, 1000 * rate.denominator * self.gop_frames))
+        return round(Fraction(ms * rate.numerator, 1000 * rate.denominator * self.gop_frames * self.segment_gops))
 
-    def snap_to_gop(self, ms: Millis) -> Millis:
-        """``ms`` moved to the nearest GOP boundary.
+    def snap_to_segment(self, ms: Millis) -> Millis:
+        """``ms`` moved to the nearest segment boundary.
 
-        Off-grid ESAM points split AVC/HEVC but not AV1 or audio, which truncates the DASH MPD, so every cue point
-        is snapped before it reaches MediaConvert or Channel Assembly (mediaconvert.md §8.3).
+        Encodes stay on MediaConvert's Basic tier, which has no ESAM, so the only boundaries every variant shares are
+        the segment grid's; editorial cue points are snapped to it before they reach Channel Assembly.
         """
-        return self.gop_exact(self.gop_index(ms))
+        return self.gop_exact(self.segment_index(ms) * self.segment_gops)
 
 
 class BreakPolicy(BaseModel):

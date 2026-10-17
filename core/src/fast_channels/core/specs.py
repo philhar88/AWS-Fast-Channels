@@ -14,19 +14,13 @@ from xml.sax.saxutils import escape, quoteattr
 from pydantic import BaseModel, Field
 
 from fast_channels.core.naming import ladder_path
-from fast_channels.core.profiles import ManifestFormat, RenditionProfile, profile
 
 if TYPE_CHECKING:
+    from fast_channels.core.profiles import RenditionProfile
     from fast_channels.core.timeline import Plan, PlannedProgram
 
-MANIFEST_WINDOW_SECONDS: Final = 60  # verified HLS and DASH; keeps multi-period MPDs small (_review.md, DASH)
+MANIFEST_WINDOW_SECONDS: Final = 60
 _HLS_SETTINGS: Final = {"ManifestWindowSeconds": MANIFEST_WINDOW_SECONDS, "AdMarkupType": ["DATERANGE"]}
-_DASH_SETTINGS: Final = {
-    "ManifestWindowSeconds": MANIFEST_WINDOW_SECONDS,
-    "MinBufferTimeSeconds": 12,
-    "MinUpdatePeriodSeconds": 6,
-    "SuggestedPresentationDelaySeconds": 18,
-}
 UPID_TYPE_MPU: Final = 12  # SegmentationUpidType 0x0C
 PLACEMENT_OPPORTUNITY_START: Final = 52  # SegmentationTypeId 0x34
 QUARTILE_EVENTS: Final = ("start", "firstQuartile", "midpoint", "thirdQuartile", "complete")
@@ -71,17 +65,10 @@ ADS_VARIABLES: Final[frozenset[str]] = frozenset(
 
 
 def channel_outputs(profiles: Sequence[RenditionProfile]) -> list[dict[str, Any]]:
-    """Channel ``Outputs``: one per profile, ManifestName = SourceGroup = profile name; HLS uses DATERANGE."""
+    """Channel ``Outputs``: one HLS output per profile, ManifestName = SourceGroup = profile name, DATERANGE markup
+    (SGAI needs it)."""
     return [
-        {
-            "ManifestName": p.name,
-            "SourceGroup": p.name,
-            **(
-                {"HlsPlaylistSettings": deepcopy(_HLS_SETTINGS)}
-                if p.format is ManifestFormat.HLS
-                else {"DashPlaylistSettings": deepcopy(_DASH_SETTINGS)}
-            ),
-        }
+        {"ManifestName": p.name, "SourceGroup": p.name, "HlsPlaylistSettings": deepcopy(_HLS_SETTINGS)}
         for p in profiles
     ]
 
@@ -89,7 +76,7 @@ def channel_outputs(profiles: Sequence[RenditionProfile]) -> list[dict[str, Any]
 def http_package_configurations(asset_prefix: str, profiles: Sequence[RenditionProfile]) -> list[dict[str, str]]:
     """VOD source ``HttpPackageConfigurations``; Paths are relative to the source location's BaseUrl."""
     base = asset_prefix.strip("/")
-    return [{"Path": f"/{p.manifest_key(base)}", "SourceGroup": p.name, "Type": p.format.value} for p in profiles]
+    return [{"Path": f"/{p.manifest_key(base)}", "SourceGroup": p.name, "Type": "HLS"} for p in profiles]
 
 
 def ad_breaks(
@@ -212,8 +199,6 @@ def playback_configuration(
         "AdDecisionServerUrl": validate_ads_url(ads_url),
         "InsertionMode": "PLAYER_SELECT",
         "CdnConfiguration": {"AdSegmentUrlPrefix": content_base_url, "ContentSegmentUrlPrefix": content_base_url},
-        # MpdLocation DISABLED keeps DASH players on the CDN instead of a Location element pointing at MediaTailor.
-        "DashConfiguration": {"MpdLocation": "DISABLED", "OriginManifestType": "MULTI_PERIOD"},
         "AdConditioningConfiguration": {"StreamingMediaFileConditioning": "NONE"},
         "PersonalizationThresholdSeconds": 5,
         # The three timeouts must be set together or PutPlaybackConfiguration fails (e2e.md §8 item 1).
@@ -293,7 +278,6 @@ class Creative(BaseModel):
     creative_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     duration_ms: int = Field(gt=0)
     hls_uri: str = Field(description="Absolute multivariant of the SGAI-ready (absolute segment URI) copy.")
-    dash_uri: str = Field(description="Absolute per-codec MPD.")
     width: int = 1920
     height: int = 1080
 
@@ -324,8 +308,6 @@ def _ad(sequence: int, c: Creative, beacon: str) -> str:
         f"<MediaFiles>"
         f'<MediaFile id={quoteattr(f"{c.creative_id}-hls")} delivery="streaming" type="application/x-mpegURL" '
         f"{size}>{_cdata(c.hls_uri)}</MediaFile>"
-        f'<MediaFile id={quoteattr(f"{c.creative_id}-dash")} delivery="streaming" type="application/dash+xml" '
-        f"{size}>{_cdata(c.dash_uri)}</MediaFile>"
         f"</MediaFiles></Linear></Creative></Creatives></InLine></Ad>"
     )
 
@@ -337,7 +319,7 @@ def vast_pod(
     fill_ms: int = 0,
     beacon_path: str = "/ads/b.gif",
 ) -> str:
-    """Static VAST 4.2 pod of preconditioned creatives (streaming HLS + DASH only).
+    """Static VAST 4.2 pod of preconditioned creatives (streaming HLS only).
 
     The creatives repeat in order until the pod lasts at least ``fill_ms`` (the longest break), because MediaTailor
     fills an avail with the pod's ads in sequence and drops the avail when too much of it would stay unfilled.
@@ -356,21 +338,15 @@ def vast_pod(
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<VAST version="4.2" xmlns="http://www.iab.com/VAST">{ads}</VAST>\n'
 
 
-def playback_urls(
-    *, cdn_base: str, playback_prefix_hls: str, playback_prefix_dash: str, outputs: Sequence[str]
-) -> dict[str, dict[str, str]]:
-    """Viewer URLs per channel output, through the CDN.
+def playback_urls(*, cdn_base: str, playback_prefix_hls: str, outputs: Sequence[str]) -> dict[str, dict[str, str]]:
+    """Viewer URLs per channel output, through the CDN: ``ssai`` and ``sgai`` (``?aws.insertionMode=GUIDED``).
 
-    HLS outputs get ``ssai`` and ``sgai`` (``?aws.insertionMode=GUIDED``; SGAI is HLS-only) URLs; DASH outputs a
-    ``dash`` URL. The prefixes are the playback configuration's HLS/DASH ``ManifestEndpointPrefix``.
+    ``playback_prefix_hls`` is the playback configuration's HLS ``ManifestEndpointPrefix``.
     """
     cdn = cdn_base.rstrip("/")
-    hls_path, dash_path = (urlsplit(prefix).path.rstrip("/") for prefix in (playback_prefix_hls, playback_prefix_dash))
+    hls_path = urlsplit(playback_prefix_hls).path.rstrip("/")
     urls: dict[str, dict[str, str]] = {}
     for output in outputs:
-        if profile(output).format is ManifestFormat.HLS:
-            ssai = f"{cdn}{hls_path}/{output}.m3u8"
-            urls[output] = {"ssai": ssai, "sgai": f"{ssai}?aws.insertionMode=GUIDED"}
-        else:
-            urls[output] = {"dash": f"{cdn}{dash_path}/{output}.mpd"}
+        ssai = f"{cdn}{hls_path}/{output}.m3u8"
+        urls[output] = {"ssai": ssai, "sgai": f"{ssai}?aws.insertionMode=GUIDED"}
     return urls

@@ -1,194 +1,38 @@
-# STANDARD: the default FAST ladder (ladders.md §4.2, capped at 1080p).
-# AVC 8 + HEVC Main 4 + AV1 10-bit 4 rungs, HE-AACv2/HE-AAC/AAC-LC, 29.97 fps, 2 s GOP, 6 s segments.
-# Order is multivariant order: the ~2 Mbit/s AVC 720p rung first (Apple HLS 1.32), AVC descending, HEVC, AV1.
+# STANDARD: the default FAST ladder. Plain HLS: H.264 High 8-bit with AAC-LC 128 kbit/s stereo muxed into every
+# variant's MPEG-TS segments, 29.97 fps, 2 s GOP, 6 s segments, MediaConvert Basic tier.
+# Order is multivariant order: the 720p rung first, so players start mid-ladder, then 1080p and 360p.
 # QVBR level / max_kbps are the MediaConvert inputs; hrd_kbps = max_kbps on rungs <= 432p holds peaks at the cap.
 
 id = "standard"
-description = "AVC + HEVC + AV1 up to 1080p, 29.97 fps"
+description = "AVC + AAC-LC muxed in MPEG-TS, up to 1080p, 29.97 fps"
 frame_rate = "29.97"
 gop_seconds = 2
 segment_seconds = 6
 
 [options]
-iframe_playlists = false
-loudness_lkfs = -24.0
-acceleration = "PREFERRED"
-film_grain = false
 allow_frame_rate_conversion = false
 
-# --- AVC (H.264 High, 8-bit, avc1) ---------------------------------------------------------------------------
-[[video]]  # A5: default variant
-name = "avc-720p-a"
-codec = "avc"
+[audio]
+kbps = 128
+
+[[video]]  # start-up variant
+name = "avc-720p"
 width = 1280
 height = 720
 qvbr = 7
 max_kbps = 3400
-audio_group = "aac-lc-128"
 
-[[video]]  # A8: second 1080p rung (Apple 9.10)
-name = "avc-1080p-b"
-codec = "avc"
-width = 1920
-height = 1080
-qvbr = 9
-max_kbps = 9000
-audio_group = "aac-lc-128"
-
-[[video]]  # A7
-name = "avc-1080p-a"
-codec = "avc"
+[[video]]
+name = "avc-1080p"
 width = 1920
 height = 1080
 qvbr = 8
-max_kbps = 7000
-audio_group = "aac-lc-128"
+max_kbps = 6000
 
-[[video]]  # A6
-name = "avc-720p-b"
-codec = "avc"
-width = 1280
-height = 720
-qvbr = 8
-max_kbps = 5000
-audio_group = "aac-lc-128"
-
-[[video]]  # A4
-name = "avc-540p"
-codec = "avc"
-width = 960
-height = 540
-qvbr = 7
-max_kbps = 2200
-audio_group = "aac-lc-128"
-
-[[video]]  # A3
-name = "avc-432p"
-codec = "avc"
-width = 768
-height = 432
-qvbr = 7
-max_kbps = 1100
-hrd_kbps = 1100
-audio_group = "aac-he1-64"
-
-[[video]]  # A2
+[[video]]
 name = "avc-360p"
-codec = "avc"
 width = 640
 height = 360
 qvbr = 6
-max_kbps = 600
-hrd_kbps = 600
-audio_group = "aac-he1-64"
-
-[[video]]  # A1: iOS cellular floor, BANDWIDTH <= 192 kbit/s
-name = "avc-234p"
-codec = "avc"
-width = 416
-height = 234
-qvbr = 6
-max_kbps = 120
-hrd_kbps = 120
-audio_group = "aac-he2-32"
-
-# --- HEVC (Main 8-bit, hvc1) ---------------------------------------------------------------------------------
-[[video]]  # H4
-name = "hevc-1080p"
-codec = "hevc"
-width = 1920
-height = 1080
-qvbr = 8
-max_kbps = 5500
-audio_group = "aac-lc-128"
-
-[[video]]  # H3
-name = "hevc-720p"
-codec = "hevc"
-width = 1280
-height = 720
-qvbr = 7
-max_kbps = 2800
-audio_group = "aac-lc-128"
-
-[[video]]  # H2
-name = "hevc-540p"
-codec = "hevc"
-width = 960
-height = 540
-qvbr = 7
-max_kbps = 1400
-audio_group = "aac-lc-128"
-
-[[video]]  # H1: keeps the HEVC ladder's lowest BANDWIDTH <= 500 kbit/s for hls.js
-name = "hevc-360p"
-codec = "hevc"
-width = 640
-height = 360
-qvbr = 6
-max_kbps = 330
-hrd_kbps = 330
-audio_group = "aac-he1-64"
-
-# --- AV1 (Main, 10-bit, av01): one QVBR step below HEVC at >= 1080p -----------------------------------------------
-[[video]]  # V4
-name = "av1-1080p"
-codec = "av1"
-width = 1920
-height = 1080
-qvbr = 7
-max_kbps = 3500
-audio_group = "aac-lc-128"
-bit_depth = 10
-
-[[video]]  # V3
-name = "av1-720p"
-codec = "av1"
-width = 1280
-height = 720
-qvbr = 7
-max_kbps = 2000
-audio_group = "aac-lc-128"
-bit_depth = 10
-
-[[video]]  # V2
-name = "av1-540p"
-codec = "av1"
-width = 960
-height = 540
-qvbr = 7
-max_kbps = 1000
-audio_group = "aac-lc-128"
-bit_depth = 10
-
-[[video]]  # V1
-name = "av1-360p"
-codec = "av1"
-width = 640
-height = 360
-qvbr = 6
-max_kbps = 300
-audio_group = "aac-he1-64"
-bit_depth = 10
-
-# --- Audio (AAC stereo 48 kHz CBR) ---------------------------------------------------------------------------
-[[audio]]
-group_id = "aac-lc-128"
-profile = "lc"
-kbps = 128
-
-[[audio]]
-group_id = "aac-he1-64"
-profile = "he1"
-kbps = 64
-
-[[audio]]
-group_id = "aac-he2-32"
-profile = "he2"
-kbps = 32
-
-# --- Captions (IMSC1 text in the CMAF group; every asset carries every track, empty when it has no captions) ----
-[[captions]]
-language = "en"
-label = "English"
-kind = "captions"
+max_kbps = 800
+hrd_kbps = 800

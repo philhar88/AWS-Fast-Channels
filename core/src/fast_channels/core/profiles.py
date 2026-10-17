@@ -1,73 +1,37 @@
-"""Rendition profiles: named subsets of a ladder, each written as its own manifest by the same encode.
+"""Rendition profiles: the manifests an encode offers Channel Assembly, one package configuration each.
 
-Every encode writes the full catalogue as MediaConvert ``AdditionalManifests`` (free: segments are shared,
-ladders.md §3.7), so enabling a profile later never needs a re-encode. MediaConvert writes an HLS *and* a DASH
-manifest per additional manifest, so ``hls-avc`` and ``dash-avc`` share one ``main_avc`` stem.
-The combined ``main.mpd`` is never used: it mixes every codec in one AdaptationSet (ladders.md §3.3).
+An encode writes one HLS multivariant playlist, ``main.m3u8``, with every variant of the ladder; that is the only
+profile, ``hls``. The catalogue stays a list so a deployment names the profiles it registers (``package_profiles``)
+and a channel the outputs it serves.
 """
 
-from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from fast_channels.core.ladder import Ladder, VideoCodec, VideoRendition
+if TYPE_CHECKING:
+    from fast_channels.core.ladder import Ladder
 
 MANIFEST_BASE: Final = "main"
-"""File name of the output group's own manifests; MediaConvert appends NameModifiers to it."""
-
-
-class ManifestFormat(StrEnum):
-    HLS = "HLS"
-    DASH = "DASH"
+"""File name of the output group's own manifest; MediaConvert appends NameModifiers to it for media playlists."""
 
 
 class RenditionProfile(BaseModel):
-    """A named rendition subset: codecs (``None`` = all) within a height range, in one manifest format."""
+    """A named manifest of an encode."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
-    format: ManifestFormat
-    codecs: frozenset[VideoCodec] | None = None
-    min_height: int = 0
-    max_height: int = 100_000
-
-    @property
-    def manifest_suffix(self) -> str:
-        """ManifestNameModifier: ``""`` for ``hls`` (the group's own ``main``), else ``_`` + name sans format."""
-        _, _, selection = self.name.partition("-")
-        return f"_{selection}" if selection else ""
-
-    @property
-    def extension(self) -> str:
-        return ".m3u8" if self.format is ManifestFormat.HLS else ".mpd"
-
-    def selects(self, r: VideoRendition) -> bool:
-        """Whether rendition ``r`` belongs to this profile."""
-        return (self.codecs is None or r.codec in self.codecs) and self.min_height <= r.height <= self.max_height
 
     def manifest_key(self, base: str) -> str:
-        """Key of this profile's manifest under an asset prefix: ``<base>/main_avc.m3u8``."""
-        return f"{base.rstrip('/')}/{MANIFEST_BASE}{self.manifest_suffix}{self.extension}"
+        """Key of this profile's manifest under an asset prefix: ``<base>/main.m3u8``."""
+        return f"{base.rstrip('/')}/{MANIFEST_BASE}.m3u8"
 
 
-def _single(codec: VideoCodec, fmt: ManifestFormat) -> RenditionProfile:
-    return RenditionProfile(name=f"{fmt.lower()}-{codec}", format=fmt, codecs=frozenset({codec}))
+CATALOGUE: Final[tuple[RenditionProfile, ...]] = (RenditionProfile(name="hls"),)
 
-
-CATALOGUE: Final[tuple[RenditionProfile, ...]] = (
-    RenditionProfile(name="hls", format=ManifestFormat.HLS),
-    *(_single(codec, ManifestFormat.HLS) for codec in VideoCodec),
-    RenditionProfile(name="hls-sd", format=ManifestFormat.HLS, max_height=576),
-    RenditionProfile(name="hls-hd", format=ManifestFormat.HLS, min_height=720, max_height=1080),
-    RenditionProfile(name="hls-uhd", format=ManifestFormat.HLS, min_height=1440),
-    *(_single(codec, ManifestFormat.DASH) for codec in VideoCodec),
-)
-"""hls (all codecs), hls-avc, hls-hevc, hls-av1, hls-sd, hls-hd, hls-uhd, dash-avc, dash-hevc, dash-av1."""
-
-DEFAULT_PACKAGE_PROFILES: Final[tuple[str, ...]] = ("hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc")
-"""Channel Assembly package configurations registered on every VOD source (quota: 5 per source)."""
+DEFAULT_PACKAGE_PROFILES: Final[tuple[str, ...]] = ("hls",)
+"""Channel Assembly package configurations registered on every VOD source."""
 
 _BY_NAME: Final = {p.name: p for p in CATALOGUE}
 
@@ -81,21 +45,5 @@ def profile(name: str) -> RenditionProfile:
 
 
 def applicable(ladder: Ladder) -> list[RenditionProfile]:
-    """Catalogue profiles that select at least one of the ladder's renditions (e.g. no ``hls-uhd`` below 1440p)."""
-    return [p for p in CATALOGUE if any(p.selects(r) for r in ladder.video)]
-
-
-def selected_outputs(ladder: Ladder, p: RenditionProfile) -> list[str]:
-    """NameModifiers of the profile's video outputs, the audio outputs those use and every caption output, in ladder
-    order.
-
-    Every profile carries every caption track: MediaConvert writes ``SUBTITLES`` and ``stpp`` into every variant
-    of every additional manifest, so a manifest without the tracks would reference a group it lacks.
-    """
-    video = [r for r in ladder.video if p.selects(r)]
-    groups = {r.audio_group for r in video}
-    return [
-        *(r.name_modifier for r in video),
-        *(a.name_modifier for a in ladder.audio if a.group_id in groups),
-        *(c.name_modifier for c in ladder.captions),
-    ]
+    """Catalogue profiles an encode of ``ladder`` writes."""
+    return list(CATALOGUE)
