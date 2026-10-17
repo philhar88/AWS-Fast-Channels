@@ -264,6 +264,16 @@ The audio is muxed into each variant's output, so it adds no output of its own. 
 replaced cost about $0.56 per content minute on the Professional tier
 ([ADR-0016](adr/0016-plain-hls-ts-avc-aac-basic-tier.md)).
 
+Encode times measured on the demo stage (Basic tier, no acceleration, 2026-10-17):
+
+| Title | Length | Encode time |
+|---|---|---|
+| Sintel | 14:48 | 3 min 18 s |
+| Tears of Steel | 12:14 | 4 min 33 s |
+| Elephants Dream | 10:54 | 4 min 11 s |
+| Sintel trailer | 0:52 | 15 s |
+| Kit items (slates, house ads) | 30–120 s each | 10–41 s each |
+
 AVC on the Basic tier, per output minute:
 
 | Frame rate | SD (< 720 lines) | HD (720–1080 lines) |
