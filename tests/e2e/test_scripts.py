@@ -226,8 +226,9 @@ def test_the_plan_prices_only_what_is_encoded(stubbed: Any, capsys: pytest.Captu
     total = seed.print_plan(titles, STANDARD)
     assert total == pytest.approx(encode_cost(STANDARD, 52_000))
     lines = capsys.readouterr().out.splitlines()
-    assert "skipped" in lines[1] and lines[1].startswith("sintel ")
-    assert lines[2].split()[1:] == ["0:52", "-", f"${total:.2f}"]
+    assert lines[1].split()[2:] == ["READY", "PROFESSIONAL", "skipped"]  # Sintel's cue points need ESAM
+    assert lines[1].startswith("sintel ")
+    assert lines[2].split()[1:] == ["0:52", "-", "BASIC", f"${total:.2f}"]
 
 
 def test_mezzanines_are_uploaded_after_their_sidecar(stubbed: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -21,19 +21,24 @@ before any S3 glob.
 | # | Path | Origin | Cache policy | Origin request policy | Response headers | Compress | Methods | Purpose |
 |---|---|---|---|---|---|---|---|---|
 | 1 | `/tm/*` | mediatailor-segments | Managed-CachingOptimizedForUncompressedObjects | none (cache key only) | media | no | read | Ad segments MediaTailor transcoded (external VAST creatives) |
-| 2 | `/v1/manifest/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-AllViewerAndCloudFrontHeaders-2022-06 | preflight | yes | read | SSAI HLS media playlists (per session, gzip) |
-| 3 | `/v1/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-Elemental-MediaTailor-PersonalizedManifests | preflight | yes | all | Session start (/v1/master, POST /v1/session), tracking, ad segment redirects (/v1/segment) |
-| 4 | `*` (default) | media | Managed-CachingOptimizedForUncompressedObjects | Managed-CORS-S3Origin | media | no | read | MPEG-TS content and preconditioned ad segments; ad manifest copies, VAST pods and beacons (/ads); EPG feeds (/epg); content manifests under /assets are denied by the bucket policy |
+| 2 | `/v1/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-AllViewerAndCloudFrontHeaders-2022-06 | preflight | yes | all | SSAI sessions: multivariant (/v1/master), media playlists (/v1/manifest, gzip), POST /v1/session, tracking, ad segment redirects (/v1/segment) |
+| 3 | `*` (default) | media | Managed-CachingOptimizedForUncompressedObjects | Managed-CORS-S3Origin | media | no | read | MPEG-TS content and preconditioned ad segments; ad manifest copies, VAST pods and beacons (/ads); EPG feeds (/epg); content manifests under /assets are denied by the bucket policy |
 
-"read" is `GET`, `HEAD`, `OPTIONS`; "all" adds the methods MediaTailor's explicit session start (`POST`) needs. Every
-route was confirmed live through the `cache-behavior-path-pattern` field of the access logs, including gzip on
-`/v1/manifest/*`.
+"read" is `GET`, `HEAD`, `OPTIONS`; "all" adds the methods MediaTailor's explicit session start (`POST`) needs. The
+table is MediaTailor's
+[production CloudFront configuration](https://docs.aws.amazon.com/mediatailor/latest/ug/cf-comprehensive-configuration.html)
+without its SGAI route (`/v1/i-media/*`); MediaTailor's server-side beacon redirects are `/v1/segment/*` requests,
+which route 2 covers. Every route was confirmed live through the `cache-behavior-path-pattern` field of the access
+logs, including gzip on the media playlists.
 
 Rules behind the table:
 
-- **Never forward the viewer `Host` to S3 or Channel Assembly.** The default route forwards only the CORS headers;
-  route 3 uses MediaTailor's managed policy, which forwards `User-Agent` and `X-Forwarded-For` (ad targeting) and all
-  query strings (ADS variables, `aws.*` session options), but not `Host`.
+- **Forward every viewer header to MediaTailor, and only the CORS headers to S3.** Route 2 forwards all viewer
+  headers, cookies and query strings, including the four that MediaTailor
+  [requires from a CDN](https://docs.aws.amazon.com/mediatailor/latest/ug/cdn-configuration.html#cdn-required-headers):
+  `Accept-Encoding` (gzip), `User-Agent` and `X-Forwarded-For` (ad targeting) and `Host` (request routing). The
+  query strings carry the ADS variables and `aws.*` session options. Nothing on route 2 is cached, so this cannot
+  fragment a cache. The default route never forwards the viewer `Host` to S3.
 - **Never cache** `/v1/master`, `/v1/session` or `/v1/segment` responses: they create sessions or expire.
 - **Content segments are immutable**: a new encode is a new key under a new ladder version (the pipeline refuses to
   encode a `READY` asset again in place), so long TTLs are safe.
@@ -73,12 +78,12 @@ require it.
 
 Two response headers policies:
 
-- **`media`** (custom, routes 1 and 4): `Access-Control-Allow-Origin: *` *overriding* the origin's value,
+- **`media`** (custom, routes 1 and 3): `Access-Control-Allow-Origin: *` *overriding* the origin's value,
   `Access-Control-Allow-Headers: *` (CMCD header mode preflights), `Timing-Allow-Origin: *` and `Server-Timing` on
   every response. MediaTailor echoes the request's `Origin` with credentials, which a shared cache must never replay
   to other sites, hence the override on the cached MediaTailor route. `Server-Timing` carries `cdn-rid`, the same
   value as the `x-edge-request-id` log field, so a player can quote the request id of a failed segment.
-- **`preflight`** (managed CORS-with-preflight-and-security-headers, routes 2–3): uncached MediaTailor responses keep
+- **`preflight`** (managed CORS-with-preflight-and-security-headers, route 2): uncached MediaTailor responses keep
   their own CORS headers.
 
 ## Access logs
