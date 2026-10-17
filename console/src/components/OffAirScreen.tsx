@@ -3,7 +3,7 @@ import type { OffAirState, PlayerGate } from "../players/gate";
 import styles from "./OffAirScreen.module.css";
 
 const STATE_LINES: Record<OffAirState, readonly [state: string, hint: string]> = {
-  STOPPED: ["is stopped", "The players start as soon as the channel runs."],
+  STOPPED: ["is stopped", "The player starts as soon as the channel runs."],
   // In the media library but not in Channel Assembly.
   MISSING: ["is missing from Channel Assembly", "It was deleted outside the deployment."],
 };

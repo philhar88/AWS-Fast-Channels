@@ -1,10 +1,10 @@
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
-import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Container from "@cloudscape-design/components/container";
 import ContentLayout from "@cloudscape-design/components/content-layout";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
+import Grid from "@cloudscape-design/components/grid";
 import Header from "@cloudscape-design/components/header";
 import KeyValuePairs from "@cloudscape-design/components/key-value-pairs";
 import Link from "@cloudscape-design/components/link";
@@ -28,11 +28,11 @@ import { HlsPlayer } from "../players/HlsPlayer";
 import type { PlayerEvent } from "../players/telemetry";
 
 const MAX_LOGGED_EVENTS = 200;
-/** How often an open channel page reads the channel's state: players follow a start or stop made elsewhere. */
+/** How often an open channel page reads the channel's state: the player follows a start or stop made elsewhere. */
 const STATE_POLL_MS = 15_000;
 
 export function ChannelsView({ channel }: { channel?: string | undefined }) {
-  // One instance per channel: its state, players and event log never carry over to another channel.
+  // One instance per channel: its state, player and event log never carry over to another channel.
   return channel ? <ChannelDetail key={channel} name={channel} /> : <ChannelList />;
 }
 
@@ -59,7 +59,7 @@ function ChannelList() {
     ...(live.data ?? []).filter((c) => !config.channels.some((configured) => configured.name === c.name)),
   ];
   return (
-    <ContentLayout header={<Header variant="h1" description="Linear channels assembled by MediaTailor Channel Assembly and monetised with SSAI or SGAI.">Channels</Header>}>
+    <ContentLayout header={<Header variant="h1" description="Linear channels assembled by MediaTailor Channel Assembly and monetised with server-side ad insertion.">Channels</Header>}>
       <SpaceBetween size="m">
         {live.error !== undefined && (
           <Alert type="warning" header="Live channel state is unavailable">
@@ -152,7 +152,7 @@ function ChannelDetail({ name }: { name: string }) {
 
 interface PlaybackProps {
   readonly channel: string;
-  /** Whether the players may open sessions (players/gate.ts). */
+  /** Whether the player may open a session (players/gate.ts). */
   readonly gate: PlayerGate;
   readonly playback: ChannelPlayback;
   /** The same URLs through the deployment's other CDNs (`delivery.cdns`), listed for copying. */
@@ -162,54 +162,45 @@ interface PlaybackProps {
 }
 
 /**
- * SSAI (stitched) and SGAI (HLS Interstitials) sessions of the channel's HLS output (`hls`), side by side. The
- * players mount when the channel runs, so a Start (here or by the agent) brings them up without a reload, and
- * unmount when it stops.
+ * The SSAI session of the channel's HLS output (`hls`), with its viewer URLs. The player mounts when the channel
+ * runs, so a Start (here or by the agent) brings it up without a reload, and unmounts when it stops.
  */
 function Playback({ channel, gate, playback, otherCdns, cdnBaseUrl, onEvent }: PlaybackProps) {
-  const outputs = Object.keys(playback).filter((name) => playback[name]?.ssai);
-  const output = outputs.includes("hls") ? "hls" : outputs[0];
-  const urls = output === undefined ? undefined : playback[output];
-  const ssai = urls?.ssai;
-  const sgai = urls?.sgai && guidedUrl(urls.sgai);
+  const output = "hls" in playback ? "hls" : Object.keys(playback)[0];
+  const src = output === undefined ? undefined : playback[output];
 
   return (
     <Container
       header={
-        <Header variant="h2" description="One playback configuration (InsertionMode PLAYER_SELECT), two sessions of the same HLS output.">
+        <Header variant="h2" description="MediaTailor stitches the ads into the channel's HLS output (InsertionMode STITCHED_ONLY).">
           Playback
         </Header>
       }
     >
-      <SpaceBetween size="l">
-        {ssai === undefined ? (
-          <Box color="text-body-secondary">This channel has no HLS output.</Box>
-        ) : (
-          <ColumnLayout columns={2}>
-            <SpaceBetween size="xs">
-              <Box variant="h3">Server-side ad insertion (stitched)</Box>
-              {gate.kind === "play" ? (
-                <HlsPlayer key={ssai} src={ssai} mode="ssai" cdnBaseUrl={cdnBaseUrl} label="SSAI player" onEvent={onEvent} />
-              ) : (
-                <OffAirScreen channel={channel} gate={gate} />
-              )}
-            </SpaceBetween>
-            <SpaceBetween size="xs">
-              <Box variant="h3">Server-guided ad insertion (HLS Interstitials)</Box>
-              {!sgai ? (
-                <Box color="text-body-secondary">No SGAI URL for this output.</Box>
-              ) : gate.kind === "play" ? (
-                <HlsPlayer key={sgai} src={sgai} mode="sgai" cdnBaseUrl={cdnBaseUrl} label="SGAI player" onEvent={onEvent} />
-              ) : (
-                <OffAirScreen channel={channel} gate={gate} />
-              )}
-            </SpaceBetween>
-          </ColumnLayout>
-        )}
-        {output !== undefined && otherCdns.length > 0 && (
-          <KeyValuePairs columns={2} items={otherCdns.flatMap(({ cdn, playback: urls }) => cdnUrls(cdn, output, urls))} />
-        )}
-      </SpaceBetween>
+      {output === undefined || src === undefined ? (
+        <Box color="text-body-secondary">This channel has no HLS output.</Box>
+      ) : (
+        <Grid gridDefinition={[{ colspan: { default: 12, s: 8 } }, { colspan: { default: 12, s: 4 } }]}>
+          <SpaceBetween size="xs">
+            <Box variant="h3">Server-side ad insertion</Box>
+            {gate.kind === "play" ? (
+              <HlsPlayer key={src} src={src} cdnBaseUrl={cdnBaseUrl} label="SSAI player" onEvent={onEvent} />
+            ) : (
+              <OffAirScreen channel={channel} gate={gate} />
+            )}
+          </SpaceBetween>
+          <KeyValuePairs
+            items={[
+              { label: "Output", value: output },
+              copyableUrl("Viewer URL", src),
+              ...otherCdns.flatMap(({ cdn, playback: urls }) => {
+                const url = urls[output];
+                return url ? [copyableUrl(`Viewer URL via ${cdn}`, url)] : [];
+              }),
+            ]}
+          />
+        </Grid>
+      )}
     </Container>
   );
 }
@@ -217,23 +208,6 @@ function Playback({ channel, gate, playback, otherCdns, cdnBaseUrl, onEvent }: P
 function copyableUrl(label: string, url: string) {
   return {
     label,
-    value: <CopyToClipboard variant="inline" textToCopy={url} copyButtonAriaLabel={`Copy ${label} URL`} copySuccessText="URL copied" copyErrorText="URL not copied" />,
+    value: <CopyToClipboard variant="inline" textToCopy={url} copyButtonAriaLabel={`Copy ${label}`} copySuccessText="URL copied" copyErrorText="URL not copied" />,
   };
-}
-
-/** The output's SSAI and SGAI URLs through another CDN. */
-function cdnUrls(cdn: string, output: string, playback: ChannelPlayback) {
-  const urls = playback[output];
-  return [
-    ...(urls?.ssai ? [copyableUrl(`SSAI (${output}) via ${cdn}`, urls.ssai)] : []),
-    ...(urls?.sgai ? [copyableUrl(`SGAI (${output}) via ${cdn}`, urls.sgai)] : []),
-  ];
-}
-
-/** Asks MediaTailor for client-side reporting so the asset lists carry TRACKING beacons (players/beacons.ts). */
-function guidedUrl(sgai: string): string {
-  const url = new URL(sgai, window.location.href);
-  url.searchParams.set("aws.insertionMode", "GUIDED");
-  url.searchParams.set("aws.reportingMode", "CLIENT");
-  return url.href;
 }

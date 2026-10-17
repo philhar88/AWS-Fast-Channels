@@ -1,5 +1,5 @@
 /** Fixture data for mock mode: one deployment with two channels, a small library and a rolling EPG. */
-import type { AppConfig, ChannelPlayback, OutputPlayback } from "../lib/config";
+import type { AppConfig, ChannelPlayback } from "../lib/config";
 import type { Epg, EpgBreak, EpgProgram, Plan, PlannedProgram } from "../lib/schedule";
 import type { Asset, ChannelDetail, ChannelSummary, Ladder } from "../lib/tools";
 
@@ -10,10 +10,8 @@ const BREAK_MS = 60_060; // 30 GOPs of 2.002 s: the BREAK_SLATE_GOPS default
 const GOP_MS = 2_002;
 const SEGMENT_MS = 6_006; // every segment boundary common to all renditions is a valid break offset
 
-const hls: OutputPlayback = {
-  ssai: `${CDN}/channel/ssai.m3u8`,
-  sgai: `${CDN}/channel/sgai.m3u8?aws.insertionMode=GUIDED`,
-};
+/** Viewer URL per output: one stitched SSAI stream with an ad break 12 s in. */
+const PLAYBACK: ChannelPlayback = { hls: `${CDN}/channel/hls.m3u8` };
 
 export const MOCK_CONFIG: AppConfig = {
   region: "us-east-1",
@@ -26,8 +24,8 @@ export const MOCK_CONFIG: AppConfig = {
   cdnBaseUrl: CDN,
   epgBaseUrl: `${CDN}/epg`,
   channels: [
-    { name: "fast-demo", ladderVersion: LADDER, playback: { hls } },
-    { name: "fast-kids", ladderVersion: LADDER, playback: { hls } },
+    { name: "fast-demo", ladderVersion: LADDER, playback: PLAYBACK },
+    { name: "fast-kids", ladderVersion: LADDER, playback: PLAYBACK },
   ],
 };
 
@@ -160,13 +158,7 @@ export const LADDERS: readonly Ladder[] = [
 
 /** The mock deployment's other CDN (`delivery.cdns`): same paths, another host. Listed, never fetched. */
 function viaOtherCdn(playback: ChannelPlayback): ChannelPlayback {
-  const move = (url: string) => url.replace(CDN, "https://cdn-b.example.net");
-  return Object.fromEntries(
-    Object.entries(playback).map(([output, { ssai, sgai }]): [string, OutputPlayback] => [
-      output,
-      { ...(ssai ? { ssai: move(ssai) } : {}), ...(sgai ? { sgai: move(sgai) } : {}) },
-    ]),
-  );
+  return Object.fromEntries(Object.entries(playback).map(([output, url]) => [output, url.replace(CDN, "https://cdn-b.example.net")]));
 }
 
 export const CHANNELS: readonly ChannelDetail[] = MOCK_CONFIG.channels.map((channel) => ({
