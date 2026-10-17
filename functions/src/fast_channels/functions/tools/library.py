@@ -13,7 +13,6 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from fast_channels.core.captions import CaptionOrigin, CaptionProvenance, CaptionsRequest
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind, IngestRequest
 from fast_channels.core.naming import mediatailor_name
@@ -69,17 +68,13 @@ class AssetSummary(BaseModel):
     content_id: str | None = None
     duration_ms: int | None = Field(None, description="Running time of the content, without ad breaks.")
     break_offset_count: int = Field(description="Number of valid ad-break offsets; library___get_asset lists them.")
-    captioned: list[str] = Field(
-        [], description="Languages whose caption track has captions; library___get_asset says where each came from."
-    )
     vod_source: str | None = Field(None, description="Channel Assembly VOD source; ads have none.")
     updated_at: str
 
     @classmethod
     def of(cls, asset: Asset) -> Self:
-        fields = asset.model_dump(include=set(cls.model_fields) - {"break_offset_count", "captioned"})
-        captioned = [c.language for c in asset.captions if c.origin is not CaptionOrigin.NONE]
-        return cls(**fields, break_offset_count=len(asset.break_offsets_ms), captioned=captioned)
+        fields = asset.model_dump(include=set(cls.model_fields) - {"break_offset_count"})
+        return cls(**fields, break_offset_count=len(asset.break_offsets_ms))
 
 
 class FindAssetsOutput(BaseModel):
@@ -109,13 +104,8 @@ class GetAssetInput(BaseModel):
 
 class AssetDetail(AssetSummary):
     break_offsets_ms: list[int] = Field(
-        description="Offsets into the content (ms) where every track has a common segment boundary: the only "
+        description="Offsets into the content (ms) where every variant has a common segment boundary: the only "
         "valid ad-break positions."
-    )
-    captions: list[CaptionProvenance] = Field(
-        [],
-        description="Every caption track in ladder order: provided (a file), embedded (in the source), generated "
-        "(by the captioner engine; worth a human check) or none (an empty track).",
     )
     source_location: str | None = Field(None, description="Source location of the VOD source; null = the deployment's.")
     packages: dict[str, str] = Field(
@@ -143,7 +133,6 @@ def get_asset(request: GetAssetInput, ctx: ToolContext) -> AssetDetail:
         **asset.model_dump(
             include={
                 "break_offsets_ms",
-                "captions",
                 "source_location",
                 "packages",
                 "source_uri",
@@ -188,7 +177,7 @@ class IngestInput(BaseModel):
         None, pattern=ASSET_ID_PATTERN, description="Library id; omit to derive a stable id from the file name."
     )
     cue_points_ms: list[int] = Field(
-        [], description="Editorial ad-break positions in ms (catalog cue_points_ms); snapped to the GOP grid."
+        [], description="Editorial ad-break positions in ms (catalog cue_points_ms); snapped to the segment grid."
     )
     duration_ms: int | None = Field(
         None, gt=0, description="Running time in ms (catalog duration_ms); only used for the cost estimate."
@@ -197,12 +186,6 @@ class IngestInput(BaseModel):
         None,
         pattern=LADDER_VERSION_PATTERN,
         description="Ladder version to encode with (PROVISIONING or READY); omit for the deployment default.",
-    )
-    captions: CaptionsRequest | None = Field(
-        None,
-        description="Caption files that come with the title (uri relative to the source's folder or s3://, "
-        "language, optional format), its spoken_language, and mode: auto (default: provided files, else captions "
-        "in the source, else generated), generate (always generate the spoken language) or off (empty tracks).",
     )
 
 
@@ -213,7 +196,6 @@ class IngestOutput(BaseModel):
     execution_name: str = Field(description="Pass to library___get_ingest_status.")
     execution_arn: str
     started_at: str
-    pricing_tier: Literal["BASIC", "PROFESSIONAL"]
     cost_per_minute_usd: float = Field(description="Estimated MediaConvert cost per minute of content.")
     estimated_cost_usd: float | None = Field(None, description="Estimated encode cost; null when duration is unknown.")
 
@@ -235,7 +217,6 @@ def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
         asset_id=request.asset_id,
         content_id=request.content_id,
         cue_points_ms=request.cue_points_ms,
-        captions=request.captions,
         ladder_version=ladder_version,
         metadata={"agent_session": ctx.correlation_id} | ({"title": request.title} if request.title else {}),
     )
@@ -266,7 +247,6 @@ def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
         execution_name=name,
         execution_arn=started["executionArn"],
         started_at=store.iso(started["startDate"]),
-        pricing_tier=ladder.pricing_tier(),
         cost_per_minute_usd=encode_cost_per_minute(ladder),
         estimated_cost_usd=encode_cost(ladder, request.duration_ms) if request.duration_ms else None,
     )

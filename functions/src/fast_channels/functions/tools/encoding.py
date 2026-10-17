@@ -19,9 +19,8 @@ from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field
 
-from fast_channels.core.captions import CaptionTrack  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
-from fast_channels.core.ladder import AudioRendition, Ladder, LadderOps, LadderOptions, VideoRendition, propose
+from fast_channels.core.ladder import Audio, Ladder, LadderOps, LadderOptions, VideoRendition, propose
 from fast_channels.core.mediaconvert import job_template_props
 from fast_channels.core.naming import job_template_name, ladder_path
 from fast_channels.core.profiles import applicable
@@ -39,15 +38,11 @@ logger = Logger()
 
 describe_fields(
     LadderOps,
-    codecs="Video codecs to keep (avc, hevc, av1); omit to keep all.",
     max_height="Drop video renditions taller than this many lines, e.g. 720.",
     min_height="Drop video renditions shorter than this many lines.",
     quality_shift="Added to every rendition's QVBR quality level (1-10, clamped); higher is better quality and "
     "more bits.",
-    drop_rungs="Video rendition names to drop, e.g. avc-234p (encoding___get_ladder lists them).",
-    captions="Replace the caption tracks (IMSC1, one per language, in order), e.g. "
-    '[{"language": "en", "label": "English"}, {"language": "es", "label": "Spanish"}]; [] removes them; omit '
-    "to keep the base's.",
+    drop_rungs="Video rendition names to drop, e.g. avc-360p (encoding___get_ladder lists them).",
     new_id="Ladder id of the result (its version is <id>@<fingerprint>); omit to keep the base id.",
 )
 
@@ -77,7 +72,6 @@ class LadderSummary(BaseModel):
     status: store.LadderStatus = Field(description="PROPOSED | PROVISIONING | READY | FAILED.")
     owner: store.Owner
     description: str | None
-    codecs: list[str] | None
     max_height: int | None
     renditions: int | None = Field(description="Number of video renditions.")
     cost_per_minute_usd: float | None = Field(description="MediaConvert cost per content-minute (estimate).")
@@ -99,7 +93,6 @@ def _summary(record: store.LadderRecord, ladder: Ladder | None) -> LadderSummary
         status=record.status,
         owner=record.owner,
         description=record.description or (ladder.description if ladder else None),
-        codecs=sorted(ladder.codecs) if ladder else None,
         max_height=ladder.max_height if ladder else None,
         renditions=len(ladder.video) if ladder else None,
         cost_per_minute_usd=encode_cost_per_minute(ladder) if ladder else None,
@@ -113,9 +106,9 @@ def _summary(record: store.LadderRecord, ladder: Ladder | None) -> LadderSummary
 
 @tool("encoding", access=Access.READ)
 def list_ladders(payload: ListLaddersInput, ctx: ToolContext) -> ListLaddersOutput:
-    """List encoding ladder versions with status, codecs, top resolution, rendition count, encode cost per
-    content-minute and kit (filler and break slates, house ads). Channels need a READY version; ingest also accepts
-    a PROVISIONING one."""
+    """List encoding ladder versions with status, top resolution, rendition count, encode cost per content-minute
+    and kit (filler and break slates, house ads). Channels need a READY version; ingest also accepts a
+    PROVISIONING one."""
     return ListLaddersOutput(ladders=[_summary(r, definition(r)) for r in store.list_ladders(payload.status)])
 
 
@@ -129,12 +122,10 @@ class LadderDetail(LadderSummary):
     frame_rate: str
     gop_ms: int
     segment_ms: int
-    pricing_tier: str = Field(description="MediaConvert pricing tier (BASIC or PROFESSIONAL).")
-    video: list[VideoRendition] = Field(description="Video renditions in multivariant order.")
-    audio: list[AudioRendition]
-    captions: list[CaptionTrack] = Field(
-        [], description="Caption tracks (IMSC1) every asset of the ladder carries, empty when it has no captions."
+    video: list[VideoRendition] = Field(
+        description="Video renditions (H.264) in multivariant order; each variant carries the audio muxed in."
     )
+    audio: Audio = Field(description="The AAC-LC stereo track muxed into every variant.")
     options: LadderOptions
     profiles: list[str] = Field(description="Rendition profiles (manifests) every encode on this ladder writes.")
     break_slate_gops: list[int] = Field(description="Ad-break slate lengths (GOPs) the kit provides.")
@@ -144,8 +135,8 @@ class LadderDetail(LadderSummary):
 
 @tool("encoding", access=Access.READ)
 def get_ladder(payload: LadderInput, ctx: ToolContext) -> LadderDetail:
-    """Get one ladder version in full: every rendition (names for propose_ladder's drop_rungs), frame rate,
-    GOP/segment grid, options, pricing tier, manifest profiles, kit and provisioning status or error."""
+    """Get one ladder version in full: every rendition (names for propose_ladder's drop_rungs), audio, frame rate,
+    GOP/segment grid, options, manifest profiles, kit and provisioning status or error."""
     record = store.get_ladder(payload.ladder_version)
     ladder = definition(record) if record is not None else None
     if record is None or ladder is None:
@@ -157,10 +148,8 @@ def get_ladder(payload: LadderInput, ctx: ToolContext) -> LadderDetail:
         frame_rate=str(ladder.frame_rate),
         gop_ms=ladder.grid.gop_ms,
         segment_ms=ladder.grid.segment_ms,
-        pricing_tier=ladder.pricing_tier(),
         video=list(ladder.video),
-        audio=list(ladder.audio),
-        captions=list(ladder.captions),
+        audio=ladder.audio,
         options=ladder.options,
         profiles=[p.name for p in applicable(ladder)],
         break_slate_gops=sorted(record.kit.break_slates),
@@ -189,9 +178,6 @@ class ProposeLadderOutput(BaseModel):
     errors: list[str]
     warnings: list[str]
     video: list[str] = Field(description="Video renditions of the proposal, in order.")
-    audio: list[str]
-    captions: list[str] = Field([], description="Caption track languages of the proposal, in order.")
-    pricing_tier: str | None
     cost_per_minute_usd: float = Field(description="Encode cost per content-minute of the proposal (estimate).")
     base_cost_per_minute_usd: float
     kit_cost_usd: float | None = Field(
@@ -233,9 +219,9 @@ def kit_cost(ladder: Ladder) -> float:
 
 @tool("encoding", access=Access.READ)
 def propose_ladder(payload: ProposeLadderInput, ctx: ToolContext) -> ProposeLadderOutput:
-    """Propose a new ladder version derived from a base version: keep some codecs, cap or floor the height,
-    shift quality, drop rungs. Changes nothing. Returns a proposal_id (valid 24 hours), the diff, validation errors
-    and warnings, the encode cost per content-minute and the kit cost. Show it all to the operator; only a valid
+    """Propose a new ladder version derived from a base version: cap or floor the height, shift quality, drop
+    rungs. Changes nothing. Returns a proposal_id (valid 24 hours), the diff, validation errors and warnings, the
+    encode cost per content-minute and the kit cost. Show it all to the operator; only a valid
     proposal they accept goes to encoding___provision_ladder."""
     base = store.ladder_definition(payload.base)
     proposal = propose(base, payload.ops)
@@ -263,9 +249,6 @@ def propose_ladder(payload: ProposeLadderInput, ctx: ToolContext) -> ProposeLadd
         errors=proposal.errors,
         warnings=proposal.warnings,
         video=[r.name for r in ladder.video] if ladder else [],
-        audio=[a.group_id for a in ladder.audio] if ladder else [],
-        captions=[c.language for c in ladder.captions] if ladder else [],
-        pricing_tier=ladder.pricing_tier() if ladder else None,
         cost_per_minute_usd=proposal.cost_per_minute_usd,
         base_cost_per_minute_usd=encode_cost_per_minute(base),
         kit_cost_usd=kit_cost(ladder) if ladder else None,

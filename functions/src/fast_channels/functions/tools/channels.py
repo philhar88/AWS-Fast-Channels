@@ -99,7 +99,7 @@ def _in_transition(error: ChannelStateTimeoutError, channel: str) -> ToolError:
 
 type ChannelOwner = Literal[store.Owner.IAC, store.Owner.AGENT]
 type Playback = dict[str, dict[str, str]]
-"""Viewer URLs per channel output: ``ssai`` and ``sgai`` for HLS outputs, ``dash`` for DASH outputs."""
+"""Viewer URLs per channel output: ``ssai`` and ``sgai``."""
 
 
 class ChannelSummary(BaseModel):
@@ -110,7 +110,7 @@ class ChannelSummary(BaseModel):
     )
     owner: ChannelOwner = Field(description="iac: defined by the deployment; agent: created with channels tools.")
     ladder_version: str = Field(description="The only ladder version whose assets this channel can air.")
-    outputs: list[str] = Field(description="Outputs (rendition profiles), e.g. hls, hls-avc, dash-avc.")
+    outputs: list[str] = Field(description="Outputs (rendition profiles), e.g. hls.")
     tier: str | None = Field(description="BASIC (~$0.10/h while running) or STANDARD (~$0.35/h).")
 
 
@@ -133,8 +133,8 @@ class ChannelDetail(ChannelSummary):
     arn: str | None
     playback_configuration: str | None = Field(description="MediaTailor playback configuration (ad insertion).")
     playback: Playback = Field(
-        description="Viewer URLs per output through the primary CDN: ssai and sgai (HLS Interstitials) for HLS "
-        "outputs, dash for DASH outputs. Empty when the channel has no playback configuration."
+        description="Viewer URLs per output through the primary CDN: ssai and sgai (HLS Interstitials). Empty when "
+        "the channel has no playback configuration."
     )
     cdn_playback: list[CdnPlayback] | None = Field(
         None,
@@ -223,9 +223,9 @@ def list_channels(payload: ListChannelsInput, ctx: ToolContext) -> ListChannelsO
     )
 
 
-def _prefixes(record: store.ChannelRecord) -> tuple[str, str] | None:
-    if record.hls_prefix and record.dash_prefix:
-        return record.hls_prefix, record.dash_prefix
+def _hls_prefix(record: store.ChannelRecord) -> str | None:
+    if record.hls_prefix:
+        return record.hls_prefix
     if not record.playback_configuration_name:
         return None
     try:
@@ -234,7 +234,7 @@ def _prefixes(record: store.ChannelRecord) -> tuple[str, str] | None:
         if is_missing(error):
             return None
         raise
-    return config["HlsConfiguration"]["ManifestEndpointPrefix"], config["DashConfiguration"]["ManifestEndpointPrefix"]
+    return str(config["HlsConfiguration"]["ManifestEndpointPrefix"])
 
 
 def playback_by_cdn(record: store.ChannelRecord) -> dict[str, Playback]:
@@ -244,17 +244,14 @@ def playback_by_cdn(record: store.ChannelRecord) -> dict[str, Playback]:
     configuration or a primary CDN.
     """
     config = settings()
-    prefixes = _prefixes(record)
-    if prefixes is None or not config.cdn_base_url:
+    hls = _hls_prefix(record)
+    if hls is None or not config.cdn_base_url:
         return {}
     bases = {PRIMARY_CDN: config.cdn_base_url}
     for endpoint in config.cdn_endpoints:
         bases.setdefault(endpoint.name, endpoint.manifest_base)
-    hls, dash = prefixes
     return {
-        cdn: specs.playback_urls(
-            cdn_base=base, playback_prefix_hls=hls, playback_prefix_dash=dash, outputs=record.outputs
-        )
+        cdn: specs.playback_urls(cdn_base=base, playback_prefix_hls=hls, outputs=record.outputs)
         for cdn, base in bases.items()
     }
 
@@ -302,8 +299,8 @@ def _detail(record: store.ChannelRecord, live: dict[str, Any] | None) -> Channel
 @tool("channels", access=Access.READ)
 def get_channel(payload: ChannelInput, ctx: ToolContext) -> ChannelDetail:
     """Get one channel: live state, owner, tier, ladder version, outputs, the viewer playback URLs per output
-    (ssai and sgai for HLS outputs, dash for DASH outputs; per CDN when several are configured) and the pending
-    auto-stop time. Give operators these URLs verbatim; never build playback URLs yourself."""
+    (ssai and sgai; per CDN when several are configured) and the pending auto-stop time. Give operators these URLs
+    verbatim; never build playback URLs yourself."""
     record = require_channel(payload.channel)
     return _detail(record, _describe(record.name))
 
@@ -632,7 +629,6 @@ def create_channel(payload: CreateChannelInput, ctx: ToolContext) -> ChannelDeta
                 arn=created["Arn"],
                 playback_configuration_name=name,
                 hls_prefix=pc["HlsConfiguration"]["ManifestEndpointPrefix"],
-                dash_prefix=pc["DashConfiguration"]["ManifestEndpointPrefix"],
                 brief=payload.brief,
                 correlation_id=ctx.correlation_id,
             ),

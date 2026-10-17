@@ -32,7 +32,6 @@ LV = STANDARD.version
 CA_HOST = "https://e4134234413166c2d978e6bbd36eb21f.7wzuvg.channel-assembly.mediatailor.us-east-1.amazonaws.com"
 MT_HOST = "https://8d3d0b2de74c42869dc871421200f174.mediatailor.us-east-1.amazonaws.com"
 HLS_PREFIX = f"{MT_HOST}/v1/master/1bab6b42/fast-demo/"
-DASH_PREFIX = f"{MT_HOST}/v1/dash/1bab6b42/fast-demo/"
 DESTINATION = f"arn:aws:logs:us-east-1:{ACCOUNT}:delivery-destination:fast-mediatailor"
 SCHEDULER_ROLE = f"arn:aws:iam::{ACCOUNT}:role/fast-scheduler"
 TEMPLATE = {
@@ -84,7 +83,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "MEDIA_BUCKET": BUCKET,
         "SOURCE_LOCATION": "fast-origin",
         "CDN_BASE_URL": "https://d111111abcdef8.cloudfront.net/",
-        "PACKAGE_PROFILES": "hls,hls-avc,hls-hevc,hls-av1,dash-avc",
+        "PACKAGE_PROFILES": "hls",
         "DEFAULT_LADDER_VERSION": LV,
         "PLAYBACK_CONFIG_TEMPLATE": json.dumps(TEMPLATE),
         "AUTO_STOP_HOURS": "4",
@@ -124,13 +123,12 @@ def channel(name: str = "fast-demo", **changes: Any) -> store.ChannelRecord:
     fields: dict[str, Any] = {
         "name": name,
         "ladder_version": LV,
-        "outputs": ["hls", "dash-avc"],
+        "outputs": ["hls"],
         "owner": "iac",
         "tier": "BASIC",
         "arn": f"arn:aws:mediatailor:us-east-1:{ACCOUNT}:channel/{name}",
         "playback_configuration_name": name,
         "hls_prefix": HLS_PREFIX,
-        "dash_prefix": DASH_PREFIX,
     }
     return store.ChannelRecord(**fields | changes)
 
@@ -155,7 +153,7 @@ def described(name: str, state: str) -> dict[str, Any]:
         "ChannelState": state,
         "Outputs": [
             {"ManifestName": o, "PlaybackUrl": f"{CA_HOST}/v1/channel/{name}/{o}.m3u8", "SourceGroup": o}
-            for o in ("hls", "dash-avc")
+            for o in ("hls",)
         ],
         "PlaybackMode": "LINEAR",
         "Tier": "BASIC",
@@ -195,7 +193,7 @@ def test_list_channels_merges_the_library_with_live_state(aws_stubs: SimpleNames
         "state": "RUNNING",
         "owner": "iac",
         "ladder_version": LV,
-        "outputs": ["hls", "dash-avc"],
+        "outputs": ["hls"],
         "tier": "BASIC",
     }
 
@@ -217,7 +215,6 @@ def test_get_channel_returns_playback_urls_per_output(aws_stubs: SimpleNamespace
             "ssai": f"{cdn}/v1/master/1bab6b42/fast-demo/hls.m3u8",
             "sgai": f"{cdn}/v1/master/1bab6b42/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
         },
-        "dash-avc": {"dash": f"{cdn}/v1/dash/1bab6b42/fast-demo/dash-avc.mpd"},
     }
     assert (result.state, result.auto_stop_at, result.arn) == (
         "RUNNING",
@@ -249,7 +246,6 @@ def test_get_channel_lists_playback_urls_per_cdn_primary_first(
             "ssai": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8",
             "sgai": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
         },
-        "dash-avc": {"dash": "https://cdn-b.example.net/v1/dash/1bab6b42/fast-demo/dash-avc.mpd"},
     }
     assert "cdn_playback" in result.model_dump(exclude_none=True)
 
@@ -261,22 +257,19 @@ def test_channel_owners_are_iac_or_agent() -> None:
 
 
 def test_get_channel_reads_prefixes_from_the_playback_configuration(aws_stubs: SimpleNamespace) -> None:
-    record = channel(hls_prefix=None, dash_prefix=None)
+    record = channel(hls_prefix=None)
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), record.to_item())
     aws_stubs.mt.add_response("describe_channel", described("fast-demo", "STOPPED"), {"ChannelName": "fast-demo"})
     aws_stubs.mt.add_response(
         "get_playback_configuration",
-        {
-            "HlsConfiguration": {"ManifestEndpointPrefix": HLS_PREFIX},
-            "DashConfiguration": {"ManifestEndpointPrefix": DASH_PREFIX},
-        },
+        {"HlsConfiguration": {"ManifestEndpointPrefix": HLS_PREFIX}},
         {"Name": "fast-demo"},
     )
     no_schedule(aws_stubs.scheduler, "fast-demo")
 
     result = channels.get_channel(ChannelInput(channel="fast-demo"), CTX)
 
-    assert set(result.playback) == {"hls", "dash-avc"} and result.auto_stop_at is None
+    assert set(result.playback) == {"hls"} and result.auto_stop_at is None
 
 
 def test_get_channel_without_live_channel_or_playback_configuration(
@@ -284,7 +277,7 @@ def test_get_channel_without_live_channel_or_playback_configuration(
 ) -> None:
     monkeypatch.delenv("SCHEDULER_GROUP")
     settings.cache_clear()
-    record = channel(hls_prefix=None, dash_prefix=None)
+    record = channel(hls_prefix=None)
     get_item(aws_stubs.ddb, store.channel_key("fast-demo"), record.to_item())
     aws_stubs.mt.add_client_error("describe_channel", "NotFoundException", http_status_code=404)
     aws_stubs.mt.add_client_error("get_playback_configuration", "NotFoundException", http_status_code=404)
@@ -615,7 +608,6 @@ def playback_configuration() -> dict[str, Any]:
         "Name": AGENT,
         "PlaybackConfigurationArn": PC_ARN,
         "HlsConfiguration": {"ManifestEndpointPrefix": f"{MT_HOST}/v1/master/1bab6b42/{AGENT}/"},
-        "DashConfiguration": {"ManifestEndpointPrefix": f"{MT_HOST}/v1/dash/1bab6b42/{AGENT}/"},
     }
 
 
@@ -635,7 +627,7 @@ def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: Si
     aws_stubs.ddb.add_response("put_item", {})
     no_schedule(aws_stubs.scheduler, AGENT)
 
-    payload = channels.CreateChannelInput(name="fast-agent-kids", outputs=["hls", "dash-avc"])
+    payload = channels.CreateChannelInput(name="fast-agent-kids", outputs=["hls"])
     result = channels.create_channel(payload, CTX)
 
     tags = {"fast:app": "fast", "fast:owner": "agent", "fast:ladder": LV, "fast:correlation-id": CTX.correlation_id}
@@ -644,7 +636,7 @@ def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: Si
         "ChannelName": AGENT,
         "PlaybackMode": "LINEAR",
         "Tier": "BASIC",
-        "Outputs": specs.channel_outputs([profile("hls"), profile("dash-avc")]),
+        "Outputs": specs.channel_outputs([profile("hls")]),
         "FillerSlate": {"SourceLocationName": "fast-origin", "VodSourceName": "fast-filler"},
         "Tags": tags,
     }
@@ -725,8 +717,8 @@ def test_create_channel_needs_a_ready_ladder_and_known_outputs(aws_stubs: Simple
     assert raised.value.code == "VALIDATION"
 
     get_item(aws_stubs.ddb, store.ladder_key(LV), ladder().to_item())
-    with pytest.raises(ToolError, match="hls-uhd") as raised:
-        channels.create_channel(channels.CreateChannelInput(name="kids", outputs=["hls", "hls-uhd"]), CTX)
+    with pytest.raises(ToolError, match="dash-avc") as raised:
+        channels.create_channel(channels.CreateChannelInput(name="kids", outputs=["hls", "dash-avc"]), CTX)
     assert raised.value.code == "VALIDATION"
 
 

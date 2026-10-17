@@ -24,8 +24,7 @@ from fast_channels.functions.tools.registry import Approval, ToolContext, ToolEr
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
 
-REPO = Path(__file__).resolve().parents[3]
-SAMPLES = REPO / "core/tests/data/standard-job/src25i"  # a real STANDARD encode: 10 s, ESAM split at 4004 ms
+SAMPLES = Path(__file__).parents[1] / "ingest/data/content"  # a real STANDARD TS encode: 40.073 s
 TABLE = "library-test"
 PREFIX = "fast"
 REGION = "us-east-1"
@@ -37,11 +36,10 @@ BASE_URL = f"https://{BUCKET}.s3.{REGION}.amazonaws.com"
 ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/fast-origins-role"
 NOW = "2026-10-16T12:00:00Z"
 WHEN = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
-STANDARD = Ladder.builtin("standard").with_captions(())  # the external content fixtures have no captions
+STANDARD = Ladder.builtin("standard")
 VOD_SOURCE = f"fast-agent-pilot-{STANDARD.fingerprint}"
 VOD_ARN = f"arn:aws:mediatailor:{REGION}:{ACCOUNT}:vodSource/{LOCATION}/{VOD_SOURCE}"
 CTX = ToolContext(tool="origins___register_vod_source", correlation_id="session-1")
-MPD = b'<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"/>'
 TAGS = {"fast:app": PREFIX, "fast:owner": "agent", "fast:correlation-id": "session-1"}
 _serialize = TypeSerializer().serialize
 
@@ -57,7 +55,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "LIBRARY_TABLE": TABLE,
         "MEDIA_BUCKET": "fast-media",
         "SOURCE_LOCATION": "fast-origin",
-        "PACKAGE_PROFILES": "hls,hls-avc,hls-hevc,hls-av1,dash-avc",
+        "PACKAGE_PROFILES": "hls",
         "DEFAULT_LADDER_VERSION": STANDARD.version,
         "AWS_REGION": REGION,
     }.items():
@@ -126,22 +124,9 @@ def serve(s3: Stubber, *files: str | tuple[str, bytes], folder: str = "shows/pil
         s3.add_response("get_object", body(data), {"Bucket": BUCKET, "Key": f"{folder}/{name}"})
 
 
-TIMELINE = (  # first video playlist per codec, then every audio rendition (encode_timeline)
-    "main_avc-720p-a.m3u8",
-    "main_hevc-1080p.m3u8",
-    "main_av1-1080p.m3u8",
-    "main_aac-lc-128.m3u8",
-    "main_aac-he1-64.m3u8",
-    "main_aac-he2-32.m3u8",
-)
-PACKAGES = [
-    {"source_group": "hls", "path": "/shows/pilot/main.m3u8"},
-    {"source_group": "dash-avc", "path": "/shows/pilot/main_avc.mpd"},
-]
-CONFIGURATIONS = [
-    {"Path": "/shows/pilot/main.m3u8", "SourceGroup": "hls", "Type": "HLS"},
-    {"Path": "/shows/pilot/main_avc.mpd", "SourceGroup": "dash-avc", "Type": "DASH"},
-]
+TIMELINE = ("main_avc-720p.m3u8", "main_avc-1080p.m3u8", "main_avc-360p.m3u8")  # every variant
+PACKAGES = [{"source_group": "hls", "path": "/shows/pilot/main.m3u8"}]
+CONFIGURATIONS = [{"Path": "/shows/pilot/main.m3u8", "SourceGroup": "hls", "Type": "HLS"}]
 
 
 def alert(code: str, category: str, minute: int) -> dict[str, Any]:
@@ -280,7 +265,7 @@ def test_register_vod_source_verifies_the_ladder_and_computes_the_timeline(
     ddb: Stubber, mt: Stubber, s3: Stubber
 ) -> None:
     _prelude(ddb, mt)
-    serve(s3, "main.m3u8", ("main_avc.mpd", MPD), *TIMELINE)
+    serve(s3, "main.m3u8", *TIMELINE)
     mt.add_response(
         "create_vod_source",
         {"Arn": VOD_ARN, "VodSourceName": VOD_SOURCE},
@@ -298,12 +283,12 @@ def test_register_vod_source_verifies_the_ladder_and_computes_the_timeline(
         status="READY",
         owner="agent",
         title="Pilot",
-        duration_ms=10_010,
-        break_offsets_ms=[4004],  # the HE-AACv2 boundary trails video by 135 ms: within tolerance
+        duration_ms=40_073,
+        break_offsets_ms=[6006, 12012, 18018, 24024, 30030, 36036],  # every segment boundary of every variant
         signature=[list(row) for row in expected_signature(STANDARD)],
         vod_source=VOD_SOURCE,
         source_location=LOCATION,
-        packages={"hls": "/shows/pilot/main.m3u8", "dash-avc": "/shows/pilot/main_avc.mpd"},
+        packages={"hls": "/shows/pilot/main.m3u8"},
         correlation_id="session-1",
         updated_at=NOW,
     )
@@ -318,40 +303,56 @@ def test_register_vod_source_verifies_the_ladder_and_computes_the_timeline(
     assert (result.vod_source, result.vod_source_arn, result.duration_ms, result.break_offset_count) == (
         VOD_SOURCE,
         VOD_ARN,
-        10_010,
-        1,
+        40_073,
+        6,
     )
-    assert result.missing_source_groups == ["hls-avc", "hls-hevc", "hls-av1"]
+    assert (result.source_groups, result.missing_source_groups) == (["hls"], [])
     assert [a.code for a in result.alerts] == ["NOT_PROCESSED"]
 
 
 def test_register_refuses_ladder_mismatches(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _prelude(ddb, mt)
-    serve(s3, "main.m3u8")
+    two_variants = "".join((SAMPLES / "main.m3u8").read_text().splitlines(keepends=True)[:-2])
+    serve(s3, ("main.m3u8", two_variants.encode()))
     with pytest.raises(ToolError) as raised:
-        origins.register_vod_source(
-            _register(packages=[{"source_group": "hls-avc", "path": "/shows/pilot/main.m3u8"}]), CTX
-        )
+        origins.register_vod_source(_register(), CTX)
     assert raised.value.code == "LADDER_MISMATCH"
-    assert "16 variants but the ladder has 8" in raised.value.message
+    assert "2 variants but the ladder has 3" in raised.value.message
 
 
 def test_register_names_the_first_differing_variant(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _prelude(ddb, mt)
-    shuffled = (SAMPLES / "main_avc.m3u8").read_text().replace("RESOLUTION=1280x720", "RESOLUTION=1280x704", 1)
-    serve(s3, ("main_avc.m3u8", shuffled.encode()))
+    shuffled = (SAMPLES / "main.m3u8").read_text().replace("RESOLUTION=1280x720", "RESOLUTION=1280x704", 1)
+    serve(s3, ("main.m3u8", shuffled.encode()))
     with pytest.raises(ToolError) as raised:
-        origins.register_vod_source(
-            _register(packages=[{"source_group": "hls-avc", "path": "/shows/pilot/main_avc.m3u8"}]), CTX
-        )
-    assert "variant 1 is avc/1280x704/29.970/aac-lc-128 but the ladder has avc/1280x720" in raised.value.message
+        origins.register_vod_source(_register(), CTX)
+    assert "variant 1 is avc/1280x704/29.970/mp4a.40.2 but the ladder has avc/1280x720" in raised.value.message
+
+
+@pytest.mark.parametrize(
+    ("codecs", "found"),
+    [
+        ("hvc1.1.6.L93.B0,mp4a.40.2", "variant 1 is hevc/1280x720/29.970/mp4a.40.2"),
+        ("avc1.64001f", "variant 1 is avc/1280x720/29.970/ "),  # demuxed: the audio is in a rendition group
+    ],
+    ids=["hevc", "demuxed"],
+)
+def test_register_refuses_other_codecs_and_demuxed_audio(
+    ddb: Stubber, mt: Stubber, s3: Stubber, codecs: str, found: str
+) -> None:
+    _prelude(ddb, mt)
+    text = (SAMPLES / "main.m3u8").read_text().replace("avc1.64001f,mp4a.40.2", codecs, 1)
+    serve(s3, ("main.m3u8", text.encode()))
+    with pytest.raises(ToolError) as raised:
+        origins.register_vod_source(_register(), CTX)
+    assert raised.value.code == "LADDER_MISMATCH" and found in raised.value.message
 
 
 @pytest.mark.parametrize(
     ("served", "message"),
     [
         (("main.m3u8", b"<MPD/>"), "not an HLS multivariant"),
-        (("main.m3u8", b"#EXTM3U\n#EXT-X-VERSION:6\n"), "not an HLS multivariant"),
+        (("main.m3u8", b"#EXTM3U\n#EXT-X-VERSION:3\n"), "not an HLS multivariant"),
     ],
 )
 def test_register_checks_manifest_formats(
@@ -363,25 +364,18 @@ def test_register_checks_manifest_formats(
         origins.register_vod_source(_register(), CTX)
 
 
-def test_register_checks_dash_manifests(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
-    _prelude(ddb, mt)
-    serve(s3, "main.m3u8", ("main_avc.mpd", b"#EXTM3U"))
-    with pytest.raises(ToolError, match="not a DASH MPD"):
-        origins.register_vod_source(_register(), CTX)
-
-
 def test_register_needs_complete_vod_playlists(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _prelude(ddb, mt)
-    live = (SAMPLES / "main_avc-720p-a.m3u8").read_text().replace("#EXT-X-ENDLIST\n", "")
-    serve(s3, "main.m3u8", ("main_avc.mpd", MPD), ("main_avc-720p-a.m3u8", live.encode()))
+    live = (SAMPLES / "main_avc-720p.m3u8").read_text().replace("#EXT-X-ENDLIST\n", "")
+    serve(s3, "main.m3u8", ("main_avc-720p.m3u8", live.encode()))
     with pytest.raises(ToolError, match="EXT-X-ENDLIST"):
         origins.register_vod_source(_register(), CTX)
 
 
 def test_register_refuses_absolute_child_uris(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _prelude(ddb, mt)
-    text = (SAMPLES / "main.m3u8").read_text().replace("\nmain_avc-720p-a.m3u8", "\nhttps://x/main_avc-720p-a.m3u8")
-    serve(s3, ("main.m3u8", text.encode()), ("main_avc.mpd", MPD))
+    text = (SAMPLES / "main.m3u8").read_text().replace("\nmain_avc-720p.m3u8", "\nhttps://x/main_avc-720p.m3u8")
+    serve(s3, ("main.m3u8", text.encode()))
     with pytest.raises(ToolError, match="relative"):
         origins.register_vod_source(_register(), CTX)
 
@@ -420,7 +414,7 @@ def test_register_refuses_non_s3_and_unknown_source_locations(ddb: Stubber, mt: 
     assert raised.value.code == "NOT_FOUND"
 
 
-def test_register_refuses_existing_assets_and_foreign_groups(ddb: Stubber) -> None:
+def test_register_refuses_existing_assets(ddb: Stubber) -> None:
     ladder(ddb)
     get(
         ddb,
@@ -431,27 +425,17 @@ def test_register_refuses_existing_assets_and_foreign_groups(ddb: Stubber) -> No
         origins.register_vod_source(_register(), CTX)
     assert raised.value.code == "CONFLICT"
 
-    ladder(ddb)
-    with pytest.raises(ToolError) as raised:
-        origins.register_vod_source(_register(packages=[{"source_group": "hls-sd", "path": "/a/main_sd.m3u8"}]), CTX)
-    assert raised.value.code == "VALIDATION" and "hls-sd" in raised.value.message
-
-
-def test_register_needs_an_hls_package(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
-    _prelude(ddb, mt)
-    serve(s3, ("main_avc.mpd", MPD))
-    with pytest.raises(ToolError, match="HLS package"):
-        origins.register_vod_source(_register(packages=PACKAGES[1:]), CTX)
-
 
 @pytest.mark.parametrize(
     "packages",
     [
         [],
         [PACKAGES[0], PACKAGES[0]],
-        [{"source_group": "hls-4k", "path": "/a.m3u8"}],
+        [{"source_group": "dash-avc", "path": "/a.m3u8"}],
+        [{"source_group": "hls", "path": "/shows/a/main.mpd"}],
         [{"source_group": "hls", "path": "shows/a.m3u8"}],
     ],
+    ids=["none", "duplicate", "unknown-profile", "dash-manifest", "relative-path"],
 )
 def test_register_input_validation(packages: list[dict[str, str]]) -> None:
     with pytest.raises(ValidationError):
@@ -460,7 +444,7 @@ def test_register_input_validation(packages: list[dict[str, str]]) -> None:
 
 def _registered_up_to_create(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _prelude(ddb, mt)
-    serve(s3, "main.m3u8", ("main_avc.mpd", MPD), *TIMELINE)
+    serve(s3, "main.m3u8", *TIMELINE)
 
 
 def test_register_adopts_an_identical_vod_source(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
@@ -468,7 +452,7 @@ def test_register_adopts_an_identical_vod_source(ddb: Stubber, mt: Stubber, s3: 
     mt.add_client_error("create_vod_source", "BadRequestException", "A vod-source with this name already exists")
     mt.add_response(
         "describe_vod_source",
-        {"Arn": VOD_ARN, "HttpPackageConfigurations": list(reversed(CONFIGURATIONS))},
+        {"Arn": VOD_ARN, "HttpPackageConfigurations": CONFIGURATIONS},
         {"SourceLocationName": LOCATION, "VodSourceName": VOD_SOURCE},
     )
     ddb.add_response("put_item", {})
@@ -479,7 +463,8 @@ def test_register_adopts_an_identical_vod_source(ddb: Stubber, mt: Stubber, s3: 
 def test_register_conflicts_with_a_different_vod_source(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
     _registered_up_to_create(ddb, mt, s3)
     mt.add_client_error("create_vod_source", "BadRequestException", "A vod-source with this name already exists")
-    mt.add_response("describe_vod_source", {"Arn": VOD_ARN, "HttpPackageConfigurations": CONFIGURATIONS[:1]})
+    other = [{"Path": "/shows/other/main.m3u8", "SourceGroup": "hls", "Type": "HLS"}]
+    mt.add_response("describe_vod_source", {"Arn": VOD_ARN, "HttpPackageConfigurations": other})
     with pytest.raises(ToolError) as raised:
         origins.register_vod_source(_register(), CTX)
     assert raised.value.code == "CONFLICT"
@@ -522,6 +507,7 @@ def test_update_derives_pipeline_manifest_paths(ddb: Stubber, mt: Stubber) -> No
     get(ddb, pipeline.key(), pipeline.to_item())
     ladder(ddb)
     base = f"/assets/bbb-1a2b3c/standard_{STANDARD.fingerprint}"
+    # A source group the VOD source serves but the deployment no longer packages (a CMAF-era hls-av1).
     current = [
         {"Path": f"{base}/main.m3u8", "SourceGroup": "hls", "Type": "HLS"},
         {"Path": f"{base}/main_av1.m3u8", "SourceGroup": "hls-av1", "Type": "HLS"},
@@ -531,26 +517,22 @@ def test_update_derives_pipeline_manifest_paths(ddb: Stubber, mt: Stubber) -> No
         {"Arn": VOD_ARN, "HttpPackageConfigurations": current},
         {"SourceLocationName": "fast-origin", "VodSourceName": "fast-bbb-1a2b3c"},
     )
-    wanted = [current[0], {"Path": f"{base}/main_avc.mpd", "SourceGroup": "dash-avc", "Type": "DASH"}]
     mt.add_response(
         "update_vod_source",
         {"Arn": VOD_ARN},
-        {"SourceLocationName": "fast-origin", "VodSourceName": "fast-bbb-1a2b3c", "HttpPackageConfigurations": wanted},
+        {
+            "SourceLocationName": "fast-origin",
+            "VodSourceName": "fast-bbb-1a2b3c",
+            "HttpPackageConfigurations": current[:1],
+        },
     )
-    paths = {"hls": f"{base}/main.m3u8", "dash-avc": f"{base}/main_avc.mpd"}
+    paths = {"hls": f"{base}/main.m3u8"}
     ddb.add_response("put_item", {}, {"TableName": TABLE, "Item": _asset(packages=paths).to_item()})
     mt.add_response("list_alerts", {"Items": [alert("BANDWIDTH_MISMATCH", "PLAYBACK_WARNING", 1)]})
 
-    request = origins.UpdatePackagesInput(
-        asset_id="bbb-1a2b3c", packages=[{"source_group": "hls"}, {"source_group": "dash-avc"}]
-    )
+    request = origins.UpdatePackagesInput(asset_id="bbb-1a2b3c", packages=[{"source_group": "hls"}])
     result = origins.update_package_configurations(request, CTX)
-    assert (result.source_groups, result.added, result.removed, result.alerts) == (
-        ["hls", "dash-avc"],
-        ["dash-avc"],
-        ["hls-av1"],
-        [],
-    )
+    assert (result.source_groups, result.added, result.removed, result.alerts) == (["hls"], [], ["hls-av1"], [])
 
 
 def test_update_verifies_new_manifests_of_external_content(ddb: Stubber, mt: Stubber, s3: Stubber) -> None:
@@ -564,9 +546,9 @@ def test_update_verifies_new_manifests_of_external_content(ddb: Stubber, mt: Stu
     get(ddb, external.key(), external.to_item())
     ladder(ddb)
     mt.add_response("describe_source_location", location(), {"SourceLocationName": LOCATION})
-    serve(s3, "main_avc.m3u8")
-    mt.add_response("describe_vod_source", {"Arn": VOD_ARN, "HttpPackageConfigurations": CONFIGURATIONS[:1]})
-    wanted = [CONFIGURATIONS[0], {"Path": "/shows/pilot/main_avc.m3u8", "SourceGroup": "hls-avc", "Type": "HLS"}]
+    serve(s3, "main.m3u8", folder="shows/pilot/v2")
+    mt.add_response("describe_vod_source", {"Arn": VOD_ARN, "HttpPackageConfigurations": CONFIGURATIONS})
+    wanted = [{"Path": "/shows/pilot/v2/main.m3u8", "SourceGroup": "hls", "Type": "HLS"}]
     mt.add_response(
         "update_vod_source",
         {"Arn": VOD_ARN},
@@ -575,18 +557,18 @@ def test_update_verifies_new_manifests_of_external_content(ddb: Stubber, mt: Stu
     ddb.add_response("put_item", {})
     mt.add_response("list_alerts", {"Items": []})
     request = origins.UpdatePackagesInput(
-        asset_id="pilot",
-        packages=[{"source_group": "hls"}, {"source_group": "hls-avc", "path": "/shows/pilot/main_avc.m3u8"}],
+        asset_id="pilot", packages=[{"source_group": "hls", "path": "/shows/pilot/v2/main.m3u8"}]
     )
-    assert origins.update_package_configurations(request, CTX).added == ["hls-avc"]
+    result = origins.update_package_configurations(request, CTX)
+    assert (result.source_groups, result.added, result.removed) == (["hls"], [], [])
 
 
 def test_update_needs_paths_it_cannot_derive(ddb: Stubber) -> None:
-    external = _asset(owner="agent", packages={"hls": "/a/main.m3u8"})
+    external = _asset(owner="agent", packages={})
     get(ddb, external.key(), external.to_item())
     ladder(ddb)
-    request = origins.UpdatePackagesInput(asset_id="bbb-1a2b3c", packages=[{"source_group": "hls-hevc"}])
-    with pytest.raises(ToolError, match="no hls-hevc manifest"):
+    request = origins.UpdatePackagesInput(asset_id="bbb-1a2b3c", packages=[{"source_group": "hls"}])
+    with pytest.raises(ToolError, match="no hls manifest"):
         origins.update_package_configurations(request, CTX)
 
 

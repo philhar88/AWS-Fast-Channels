@@ -131,7 +131,7 @@ def test_entity_keys() -> None:
     assert store.plan_key("c", "p1") == {"pk": "CHANNEL#c", "sk": "PLAN#p1"}
     assert store.lease_key("c") == {"pk": "CHANNEL#c", "sk": "LEASE"}
     assert store.proposal_key("x") == {"pk": "PROPOSAL#x", "sk": "META"}
-    assert store.ladder_key("uhd@0123456789") == {"pk": "LADDER#uhd", "sk": "V#uhd@0123456789"}
+    assert store.ladder_key("lite@0123456789") == {"pk": "LADDER#lite", "sk": "V#lite@0123456789"}
 
 
 def test_time_helpers() -> None:
@@ -204,7 +204,7 @@ def test_raw_items(ddb: Stubber) -> None:
 
 
 def test_asset_versions_reads_every_page(ddb: Stubber) -> None:
-    first, second = asset(), asset(ladder_version="uhd@5306b91dd0")
+    first, second = asset(), asset(ladder_version="lite@5306b91dd0")
     query = {"TableName": TABLE, "KeyConditionExpression": Key("pk").eq("ASSET#bbb-1a2b3c")}
     start = first.key()
     ddb.add_response("query", {"Items": [dynamo(first.to_item())], "LastEvaluatedKey": dynamo(start)}, query)

@@ -14,7 +14,7 @@ from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from fast_channels.core.cost import encode_cost_per_minute
-from fast_channels.core.ladder import Ladder, LadderOps, VideoCodec, propose
+from fast_channels.core.ladder import Ladder, LadderOps, propose
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import encoding
@@ -25,7 +25,8 @@ TABLE = "library-test"
 QUEUE = "arn:aws:mediaconvert:us-east-1:111122223333:queues/fast"
 PROVISIONER = "arn:aws:states:us-east-1:111122223333:stateMachine:fast-ladder-provisioner"
 STANDARD = Ladder.builtin("standard")
-AVC_720 = LadderOps(codecs=[VideoCodec.AVC], max_height=720)
+UP_TO_720 = LadderOps(max_height=720)
+NOTHING_LEFT = LadderOps(max_height=200)
 CTX = ToolContext(tool="encoding___provision_ladder", correlation_id="fast-console-session-1")
 READ_CTX = ToolContext(tool="encoding___list_ladders", correlation_id="fast-console-session-1")
 _typed = TypeSerializer().serialize
@@ -102,7 +103,7 @@ def standard(**changes: Any) -> store.LadderRecord:
     return store.LadderRecord(**{"ladder_version": STANDARD.version, "status": "READY", "kit": kit} | changes)
 
 
-def proposal_item(ops: LadderOps = AVC_720, *, expires_in: int = 600) -> tuple[dict[str, Any], Ladder | None]:
+def proposal_item(ops: LadderOps = UP_TO_720, *, expires_in: int = 600) -> tuple[dict[str, Any], Ladder | None]:
     proposal = propose(STANDARD, ops)
     stored = encoding.StoredProposal(
         proposal_id="proposal-1",
@@ -120,7 +121,7 @@ def proposal_item(ops: LadderOps = AVC_720, *, expires_in: int = 600) -> tuple[d
 
 
 def test_list_ladders_summarises_each_version_and_its_kit(aws_stubs: SimpleNamespace) -> None:
-    derived = propose(STANDARD, AVC_720).ladder
+    derived = propose(STANDARD, UP_TO_720).ladder
     assert derived is not None
     records = [
         standard(),
@@ -133,7 +134,7 @@ def test_list_ladders_summarises_each_version_and_its_kit(aws_stubs: SimpleNames
 
     first, second, broken = result.model_dump(mode="json")["ladders"]
     assert first["ladder_version"] == STANDARD.version and first["status"] == "READY"
-    assert first["codecs"] == ["av1", "avc", "hevc"] and first["max_height"] == 1080
+    assert first["max_height"] == 1080
     assert first["renditions"] == len(STANDARD.video)
     assert first["cost_per_minute_usd"] == encode_cost_per_minute(STANDARD)
     assert first["kit"] == {
@@ -141,8 +142,9 @@ def test_list_ladders_summarises_each_version_and_its_kit(aws_stubs: SimpleNames
         "break_slates": ["fast-slate-15", "fast-slate-30"],
         "house_ads": ["h1"],
     }
-    assert second["codecs"] == ["avc"] and second["owner"] == "agent"
-    assert broken["codecs"] is None and broken["cost_per_minute_usd"] is None
+    assert second["max_height"] == 720 and second["owner"] == "agent"
+    assert broken["max_height"] is None and broken["cost_per_minute_usd"] is None
+    assert "codecs" not in first
 
 
 def test_get_ladder_returns_renditions_grid_and_profiles(aws_stubs: SimpleNamespace) -> None:
@@ -151,9 +153,10 @@ def test_get_ladder_returns_renditions_grid_and_profiles(aws_stubs: SimpleNamesp
     result = encoding.get_ladder(encoding.LadderInput(ladder_version=STANDARD.version), READ_CTX)
 
     assert (result.frame_rate, result.gop_ms, result.segment_ms) == ("30000/1001", 2002, 6006)
-    assert result.video[0].name == STANDARD.video[0].name and len(result.audio) == len(STANDARD.audio)
-    assert "hls-avc" in result.profiles and "hls-uhd" not in result.profiles
-    assert result.break_slate_gops == [15, 30] and result.pricing_tier == "PROFESSIONAL"
+    assert [r.name for r in result.video] == [r.name for r in STANDARD.video]
+    assert result.audio == STANDARD.audio and result.audio.kbps == 128
+    assert result.profiles == ["hls"]
+    assert result.break_slate_gops == [15, 30]
 
 
 def test_get_unknown_ladder_is_not_found(aws_stubs: SimpleNamespace) -> None:
@@ -168,35 +171,35 @@ def test_get_unknown_ladder_is_not_found(aws_stubs: SimpleNamespace) -> None:
 
 def test_propose_ladder_stores_a_valid_proposal(aws_stubs: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(secrets, "token_hex", lambda n: "a1b2c3d4e5")
-    derived = propose(STANDARD, AVC_720).ladder
+    derived = propose(STANDARD, UP_TO_720).ladder
     assert derived is not None
     get_item(aws_stubs.ddb, store.ladder_key(STANDARD.version), standard().to_item())
     get_item(aws_stubs.ddb, store.ladder_key(derived.version))
     aws_stubs.ddb.add_response("put_item", {})
 
-    result = encoding.propose_ladder(encoding.ProposeLadderInput(base=STANDARD.version, ops=AVC_720), READ_CTX)
+    result = encoding.propose_ladder(encoding.ProposeLadderInput(base=STANDARD.version, ops=UP_TO_720), READ_CTX)
 
     assert result.proposal_id == "proposal-a1b2c3d4e5" and result.valid
     assert result.ladder_version == derived.version and result.existing_status is None
-    assert all(name.startswith("avc") for name in result.video)
-    assert any(name.startswith("hevc") for name in result.removed)
+    assert result.video == ["avc-720p", "avc-360p"]
+    assert result.removed == ["avc-1080p"]
     assert result.cost_per_minute_usd < result.base_cost_per_minute_usd
     assert result.kit_cost_usd is not None and result.kit_cost_usd > 0
     [put] = aws_stubs.calls.of("PutItem")
     assert (put["Item"]["pk"], put["Item"]["sk"]) == ("PROPOSAL#proposal-a1b2c3d4e5", "META")
-    assert put["Item"]["ladder"]["video"][0]["codec"] == "avc"
+    assert put["Item"]["ladder"]["video"][0]["name"] == "avc-720p"
     assert abs(put["Item"]["expires_at"] - time.time() - encoding.PROPOSAL_TTL_S) < 5
 
 
 def test_propose_reports_an_invalid_ladder(aws_stubs: SimpleNamespace) -> None:
     get_item(aws_stubs.ddb, store.ladder_key(STANDARD.version), standard().to_item())
     aws_stubs.ddb.add_response("put_item", {})
-    ops = LadderOps(codecs=[VideoCodec.AV1])
+    ops = NOTHING_LEFT
 
     result = encoding.propose_ladder(encoding.ProposeLadderInput(base=STANDARD.version, ops=ops), READ_CTX)
 
     assert not result.valid and result.ladder_version is None and result.kit_cost_usd is None
-    assert any("720p" in error for error in result.errors)
+    assert result.errors == ["no video renditions left"]
 
 
 # --- provision ------------------------------------------------------------------------------------------------------
@@ -290,7 +293,7 @@ def test_provisioning_an_existing_version_starts_nothing(aws_stubs: SimpleNamesp
 
 
 def test_invalid_or_expired_proposals_are_refused(aws_stubs: SimpleNamespace) -> None:
-    invalid, _ = proposal_item(LadderOps(codecs=[VideoCodec.AV1]))
+    invalid, _ = proposal_item(NOTHING_LEFT)
     get_item(aws_stubs.ddb, store.proposal_key("proposal-1"), invalid)
     with pytest.raises(ToolError) as raised:
         encoding.provision_ladder(encoding.ProvisionLadderInput(proposal_id="proposal-1"), CTX)

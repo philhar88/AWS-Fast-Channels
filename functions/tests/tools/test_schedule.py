@@ -115,7 +115,7 @@ def channel(**changes: Any) -> store.ChannelRecord:
     fields: dict[str, Any] = {
         "name": CHANNEL,
         "ladder_version": LV,
-        "outputs": ["hls", "dash-avc"],
+        "outputs": ["hls"],
         "owner": "iac",
         "tier": "BASIC",
         "arn": ARN,
@@ -383,7 +383,7 @@ def test_plan_reports_assets_encoded_on_another_ladder(aws_stubs: SimpleNamespac
     get_item(ddb, store.ladder_key(LV), ladder().to_item())
     query(ddb)
     get_item(ddb, store.asset_key("bbb", LV))
-    query(ddb, asset("bbb", ladder_version="uhd@5306b91dd0").to_item())
+    query(ddb, asset("bbb", ladder_version="lite@5306b91dd0").to_item())
     ddb.add_response("put_item", {})
     aws_stubs.mt.add_response("get_channel_schedule", {"Items": []}, schedule_request())
 

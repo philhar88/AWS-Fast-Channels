@@ -84,7 +84,7 @@
     },
     {
       "name": "channels___get_channel",
-      "description": "Get one channel: live state, owner, tier, ladder version, outputs, the viewer playback URLs per output (ssai and sgai for HLS outputs, dash for DASH outputs; per CDN when several are configured) and the pending auto-stop time. Give operators these URLs verbatim; never build playback URLs yourself.",
+      "description": "Get one channel: live state, owner, tier, ladder version, outputs, the viewer playback URLs per output (ssai and sgai; per CDN when several are configured) and the pending auto-stop time. Give operators these URLs verbatim; never build playback URLs yourself.",
       "inputSchema": {
         "required": [
           "channel"

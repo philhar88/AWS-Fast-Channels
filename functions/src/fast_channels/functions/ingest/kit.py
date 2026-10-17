@@ -140,7 +140,6 @@ def begin(provision: Mapping[str, Any], execution: str, images: KitImages) -> di
         "description": ladder.description,
         "job_template": provision["job_template"],
         "owner": provision.get("owner", Owner.IAC.value),
-        "codecs": sorted(ladder.codecs),
         "max_height": ladder.max_height,
         "renditions": len(ladder.video),
         "cost_per_minute_usd": encode_cost_per_minute(ladder),
@@ -182,7 +181,6 @@ def ready(kit: Mapping[str, Any], assets: Sequence[Mapping[str, Any]]) -> dict[s
             creative_id=ad["creative"]["creative_id"],
             duration_ms=ad["duration_ms"],
             hls_uri=ad["creative"]["hls_uri"],
-            dash_uri=ad["creative"]["dash_uri"],
             width=kit["width"],
             height=kit["height"],
         )
