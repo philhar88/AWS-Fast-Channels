@@ -225,6 +225,19 @@ def _input(ladder: Ladder, source_uri: str | None, generator: GeneratorInput | N
     }
 
 
+def snapped_cue_points(ladder: Ladder, cue_points_ms: Sequence[int]) -> list[int]:
+    """Cue points snapped to the nearest frame, sorted and de-duplicated, without 0 (a break before the program is
+    no break); these are the values Channel Assembly ad breaks use."""
+    grid = ladder.grid
+    return sorted({grid.snap_to_frame(ms) for ms in cue_points_ms} - {0})
+
+
+def needs_esam(ladder: Ladder, cue_points_ms: Sequence[int]) -> bool:
+    """Whether an encode with these cue points carries ESAM (and is billed at the Professional tier): some snapped
+    point lies between the natural segment boundaries."""
+    return any(not ladder.grid.on_segment_grid(ms) for ms in snapped_cue_points(ladder, cue_points_ms))
+
+
 def build_job_overrides(
     *,
     ladder: Ladder,
@@ -246,9 +259,8 @@ def build_job_overrides(
         raise ValueError("exactly one of source_uri and generator is required")
     if generator is not None and cue_points_ms:
         raise ValueError("generated slates and house ads have no cue points")
-    grid = ladder.grid
-    snapped = sorted({grid.snap_to_frame(ms) for ms in cue_points_ms} - {0})
-    esam = any(not grid.on_segment_grid(ms) for ms in snapped)
+    snapped = snapped_cue_points(ladder, cue_points_ms)
+    esam = needs_esam(ladder, snapped)
     prefix = output_prefix(asset_id, ladder.version)
     settings: dict[str, Any] = {
         "Inputs": [_input(ladder, source_uri, generator)],

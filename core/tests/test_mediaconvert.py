@@ -21,7 +21,9 @@ from fast_channels.core.mediaconvert import (
     build_job_overrides,
     compile_job_settings,
     job_template_props,
+    needs_esam,
     output_prefix,
+    snapped_cue_points,
 )
 from fast_channels.core.profiles import profile
 
@@ -308,6 +310,12 @@ def test_cue_points_snap_to_the_frame_and_add_esam(standard: Ladder) -> None:
     assert o.settings["Esam"] == build_esam([13480, 26994])
     assert o.settings["Esam"]["ResponseSignalPreroll"] == 0  # the default 4 s can signal a segment early
     assert all(abs(standard.grid.snap_to_frame(ms) - ms) <= 17 for ms in range(0, 120_000, 997))  # half a frame
+
+
+def test_needs_esam_follows_the_snapped_cue_points(standard: Ladder) -> None:
+    assert snapped_cue_points(standard, [27000, 13480, 0, 16]) == [13480, 26994]  # 16 ms snaps to frame 0
+    assert not needs_esam(standard, []) and not needs_esam(standard, [6006, 12012, 12000])
+    assert needs_esam(standard, [6006, 246000])  # Sintel's first cue: 246012, between segment boundaries
 
 
 def test_generator_overrides(standard: Ladder) -> None:
