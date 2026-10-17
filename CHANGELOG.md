@@ -132,7 +132,7 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 
 ### Known issues
 
-AWS service behaviour that Apple's mediastreamvalidator reports at Critical or Must level, raised with AWS:
+AWS service behaviour that Apple's mediastreamvalidator reports at Critical or Must level:
 
 - MediaConvert declares HE-AAC v2 outputs as `mp4a.40.5` in HLS `CODECS` (`mp4a.40.29` in DASH): 535060 on the
   `avc-234p` variant of every channel ([encoding.md](docs/encoding.md)).
