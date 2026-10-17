@@ -2,7 +2,9 @@
 
 Every channel has one MediaTailor playback configuration that serves both server-side ad insertion (SSAI, stitched
 manifests) and server-guided ad insertion (SGAI, HLS Interstitials). By default the ads are *preconditioned*:
-encoded on the channel's own ladder, so MediaTailor never transcodes them.
+encoded on the channel's own ladder, so MediaTailor never transcodes them. Content and ads are plain HLS: MPEG-TS
+segments with AVC video and AAC audio muxed into every variant ([encoding.md](encoding.md)). SSAI is the primary
+path; it works with every HLS player.
 
 - [SSAI or SGAI](#ssai-or-sgai)
 - [The playback configuration](#the-playback-configuration)
@@ -10,7 +12,6 @@ encoded on the channel's own ladder, so MediaTailor never transcodes them.
 - [External VAST mode](#external-vast-mode)
 - [The ad decision server URL](#the-ad-decision-server-url)
 - [Beaconing and ad tracking](#beaconing-and-ad-tracking)
-- [DASH](#dash)
 - [Monitoring and troubleshooting](#monitoring-and-troubleshooting)
 
 ## SSAI or SGAI
@@ -20,16 +21,16 @@ The playback configuration uses `InsertionMode: PLAYER_SELECT`, so each session 
 | | SSAI (stitched) | SGAI (HLS Interstitials) |
 |---|---|---|
 | Request | `<CdnBaseUrl>/v1/master/<hash>/<channel>/<output>.m3u8` | the same URL with `?aws.insertionMode=GUIDED` |
-| Formats | HLS and DASH (`/v1/dash/<hash>/<channel>/<output>.mpd`) | HLS only |
 | Manifests | Personalised per session; never cached | Media playlists (`/v1/i-media/…`) are identical for every session and cached by CloudFront for the origin's 1 s |
 | Ads | Stitched into the media playlist, behind discontinuities | `EXT-X-DATERANGE` interstitial; the player fetches the break's asset list |
 | Asset list | n/a | Absolute URL on `interstitials.mediatailor.<region>.amazonaws.com`: players call MediaTailor directly, not through the CDN |
 | Beacons | Server-side by MediaTailor (implicit sessions) | Client-side: add `aws.reportingMode=CLIENT` and fire the asset list's `TRACKING` beacons |
-| Players | Any HLS or DASH player | Apple platforms 16.4+, hls.js 1.6+ (the console uses 1.7.3), other players with HLS Interstitials support |
+| Players | Any HLS player | Apple platforms 16.4+, hls.js 1.6+, other players with HLS Interstitials support. hls.js 1.7.3, which the console uses, stalls at breaks with muxed audio ([below](#monitoring-and-troubleshooting)) |
 | Channel Assembly load | About one origin request per session request | Expected to be bounded per variant by the CDN cache (not measured at scale) |
 
 Get the URLs from the Media stack's `Channels` output, from `channels___get_channel`, or from the console's Channels
-view, which plays an SSAI and an SGAI session of the same output side by side. SGAI with DASH returns HTTP 500.
+view, which plays an SSAI and an SGAI session of the same output side by side. Verify SGAI on your own player before
+you rely on it.
 
 ## The playback configuration
 
@@ -43,7 +44,6 @@ per channel, named after the channel.
 | `AdDecisionServerUrl` | The ladder's VAST pod with correlation parameters (preconditioned), or `ads.url` (external) | [below](#the-ad-decision-server-url) |
 | `CdnConfiguration` | `AdSegmentUrlPrefix` and `ContentSegmentUrlPrefix` = the content base URL | Ad segments and re-hosted ad playlists go through the CDN |
 | `AdConditioningConfiguration.StreamingMediaFileConditioning` | `NONE` | Streaming creatives are stitched as they are |
-| `DashConfiguration` | `MpdLocation: DISABLED`, `OriginManifestType: MULTI_PERIOD` | Keeps DASH players on the CDN instead of a `Location` pointing at MediaTailor |
 | `PersonalizationThresholdSeconds` | 5 | |
 | `AdsPersonalizationTimeouts` | ADS request 2000 ms; live and VOD personalisation 6000 ms | All three must be set together or the API rejects the configuration |
 | `LogConfiguration` | `VENDED_LOGS` for `observability.mediatailor_log_percent` of sessions (default 100; use about 10 in production); raw ADS responses included, generated manifests excluded | One shared log group per deployment |
@@ -53,28 +53,31 @@ per channel, named after the channel.
 
 ### Why
 
-MediaTailor normally transcodes creatives to match the content. With a multi-codec AV1 + HEVC + AVC ladder, the live
-tests showed transcoded ads truncated in AVC and HEVC variants (8 s of video against 10.1 s of audio, padded with
-slate), AV1 ads downgraded to 8-bit, HEVC ads to Main profile, and one HE-AAC rendition stitched into both audio
-groups. Creatives encoded with the content's own job template and stitched with conditioning `NONE` filled every
-variant exactly, in SSAI and SGAI sessions ([ADR-0005](adr/0005-preconditioned-ads.md)).
+MediaTailor normally transcodes creatives to match the content. With the multi-codec AV1 + HEVC + AVC ladder of the
+first v3.0.0 encode, the live tests showed transcoded ads truncated in AVC and HEVC variants (8 s of video against
+10.1 s of audio, padded with slate), AV1 ads downgraded to 8-bit, HEVC ads to Main profile, and one HE-AAC rendition
+stitched into both audio groups. Creatives encoded with the content's own job template and stitched with conditioning
+`NONE` filled every variant exactly, in SSAI and SGAI sessions ([ADR-0005](adr/0005-preconditioned-ads.md)). The AVC +
+AAC ladder keeps that default: a preconditioned ad is stitched as it was encoded, so every variant gets exactly that
+ad and no transcode is billed.
+
+MediaTailor stitches a preconditioned ad only when it matches the content's variants: the same resolution and codec,
+and a bitrate within 8 kbit/s after rounding. House ads are encoded with the channel ladder's own job template, so
+they are MPEG-TS variants of the same rungs, in the same order, with the same muxed AAC track.
 
 ### How
 
 1. Each ladder version's [kit](encoding.md#ladder-kits) includes two house ads of 15 GOPs (30.03 s each), encoded
-   with the ladder's job template, its caption tracks included (empty).
+   with the ladder's job template.
 2. Finalize writes an **SGAI-ready copy** of each ad's manifests under `ads/<ladder>/<creative_id>/`: media playlists
-   with absolute segment and `EXT-X-MAP` URIs on the content host, multivariant child URIs kept relative, and DASH
-   MPDs with absolute segment templates. MediaTailor re-hosts only the multivariant playlist of a preconditioned ad
-   (under `/preconditioned-ads/` on the ad segment prefix), so relative segment URIs would resolve against
-   MediaTailor's host and fail; for DASH it resolves the templates against the copy's location and ignores `BaseURL`
-   (v3.0.0 wrote a `BaseURL`, and DASH ad segments then redirected to init segments that did not exist).
-   CloudFront routes `/preconditioned-ads/*` to MediaTailor's segment origin.
+   with absolute segment URIs on the content host, multivariant child URIs kept relative. MediaTailor re-hosts only
+   the multivariant playlist of a preconditioned ad (under `/preconditioned-ads/` on the ad segment prefix), so
+   relative segment URIs would resolve against MediaTailor's host and fail. CloudFront routes
+   `/preconditioned-ads/*` to MediaTailor's segment origin.
 3. The kit writes a static **VAST 4.2 pod** to `ads/<ladder>/vast.xml`, repeating the house ads until the pod covers
-   the longest break slate, so every break length is a whole number of ads. Each `<Ad>` has two streaming `MediaFile`s:
-   the HLS multivariant of the SGAI-ready copy and the per-codec DASH MPD. There is deliberately no progressive MP4:
-   with conditioning `NONE`, MediaTailor would transcode one when it cannot use the streaming files, which is the
-   path that failed.
+   the longest break slate, so every break length is a whole number of ads. Each `<Ad>` has one streaming
+   `MediaFile`: the HLS multivariant of the SGAI-ready copy. There is deliberately no progressive MP4: with
+   conditioning `NONE`, MediaTailor would transcode one when it cannot use the streaming file.
 4. Creative ids are `<creative>-<ladder key>-<host hash>` and appear as `Creative@id` and `UniversalAdId`. MediaTailor
    caches imports by creative, so ids are never reused for different media or URLs; a new content host produces new
    ids.
@@ -86,10 +89,10 @@ imports it; later breaks fill.
 ### Your own ad server with preconditioned creatives
 
 To keep the preconditioned path with real campaigns, encode your creatives with the channel's ladder (ingest them with
-`kind: "ad"`, see [integrate-your-cms.md](integrate-your-cms.md#ingest-contract)). The library asset then carries the
-creative id and the absolute `hls_uri` and `dash_uri` of its SGAI-ready copy. Have your ADS return VAST with those two
-streaming `MediaFile`s (and no progressive file), versioning `Creative@id` and `UniversalAdId` per ladder version, and
-configure its URL with `ads.mode: external_vast` (next section).
+`kind: "ad"`, see [integrate-your-cms.md](integrate-your-cms.md#ingest-contract)). They then have the channel's exact
+MPEG-TS variants. The library asset carries the creative id and the absolute `hls_uri` of its SGAI-ready copy. Have
+your ADS return VAST with that streaming `MediaFile` (and no progressive file), versioning `Creative@id` and
+`UniversalAdId` per ladder version, and configure its URL with `ads.mode: external_vast` (next section).
 
 ## External VAST mode
 
@@ -102,10 +105,8 @@ configure its URL with `ads.mode: external_vast` (next section).
 
 The playback configurations then call your ad decision server. Caveats:
 
-- Creatives that are not preconditioned are transcoded by MediaTailor from their progressive files and served under
-  `/tm/*` (routed by CloudFront to MediaTailor's segment origin). Transcoding produces the defects described above
-  when one manifest mixes codecs, so **every channel output must be single-codec** in this mode: `hls-avc`,
-  `hls-hevc`, `hls-av1` or a `dash-*` output. Configuration validation rejects `hls`.
+- Creatives that are not preconditioned are transcoded by MediaTailor from their progressive files to match the
+  content's MPEG-TS variants, and served under `/tm/*` (routed by CloudFront to MediaTailor's segment origin).
 - The first break that meets a new creative is skipped while it is transcoded.
 - MediaTailor includes 10 transcodes per 1,000 ad insertions; beyond that they are billed at MediaConvert rates.
 - The URL is validated against the documented MediaTailor variables; an unknown variable would silently become an
@@ -140,11 +141,8 @@ Variables accepted in any ADS URL (`core.specs.ADS_VARIABLES`):
 ## Beaconing and ad tracking
 
 - **SSAI, implicit sessions** (a plain `GET` of the multivariant): MediaTailor fires the VAST impression and quartile
-  beacons server-side as the player fetches the ad video segments through `/v1/segment/…` redirects (301 to the CDN).
-  Never cache those redirects; they are unique per session and expire. With preconditioned ads only the video goes
-  through them: the ad audio is served straight from the creative's own CMAF output, `/assets/<ad asset>/…` on the
-  content host, on the CDN's default route. In CDN logs, count ad audio by the house ads' asset ids under
-  `/assets/`, not by the redirect route.
+  beacons server-side as the player fetches the ad segments through `/v1/segment/…` redirects (301 to the CDN).
+  Never cache those redirects; they are unique per session and expire.
 - **SSAI, explicit sessions** (`POST /v1/session/…`): MediaTailor returns a `trackingUrl` for client-side reporting.
 - **SGAI**: request `?aws.insertionMode=GUIDED&aws.reportingMode=CLIENT`. Each asset list then contains a `TRACKING`
   block with the beacon URLs and their times, and the player fires them. Server-side beaconing is not possible for
@@ -153,23 +151,6 @@ Variables accepted in any ADS URL (`core.specs.ADS_VARIABLES`):
 - **The kit's beacons** point at `<ContentBaseUrl>/ads/b.gif?evt=<event>&cr=<creative>` (`Cache-Control: no-store`),
   so every impression and quartile appears in the CloudFront access logs. MediaTailor does not expand VAST macros such
   as `[CACHEBUSTING]`; they arrive literally.
-
-## DASH
-
-DASH is SSAI only. Channel Assembly outputs a multi-period MPD (60 s window) per DASH output; ad periods are stitched
-from the per-codec ad MPDs. DASH ad-segment requests used for server-side beacons go directly to
-`manifests.mediatailor.<region>.amazonaws.com/v1/dashsegment/…` (MediaTailor writes that absolute `BaseURL` even
-behind a CDN) and end in a 301 to the CDN. The default package profiles include `dash-avc`; add `dash-hevc` or
-`dash-av1` if your DASH devices need them.
-
-## Captions during ads
-
-House ads carry the ladder's caption tracks (empty), so every stream keeps one rendition set through a break. During
-an SSAI HLS ad MediaTailor serves one blank WebVTT (`/v1/webvtt/…/web.vtt`) in every subtitle rendition, which in
-the IMSC1 rendition is not valid HLS ([captions.md](captions.md#limits)); SGAI interstitials show the ad's own (empty)
-tracks while the primary keeps the slate's; DASH ad periods carry the ad's IMSC AdaptationSet. Your own preconditioned
-creatives must be encoded with the channel's ladder, caption tracks included. Details in
-[captions.md](captions.md#through-channel-assembly-ad-insertion-and-players).
 
 ## Monitoring and troubleshooting
 
@@ -181,13 +162,11 @@ creatives must be encoded with the channel's ladder, caption tracks included. De
 | Symptom | Likely cause | Action |
 |---|---|---|
 | The first break after a deploy or a new creative shows only slate | `NEW_CREATIVE` import | Expected; later breaks fill. Warm up a demo channel for a few breaks |
-| Breaks never fill | ADS URL unreachable, or creatives do not match the ladder | Check `MAKING_ADS_REQUEST` and `FILLED_AVAIL` in the vended logs; `curl` the VAST URL through the CDN |
+| Breaks never fill | ADS URL unreachable, or creatives do not match the ladder's variants | Check `MAKING_ADS_REQUEST` and `FILLED_AVAIL` in the vended logs; `curl` the VAST URL through the CDN |
 | SGAI plays content but no ads | Asset list fetch blocked, or player without HLS Interstitials | Check the player's network log for `interstitials.mediatailor…`; use hls.js 1.6+ or AVPlayer |
-| SGAI in hls.js stalls at a break | hls.js 1.7.3 enters an append-in-place interstitial only when the audio and video buffers reach within 10 ms of the `DATERANGE` start | Seen with AAC framing in local tests; verify with your player version |
+| SGAI in hls.js (the console's players included) stalls at a break | hls.js 1.7.3 enters an append-in-place interstitial only when the buffered audio and video reach within 10 ms of the `DATERANGE` start. With AAC muxed into the content segments (1024-sample frames) the audio can end 20–30 ms short of the segment boundary, and the player stalls there without loading the asset list | hls.js behaviour: SSAI is not affected, nor are players other than hls.js. Verify SGAI on your player before you rely on it |
 | SSAI returns 504 for a few minutes after a channel change | A new channel policy takes minutes to propagate; Channel Assembly answers 403 meanwhile | Wait; avoid changing the policy on a live channel |
 | HTTP 400 `GUIDED insertion mode not allowed` | The playback configuration is `STITCHED_ONLY` | The constructs always set `PLAYER_SELECT`; check for manual edits |
-| mediastreamvalidator: 552026 *Removed an EXT-X-DATERANGE while mapped to range in playlist*, for most breaks, on every live video and subtitle playlist: the Channel Assembly origin, SSAI and SGAI | Channel Assembly drops a break's `DATERANGE` from the first playlist whose first segment starts exactly at `START-DATE` + `DURATION`. The validator counts that instant as part of the range (RFC 8216bis section 6.2.1). It misses a break only when `START-DATE` + `DURATION` rounds just below the in-point in its double-precision dates. Audio playlists pass because their in-point segment starts a few tens of milliseconds later | Channel Assembly behaviour, not configuration: the tier, the window length, the SCTE-35 message type and MediaTailor do not change it, and `SCTE35_ENHANCED` markup leaves SGAI without interstitials. Players near the live edge left the break about one window earlier |
-| mediastreamvalidator: 641087 *No samples found in the segment* (and 535008) on the SSAI subtitle playlist at every break | MediaTailor's blank WebVTT inside the IMSC1 rendition ([captions.md](captions.md#limits)) | MediaTailor behaviour, no setting; SGAI is not affected |
+| mediastreamvalidator: 552026 *Removed an EXT-X-DATERANGE while mapped to range in playlist*, for most breaks, on every live media playlist: the Channel Assembly origin, SSAI and SGAI | Channel Assembly drops a break's `DATERANGE` from the first playlist whose first segment starts exactly at `START-DATE` + `DURATION`. The validator counts that instant as part of the range (RFC 8216bis section 6.2.1). It misses a break only when `START-DATE` + `DURATION` rounds just below the in-point in its double-precision dates | Channel Assembly behaviour, not configuration: the tier, the window length, the SCTE-35 message type and MediaTailor do not change it, and `SCTE35_ENHANCED` markup leaves SGAI without interstitials. No ad, interstitial or beacon is lost: the tag goes about one window after the break ends |
 | mediastreamvalidator: 536003 *Program date-time tags are too far apart* at the second ad of a pod | In SSAI, MediaTailor writes the `EXT-X-PROGRAM-DATE-TIME` of the first segment of the second and later ads of a pod one segment (about 6 s) off in some reloads, in every rendition, also when the VAST returns exactly the ads that fill the break | MediaTailor behaviour: Channel Assembly's own playlists keep every date |
-| mediastreamvalidator: 652018 *Media Entry URL not match previous playlist* and 652014 (Critical), with 536001-536004 and 552027, on the SSAI subtitle playlist at every break | Channel Assembly's `sub_1.m3u8` runs N media sequence numbers ahead of the video's, because a source aired with a caption track of N more segments than its video. MediaTailor places the break at the video's sequence number in every rendition: in that playlist the blank WebVTT replaces the last N content segments before the break after they were served, N slate segments follow the ads, and around breaks the `EXT-X-DISCONTINUITY-SEQUENCE` of every rendition changes between reloads | Caption tracks must have the video's segments ([captions.md](captions.md#why-imsc1-and-why-caption-tracks-belong-to-the-ladder)). After rewriting a registered source's manifests, call `UpdateVodSource`: Channel Assembly caches source playlists. An offset lasts until the channel restarts. HLS lets every rendition number its segments on its own (HLS 2nd edition §4.4.3.2), so this is also a MediaTailor defect |
 | `EXT-X-MEDIA-SEQUENCE` one lower than the reload before | MediaTailor sometimes answers a reload with an older session playlist, with or without the CDN; seen by a poller reloading about every second, never by the validator | MediaTailor behaviour: Channel Assembly's own playlists never go back |

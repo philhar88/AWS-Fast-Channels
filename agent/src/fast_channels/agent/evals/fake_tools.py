@@ -136,16 +136,11 @@ class FakeScheduleTools:
             "state": "RUNNING",
             "owner": "iac",
             "ladder_version": LADDER_VERSION,
-            "outputs": ["hls", "hls-avc", "dash-avc"],
+            "outputs": ["hls"],
             "tier": "BASIC",
             "playback_configuration": channel,
             "playback": {
                 "hls": {"ssai": f"{playback}/hls.m3u8", "sgai": f"{playback}/hls.m3u8?aws.insertionMode=GUIDED"},
-                "hls-avc": {
-                    "ssai": f"{playback}/hls-avc.m3u8",
-                    "sgai": f"{playback}/hls-avc.m3u8?aws.insertionMode=GUIDED",
-                },
-                "dash-avc": {"dash": playback.replace("/master/", "/dash/") + "/dash-avc.mpd"},
             },
         }
 

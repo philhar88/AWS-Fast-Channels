@@ -344,12 +344,6 @@
               "break_offset_count": {
                 "type": "integer"
               },
-              "captioned": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
               "vod_source": {
                 "type": "string"
               },
@@ -364,7 +358,6 @@
               "status",
               "owner",
               "break_offset_count",
-              "captioned",
               "updated_at"
             ]
           }
@@ -411,12 +404,6 @@
               },
               "description": {
                 "type": "string"
-              },
-              "codecs": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
               },
               "max_height": {
                 "type": "integer"

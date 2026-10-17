@@ -20,7 +20,6 @@ CREATIVE = {
     "creative_id": "c-1",
     "ad_prefix": "ads/x/c-1/",
     "hls_uri": "https://h/main.m3u8",
-    "dash_uri": "https://h/m.mpd",
 }
 
 

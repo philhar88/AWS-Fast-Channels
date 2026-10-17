@@ -99,7 +99,7 @@ def test_ready_writes_the_vast_pod_and_marks_the_ladder(
             f"house-ad-{n}",
             d,
             vod_source=None,
-            creative={"creative_id": f"c{n}", "hls_uri": f"h{n}", "dash_uri": f"d{n}"},
+            creative={"creative_id": f"c{n}", "hls_uri": f"h{n}"},
         )
         for n, d in ((1, 30030), (2, 30030))
     ]

@@ -4,8 +4,8 @@ CDN-neutral path contract, and its standard-logs-v2 access logs.
 The routing table :data:`ROUTES` is the single source of truth: :class:`MediaDistribution` renders it as CloudFront
 behaviours and :func:`path_contract` as the JSON other CDNs copy (``docs/path-contract.json``). The rows come from
 e2e.md §2.3 and SPEC §5.4; a deployment of this construct confirmed each of them through the
-``cache-behavior-path-pattern`` field of its access logs, with gzip on ``/v1/dash/*`` and ``/v1/manifest/*`` and
-cache hits on ``/v1/i-media/*`` (2026-10-16). The managed policies' contents were re-read with
+``cache-behavior-path-pattern`` field of its access logs, with gzip on ``/v1/manifest/*`` and cache hits on
+``/v1/i-media/*`` (2026-10-16). The managed policies' contents were re-read with
 ``aws cloudfront get-cache-policy`` / ``get-origin-request-policy``.
 """
 
@@ -226,17 +226,6 @@ ROUTES: Final[tuple[Route, ...]] = (
         purpose="SGAI media playlists: identical across sessions, cached for the origin's max-age (1 s)",
     ),
     Route(
-        "/v1/dash/*",
-        Origin.MANIFESTS,
-        CACHING_DISABLED,
-        ALL_VIEWER_AND_CLOUDFRONT_HEADERS,
-        Cors.PREFLIGHT,
-        compress=True,
-        methods=Methods.READ,
-        # Multi-period MPDs reach 30-100 KB; the /v1/* policy drops Accept-Encoding (_review.md, DASH).
-        purpose="SSAI DASH manifests (per session, gzip)",
-    ),
-    Route(
         "/v1/manifest/*",
         Origin.MANIFESTS,
         CACHING_DISABLED,
@@ -265,7 +254,7 @@ ROUTES: Final[tuple[Route, ...]] = (
         compress=False,
         methods=Methods.READ,
         purpose=(
-            "CMAF content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); "
+            "MPEG-TS content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); "
             "content manifests under /assets are denied by the bucket policy"
         ),
     ),

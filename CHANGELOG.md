@@ -7,19 +7,18 @@ All notable changes to this project are documented here. The format follows
 ## [3.0.0] - 2026-10-16
 
 A rewrite of FAST Channels on AWS on the AWS CDK (Python), with agentic scheduling on Amazon Bedrock AgentCore, one
-multi-codec CMAF encode per asset, SSAI and SGAI, and end-to-end traceability. v2 deployments are not upgraded in
-place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
+plain HLS encode per asset (MPEG-TS, AVC with AAC muxed, MediaConvert Basic tier), SSAI and SGAI, and end-to-end
+traceability. v2 deployments are not upgraded in place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 
 ### BREAKING
 
 - The AWS SAM templates (`deployment/`), the SAM Lambda functions and layers (`source/`) and the CloudFormation
   parameters are gone. Deploy with `make deploy`; configure in the `fast-channels` block of `cdk.json`.
-- AWS Elemental MediaPackage VOD is no longer used. Channel Assembly reads CMAF manifests from S3 with SigV4. Content
-  encoded or packaged by v2 cannot be scheduled on v3 channels and must be re-encoded.
+- AWS Elemental MediaPackage VOD is no longer used. Channel Assembly reads the encode's HLS manifests from S3 with
+  SigV4. Content encoded or packaged by v2 cannot be scheduled on v3 channels and must be re-encoded.
 - Stack, bucket and resource names, playback URLs and outputs are new.
-- The default ladder (`standard`) tops out at 1080p and adds AV1; 2160p moved to the optional `uhd` ladder.
-- Ads are preconditioned by default (MediaTailor `AdConditioning` `NONE`). A third-party ad server
-  (`ads.mode: external_vast`) requires single-codec channel outputs.
+- The default ladder (`standard`) is H.264 with AAC muxed, up to 1080p. v3 has no HEVC, 4K or DASH output.
+- Ads are preconditioned by default (MediaTailor `AdConditioning` `NONE`).
 - The per-asset notification email with playback URLs is replaced by EventBridge events and failure alerts.
 - Python 3.14 on arm64 and Node.js 24 are required.
 
@@ -35,28 +34,21 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - **Autopilot**: per-channel EventBridge Scheduler schedules that keep a channel's schedule 24 hours ahead with a
   machine token limited by Cedar to planning and publishing on its own channels. The machine client, its permits and
   the autopilot's error and dead-letter alarms exist only when a channel has an `autopilot_cron`.
-- **Closed captions**: ladders declare IMSC1 caption tracks (`[[captions]]`; English in `standard` and `uhd`) that
-  every asset carries, empty where it has none, so programs, slates and house ads share one rendition set through
-  Channel Assembly, SSAI, SGAI and DASH. Each track comes from a provided file (request `captions.files` or a
-  drop-folder sibling `<stem>.<language>.<ext>`), else from CEA-608/708 in the source (a Probe-visible `c608` track
-  or a caption scan job), else from the stage's captioner: a pluggable state-machine contract whose bundled engine
-  relays a MediaConvert proxy of the file to AWS Elemental Inference smart subtitles in parallel 10-minute chunks and
-  turns the live roll-up into pop-on IMSC1 captions. `captions.enabled`, `required`, `engine`, `max_feeds` and
-  `dictionary_id` configure it; caption provenance is on every asset, `Asset Ready` and `library___get_asset`; the
-  console players have a CC toggle.
 - **Model choice**: Claude Haiku 5.5 by default, as the deployment region's inference profile (`{geo}` resolves to
   `us.`, `eu.`, `au.` or `global.`); a validated ModelSpec in SSM switches among allow-listed models without a
   redeploy; `make model-access` checks Bedrock access; `make eval` runs the scheduling conformance suite.
-- **Ladders as code**: validated, fingerprinted TOML ladders (`standard`, `uhd`) compiled to MediaConvert job
-  templates; agent-driven ladder proposals and provisioning; encode cost estimates.
-- **One CMAF encode** of AV1 (10-bit), HEVC and AVC with AAC, writing HLS and DASH manifests per rendition profile
-  (`hls`, `hls-avc`, `hls-hevc`, `hls-av1`, `hls-sd`, `hls-hd`, `hls-uhd`, `dash-avc`, `dash-hevc`, `dash-av1`).
+- **Ladders as code**: validated, fingerprinted TOML ladders (`standard`) compiled to MediaConvert job templates;
+  agent-driven ladder proposals (cap or floor the height, shift quality, drop rungs) and provisioning; encode cost
+  estimates.
+- **One plain HLS encode** per asset: a MediaConvert Apple HLS output group of MPEG-TS segments, each variant H.264
+  High with AAC-LC 128 kbit/s stereo muxed in (`avc-720p` first, `avc-1080p`, `avc-360p`), 29.97 fps, 2 s closed GOPs,
+  6.006 s segments and `CLOSED-CAPTIONS=NONE`, on the Basic tier at about $0.0375 per content minute. The encode's own
+  `main.m3u8` is the one rendition profile, `hls`.
 - **Ingest pipeline** (Step Functions, JSONata): uploads with JSON sidecars, `Ingest Requested` events or tool calls;
-  probe-based refusals (HDR, 50/60 Hz conversions); cue points snapped to the GOP grid with ESAM only off the segment
-  grid; output verification, AV1 `av1C` repair, nominal `BANDWIDTH`, break-offset discovery; VOD source registration.
-  An encode that is `READY` is never overwritten in place, a reused correlation id is reported
-  (`DuplicateCorrelationId`), and every refusal or failure ends in an `Asset Failed` event. The deinterlacer runs in
-  `DEINTERLACE` mode, which keeps content jobs eligible for accelerated transcoding.
+  probe-based refusals (HDR, 50/60 Hz conversions); cue points snapped to the segment grid; output verification
+  against the ladder signature, nominal `BANDWIDTH`, break-offset discovery; VOD source registration. An encode that
+  is `READY` is never overwritten in place, a reused correlation id is reported (`DuplicateCorrelationId`), and every
+  refusal or failure ends in an `Asset Failed` event.
 - **Ladder kits**: filler slate, four break slates, two house ads and a VAST 4.2 pod per ladder version, encoded at
   deploy time or by the agent.
 - **Channels**: IaC LINEAR channels with per-channel `PLAYER_SELECT` playback configurations, SigV4-only channel
@@ -91,8 +83,8 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 
 ### Changed
 
-- Encoding moved from a CSV-generated preset list to validated ladders with 2 s GOPs, 6 s segments, QVBR, loudness
-  normalisation to −24 LKFS and frame-rate normalisation.
+- Encoding moved from a CSV-generated preset list to a validated ladder with 2 s GOPs, 6 s segments, QVBR and
+  frame-rate normalisation.
 - Ad-break placement keeps the v2 `AdOffsets` S3 object tag and adds sidecar and catalog cue points.
 - Tracing uses Lambda and Step Functions active tracing and AWS Distro for OpenTelemetry instead of the X-Ray SDK.
 - Documentation rewritten: README and `docs/` (architecture, encoding, Channel Assembly, ad insertion, delivery,
@@ -118,34 +110,38 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - The boto3, crhelper and xmltodict Lambda layers, and the SNS email sender function.
 - `assets/presets.csv` and its preset generator scripts.
 
+### Changed since the first v3.0.0 tag
+
+- **Plain HLS MPEG-TS, AVC + AAC muxed, Basic tier**, for cost and stability
+  ([ADR-0016](docs/adr/0016-plain-hls-ts-avc-aac-basic-tier.md)). The first tag encoded one CMAF group of AV1, HEVC
+  and AVC with HLS and DASH manifests per rendition profile and IMSC1 captions, on the Professional tier at about
+  $0.56 per content minute; every feature brought MediaConvert, MediaTailor or hls.js behaviour to work around. The
+  encode is now three AVC variants with AAC muxed in, about $0.0375 per content minute, and SSAI is the focus. Gone:
+  the `uhd` ladder, rendition profiles other than `hls`, DASH outputs and playback URLs, HEVC, AV1, audio rendition
+  groups, I-frame playlists, ESAM, accelerated transcoding, loudness normalisation, and captions (the `captions.*`
+  settings, the Elemental Inference captioner, caption fields in requests, events and tools, and the console's CC
+  toggle). Cue points snap to the 6.006 s segment grid, so a break lands within ±3 s of its cue. Every ladder version
+  changes: kits re-provision and assets re-encode.
+
 ### Fixed since the first v3.0.0 tag
 
-- DASH preconditioned ads: the SGAI-ready ad MPDs had an MPD-level `BaseURL`, which MediaTailor ignores, so DASH ad
-  segments redirected to init segments that did not exist (403). Ad MPDs now carry absolute segment templates.
 - VOD source names are at most 50 characters (Channel Assembly's limit; 64 was assumed), so assets with ids longer
   than about 29 characters no longer fail registration.
-- The Lambda functions ship their locked boto3 instead of the runtime's, whose Elemental Inference model lacks smart
-  subtitles.
-- Caption tracks of titles with off-grid cue points are re-cut on the video's segments in Finalize. MediaConvert cut
-  them differently after an ESAM split, so their subtitle sequence numbers drifted from the video's on every airing
-  and players lost the captions.
 
 ### Known issues
 
-AWS service behaviour that Apple's mediastreamvalidator reports at Critical or Must level:
+AWS service behaviour that Apple's mediastreamvalidator reports at Must level
+([ad-insertion.md](docs/ad-insertion.md#monitoring-and-troubleshooting)):
 
-- MediaConvert declares HE-AAC v2 outputs as `mp4a.40.5` in HLS `CODECS` (`mp4a.40.29` in DASH): 535060 on the
-  `avc-234p` variant of every channel ([encoding.md](docs/encoding.md)).
-- Channel Assembly removes a break's `EXT-X-DATERANGE` one playlist update too early: 552026 once per break on every
-  live SSAI and SGAI media playlist ([ad-insertion.md](docs/ad-insertion.md#monitoring-and-troubleshooting)).
-- MediaTailor SSAI stitches blank WebVTT into IMSC1 subtitle renditions during ads (641087, 535008) and sometimes
-  shifts the `EXT-X-PROGRAM-DATE-TIME` of later ads in a pod (536003) or serves an older playlist (552027). SGAI's
-  subtitles are clean ([captions.md](docs/captions.md#limits)).
+- Channel Assembly removes a break's `EXT-X-DATERANGE` one playlist update too early: 552026 for most breaks on every
+  live media playlist of the Channel Assembly origin, SSAI and SGAI.
+- MediaTailor SSAI writes the `EXT-X-PROGRAM-DATE-TIME` of the second and later ads in a pod one segment off in some
+  reloads (536003).
 
 Players:
 
-- hls.js 1.7.3 players, the console's included, stop showing captions at the first SSAI break, programme boundary or
-  SGAI interstitial (three hls.js subtitle bugs, [console/README.md](console/README.md#known-hlsjs-caption-bugs)).
+- hls.js 1.7.3 players, the console's included, stall entering an append-in-place SGAI interstitial when AAC audio is
+  muxed into the content. SSAI and players other than hls.js are not affected; verify SGAI on your player.
 
 ## [2.0.0] - 2026-01-30
 

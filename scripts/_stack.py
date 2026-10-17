@@ -50,7 +50,6 @@ OUTPUT_KEYS: Final[dict[Plane, tuple[str, ...]]] = {
         "LadderProvisionerArn",
         "SourceLocationName",
         "DefaultLadderVersion",
-        "CaptionEngine",
         "Channels",
         "DashboardUrl",
     ),

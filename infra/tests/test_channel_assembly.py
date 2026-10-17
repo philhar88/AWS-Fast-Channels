@@ -43,7 +43,7 @@ CONTEXT = json.loads((REPO_ROOT / "cdk.json").read_text())["context"] | {"aws:cd
 CONTENT = "https://d111111abcdef8.cloudfront.net"
 LADDER = "standard@86bf8088e0"
 EXTERNAL_ADS = "https://ads.example.com/vast?sid=[session.uuid]"
-OUTPUTS = ("hls", "hls-avc", "dash-avc")
+OUTPUTS = ("hls",)
 RETENTION = logs.RetentionDays.ONE_WEEK
 
 
@@ -108,7 +108,7 @@ def _build(outdir: Path | None = None, removal: RemovalPolicy = RemovalPolicy.DE
         stack,
         "News",
         name="fast-news",
-        outputs=("hls-avc",),
+        outputs=("hls",),
         ads_url=EXTERNAL_ADS,
         tier=ChannelTier.STANDARD,
         restart_on_update=True,
@@ -284,7 +284,6 @@ def test_lifecycle_resources_bracket_the_channel(template: Template) -> None:
         "playback_configuration_name",
         "playback_configuration_arn",
         "hls_prefix",
-        "dash_prefix",
         "channel_url",
         "source_location",
         "filler_slate",
@@ -323,12 +322,9 @@ def test_exports_fill_channel_exports(built: Built) -> None:
         OUTPUTS,
         "fast-demo",
     )
-    resolved = built.stack.resolve([exports.arn, exports.hls_prefix, exports.dash_prefix])
-    assert [r["Fn::GetAtt"][1] for r in resolved] == [
-        "Arn",
-        "HlsConfiguration.ManifestEndpointPrefix",
-        "DashConfiguration.ManifestEndpointPrefix",
-    ]
+    resolved = built.stack.resolve([exports.arn, exports.hls_prefix])
+    assert [r["Fn::GetAtt"][1] for r in resolved] == ["Arn", "HlsConfiguration.ManifestEndpointPrefix"]
+    assert not hasattr(exports, "dash_prefix")  # HLS only
 
 
 # --- vended logs ---------------------------------------------------------------------------------------------------

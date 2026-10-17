@@ -1,10 +1,10 @@
 # Architecture
 
 FAST Channels on AWS turns mezzanine files into always-on, ad-supported linear channels without a live encoder.
-Every title is encoded once into CMAF. AWS Elemental MediaTailor Channel Assembly plays those VOD sources as a linear
-schedule, MediaTailor ad insertion fills the breaks (server-side or server-guided), and Amazon CloudFront delivers
-everything. A scheduling agent on Amazon Bedrock AgentCore builds the schedules through typed tools, under Cedar
-policies and human approval.
+Every title is encoded once into plain HLS: MPEG-TS segments with H.264 video and AAC audio muxed into every variant.
+AWS Elemental MediaTailor Channel Assembly plays those VOD sources as a linear schedule, MediaTailor ad insertion
+fills the breaks (server-side or server-guided), and Amazon CloudFront delivers everything. A scheduling agent on
+Amazon Bedrock AgentCore builds the schedules through typed tools, under Cedar policies and human approval.
 
 ![Architecture](images/architecture.png)
 
@@ -44,7 +44,7 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 | Stack | Outputs |
 |---|---|
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
-| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `CaptionEngine` (`elemental-inference` or `none`), `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai?, sgai?, dash?}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
+| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai, sgai}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
 | Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
 
 ```bash
@@ -96,32 +96,23 @@ sequenceDiagram
     participant Lib as MediaLibrary table
     participant Bus as fast-channels bus
 
-    participant Cap as Captioner (Elemental Inference)
-
-    Owner->>S3i: PUT movie.en.scc (optional), movie.mp4.json (optional), then movie.mp4
+    Owner->>S3i: PUT movie.mp4.json (optional), then movie.mp4
     S3i->>EB: Object Created
     EB->>Trig: rule (retries, DLQ)
-    Trig->>S3i: read sidecar, AdOffsets tag, list caption files next to the video
+    Trig->>S3i: read sidecar, AdOffsets tag
     Trig->>SFN: StartExecution(name = correlation id, IngestRequest)
-    SFN->>MC: Prepare: Probe source (refuse HDR, 50/60 Hz mismatch; c608 track, audio language)
-    SFN->>Lib: Prepare: asset INGESTING, caption plan
-    opt the spoken language has no provided captions
-        SFN->>MC: ScanCaptions: CEA-608/708 in the video as TTML (run-a-job)
-        opt the scan found none
-            SFN->>Cap: GenerateCaptions: startExecution.sync:2 (proxy job, chunked feeds -> captions/{asset}/…/en.ttml)
-        end
-    end
-    SFN->>MC: Transcode: CreateJob (job template + sparse overrides with caption selectors, run-a-job)
-    MC->>S3m: assets/{asset}/{ladder}/main*.m3u8 and .mpd, CMAF segments
-    SFN->>S3m: Finalize: verify signatures, patch av1C, normalise BANDWIDTH, break offsets
+    SFN->>MC: Prepare: Probe source (refuse HDR, 50/60 Hz mismatch)
+    SFN->>Lib: Prepare: asset INGESTING, cue points snapped to the segment grid
+    SFN->>MC: Transcode: CreateJob (job template + sparse overrides, run-a-job)
+    MC->>S3m: assets/{asset}/{ladder}/main.m3u8, main_{rendition}.m3u8, MPEG-TS segments
+    SFN->>S3m: Finalize: verify the signature, normalise BANDWIDTH, break offsets
     SFN->>CA: Register: CreateVodSource (one package configuration per profile), ListAlerts
     SFN->>Lib: Publish: asset READY (duration, break offsets, VOD source)
     SFN->>Bus: Asset Ready
 ```
 
-The same pipeline encodes a ladder's *kit* (filler slate, break slates and house ads, with empty caption tracks) as
-child executions of the `LadderProvisioner` state machine; see [encoding.md](encoding.md#ladder-kits). Where each
-caption track comes from is described in [captions.md](captions.md).
+The same pipeline encodes a ladder's *kit* (filler slate, break slates and house ads) as child executions of the
+`LadderProvisioner` state machine; see [encoding.md](encoding.md#ladder-kits).
 
 ### Scheduling and publishing
 
@@ -166,7 +157,7 @@ The autopilot follows the same path with a machine token on a schedule; Cedar li
 ### Playback: SSAI and SGAI
 
 One playback configuration per channel (`InsertionMode: PLAYER_SELECT`) serves both modes. The player chooses with a
-query string; DASH is always SSAI.
+query string.
 
 ```mermaid
 sequenceDiagram
@@ -221,8 +212,7 @@ module path.
 | | `MediaLibrary`, `ReferenceCatalogTable` | `TableV2` tables (on demand, PITR, TTL `expires_at`, `GSI1`) |
 | `functions` | `FastFunction` | Python 3.14 arm64 Lambda from the shared workspace bundle, JSON logs, explicit log group with retention, active tracing; `allow()` adds a least-privilege statement |
 | `encoding.ladder` | `EncodingLadder` | MediaConvert job template of one ladder version |
-| `encoding.pipeline` | `IngestPipeline`, `Captioner` | MediaConvert queue and role, ingest state machine (with the caption scan and an optional captioner), trigger rules, DLQ; the captioner contract |
-| `encoding.captioners` | `InferenceCaptioner` | MediaConvert proxy queue and role, relay function and state machine that caption a file with AWS Elemental Inference smart subtitles |
+| `encoding.pipeline` | `IngestPipeline` | MediaConvert queue and role, ingest state machine, trigger rules, DLQ |
 | `encoding.kits` | `LadderProvisioner`, `LadderKit` | Kit state machine; deploy-time custom resource, idempotent by fingerprint |
 | `channel_assembly.origin` | `ChannelAssemblyOrigin` | `S3_SIGV4` source location on the media bucket |
 | `channel_assembly.ad_insertion` | `MediaTailorLogs` | `/aws/vendedlogs/mediatailor/<prefix>` and its delivery destination |
@@ -268,9 +258,9 @@ channels are built from the same functions (`core.specs`).
 
 `ReferenceCatalog` holds `CONTENT#<content_id>` / `META` items (GSI1 `GENRE#<genre>` / `<title>`).
 
-Media bucket keys: `assets/<asset_id>/<ladder>/main*.m3u8|.mpd` plus CMAF segments; `ads/<ladder>/vast.xml`,
+Media bucket keys: `assets/<asset_id>/<ladder>/main*.m3u8` plus MPEG-TS segments (`.ts`); `ads/<ladder>/vast.xml`,
 `ads/<ladder>/<creative_id>/…` (SGAI-ready ad manifests) and `ads/b.gif`; `epg/<channel>.json|.xml`. In keys a ladder
-version `standard@86bf8088e0` is written `standard_86bf8088e0`.
+version `standard@843ed1d05a` is written `standard_843ed1d05a`.
 
 Domain events on the `<prefix>-fast-channels` bus (source `fast-channels.<prefix>`, schema in
 [`contracts/events.schema.json`](../contracts/events.schema.json)): `Ingest Requested` (in), `Asset Ready`,

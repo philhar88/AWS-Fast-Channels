@@ -142,8 +142,8 @@ class AdInsertion(Construct):
         log_percent: share of sessions that log (100 for demos, about 10 in production).
 
     Attributes:
-        playback_configuration: the ``CfnPlaybackConfiguration``. name, arn, hls_prefix, dash_prefix: its name,
-            ARN and HLS/DASH ``ManifestEndpointPrefix``.
+        playback_configuration: the ``CfnPlaybackConfiguration``. name, arn, hls_prefix: its name, ARN and
+            HLS ``ManifestEndpointPrefix``.
     """
 
     def __init__(
@@ -184,4 +184,3 @@ class AdInsertion(Construct):
         self.name = name
         self.arn = self.playback_configuration.attr_playback_configuration_arn
         self.hls_prefix = self.playback_configuration.attr_hls_configuration_manifest_endpoint_prefix
-        self.dash_prefix = self.playback_configuration.attr_dash_configuration_manifest_endpoint_prefix

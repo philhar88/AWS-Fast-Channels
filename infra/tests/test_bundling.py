@@ -44,9 +44,8 @@ def test_bundle_has_arm64_wheels_and_its_own_sdk(bundle: tuple[Path, str]) -> No
 
     assert list((directory / "pydantic_core").glob("*aarch64-linux-gnu.so"))
     assert (directory / "aws_lambda_powertools").is_dir()
-    # The locked boto3, not the runtime's: that one knows Elemental Inference without smart subtitles.
-    models = list((directory / "botocore/data/elementalinference").glob("*/service-2.json*"))
-    assert (directory / "boto3").is_dir() and models
+    # The functions declare boto3, so they run on the locked SDK, not the runtime's.
+    assert (directory / "boto3").is_dir() and (directory / "botocore").is_dir()
 
 
 def test_asset_hash_is_the_fingerprint_of_the_bundle(bundle: tuple[Path, str]) -> None:

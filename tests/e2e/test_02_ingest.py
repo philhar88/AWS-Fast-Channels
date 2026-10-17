@@ -1,33 +1,33 @@
-"""Ingest of a synthetic source: S3 upload with a JSON sidecar and a caption file -> MediaConvert (one CMAF encode with
-every rendition profile and the ladder's IMSC tracks) -> Channel Assembly VOD source (SPEC §5.1)."""
+"""Ingest of a synthetic source: S3 upload with a JSON sidecar -> MediaConvert (one HLS MPEG-TS encode on the Basic
+tier, AVC with AAC-LC muxed into every variant) -> Channel Assembly VOD source (SPEC §5.1)."""
 
-import re
 from typing import TYPE_CHECKING
 
 import pytest
 from _stack import Plane, Stage
-from harness import ASSET_ID, CONTENT_ID, CUE_POINT_MS, PATTERN_SECONDS, Channel, caption_text
+from harness import ASSET_ID, CONTENT_ID, CUE_POINT_MS, PATTERN_SECONDS, Channel
 
-from fast_channels.core.captions import CaptionOrigin
 from fast_channels.core.ingest import AssetKind
 from fast_channels.core.manifests import (
-    BOUNDARY_TOLERANCE_MS,
     attributes,
+    check_hls,
     expected_signature,
     ladder_signature,
     media_segment_durations,
     parse_multivariant,
-    subtitle_renditions,
+    segment_boundaries_ms,
 )
 from fast_channels.core.mediaconvert import output_prefix
-from fast_channels.core.mp4 import sample_entries
-from fast_channels.core.profiles import ManifestFormat, applicable, profile
+from fast_channels.core.profiles import applicable, profile
 from fast_channels.functions.tools.library_store import Asset, AssetStatus
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
 
 pytestmark = pytest.mark.e2e
+
+TS_CONTENT_TYPE = "video/mp2t"
+"""Content-Type of an MPEG-TS segment (MediaConvert writes ``video/MP2T``; media types are case-insensitive)."""
 
 
 def test_ingest_is_ready(ingested: Asset) -> None:
@@ -38,7 +38,9 @@ def test_ingest_is_ready(ingested: Asset) -> None:
 
 
 def test_profile_manifests_written(stage: Stage, ingested: Asset, ladder: Ladder) -> None:
-    """Every rendition profile the ladder supports is in S3, and every HLS one has exactly its ladder signature."""
+    """Every rendition profile's manifest is in S3 with exactly the ladder's signature (one AVC variant per rung,
+    each with the muxed AAC-LC in CODECS), passes the multivariant checklist and says ``CLOSED-CAPTIONS=NONE`` on
+    every variant."""
     s3 = stage.session.client("s3", region_name=stage.region)
     bucket = stage.output(Plane.DATA, "MediaBucketName")
     problems = []
@@ -49,24 +51,46 @@ def test_profile_manifests_written(stage: Stage, ingested: Asset, ladder: Ladder
         except s3.exceptions.NoSuchKey:
             problems.append(f"{key} is missing")
             continue
-        if rendition_profile.format is ManifestFormat.DASH:
-            if "<MPD" not in text:
-                problems.append(f"{key} is not an MPD")
-        elif (signature := ladder_signature(text)) != expected_signature(ladder, rendition_profile):
+        if (signature := ladder_signature(text)) != expected_signature(ladder):
             problems.append(f"{key} has ladder signature {signature}")
+        problems += [f"{key}: {finding}" for finding in check_hls(text)]
+        stream_infs = [attributes(line) for line in text.splitlines() if line.startswith("#EXT-X-STREAM-INF:")]
+        if any(variant.get("CLOSED-CAPTIONS") != "NONE" for variant in stream_infs):
+            problems.append(f"{key}: a variant lacks CLOSED-CAPTIONS=NONE")
     assert not problems, problems
 
 
+def test_variants_share_one_segment_grid(stage: Stage, ingested: Asset, ladder: Ladder) -> None:
+    """There is no ESAM split on the Basic tier: every variant is MPEG-TS (``.ts`` segments served as
+    ``video/MP2T``) with identical EXTINFs on the 6006 ms grid, and the snapped cue point is a boundary they share."""
+    s3 = stage.session.client("s3", region_name=stage.region)
+    bucket, prefix = stage.output(Plane.DATA, "MediaBucketName"), output_prefix(ASSET_ID, ladder.version)
+
+    def text(key: str) -> str:
+        return str(s3.get_object(Bucket=bucket, Key=f"{prefix}{key}")["Body"].read().decode())
+
+    playlists = {variant.uri: text(variant.uri) for variant in parse_multivariant(text("main.m3u8"))}
+    durations = {uri: media_segment_durations(playlist) for uri, playlist in playlists.items()}
+    assert len({tuple(d) for d in durations.values()}) == 1, durations
+    lines = [line.strip() for playlist in playlists.values() for line in playlist.splitlines()]
+    segments = [line for line in lines if line and not line.startswith("#")]
+    assert segments and all(segment.endswith(".ts") for segment in segments), segments[:3]
+    content_type = s3.head_object(Bucket=bucket, Key=f"{prefix}{segments[0]}")["ContentType"]
+    assert content_type.lower() == TS_CONTENT_TYPE, (segments[0], content_type)
+    snapped = ladder.grid.snap_to_segment(CUE_POINT_MS)
+    assert snapped in segment_boundaries_ms(*playlists.values()), (snapped, durations)
+
+
 def test_break_offsets_include_the_cue_point(ingested: Asset, ladder: Ladder) -> None:
-    """The sidecar's cue point, snapped to the GOP grid (32032 ms at 29.97 fps, an ESAM split), is a valid break
-    offset."""
-    snapped = ladder.grid.snap_to_gop(CUE_POINT_MS)
-    nearest = min(ingested.break_offsets_ms, key=lambda offset: abs(offset - snapped), default=None)
-    assert nearest is not None and abs(nearest - snapped) <= BOUNDARY_TOLERANCE_MS, (snapped, ingested.break_offsets_ms)
+    """The sidecar's cue point, snapped to the segment grid (32000 ms -> 30030 ms at 29.97 fps), is a break offset,
+    exactly."""
+    snapped = ladder.grid.snap_to_segment(CUE_POINT_MS)
+    assert snapped != CUE_POINT_MS, "the scenario's cue point should exercise snapping"
+    assert snapped in ingested.break_offsets_ms, (snapped, ingested.break_offsets_ms)
 
 
 def test_vod_source_has_every_package_configuration(stage: Stage, ingested: Asset, channel: Channel) -> None:
-    """The VOD source carries a package configuration per registered profile, covering every channel output,
+    """The VOD source carries an HLS package configuration per registered profile, covering every channel output,
     each pointing at a manifest that exists."""
     assert ingested.vod_source, "no VOD source on the asset"
     location = ingested.source_location or stage.output(Plane.MEDIA, "SourceLocationName")
@@ -78,56 +102,6 @@ def test_vod_source_has_every_package_configuration(stage: Stage, ingested: Asse
     s3 = stage.session.client("s3", region_name=stage.region)
     bucket = stage.output(Plane.DATA, "MediaBucketName")
     for group, package in packages.items():
-        assert package["Type"] == profile(group).format.value, package
+        assert package["Type"] == "HLS" and package["Path"].endswith(profile(group).manifest_key("")), package
         s3.head_object(Bucket=bucket, Key=package["Path"].lstrip("/"))
     assert source["Tags"].get("fast:app") == stage.prefix, source["Tags"]
-
-
-def test_captions_come_from_the_provided_file(ingested: Asset, ladder: Ladder) -> None:
-    """The ``<asset>.en.vtt`` next to the upload is the English track; other ladder languages are empty tracks."""
-    assert [c.language for c in ingested.captions] == [t.language for t in ladder.captions]
-    english = next(c for c in ingested.captions if c.language == "en")
-    assert english.origin is CaptionOrigin.PROVIDED and str(english.uri).endswith(f"/e2e/{ASSET_ID}.en.vtt"), english
-
-
-def test_caption_tracks_follow_the_video_grid(stage: Stage, ingested: Asset, ladder: Ladder) -> None:
-    """Every manifest lists the IMSC tracks; their segments end where the video's do, so every break offset is a
-    boundary of every track (Channel Assembly's rule), and they carry the provided cues."""
-    s3 = stage.session.client("s3", region_name=stage.region)
-    bucket, prefix = stage.output(Plane.DATA, "MediaBucketName"), output_prefix(ASSET_ID, ladder.version)
-
-    def text(key: str) -> str:
-        return str(s3.get_object(Bucket=bucket, Key=f"{prefix}{key}")["Body"].read().decode())
-
-    main = text("main.m3u8")
-    assert [a["LANGUAGE"] for a in subtitle_renditions(main)] == [t.language for t in ladder.captions]
-    first_variant = parse_multivariant(main)[0].uri
-    for rendition in subtitle_renditions(main):
-        subtitles, video = text(rendition["URI"]), text(first_variant)
-        assert media_segment_durations(subtitles) == media_segment_durations(video), rendition["URI"]
-    english = next(a["URI"] for a in subtitle_renditions(main) if a["LANGUAGE"] == "en")
-    first = next(line for line in text(english).splitlines() if line and not line.startswith("#"))
-    segment = s3.get_object(Bucket=bucket, Key=f"{prefix}{first}")["Body"].read().replace(b"&#xA0;", b" ")
-    assert caption_text(1).encode() in segment  # MediaConvert writes the spaces of a cue as &#xA0;
-
-
-def test_captions_are_their_own_cmaf_track(stage: Stage, ingested: Asset, ladder: Ladder) -> None:
-    """CMAF carries one track per file: every IMSC1 rendition has its own init segment with one ``stpp`` track, and
-    no video or audio init segment carries a second (caption) track."""
-    s3 = stage.session.client("s3", region_name=stage.region)
-    bucket, prefix = stage.output(Plane.DATA, "MediaBucketName"), output_prefix(ASSET_ID, ladder.version)
-
-    def read(key: str) -> bytes:
-        return bytes(s3.get_object(Bucket=bucket, Key=f"{prefix}{key}")["Body"].read())
-
-    main = read("main.m3u8").decode()
-    playlists = [*(v.uri for v in parse_multivariant(main)), *(a["URI"] for a in subtitle_renditions(main))]
-    playlists += [a["URI"] for line in main.splitlines() if (a := attributes(line)).get("TYPE") == "AUDIO"]
-    entries = {}
-    for playlist in dict.fromkeys(playlists):
-        init = re.search(r'#EXT-X-MAP:URI="([^"]+)"', read(playlist).decode())
-        assert init, playlist
-        entries[playlist] = sample_entries(read(init[1]))
-    assert all(len(found) == 1 for found in entries.values()), entries
-    for rendition in subtitle_renditions(main):
-        assert entries[rendition["URI"]] == ["stpp"], rendition

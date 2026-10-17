@@ -109,7 +109,7 @@ def main() -> int:
     ladder = provisioned_ladder(library, ladder_version)
     titles = [title_of(library, content, ladder_version) for content in sample_titles(CATALOG, args.titles or ())]
 
-    print(f"Deployment {stage.prefix} in {stage.region}, ladder {ladder_version} ({ladder.pricing_tier()} tier)\n")
+    print(f"Deployment {stage.prefix} in {stage.region}, ladder {ladder_version} (MediaConvert Basic tier)\n")
     estimate = print_plan(titles, ladder)
     pending = [title for title in titles if title.needs_ingest]
     if args.dry_run:

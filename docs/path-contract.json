@@ -102,44 +102,6 @@
       "cors": "media"
     },
     {
-      "path": "/v1/dash/*",
-      "origin": "mediatailor-manifests",
-      "purpose": "SSAI DASH manifests (per session, gzip)",
-      "methods": [
-        "GET",
-        "HEAD",
-        "OPTIONS"
-      ],
-      "compress": true,
-      "cache": {
-        "min_ttl": 0,
-        "default_ttl": 0,
-        "max_ttl": 0,
-        "key": {
-          "query_strings": "none",
-          "headers": [],
-          "cookies": "none"
-        },
-        "compression": false,
-        "cloudfront_policy": {
-          "id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-          "name": "Managed-CachingDisabled"
-        }
-      },
-      "forward": {
-        "headers": [
-          "*"
-        ],
-        "query_strings": "all",
-        "cookies": "all",
-        "cloudfront_policy": {
-          "id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
-          "name": "Managed-AllViewerAndCloudFrontHeaders-2022-06"
-        }
-      },
-      "cors": "preflight"
-    },
-    {
       "path": "/v1/manifest/*",
       "origin": "mediatailor-manifests",
       "purpose": "SSAI HLS media playlists (per session, gzip)",
@@ -226,7 +188,7 @@
     {
       "path": "*",
       "origin": "media",
-      "purpose": "CMAF content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); content manifests under /assets are denied by the bucket policy",
+      "purpose": "MPEG-TS content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); content manifests under /assets are denied by the bucket policy",
       "methods": [
         "GET",
         "HEAD",

@@ -85,8 +85,6 @@ export interface Asset {
   readonly duration_ms?: number;
   /** How many valid ad-break offsets the asset has (library___get_asset lists them). */
   readonly break_offset_count: number;
-  /** Languages whose caption track has captions (provided, embedded or generated); the others are empty. */
-  readonly captioned: readonly string[];
   readonly vod_source?: string;
   readonly updated_at: string;
 }
@@ -111,7 +109,6 @@ export interface Ladder {
   readonly status: LadderStatus;
   readonly owner: Owner;
   readonly description?: string;
-  readonly codecs?: readonly string[];
   readonly max_height?: number;
   readonly renditions?: number;
   readonly cost_per_minute_usd?: number;

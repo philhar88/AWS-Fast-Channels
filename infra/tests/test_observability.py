@@ -31,11 +31,10 @@ QUEUE = f"arn:aws:mediaconvert:us-east-1:{ACCOUNT}:queues/fast"
 CHANNEL = ChannelExports(
     name="fast-demo",
     arn=f"arn:aws:mediatailor:us-east-1:{ACCOUNT}:channel/fast-demo",
-    ladder_version="standard@86bf8088e0",
-    outputs=("hls", "dash-avc"),
+    ladder_version="standard@843ed1d05a",
+    outputs=("hls",),
     playback_configuration_name="fast-fast-demo",
     hls_prefix="https://abc.mediatailor.us-east-1.amazonaws.com/v1/master/h/fast-fast-demo/",
-    dash_prefix="https://abc.mediatailor.us-east-1.amazonaws.com/v1/dash/h/fast-fast-demo/",
 )
 
 

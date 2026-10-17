@@ -14,10 +14,7 @@ from fast_channels.functions import aws
 
 CONTENT_TYPES: Final = {
     ".m3u8": "application/vnd.apple.mpegurl",  # RFC 8216 §4
-    ".mpd": "application/dash+xml",
-    ".cmfv": "video/mp4",
-    ".cmfa": "audio/mp4",
-    ".mp4": "video/mp4",
+    ".ts": "video/mp2t",  # MPEG-2 transport stream segments (IANA video/MP2T)
     ".xml": "application/xml",
     ".gif": "image/gif",
 }

@@ -12,12 +12,11 @@ from aws_cdk import App, Stack
 from aws_cdk import aws_events as events
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
-from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk.assertions import Template
 from PIL import Image
 
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.mediaconvert import compile_job_settings
+from fast_channels.core.mediaconvert import GROUP_TYPE, compile_job_settings
 from fast_channels.core.naming import ladder_path
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.app import build as app_build
@@ -26,7 +25,6 @@ from fast_channels.infra.constructs.encoding import (
     BRAND_DIR,
     VIDEO_EXTENSIONS,
     EncodingLadder,
-    InferenceCaptioner,
     IngestPipeline,
     LadderKit,
     LadderProvisioner,
@@ -35,7 +33,7 @@ from fast_channels.infra.constructs.encoding import (
 )
 
 STANDARD = Ladder.builtin("standard")
-PROFILES = ("hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc")
+PROFILES = ("hls",)
 STACK = "EncodingUnderTest"
 HANDLERS = "fast_channels.functions.ingest"
 
@@ -54,18 +52,7 @@ class Encoding:
         return Template.from_stack(self.stack)
 
 
-@dataclass(frozen=True)
-class ImportedCaptioner:
-    """A captioner the pipeline only knows by its state machine (any implementation of the contract)."""
-
-    engine: str
-    state_machine: sfn.IStateMachine
-
-
-CAPTIONER_ARN = "arn:aws:states:us-east-1:123456789012:stateMachine:fast-captioner"
-
-
-def build(outdir: Path | None = None, *, captioner: bool = False) -> Encoding:
+def build(outdir: Path | None = None) -> Encoding:
     """A media-only stage (cdk.json context, bundling off) with the encoding constructs in their own stack."""
     context = json.loads((REPO_ROOT / "cdk.json").read_text())["context"]
     app = App(
@@ -75,7 +62,6 @@ def build(outdir: Path | None = None, *, captioner: bool = False) -> Encoding:
     stage = app_build(app, account="123456789012", region="us-east-1")
     data = stage.data.exports
     stack = Stack(stage, STACK)
-    imported = sfn.StateMachine.from_state_machine_arn(stack, "Captioner", CAPTIONER_ARN)
     pipeline = IngestPipeline(
         stack,
         "Ingest",
@@ -89,8 +75,6 @@ def build(outdir: Path | None = None, *, captioner: bool = False) -> Encoding:
         package_profiles=PROFILES,
         default_ladder_version=STANDARD.version,
         log_retention=logs.RetentionDays.ONE_WEEK,
-        captioner=ImportedCaptioner("elemental-inference", imported) if captioner else None,
-        captions_required=captioner,
     )
     ladder = EncodingLadder(stack, "Standard", ladder=STANDARD, prefix="fast", queue_arn=pipeline.queue_arn)
     provisioner = LadderProvisioner(stack, "Kits", pipeline=pipeline)
@@ -139,10 +123,16 @@ def test_job_template_is_the_compiled_ladder(template: Template) -> None:
     assert props["Name"] == f"fast-{ladder_path(STANDARD.version)}"
     assert props["Category"] == "fast"
     assert props["SettingsJson"] == cfn_settings(compile_job_settings(STANDARD))
-    cmfc = props["SettingsJson"]["OutputGroups"][0]["Outputs"][0]["ContainerSettings"]["CmfcSettings"]
-    assert cmfc["IframeOnlyManifest"] == "EXCLUDE" and "IFrameOnlyManifest" not in cmfc
+    [group] = props["SettingsJson"]["OutputGroups"]
+    assert group["OutputGroupSettings"]["Type"] == GROUP_TYPE == "HLS_GROUP_SETTINGS"
+    assert len(group["Outputs"]) == len(STANDARD.video)
+    for output in group["Outputs"]:
+        assert output["ContainerSettings"]["Container"] == "M3U8" and "M3u8Settings" in output["ContainerSettings"]
+        assert output["AudioDescriptions"][0]["CodecSettings"]["Codec"] == "AAC"  # muxed into every variant
+        hls = output["OutputSettings"]["HlsSettings"]
+        assert hls == {"IframeOnlyManifest": "EXCLUDE"}  # the Java bean name, not IFrameOnlyManifest
     assert props["Queue"]["Fn::GetAtt"][0].startswith("IngestQueue")
-    assert props["AccelerationSettings"] == {"Mode": "PREFERRED"}
+    assert "AccelerationSettings" not in props  # Basic tier: no accelerated transcoding
     assert props["StatusUpdateInterval"] == "SECONDS_60"
     assert props["Tags"] == {"fast:app": "fast", "fast:ladder": STANDARD.version, "fast:owner": "iac"}
 
@@ -169,8 +159,8 @@ def test_mediaconvert_role_is_confused_deputy_safe_and_least_privilege(template:
     resources = (s["Resource"] if isinstance(s["Resource"], list) else [s["Resource"]] for s in statements)
     suffixes = [sorted(r["Fn::Join"][1][-1] for r in rs) for rs in resources]
     assert list(zip((s["Action"] for s in statements), suffixes, strict=True)) == [
-        ("s3:GetObject", ["/*"]),  # mezzanines and caption files of the ingest bucket
-        ("s3:PutObject", ["/assets/*", "/work/*"]),  # encodes; caption scans and audio proxies
+        ("s3:GetObject", ["/*"]),  # mezzanines and brand stills of the ingest bucket
+        ("s3:PutObject", ["/assets/*"]),  # encodes
     ]
     assert "ManagedPolicyArns" not in role
 
@@ -192,30 +182,32 @@ def test_ingest_definition(template: Template) -> None:
 
     assert body["QueryLanguage"] == "JSONata"
     assert body["StartAt"] == "Prepare"
+    assert set(states) == {
+        "Prepare",
+        "AlreadyIngesting",
+        "Transcode",
+        "Finalize",
+        "Register",
+        "Publish",
+        "PublishFailure",
+        "IngestFailed",
+    }
     assert [states[s].get("Next") for s in ("Prepare", "Transcode", "Finalize", "Register")] == [
-        "AwaitsCaptionScan",
+        "Transcode",
         "Finalize",
         "Register",
         "Publish",
     ]
-    # Without a captioner: the scan may find embedded captions, and nothing is generated.
-    assert states["AwaitsCaptionScan"]["Choices"] == [
-        {"Condition": "{% $asset.captions.awaiting = 'scan' %}", "Next": "ScanCaptions"}
-    ]
-    assert states["AwaitsCaptionScan"]["Default"] == "Transcode"
-    scan = states["ScanCaptions"]
-    assert scan["Resource"].endswith(":states:::mediaconvert:createJob.sync")
-    assert scan["Arguments"]["Settings"] == "{% $asset.caption_scan.Settings %}"
-    assert scan["Arguments"]["Role"] == "<ref>" and "JobTemplate" not in scan["Arguments"]
-    assert scan["Next"] == "CaptionsScanned" and states["CaptionsScanned"]["Next"] == "Transcode"
-    assert states["CaptionsScanned"]["Arguments"]["Payload"] == {"step": "scanned", "asset": "{% $asset %}"}
-    assert states["CaptionsScanned"]["Assign"] == {"asset": "{% $states.result.Payload %}"}
-    assert "GenerateCaptions" not in states
     transcode = states["Transcode"]
     assert transcode["Resource"].endswith(":states:::mediaconvert:createJob.sync")
-    assert transcode["Arguments"]["Role"] == "<ref>" and transcode["Arguments"]["Queue"] == "<ref>"
-    assert transcode["Arguments"]["JobTemplate"] == "{% $asset.job.JobTemplate %}"
-    assert transcode["Arguments"]["Settings"] == "{% $asset.job.Settings %}"
+    assert transcode["Arguments"] == {
+        "Role": "<ref>",
+        "Queue": "<ref>",
+        "JobTemplate": "{% $asset.job.JobTemplate %}",
+        "Settings": "{% $asset.job.Settings %}",
+        "UserMetadata": "{% $asset.job.UserMetadata %}",
+        "ClientRequestToken": "{% $asset.job.ClientRequestToken %}",
+    }
     assert "Tags" not in transcode["Arguments"]  # Tags would need mediaconvert:TagResource (mediaconvert.md §7.4)
     assert transcode["Retry"][0]["ErrorEquals"] == [
         "MediaConvert.TooManyRequestsException",
@@ -226,7 +218,7 @@ def test_ingest_definition(template: Template) -> None:
     assert register["Items"] == "{% $encoded.registrations %}"
     assert register["ItemProcessor"]["States"]["RegisterVodSource"]["Retry"][1]["ErrorEquals"] == ["VodSourceBusyError"]
     assert states["Publish"]["Arguments"]["Payload"]["status"] == "READY"
-    for step in ("Prepare", "ScanCaptions", "CaptionsScanned", "Transcode", "Finalize", "Register", "Publish"):
+    for step in ("Prepare", "Transcode", "Finalize", "Register", "Publish"):
         assert states[step]["Catch"][-1] == {
             "ErrorEquals": ["States.ALL"],
             "Next": "PublishFailure",
@@ -237,34 +229,6 @@ def test_ingest_definition(template: Template) -> None:
     assert states["IngestFailed"]["Type"] == "Fail"
 
 
-def test_a_captioner_generates_the_captions_nothing_else_provides() -> None:
-    template = build(captioner=True).template
-    states = definition(template, "IngestStateMachine")["States"]
-
-    assert states["CaptionsScanned"]["Next"] == "AwaitsCaptionGeneration"
-    assert states["AwaitsCaptionGeneration"]["Choices"] == [
-        {"Condition": "{% $asset.captions.awaiting = 'generation' %}", "Next": "GenerateCaptions"}
-    ]
-    assert states["AwaitsCaptionGeneration"]["Default"] == "Transcode"
-    generate = states["GenerateCaptions"]
-    assert generate["Resource"].endswith(":states:::states:startExecution.sync:2")
-    assert generate["Arguments"]["StateMachineArn"] == CAPTIONER_ARN
-    assert generate["Arguments"]["Input"] == "{% $asset.captioner_input %}"
-    assert generate["Catch"] == [
-        {"ErrorEquals": ["States.ALL"], "Next": "CaptionGenerationFailed", "Output": "{% $states.errorOutput %}"}
-    ]
-    assert generate["Next"] == "CaptionsGenerated" and states["CaptionsGenerated"]["Next"] == "Transcode"
-    assert states["CaptionsGenerated"]["Arguments"]["Payload"]["result"] == "{% $states.input.Output %}"
-    assert states["CaptionGenerationFailed"]["Arguments"]["Payload"]["step"] == "failed"
-    assert states["CaptionGenerationFailed"]["Next"] == "Transcode"
-    prepare = function(template, "IngestPrepare")["Environment"]["Variables"]
-    assert (prepare["CAPTIONER"], prepare["CAPTIONS_REQUIRED"]) == ("elemental-inference", "true")
-    machine = [
-        s for s in policy_statements(template, "IngestStateMachineRole") if "states:StartExecution" in actions([s])
-    ]
-    assert machine and machine[0]["Resource"] == CAPTIONER_ARN
-
-
 def function(template: Template, logical_prefix: str) -> Mapping[str, Any]:
     props: Mapping[str, Any] = resource(template, "AWS::Lambda::Function", logical_prefix)["Properties"]
     return props
@@ -273,12 +237,7 @@ def function(template: Template, logical_prefix: str) -> Mapping[str, Any]:
 @pytest.mark.parametrize(
     ("logical", "module", "variables"),
     [
-        (
-            "IngestPrepare",
-            "prepare",
-            {"FAST_PREFIX", "LIBRARY_TABLE", "MEDIA_BUCKET", "INGEST_BUCKET", "CAPTIONS_REQUIRED", "CAPTIONER"},
-        ),
-        ("IngestCaptions", "captions", {"INGEST_BUCKET", "CAPTIONS_REQUIRED", "CAPTIONER"}),
+        ("IngestPrepare", "prepare", {"FAST_PREFIX", "LIBRARY_TABLE", "MEDIA_BUCKET"}),
         ("IngestFinalize", "finalize", {"LIBRARY_TABLE", "MEDIA_BUCKET", "CONTENT_BASE_URL", "PACKAGE_PROFILES"}),
         ("IngestRegister", "register", {"FAST_PREFIX", "SOURCE_LOCATION"}),
         ("IngestPublish", "publish", {"FAST_PREFIX", "LIBRARY_TABLE", "EVENT_BUS"}),
@@ -478,69 +437,13 @@ def test_brand_digest_follows_the_files(tmp_path: Path) -> None:
 
 def test_cfn_settings_spell_leading_acronyms_like_the_java_sdk() -> None:
     settings = {
-        "IFrameOnlyManifest": "INCLUDE",
+        "OutputSettings": {"HlsSettings": {"IFrameOnlyManifest": "EXCLUDE"}},
         "H264Settings": {"GopBReference": "ENABLED"},
-        "Outputs": [{"S3Settings": 1}],
+        "Outputs": [{"S3Settings": 1, "M3u8Settings": {"Scte35Source": "NONE", "AudioPids": [482], "PmtPid": 480}}],
     }
 
     assert cfn_settings(settings) == {
-        "IframeOnlyManifest": "INCLUDE",
+        "OutputSettings": {"HlsSettings": {"IframeOnlyManifest": "EXCLUDE"}},
         "H264Settings": {"GopBReference": "ENABLED"},
-        "Outputs": [{"S3Settings": 1}],
+        "Outputs": [{"S3Settings": 1, "M3u8Settings": {"Scte35Source": "NONE", "AudioPids": [482], "PmtPid": 480}}],
     }
-
-
-# --- InferenceCaptioner -------------------------------------------------------------------------------------------
-
-
-def test_inference_captioner_relays_chunks_to_feeds_of_its_deployment() -> None:
-    encoding = build()
-    captioner = InferenceCaptioner(
-        encoding.stack,
-        "Inference",
-        prefix="fast",
-        ingest_bucket=encoding.pipeline.ingest_bucket,
-        max_feeds=3,
-        dictionary_id="dict-1",
-        log_retention=logs.RetentionDays.ONE_WEEK,
-    )
-    template = Template.from_stack(encoding.stack)
-    states = definition(template, "InferenceStateMachine")["States"]
-
-    assert captioner.engine == "elemental-inference"
-    assert [states[s].get("Next") for s in ("Proxy", "ProxyJob", "Plan", "Relay", "Stitch")] == [
-        "ProxyJob",
-        "Plan",
-        "Relay",
-        "Stitch",
-        "Captioned",
-    ]
-    job = states["ProxyJob"]
-    assert job["Resource"].endswith(":states:::mediaconvert:createJob.sync")
-    assert job["Arguments"]["Settings"] == "{% $prepared.job.Settings %}" and job["Arguments"]["Queue"] == "<ref>"
-    relay = states["Relay"]
-    assert relay["MaxConcurrency"] == 3 and relay["Items"] == "{% $chunks %}"
-    chunk = relay["ItemProcessor"]["States"]["RelayChunk"]
-    assert chunk["Arguments"]["Payload"]["step"] == "relay"
-    assert chunk["Retry"][-1]["ErrorEquals"] == ["FeedQuotaExceededError"]
-    for step in ("Proxy", "ProxyJob", "Plan", "Relay", "Stitch"):
-        assert states[step]["Catch"][-1]["Next"] == "Cleanup"
-    assert states["Cleanup"]["Next"] == "CaptioningFailed" and states["CaptioningFailed"]["Type"] == "Fail"
-
-    variables = function(template, "InferenceFunction")["Environment"]["Variables"]
-    assert (variables["INFERENCE_DICTIONARY"], variables["FAST_PREFIX"]) == ("dict-1", "fast")
-    assert function(template, "InferenceFunction")["Timeout"] == 900
-    statements = policy_statements(template, "InferenceFunction")
-    conditioned = {
-        frozenset([s["Action"]] if isinstance(s["Action"], str) else s["Action"]): s.get("Condition")
-        for s in statements
-        if "elemental-inference" in str(s["Action"])
-    }
-    assert conditioned[frozenset({"elemental-inference:CreateFeed", "elemental-inference:TagResource"})] == {
-        "StringEquals": {"aws:RequestTag/fast:app": "fast"}
-    }
-    data_plane = next(k for k in conditioned if "elemental-inference:PutMedia" in k)
-    assert {"elemental-inference:GetMetadata", "elemental-inference:DeleteFeed"} <= data_plane
-    assert conditioned[data_plane] == {"StringEquals": {"aws:ResourceTag/fast:app": "fast"}}
-    queue = resource(template, "AWS::MediaConvert::Queue", "InferenceQueue")["Properties"]
-    assert queue["Name"] == "fast-captioner"

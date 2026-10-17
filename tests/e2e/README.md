@@ -31,15 +31,12 @@ given. The report header prints the run id. That id is the correlation id of the
     Channel Assembly's as-run log group `MediaTailor/Channel/AsRunLog`.
 
   The deploying role has all of these.
-- `polly:SynthesizeSpeech`, for the speaking clip of `test_08_generated_captions` (skipped on stages whose
-  `CaptionEngine` output is `none`).
-- `ffmpeg` on the `PATH`, to render the synthetic sources.
+- `ffmpeg` on the `PATH`, to render the synthetic source.
 - Outbound HTTPS to the CDN, Cognito and Amazon Bedrock AgentCore.
 
-A run costs about 1.50 US dollars. Most of that is the MediaConvert encodes (about $0.65 for the 70 s pattern and
-$0.25 for the 24 s speaking clip with the standard ladder, plus its caption scan and captioning proxy). The rest is about fifteen minutes
-of a BASIC channel, one agent turn, about 45 s of Elemental Inference smart subtitles ($0.11), and cents of
-CloudFront, S3 and logs.
+A run costs about 0.55 US dollars. The MediaConvert encode of the 70 s pattern is about $0.04 with the standard
+ladder (Basic tier, three outputs, `fast_channels.core.cost`). The rest is about fifteen minutes of a BASIC channel,
+one agent turn, and cents of CloudFront, S3 and logs.
 
 ## What runs, in order
 
@@ -48,13 +45,12 @@ Session fixtures (`conftest.py`) do each slow step once, when a test first needs
 | Module | Step | Checks |
 |---|---|---|
 | `test_01_outputs` | Read the stacks | Every output the scripts and the console rely on is present and well formed. The keys are listed in `scripts/_stack.py` `OUTPUT_KEYS`. |
-| `test_02_ingest` | Render a 70 s 1080p30 `testsrc2` pattern with a 1 kHz tone and a WebVTT file with a cue every 5 s. Upload the captions as `<asset>.en.vtt`, its sidecar (`asset_id` e2e-pattern-<UTC timestamp>, `content_id` e2e-pattern, `cue_points_ms` [32000]), then the file, to the ingest bucket. Wait until the asset is READY. | Every rendition profile manifest is in S3, with the ladder's exact signature (caption tracks included). The break offsets include the snapped cue point (32032 ms at 29.97 fps, off the segment grid, so the encode has an ESAM split). The VOD source has a package configuration for every source group, every channel output among them, each pointing at an existing manifest. The English track came from the provided file, its IMSC segments have the video's durations (Finalize re-cut them after the split) and carry the cues. |
-| `test_03_ladder_kit` | — | The default ladder is READY. Its filler and break-slate VOD sources exist. The VAST pod lists the house ads. Every creative, `b.gif` and an SGAI ad segment are readable through the CDN. |
-| `test_04_channel` | Call `schedule___plan` and `schedule___publish` for three programs, starting in about 2.5 minutes, with one 30 s break each. Then `channels___start_channel`. The tool Lambdas are invoked the way AgentCore Gateway invokes them (`bedrockAgentCoreToolName` in the client context). One SSAI, one SGAI and one DASH session then watch the breaks air. | The SSAI multivariant lists every codec family (`avc1`, `hvc1`, `av01`). A media playlist per family and per audio group plays. Each single-codec output carries only its codec. SSAI stitches ads from the second break on. SGAI shows an `com.apple.hls.interstitial` DATERANGE, and its asset lists carry ads that are readable via `/preconditioned-ads/*`. The DASH MPD is dynamic, uses its output's codec, and gets ad periods. Neither the channel nor the VOD source has a `SCHEDULING_ERROR`. The channel lists the ladder's caption tracks; their content segments sit on the video grid and SSAI ads carry MediaTailor's blank WebVTT; SGAI ad multivariants list the same tracks; every DASH period has the IMSC text set, and a DASH ad init segment resolves to media. |
+| `test_02_ingest` | Render a 70 s 1080p30 `testsrc2` pattern with a 1 kHz tone. Upload its sidecar (`asset_id` e2e-pattern-<UTC timestamp>, `content_id` e2e-pattern, `cue_points_ms` [32000]), then the file, to the ingest bucket. Wait until the asset is READY. | The manifest of every rendition profile (the one `hls` profile) is in S3 with the ladder's exact signature: for the standard ladder, three AVC variants, each with the muxed AAC-LC in `CODECS`. It has no checklist findings and `CLOSED-CAPTIONS=NONE` on every variant. Every variant is MPEG-TS (`.ts` segments served as `video/MP2T`) with identical EXTINFs, since the Basic tier has no ESAM split. The cue point is off the 6006 ms segment grid and snaps to 30030 ms at 29.97 fps (`Grid.snap_to_segment`), a boundary every variant shares and one of the break offsets. The VOD source has an HLS package configuration for every source group, every channel output among them, each pointing at an existing manifest. |
+| `test_03_ladder_kit` | — | The default ladder is READY. Its filler and break-slate VOD sources exist. The VAST pod lists the house ads, each with one streaming HLS MediaFile whose multivariant has the ladder's signature (preconditioned ads must match the content's variants). Every creative, `b.gif` and an SGAI ad segment (`.ts`, absolute on the CDN) are readable through the CDN. |
+| `test_04_channel` | Call `schedule___plan` and `schedule___publish` for three programs, starting in about 2.5 minutes, with one 60 s break each. Then `channels___start_channel`. The tool Lambdas are invoked the way AgentCore Gateway invokes them (`bedrockAgentCoreToolName` in the client context). One SSAI and one SGAI session then watch the breaks air. | The SSAI multivariant lists the ladder's variants with their audio muxed (no `EXT-X-MEDIA`). The media playlist of every variant plays, its content in `.ts` segments. Every variant has stitched house ads from the second break on. SGAI shows an `com.apple.hls.interstitial` DATERANGE. Its asset lists carry ads that are readable via `/preconditioned-ads/*`, and the ad multivariant that MediaTailor re-hosts has the ladder's variants. Neither the channel nor the VOD source has a `SCHEDULING_ERROR`. The SGAI checks are server-side only: whether a player enters the interstitial is not tested (hls.js 1.7.3 stalls on an append-in-place interstitial with muxed audio, docs/ad-insertion.md). |
 | `test_05_agent` | Get a client-credentials token for the autopilot app client. Send one AG-UI `RunAgentInput`, "List the channels.", to the runtime. | `RUN_STARTED` … `RUN_FINISHED`, a `channels___list_channels` tool call, and no `RUN_ERROR`. |
 | `test_06_stop` | `channels___stop_channel` | The channel is STOPPED. The session teardown stops it again, whatever failed before. |
 | `test_07_late_start` | With the channel stopped, publish two programs starting in 3 minutes, with one 2-minute break each. Start the channel 30 s after the first program's start. Stop it at the end of the module. | `channels___start_channel` reports the first program in `skipped` (and only programs whose start had passed), the media library marks it `SKIPPED`, and the as-run log shows the second program starting at its planned time, within one segment, and no start of the first. |
-| `test_08_generated_captions` | Render a 24 s pattern that speaks (Amazon Polly) and upload it without captions (`captions.spoken_language` en). Wait until READY. | The English track was generated by the stage's engine (`CaptionEngine`), the file under `captions/` transcribes the speech starting near 2 s, and the encode's IMSC segments carry it. |
 
 Timing and behaviour worth knowing:
 
@@ -70,11 +66,11 @@ Timing and behaviour worth knowing:
 
 ## What a run leaves behind
 
-- Two assets per run, `e2e-pattern-<UTC timestamp>` (content id `e2e-pattern`) and `e2e-pattern-spoken-<UTC
-  timestamp>`: their encodes under `assets/`, their VOD sources, their uploads (and the provided captions) under
-  `e2e/` and the generated captions under `captions/` in the ingest bucket. Each run uses a new asset id because the pipeline
-  refuses to re-encode a `READY` asset in place (that would overwrite the media its VOD source serves). The stage's
-  reaper removes these VOD sources when the stage is destroyed; on a long-lived stage, delete old ones as needed.
+- One asset per run, `e2e-pattern-<UTC timestamp>` (content id `e2e-pattern`): its encode under `assets/`, its VOD
+  source, and its upload and sidecar under `e2e/` in the ingest bucket. Each run uses a new asset id because the
+  pipeline refuses to re-encode a `READY` asset in place (that would overwrite the media its VOD source serves). The
+  stage's reaper removes these VOD sources when the stage is destroyed; on a long-lived stage, delete old ones as
+  needed.
 - Its five programs (the late start's first one `SKIPPED`). Channel Assembly deletes aired programs about 15
   minutes later. Their EPG entries stay in the media library and in `epg/<channel>.json`.
 - The channel, stopped.
@@ -87,8 +83,11 @@ the runtime resources that are left, and `--apply` deletes them.
 - `conftest.py`: the `--prefix` option, the skip logic and the session fixtures.
 - `harness.py`: the scenario constants; waiting and retries; the tool invoker; the player (HTTP); the playback
   watcher; the agent client; the test-pattern renderer.
-- `playback.py`: pure readers for HLS, HLS Interstitials, DASH and VAST. Unit-tested against `data/`, which holds
-  trimmed wire captures from the research run (e2e.md).
+- `playback.py`: pure readers for HLS, HLS Interstitials and VAST. Unit-tested against `data/`: an SGAI asset list
+  captured in the research run (e2e.md), and `synthetic-*` playlists. Those keep the MediaTailor URL shapes of that
+  run's captures, with the muxed TS variants, segment names and 6.006 s durations of the real encode in
+  `core/tests/data/hls-ts/` (no `EXT-X-MAP`). Each says so in a comment line. Replace them with captures from a
+  deployed TS stage.
 - `agui.py`: the AG-UI request and the Server-Sent Events reader.
 - `test_harness.py` and `test_scripts.py`: offline tests of the above and of `scripts/` (botocore Stubber,
   `httpx.MockTransport`). They are not marked `e2e`.

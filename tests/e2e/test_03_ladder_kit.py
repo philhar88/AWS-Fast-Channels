@@ -7,6 +7,7 @@ import pytest
 from _stack import Plane, Stage
 from playback import media_segments, renditions, vast_ads, vast_durations, vast_media_files
 
+from fast_channels.core.manifests import expected_signature, ladder_signature
 from fast_channels.core.specs import vast_key
 from fast_channels.core.timeline import BREAK_SLATE_GOPS, HOUSE_AD_GOPS
 from fast_channels.functions.tools.library_store import LadderRecord, LadderStatus, ladder_key
@@ -17,7 +18,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.e2e
 
 HLS: str = "application/x-mpegURL"
-DASH: str = "application/dash+xml"
 
 
 @pytest.fixture(scope="module")
@@ -46,26 +46,27 @@ def test_default_ladder_kit_ready(stage: Stage, kit_ladder: LadderRecord) -> Non
 
 
 def test_vast_pod_and_creatives_readable_via_cdn(stage: Stage, player: Player, kit_ladder: LadderRecord) -> None:
-    """The pod cycles through the house ads until it covers the longest break slate, each with a streaming HLS and
-    DASH file; the HLS copy's media playlists use absolute segment URIs on the CDN (SGAI players resolve asset URIs
-    against MediaTailor, e2e.md §5.4)."""
+    """The pod cycles through the house ads until it covers the longest break slate, each with one streaming HLS
+    file: a multivariant with the ladder's variants (preconditioned ads must match the content's), whose media
+    playlists use absolute ``.ts`` segment URIs on the CDN (SGAI players resolve asset URIs against MediaTailor,
+    e2e.md §5.4)."""
     content = stage.output(Plane.MEDIA, "ContentBaseUrl").rstrip("/")
     vast = player.get(f"{content}/{kit_ladder.kit.vast_key}")
     assert "xml" in vast.headers.get("content-type", ""), vast.headers
     pod = vast_ads(vast.text)
     house_ads = kit_ladder.kit.house_ads
     assert set(pod) == set(house_ads) and pod == [house_ads[n % len(house_ads)] for n in range(len(pod))], pod
-    longest_break_s = kit_ladder.definition().grid.gop_exact(max(BREAK_SLATE_GOPS)) / 1000
+    ladder = kit_ladder.definition()
+    longest_break_s = ladder.grid.gop_exact(max(BREAK_SLATE_GOPS)) / 1000
     assert sum(vast_durations(vast.text)) >= longest_break_s, vast_durations(vast.text)
     files = vast_media_files(vast.text)
-    assert sorted(f.mime_type for f in files) == sorted([HLS, DASH] * len(pod)), files
+    assert [f.mime_type for f in files] == [HLS] * len(pod), files
     for media_file in {f.uri: f for f in files}.values():
-        document = player.get(media_file.uri)
-        if media_file.mime_type == DASH:
-            assert "<MPD" in document.text, media_file
-            continue
-        first = next(iter(renditions(document.text, str(document.url)).values()))
+        multivariant = player.get(media_file.uri)
+        assert ladder_signature(multivariant.text) == expected_signature(ladder), media_file
+        first = next(iter(renditions(multivariant.text, str(multivariant.url)).values()))
         segments = media_segments(player.get(first).text, first)
-        assert segments and all(s.uri.startswith(content) for s in segments), (first, segments[:2])
+        absolute_ts = all(s.uri.startswith(content) and s.uri.endswith(".ts") for s in segments)
+        assert segments and absolute_ts, (first, segments[:2])
         assert player.get(segments[0].uri).content, segments[0]
     assert player.get(f"{content}/ads/b.gif").headers.get("content-type") == "image/gif"

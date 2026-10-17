@@ -2,22 +2,13 @@
 
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Final, Self
+from typing import Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fast_channels.core.captions import CaptionsRequest
 from fast_channels.core.mediaconvert import GeneratorInput  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.naming import digest, slug
-
-WORK_PREFIX: Final = "work/"
-"""Ingest-bucket prefix of the pipeline's intermediate files (caption scans and their proxies), expired after days."""
-CAPTIONS_PREFIX: Final = "captions/"
-"""Ingest-bucket prefix of generated captions, ``captions/<asset_id>/<correlation_id>/<language>.<ext>``. They are
-sources like any provided file: an operator can correct one and ingest again with it."""
-RESERVED_PREFIXES: Final = (WORK_PREFIX, CAPTIONS_PREFIX)
-"""Ingest-bucket prefixes the pipeline writes; uploads there never start an ingest."""
 
 ASSET_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,47}$"
 LADDER_VERSION_PATTERN = r"^[a-z][a-z0-9-]*@[0-9a-f]{10}$"
@@ -50,10 +41,7 @@ class IngestRequest(BaseModel):
     kind: AssetKind = AssetKind.CONTENT
     asset_id: str | None = Field(None, pattern=ASSET_ID_PATTERN, description="Defaults to asset_id_for(source).")
     content_id: str | None = Field(None, min_length=1, max_length=64, description="Catalog content id.")
-    cue_points_ms: list[int] = Field([], description="Editorial ad cue points (ms); snapped to the GOP grid.")
-    captions: CaptionsRequest | None = Field(
-        None, description="Provided caption files and how to find or generate the rest (default: auto)."
-    )
+    cue_points_ms: list[int] = Field([], description="Editorial ad cue points (ms); snapped to the segment grid.")
     ladder_version: str = Field(pattern=LADDER_VERSION_PATTERN, description="Ladder version, e.g. standard@0123abcd45.")
     correlation_id: str | None = Field(
         None, pattern=r"^[A-Za-z0-9_-]{1,80}$", description="Trace id; Step Functions execution name."
@@ -66,16 +54,9 @@ class IngestRequest(BaseModel):
             raise ValueError("exactly one of source_uri and generator is required")
         if self.generator is not None and self.cue_points_ms:
             raise ValueError("generated slates and house ads have no cue points")
-        if self.generator is not None and self.captions is not None:
-            raise ValueError("generated slates and house ads have empty caption tracks")
         if any(ms < 0 for ms in self.cue_points_ms):
             raise ValueError("cue points must not be negative")
         return self
-
-    @property
-    def resolved_captions(self) -> CaptionsRequest:
-        """``captions``, else the defaults: provided files none, mode ``auto``."""
-        return self.captions or CaptionsRequest()
 
     @property
     def resolved_asset_id(self) -> str:

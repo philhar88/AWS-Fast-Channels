@@ -18,10 +18,10 @@ from botocore.exceptions import ClientError
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind
-from fast_channels.core.manifests import SUBTITLES_ROW, expected_signature, ladder_signature, parse_multivariant
+from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.mediaconvert import output_prefix
 from fast_channels.core.naming import agent_owned_name, agent_vod_source_name, is_agent_owned
-from fast_channels.core.profiles import ManifestFormat, applicable, profile
+from fast_channels.core.profiles import applicable, profile
 from fast_channels.core.specs import http_package_configurations
 from fast_channels.core.tags import resource_tags
 from fast_channels.functions import aws
@@ -40,7 +40,7 @@ logger = Logger(child=True)
 
 MAX_PACKAGES: Final = 5  # package configurations per VOD source (channel-assembly.md §4.3 quotas)
 MAX_MANIFEST_BYTES: Final = 2 * 1024 * 1024  # Channel Assembly manifest size limit (not adjustable)
-MANIFEST_PATH_PATTERN: Final = r"^/\S+\.(m3u8|mpd)$"
+MANIFEST_PATH_PATTERN: Final = r"^/\S+\.m3u8$"
 # S3_SIGV4 needs the regional virtual-hosted form (channel-assembly.md §2.2); bucket names with dots break its TLS.
 _S3_BASE_URL: Final = re.compile(
     r"^https://(?P<bucket>[a-z0-9][a-z0-9-]*[a-z0-9])\.s3\.(?P<region>[a-z0-9-]+)\.amazonaws\.com(?P<prefix>/[^?#]*)?$"
@@ -56,9 +56,7 @@ def _mediatailor() -> Any:
 
 
 class _SourceGroup(BaseModel):
-    source_group: str = Field(
-        description="Rendition profile served under this name (a channel output), e.g. hls, hls-avc, dash-avc."
-    )
+    source_group: str = Field(description="Rendition profile served under this name (a channel output), e.g. hls.")
 
     @field_validator("source_group")
     @classmethod
@@ -274,7 +272,7 @@ class RegisterVodSourceInput(BaseModel):
     packages: Annotated[list[Package], AfterValidator(_unique_groups)] = Field(
         min_length=1,
         max_length=MAX_PACKAGES,
-        description="One manifest per source group, at least one HLS. A channel airs the asset only if every "
+        description="One HLS multivariant playlist per source group. A channel airs the asset only if every "
         "channel output has a package here.",
     )
     ladder_version: str | None = Field(
@@ -301,10 +299,10 @@ class RegisterVodSourceOutput(BaseModel):
 
 @tool("origins", access=Access.WRITE)
 def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> RegisterVodSourceOutput:
-    """Register pre-encoded HLS/DASH content from a source location as a schedulable library asset (owner agent).
-    Every HLS manifest must match the ladder exactly (codec, resolution, frame rate and audio group of every
-    variant, in order; LADDER_MISMATCH otherwise) because Channel Assembly switches programs variant by variant.
-    Duration and ad-break offsets are computed from the media playlists; the asset is READY at once."""
+    """Register pre-encoded HLS content from a source location as a schedulable library asset (owner agent).
+    Every manifest must match the ladder exactly (video codec, resolution, frame rate and muxed audio codec of
+    every variant, in order; LADDER_MISMATCH otherwise) because Channel Assembly switches programs variant by
+    variant. Duration and ad-break offsets are computed from the media playlists; the asset is READY at once."""
     config = settings()
     config.require("prefix", "library_table")
     ladder_version = request.ladder_version or _default_ladder_version()
@@ -376,11 +374,8 @@ def _check_deployment_groups(packages: Iterable[_SourceGroup]) -> None:
 
 
 def _timeline_package(packages: Sequence[Package]) -> Package:
-    """The HLS package whose media playlists define duration and break offsets (``hls`` when present)."""
-    hls = [p for p in packages if profile(p.source_group).format is ManifestFormat.HLS]
-    if not hls:
-        raise ToolError("VALIDATION", "at least one HLS package is required", hint="Add the hls source group.")
-    return next((p for p in hls if p.source_group == "hls"), hls[0])
+    """The package whose media playlists define duration and break offsets (``hls`` when present)."""
+    return next((p for p in packages if p.source_group == "hls"), packages[0])
 
 
 def _require_source_location(name: str) -> dict[str, Any]:
@@ -419,8 +414,8 @@ def _create_vod_source(location: str, name: str, packages: Sequence[Package], ta
 
 
 def _configurations(packages: Iterable[tuple[str, str]]) -> list[dict[str, str]]:
-    """HttpPackageConfigurations; the Type follows the profile, since CreateVodSource accepts any Type."""
-    return [{"Path": path, "SourceGroup": group, "Type": profile(group).format.value} for group, path in packages]
+    """HttpPackageConfigurations: every profile is an HLS manifest."""
+    return [{"Path": path, "SourceGroup": group, "Type": "HLS"} for group, path in packages]
 
 
 def _same_configurations(left: Iterable[dict[str, str]], right: Iterable[dict[str, str]]) -> bool:
@@ -468,15 +463,11 @@ class _S3Manifests:
         return str(response["Body"].read().decode("utf-8"))
 
     def verified(self, source_group: str, path: str, ladder: Ladder) -> str:
-        """The manifest at ``path``, after checking its format and, for HLS, its ladder signature for the group."""
+        """The multivariant playlist at ``path``, after checking that it is one and has the ladder's signature."""
         text = self.read(path)
-        if profile(source_group).format is ManifestFormat.DASH:
-            if "<MPD" not in text:
-                raise ToolError("VALIDATION", f"{path} is not a DASH MPD")
-            return text
         if not text.lstrip().startswith("#EXTM3U") or not parse_multivariant(text):
             raise ToolError("VALIDATION", f"{path} is not an HLS multivariant playlist")
-        expected = expected_signature(ladder, profile(source_group))
+        expected = expected_signature(ladder)
         if (actual := ladder_signature(text)) != expected:
             raise ToolError(
                 "LADDER_MISMATCH",
@@ -505,16 +496,13 @@ def _child(manifest_path: str, uri: str) -> str:
 
 
 def _difference(expected: Sequence[Sequence[str]], actual: Sequence[Sequence[str]]) -> str:
-    """The first difference between two ladder signatures, in variants and then in subtitle renditions."""
-    for kind, subtitles in (("variant", False), ("subtitle rendition", True)):
-        want = [row for row in expected if (row[0] == SUBTITLES_ROW) is subtitles]
-        got = [row for row in actual if (row[0] == SUBTITLES_ROW) is subtitles]
-        rows = zip(want, got, strict=False)
-        if diff := next(((n, w, g) for n, (w, g) in enumerate(rows, 1) if w != g), None):
-            n, w, g = diff
-            return f"{kind} {n} is {'/'.join(g)} but the ladder has {'/'.join(w)}"
-        if len(want) != len(got):
-            return f"{len(got)} {kind}s but the ladder has {len(want)}"
+    """The first difference between two ladder signatures."""
+    rows = zip(expected, actual, strict=False)
+    if diff := next(((n, w, g) for n, (w, g) in enumerate(rows, 1) if w != g), None):
+        n, w, g = diff
+        return f"variant {n} is {'/'.join(g)} but the ladder has {'/'.join(w)}"
+    if len(expected) != len(actual):
+        return f"{len(actual)} variants but the ladder has {len(expected)}"
     return "the signatures differ"
 
 
@@ -589,7 +577,7 @@ def update_package_configurations(request: UpdatePackagesInput, ctx: ToolContext
 
 
 def _package_path(asset: Asset, ladder: Ladder, change: PackageChange) -> str:
-    """Path of a source group's manifest: given, already registered, or the pipeline's AdditionalManifest."""
+    """Path of a source group's manifest: given, already registered, or the one the pipeline's encode wrote."""
     if change.path or (change.source_group in asset.packages):
         return change.path or asset.packages[change.source_group]
     target = profile(change.source_group)

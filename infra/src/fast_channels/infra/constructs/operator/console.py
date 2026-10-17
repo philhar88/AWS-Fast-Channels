@@ -45,8 +45,9 @@ PLACEHOLDER: Final = (
 def content_security_policy(*, region: str, url_suffix: str, connect_sources: Sequence[str]) -> str:
     """The console's CSP (console/README.md, verified in Playwright under the production bundle).
 
-    ``data:`` fonts are Cloudscape's embedded Open Sans; ``blob:``/``data:`` media are hls.js MSE buffers and its
-    ``data:,WEBVTT`` text tracks; the hls.js transmuxer runs in a ``blob:`` worker. ``connect-src`` covers the
+    ``data:`` fonts are Cloudscape's embedded Open Sans; ``blob:`` media are hls.js MSE buffers, and ``data:`` media
+    the hidden ``metadata`` track (``src="data:,WEBVTT"``) that hls.js creates for EXT-X-DATERANGE cues, which time
+    the SGAI interstitial transitions; the hls.js transmuxer runs in a ``blob:`` worker. ``connect-src`` covers the
     media CDN, SGAI asset lists (``*.mediatailor``), the Runtime, the Gateway and Cognito, plus ``connect_sources``.
     """
     aws = f"{region}.{url_suffix}"

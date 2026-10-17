@@ -53,7 +53,6 @@ const ASSET_COLUMNS: TableProps.ColumnDefinition<Asset>[] = [
   { id: "status", header: "Status", cell: (a) => <StatusIndicator type={ASSET_STATUS[a.status]}>{titleCase(a.status)}</StatusIndicator>, sortingField: "status" },
   { id: "duration", header: "Duration", cell: (a) => (a.duration_ms ? formatDuration(a.duration_ms) : "-") },
   { id: "breaks", header: "Break points", cell: (a) => (a.kind === "content" ? a.break_offset_count : "-") },
-  { id: "captions", header: "Captions", cell: (a) => (a.kind === "content" ? a.captioned.join(", ") || "None" : "-") },
   { id: "ladder", header: "Ladder", cell: (a) => a.ladder_version },
   { id: "updated", header: "Updated", cell: (a) => formatDateTime(a.updated_at), sortingField: "updated_at" },
 ];
@@ -72,11 +71,10 @@ const LADDER_COLUMNS: TableProps.ColumnDefinition<Ladder>[] = [
   { id: "cost", header: "Encode cost / min", cell: (l) => (l.cost_per_minute_usd === undefined ? "-" : formatUsd(l.cost_per_minute_usd)) },
 ];
 
-/** `16 renditions up to 1080p: AVC, HEVC, AV1`. */
+/** `3 renditions up to 1080p`. */
 function videoSummary(ladder: Ladder): string {
   const height = ladder.max_height ? ` up to ${ladder.max_height}p` : "";
-  const codecs = ladder.codecs?.length ? `: ${ladder.codecs.map((c) => c.toUpperCase()).join(", ")}` : "";
-  return ladder.renditions ? `${ladder.renditions} renditions${height}${codecs}` : "-";
+  return ladder.renditions ? `${ladder.renditions} renditions${height}` : "-";
 }
 
 /** A ladder goes on air only with its kit: filler, break slates and house ads encoded on the same ladder. */

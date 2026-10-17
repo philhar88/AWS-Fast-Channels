@@ -39,13 +39,6 @@ EXPECTED_BEHAVIOURS = [
     ("/preconditioned-ads/*", "mediatailor-segments", "b2884449-e4de-46a7-ac36-70bc7f1ddd6d", None, CUSTOM),
     ("/v1/i-media/*", "mediatailor-manifests", "4cc15a8a-d715-48a4-82b8-cc0b614638fe", None, CUSTOM),
     (
-        "/v1/dash/*",
-        "mediatailor-manifests",
-        "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-        "33f36d7e-f396-46d9-90e0-52428a34d9dc",
-        "eaab4381-ed33-4a86-88ca-d9558dc6cd63",
-    ),
-    (
         "/v1/manifest/*",
         "mediatailor-manifests",
         "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
@@ -123,7 +116,6 @@ def test_behaviour_methods_compression_and_viewer_protocol(template: Template) -
 
     assert {path for path, b in behaviours.items() if b["Compress"]} == {
         "/v1/i-media/*",
-        "/v1/dash/*",
         "/v1/manifest/*",
         "/v1/*",
     }
@@ -268,7 +260,7 @@ def test_path_contract_mirrors_the_routes() -> None:
         "mediatailor-manifests": "manifests.mediatailor.eu-west-1.amazonaws.com",
         "mediatailor-segments": "segments.mediatailor.eu-west-1.amazonaws.com",
     }
-    personalised = contract["rules"][5]
+    personalised = contract["rules"][4]
     assert personalised["path"] == "/v1/*"
     assert personalised["methods"] == ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"]
     assert personalised["forward"]["headers"] == [

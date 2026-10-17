@@ -21,9 +21,8 @@ from functools import reduce
 from typing import TYPE_CHECKING, Any, Self
 
 from boto3.dynamodb.conditions import Attr, ConditionBase, Key
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidatorFunctionWrapHandler, field_validator
 
-from fast_channels.core.captions import CaptionProvenance  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.ingest import AssetKind  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.timeline import PlannedProgram, ProgrammingBrief
@@ -178,16 +177,13 @@ class Asset(Record):
     title: str | None = None
     content_id: str | None = None
     duration_ms: int | None = None
-    break_offsets_ms: list[int] = Field([], description="Offsets where every track has a common segment boundary.")
+    break_offsets_ms: list[int] = Field([], description="Offsets where every variant has a common segment boundary.")
     cue_points_ms: list[int] = Field(
         [],
-        description="Editorial break positions of the ingest request, on the GOP grid; break_offsets_ms keeps "
+        description="Editorial break positions of the ingest request, on the segment grid; break_offsets_ms keeps "
         "only these when set.",
     )
     signature: list[list[str]] = Field([], description="core.manifests.ladder_signature of its HLS manifest.")
-    captions: list[CaptionProvenance] = Field(
-        [], description="Where each caption track came from (provided, embedded, generated or none), in ladder order."
-    )
     vod_source: str | None = Field(None, description="Channel Assembly VOD source name (none for ads).")
     source_location: str | None = Field(None, description="Source location of the VOD source; None = the deployment's.")
     packages: dict[str, str] = Field({}, description="Source group -> manifest path relative to the source location.")
@@ -230,6 +226,17 @@ class LadderRecord(Record):
     correlation_id: str | None = None
     error: str | None = None
 
+    @field_validator("ladder", mode="wrap")
+    @classmethod
+    def _readable(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Ladder | None:
+        """A definition stored by an older ladder model (codecs, audio groups, captions) reads as None, so the record
+        stays listable as a version without a definition."""
+        try:
+            ladder: Ladder | None = handler(value)
+        except ValidationError:
+            return None
+        return ladder
+
     @property
     def ladder_id(self) -> str:
         return self.ladder_version.partition("@")[0]
@@ -262,7 +269,6 @@ class ChannelRecord(Record):
     arn: str | None = None
     playback_configuration_name: str | None = None
     hls_prefix: str | None = Field(None, description="Playback config HlsConfiguration.ManifestEndpointPrefix.")
-    dash_prefix: str | None = Field(None, description="Playback config DashConfiguration.ManifestEndpointPrefix.")
     brief: ProgrammingBrief | None = None
     correlation_id: str | None = None
 

@@ -7,7 +7,8 @@ import pytest
 from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
 
-from fast_channels.core.profiles import DEFAULT_PACKAGE_PROFILES
+from fast_channels.core.ladder import Ladder
+from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, RenditionProfile
 from fast_channels.infra.config import (
     AdsMode,
     ChannelTier,
@@ -45,7 +46,7 @@ def test_shipped_configuration(load_config: Load) -> None:
 
     assert (config.prefix, config.removal) == ("fast", Removal.DESTROY)
     assert config.ladders.builtin == ("standard",)
-    assert config.channel_assembly.package_profiles == DEFAULT_PACKAGE_PROFILES
+    assert config.channel_assembly.package_profiles == DEFAULT_PACKAGE_PROFILES == ("hls",)
     [channel] = config.channels.iac
     assert (channel.name, channel.ladder, channel.tier) == ("fast-demo", "standard", ChannelTier.BASIC)
     assert channel.outputs == DEFAULT_PACKAGE_PROFILES
@@ -152,24 +153,19 @@ def test_errors_list_every_problem_with_its_path(load_config: Load) -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        (
-            {"channels.iac.0.outputs": ["hls", "dash-hevc"]},
-            "channels.iac[fast-demo]: outputs ['dash-hevc'] are not in channel_assembly.package_profiles",
-        ),
-        ({"channels.iac.0.outputs": ["hls-4k"]}, "unknown rendition profiles ['hls-4k']"),
-        (
-            {"channel_assembly.package_profiles": ["hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc", "dash-av1"]},
-            "between 1 and 5 profiles are required, got 6",
-        ),
-        (
-            {"channel_assembly.package_profiles": ["hls", "hls-uhd"], "channels.iac": []},
-            "'hls-uhd' selects no rendition of ladder 'standard'",
-        ),
+        ({"channels.iac.0.outputs": ["hls", "dash-avc"]}, "unknown rendition profiles ['dash-avc']; choose from"),
+        ({"channels.iac.0.outputs": []}, "at least one output is required"),
+        ({"channel_assembly.package_profiles": ["hls", "hls-avc"]}, "unknown rendition profiles ['hls-avc']"),
+        ({"channel_assembly.package_profiles": ["hls", "hls"]}, "duplicate entries: hls"),
+        ({"channel_assembly.package_profiles": []}, "between 1 and 5 profiles are required, got 0"),
+        ({"channel_assembly.package_profiles": ["hls"] * 6}, "between 1 and 5 profiles are required, got 6"),
         ({"channels.iac.0.name": "demo"}, "name must start with 'fast'- but not 'fast'-agent-"),
         ({"channels.iac.0.name": "fast-agent-demo"}, "name must start with 'fast'- but not 'fast'-agent-"),
         ({"channels.iac": [{"name": "fast-a"}, {"name": "fast-a"}]}, "duplicate entries: fast-a"),
         ({"channels.iac.0.ladder": "uhd"}, "ladder 'uhd' is not in ladders.builtin ['standard']"),
         ({"ladders.builtin": ["standard", "missing"]}, "unknown ladder 'missing'"),
+        ({"ladders.builtin": ["standard", "uhd"]}, "unknown ladder 'uhd': there is no ladders/uhd.toml"),
+        ({"captions": {"enabled": True}}, "fast-channels.captions: Extra inputs are not permitted"),
         ({"ladders.default": "uhd"}, "default ladder 'uhd' is not in builtin ['standard']"),
         ({"channels.iac.0.autopilot_cron": "every hour"}, "String should match pattern"),
         ({"delivery.content_domain": "media.example.com"}, "content_domain and certificate_arn must be set together"),
@@ -187,29 +183,26 @@ def test_invalid_configurations(load_config: Load, overrides: dict[str, Any], ex
     assert expected in config_error(load_config, with_shipped(**overrides))
 
 
-def test_ladders_and_outputs_must_match(load_config: Load) -> None:
+def test_channel_outputs_must_be_package_profiles(load_config: Load, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The catalogue has one profile today; with a second, a channel may only publish the registered ones.
+    monkeypatch.setattr("fast_channels.infra.config.CATALOGUE", (*CATALOGUE, RenditionProfile(name="hls-alt")))
+
+    message = config_error(load_config, with_shipped(**{"channels.iac.0.outputs": ["hls", "hls-alt"]}))
     config = load_config(
-        with_shipped(
-            **{
-                "ladders.builtin": ["standard", "uhd"],
-                "channels.iac": [{"name": "fast-uhd", "ladder": "uhd", "outputs": ["hls", "dash-av1"]}],
-                "channel_assembly.package_profiles": ["hls", "dash-av1"],
-            }
-        )
+        with_shipped(**{"channel_assembly.package_profiles": ["hls", "hls-alt"], "channels.iac.0.outputs": ["hls-alt"]})
     )
 
-    assert config.channels.iac[0].ladder == "uhd"
+    assert "channels.iac[fast-demo]: outputs ['hls-alt'] are not in channel_assembly.package_profiles" in message
+    assert config.channels.iac[0].outputs == ("hls-alt",)
 
 
-def test_external_vast_requires_single_codec_outputs(load_config: Load) -> None:
+def test_external_vast_ads_play_on_the_hls_output(load_config: Load) -> None:
     ads = {"mode": "external_vast", "url": "https://ads.example.com/vast?sid=[session.uuid]"}
 
-    message = config_error(load_config, with_shipped(ads=ads))
-    config = load_config(with_shipped(ads=ads, **{"channels.iac.0.outputs": ["hls-avc", "dash-avc"]}))
+    config = load_config(with_shipped(ads=ads))
 
-    assert "outputs ['hls', 'hls-avc', 'hls-hevc', 'hls-av1'] mix codecs" not in message
-    assert "outputs ['hls'] mix codecs" in message
     assert config.ads == ExternalVastAds(mode=AdsMode.EXTERNAL_VAST, url=ads["url"])
+    assert config.channels.iac[0].outputs == ("hls",)
 
 
 def test_external_vast_needs_a_url(load_config: Load) -> None:
@@ -342,13 +335,8 @@ def test_json_schema_documents_every_field() -> None:
     assert "description" in schema["$defs"]["ChannelConfig"]["properties"]["autopilot_cron"]
 
 
-def test_captions_decide_the_deployed_ladders(load_config: Load) -> None:
+def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     config = load_config(with_shipped())
-    assert config.captions.enabled and not config.captions.required
-    assert [t.language for t in config.ladder("standard").captions] == ["en"]
-    off = load_config(with_shipped(**{"captions.enabled": "false"}))
-    assert off.ladder("standard").captions == ()
-    assert off.ladder("standard").version == "standard@86bf8088e0"  # the version v3.0.0 deployed
-    assert "required captions need enabled=true" in config_error(
-        load_config, with_shipped(**{"captions.enabled": "false", "captions.required": "true"})
-    )
+
+    assert config.ladder("standard") == Ladder.builtin("standard")
+    assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed

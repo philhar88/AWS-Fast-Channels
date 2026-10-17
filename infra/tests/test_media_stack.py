@@ -26,7 +26,6 @@ AGREED_OUTPUTS = {
     "LadderProvisionerArn",
     "SourceLocationName",
     "DefaultLadderVersion",
-    "CaptionEngine",
     "Channels",
     "DashboardUrl",
 }
@@ -35,10 +34,10 @@ GLOBAL_MODELS = {
     "agent.allowed_models": ["global.anthropic.claude-haiku-5-5"],
 }
 TWO_CHANNELS: list[dict[str, Any]] = [
-    {"name": "fast-demo", "outputs": ["hls", "hls-avc", "dash-avc"]},
-    {"name": "fast-uhd", "ladder": "uhd", "outputs": ["hls-hevc"]},
+    {"name": "fast-demo", "outputs": ["hls"]},
+    {"name": "fast-mobile", "ladder": "mobile"},
 ]
-TWO_LADDERS = {"ladders.builtin": ["standard", "uhd"], "channels.iac": TWO_CHANNELS}
+TWO_LADDERS = {"ladders.builtin": ["standard", "mobile"], "channels.iac": TWO_CHANNELS}
 
 
 def logical_id(construct: IConstruct) -> str:
@@ -144,16 +143,18 @@ def test_reaper_is_disabled_when_data_is_retained(deployment: GetDeployment) -> 
 # --- Ladders, kits and channels ------------------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("second_ladder")
 def test_job_template_per_builtin_ladder_but_kits_only_where_used(deployment: GetDeployment) -> None:
-    unused = deployment({"ladders.builtin": ["standard", "uhd"]}).stage.media
+    unused = deployment({"ladders.builtin": ["standard", "mobile"]}).stage.media
     used = deployment(TWO_LADDERS).stage.media
 
-    assert (set(unused.ladders), set(unused.kits)) == ({"standard", "uhd"}, {"standard"})
-    assert set(used.kits) == {"standard", "uhd"}
+    assert (set(unused.ladders), set(unused.kits)) == ({"standard", "mobile"}, {"standard"})
+    assert set(used.kits) == {"standard", "mobile"}
     Template.from_stack(unused).resource_count_is("AWS::MediaConvert::JobTemplate", 2)
     Template.from_stack(unused).resource_count_is("Custom::LadderKit", 1)
 
 
+@pytest.mark.usefixtures("second_ladder")
 def test_kits_are_provisioned_into_the_source_location(deployment: GetDeployment) -> None:
     media = deployment(TWO_LADDERS).stage.media
     rendered = Template.from_stack(media).to_json()
@@ -162,6 +163,7 @@ def test_kits_are_provisioned_into_the_source_location(deployment: GetDeployment
         assert logical_id(media.origin.source_location) in depends_on(rendered, kit.resource)
 
 
+@pytest.mark.usefixtures("second_ladder")
 def test_channels_depend_on_their_ladder_kit_and_use_its_filler(deployment: GetDeployment) -> None:
     media: MediaStack = deployment(TWO_LADDERS).stage.media
     rendered = Template.from_stack(media).to_json()
@@ -232,16 +234,9 @@ def test_channels_output_lists_playback_urls_per_output(template: Mapping[str, A
         {
             "name": "fast-demo",
             "ladderVersion": Ladder.builtin("standard").version,
-            "outputs": ["hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc"],
+            "outputs": ["hls"],
             "playback": {
-                **{
-                    output: {
-                        "ssai": f"https://X/X/{output}.m3u8",
-                        "sgai": f"https://X/X/{output}.m3u8?aws.insertionMode=GUIDED",
-                    }
-                    for output in ("hls", "hls-avc", "hls-hevc", "hls-av1")
-                },
-                "dash-avc": {"dash": "https://X/X/dash-avc.mpd"},
+                "hls": {"ssai": "https://X/X/hls.m3u8", "sgai": "https://X/X/hls.m3u8?aws.insertionMode=GUIDED"}
             },
         }
     ]

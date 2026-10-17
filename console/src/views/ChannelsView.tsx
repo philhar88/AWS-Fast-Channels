@@ -8,7 +8,6 @@ import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import Header from "@cloudscape-design/components/header";
 import KeyValuePairs from "@cloudscape-design/components/key-value-pairs";
 import Link from "@cloudscape-design/components/link";
-import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table, { type TableProps } from "@cloudscape-design/components/table";
 import { useCallback, useState } from "react";
@@ -24,7 +23,6 @@ import { formatDateTime } from "../lib/format";
 import { getChannel, listChannels, type CdnPlayback, type ChannelSummary } from "../lib/tools";
 import { useAsync } from "../lib/useAsync";
 import { useInterval } from "../lib/useInterval";
-import { canPlayProfile, PROFILE_LABELS } from "../players/codecs";
 import { playerGate, type PlayerGate } from "../players/gate";
 import { HlsPlayer } from "../players/HlsPlayer";
 import type { PlayerEvent } from "../players/telemetry";
@@ -164,14 +162,13 @@ interface PlaybackProps {
 }
 
 /**
- * SSAI (stitched) and SGAI (HLS Interstitials) sessions of the same output, side by side. The players mount when
- * the channel runs, so a Start (here or by the agent) brings them up without a reload, and unmount when it stops.
+ * SSAI (stitched) and SGAI (HLS Interstitials) sessions of the channel's HLS output (`hls`), side by side. The
+ * players mount when the channel runs, so a Start (here or by the agent) brings them up without a reload, and
+ * unmount when it stops.
  */
 function Playback({ channel, gate, playback, otherCdns, cdnBaseUrl, onEvent }: PlaybackProps) {
-  const hlsOutputs = Object.keys(playback).filter((output) => playback[output]?.ssai);
-  const dashOutputs = Object.entries(playback).flatMap(([output, urls]) => (urls.dash ? [{ output, url: urls.dash }] : []));
-  const [chosen, setChosen] = useState<string>();
-  const output = chosen !== undefined && hlsOutputs.includes(chosen) ? chosen : hlsOutputs.includes("hls") ? "hls" : hlsOutputs[0];
+  const outputs = Object.keys(playback).filter((name) => playback[name]?.ssai);
+  const output = outputs.includes("hls") ? "hls" : outputs[0];
   const urls = output === undefined ? undefined : playback[output];
   const ssai = urls?.ssai;
   const sgai = urls?.sgai && guidedUrl(urls.sgai);
@@ -179,22 +176,7 @@ function Playback({ channel, gate, playback, otherCdns, cdnBaseUrl, onEvent }: P
   return (
     <Container
       header={
-        <Header
-          variant="h2"
-          description="One playback configuration (InsertionMode PLAYER_SELECT), two sessions. Per-codec outputs pin the player to one codec."
-          actions={
-            hlsOutputs.length > 1 && output !== undefined ? (
-              <SegmentedControl
-                label="Output"
-                selectedId={output}
-                onChange={({ detail }) => {
-                  setChosen(detail.selectedId);
-                }}
-                options={hlsOutputs.map((id) => ({ id, text: PROFILE_LABELS[id] ?? id, disabled: !canPlayProfile(id) }))}
-              />
-            ) : undefined
-          }
-        >
+        <Header variant="h2" description="One playback configuration (InsertionMode PLAYER_SELECT), two sessions of the same HLS output.">
           Playback
         </Header>
       }
@@ -224,9 +206,6 @@ function Playback({ channel, gate, playback, otherCdns, cdnBaseUrl, onEvent }: P
             </SpaceBetween>
           </ColumnLayout>
         )}
-        {dashOutputs.length > 0 && (
-          <KeyValuePairs columns={2} items={dashOutputs.map(({ output: id, url }) => copyableUrl(`DASH (${id}, SSAI only)`, url))} />
-        )}
         {output !== undefined && otherCdns.length > 0 && (
           <KeyValuePairs columns={2} items={otherCdns.flatMap(({ cdn, playback: urls }) => cdnUrls(cdn, output, urls))} />
         )}
@@ -242,14 +221,12 @@ function copyableUrl(label: string, url: string) {
   };
 }
 
-/** The selected output's SSAI and SGAI URLs through another CDN, plus its DASH URLs. */
+/** The output's SSAI and SGAI URLs through another CDN. */
 function cdnUrls(cdn: string, output: string, playback: ChannelPlayback) {
   const urls = playback[output];
-  const dash = Object.entries(playback).flatMap(([id, u]) => (u.dash ? [copyableUrl(`DASH (${id}) via ${cdn}`, u.dash)] : []));
   return [
     ...(urls?.ssai ? [copyableUrl(`SSAI (${output}) via ${cdn}`, urls.ssai)] : []),
     ...(urls?.sgai ? [copyableUrl(`SGAI (${output}) via ${cdn}`, urls.sgai)] : []),
-    ...dash,
   ];
 }
 
