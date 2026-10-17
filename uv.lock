@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -312,15 +312,15 @@ wheels = [
 
 [[package]]
 name = "boto3-stubs"
-version = "1.43.114"
+version = "1.43.112"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore-stubs" },
     { name = "types-s3transfer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/20/ee/764acba614a8c3f65204ec9d167b432c9c68f7586748204a3cec3489f485/boto3_stubs-1.43.114.tar.gz", hash = "sha256:98729a4aa168a23e27cb68490979987cf7e4872df48c7480fd4399679c9dcbf8", size = 105897, upload-time = "2026-10-14T19:39:49.123Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/61/e26db2a58a2a4db379e839d28657f339b358e58db7fc969567475e5b645a/boto3_stubs-1.43.112.tar.gz", hash = "sha256:19f9ffedaa5d1cef2edc0c46b513242b859c732c897757e49616cf7b2dc76323", size = 105936, upload-time = "2026-10-12T20:19:25.361Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/f3/025209380f68920c223f104dc0d5792bd3cda35c64b2eeebf44cc00dfd1e/boto3_stubs-1.43.114-py3-none-any.whl", hash = "sha256:2a9effc8ea19b5edf95b83e01c033e12c92c293c3a193268eeb7830cc4c10ddb", size = 72202, upload-time = "2026-10-14T19:39:44.781Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/2b/6818b13acceedba8076f7c4c77ecaea4f333a2448828f686a115d1cfb48d/boto3_stubs-1.43.112-py3-none-any.whl", hash = "sha256:b9d4753a3c4c10004a92bb135a02181b055e38130a964f1bfa17120bb664ec1b", size = 72201, upload-time = "2026-10-12T20:19:21.408Z" },
 ]
 
 [package.optional-dependencies]
@@ -815,7 +815,7 @@ docs = [
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3", specifier = ">=1.42" },
-    { name = "boto3-stubs", extras = ["bedrock-agentcore", "bedrock-agentcore-control", "cloudformation", "cognito-idp", "dynamodb", "events", "logs", "mediaconvert", "mediatailor", "s3", "scheduler", "ssm", "stepfunctions"], specifier = ">=1.42" },
+    { name = "boto3-stubs", extras = ["bedrock-agentcore", "bedrock-agentcore-control", "cloudformation", "cognito-idp", "dynamodb", "events", "logs", "mediaconvert", "mediatailor", "s3", "scheduler", "ssm", "stepfunctions"], specifier = ">=1.43.112" },
     { name = "mypy", specifier = ">=1.18" },
     { name = "pillow", specifier = ">=12" },
     { name = "pytest", specifier = ">=8.4" },
