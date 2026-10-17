@@ -126,11 +126,11 @@ def playback_configuration_template(
 
 
 class AdInsertion(Construct):
-    """A MediaTailor playback configuration serving SSAI and SGAI (``PLAYER_SELECT``) from one channel, with its
-    vended logs.
+    """A MediaTailor playback configuration serving SSAI (``STITCHED_ONLY``) from one channel, with its vended logs.
 
-    The configuration is ``core.specs.playback_configuration`` verbatim (preconditioned ads, all three
-    personalization timeouts, absolute CDN prefixes, VENDED_LOGS), so IaC channels and agent channels are identical.
+    The configuration is ``core.specs.playback_configuration`` verbatim (server-side insertion only, preconditioned
+    ads, all three personalization timeouts, absolute CDN prefixes, VENDED_LOGS), so IaC channels and agent channels
+    are identical.
 
     Args:
         name: configuration name (the channel name by convention; the channel policy admits exactly this one).

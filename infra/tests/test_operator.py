@@ -860,8 +860,7 @@ def test_console_csp_allows_exactly_what_the_console_needs() -> None:
     assert directives["worker-src"] == "'self' blob:"
     assert directives["connect-src"].split() == [
         "'self'",
-        CDN,
-        "https://*.mediatailor.us-east-1.amazonaws.com",
+        CDN,  # SSAI manifests, segments and /v1/segment ad redirects all come through the CDN
         "https://bedrock-agentcore.us-east-1.amazonaws.com",
         "https://*.gateway.bedrock-agentcore.us-east-1.amazonaws.com",
         "https://cognito-idp.us-east-1.amazonaws.com",
@@ -935,12 +934,7 @@ def test_console_config_follows_contracts_h() -> None:
         {
             "name": "fast-demo",
             "ladderVersion": LADDER,
-            "playback": {
-                "hls": {
-                    "ssai": f"{CDN}/v1/master/abc/fast-fast-demo/hls.m3u8",
-                    "sgai": f"{CDN}/v1/master/abc/fast-fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
-                },
-            },
+            "playback": {"hls": f"{CDN}/v1/master/abc/fast-fast-demo/hls.m3u8"},  # SSAI only
         }
     ]
 
@@ -948,8 +942,9 @@ def test_console_config_follows_contracts_h() -> None:
 def test_token_prefixes_are_cut_to_their_path_by_cloudformation(plane: Plane) -> None:
     config = json.dumps(plane.template.to_json())
 
-    assert '"/hls.m3u8?aws.insertionMode=GUIDED\\""' in config
-    assert config.count('{"Fn::Select": [6, {"Fn::Split": ["/"') >= 2  # the SSAI and SGAI URLs of the hls output
+    assert '"/hls.m3u8\\""' in config
+    assert config.count('{"Fn::Select": [6, {"Fn::Split": ["/"') >= 1  # the SSAI URL of the hls output
+    assert "insertionMode" not in config  # SSAI only: no GUIDED (SGAI) URLs
 
 
 def test_missing_console_build_fails_when_bundling(tmp_path: Path) -> None:

@@ -44,11 +44,15 @@ class IngestPipeline(Construct):
     ``/aws/vendedlogs/states/<prefix>-ingest``; X-Ray) takes an IngestRequest
     (``contracts/ingest-request.schema.json``) and runs ``Prepare`` (probe, refusals, sparse job overrides, item
     INGESTING) -> ``Transcode`` (MediaConvert CreateJob with the run-a-job integration; Role and Queue are
-    literals, the job template and overrides come from Prepare) -> ``Finalize`` (verify outputs, nominal
-    BANDWIDTH, break offsets; the SGAI copy of ads) -> ``Register`` (a Map with MaxConcurrency 1 creating the VOD
-    source; empty for ads) -> ``Publish`` (item READY, ``Asset Ready``). Every step catches into
-    ``PublishFailure`` (item FAILED, ``Asset Failed``) and a Fail state; an execution that finds the same encode
-    already in progress stops at ``AlreadyIngesting`` without touching the item.
+    literals, the job template and ``Settings`` come from Prepare verbatim) -> ``Finalize`` (verify outputs,
+    nominal BANDWIDTH, break offsets; the ad manifest copies under ``ads/``) -> ``Register`` (a Map with
+    MaxConcurrency 1 creating the VOD source; empty for ads) -> ``Publish`` (item READY, ``Asset Ready``). Every
+    step catches into ``PublishFailure`` (item FAILED, ``Asset Failed``) and a Fail state; an execution that finds
+    the same encode already in progress stops at ``AlreadyIngesting`` without touching the item.
+
+    The job templates stay on the Basic tier. Cue points between segment boundaries make Prepare add ``Esam`` to
+    that job's ``Settings`` (``core.mediaconvert.build_job_overrides``), which splits every variant at those frames
+    and bills that one job at the Professional tier. The tier is per job, so one on-demand queue serves both.
 
     Uploads with a video extension to the ingest bucket and ``Ingest Requested`` events on ``event_bus`` invoke a
     trigger function (retries, then :attr:`dead_letter_queue`) that starts executions named after the request's
@@ -132,7 +136,7 @@ class IngestPipeline(Construct):
         )
         self.finalize = self._step(
             "Finalize",
-            "Ingest: verify and fix up an encode; SGAI-ready ad manifests",
+            "Ingest: verify and fix up an encode; ad manifest copies",
             {
                 "LIBRARY_TABLE": library.table_name,
                 "MEDIA_BUCKET": media_bucket.bucket_name,
@@ -254,7 +258,8 @@ class IngestPipeline(Construct):
         prepare.allow(["states:DescribeExecution"], [executions], why="Executions of the ingest state machine")
 
         finalize.allow(["s3:GetObject", "s3:PutObject"], assets, why="Manifests of any encode")
-        finalize.allow(["s3:PutObject"], [self.media_bucket.arn_for_objects("ads/*")], why="SGAI-ready ad manifests")
+        # The CDN never serves assets/*.m3u8, and MediaTailor fetches an ad's VAST MediaFile through it.
+        finalize.allow(["s3:PutObject"], [self.media_bucket.arn_for_objects("ads/*")], why="Ad manifest copies")
         # ListBucket turns a missing manifest into a 404 instead of a 403.
         finalize.allow(
             ["s3:ListBucket"], [self.media_bucket.bucket_arn], conditions={"StringLike": {"s3:prefix": ["assets/*"]}}

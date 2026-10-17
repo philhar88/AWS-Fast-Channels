@@ -64,8 +64,8 @@ class LinearChannel(Construct):
     """A Channel Assembly ``LINEAR`` channel owned by CloudFormation, with its per-channel ad insertion.
 
     - ``CfnChannel``: the filler slate, one output per rendition profile (``core.specs.channel_outputs``: HLS with
-      DATERANGE ad markers, which SGAI requires) and AS_RUN logging. Channels are created stopped and are never
-      started automatically.
+      EXT-X-DATERANGE ad markers, where MediaTailor stitches the ads) and AS_RUN logging. Channels are created
+      stopped and are never started automatically.
     - :class:`AdInsertion` ``<name>``, and a channel policy (``core.specs.channel_policy``) that lets only that
       playback configuration read the channel, with SigV4; anonymous requests get 403 (channel-assembly.md §6.1).
     - Three custom resources (``fast_channels.functions.custom_resources.channel_lifecycle``): a guard that fails an

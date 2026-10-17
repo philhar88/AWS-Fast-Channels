@@ -4,9 +4,10 @@ CDN-neutral path contract, and its standard-logs-v2 access logs.
 The routing table :data:`ROUTES` is the single source of truth: :class:`MediaDistribution` renders it as CloudFront
 behaviours and :func:`path_contract` as the JSON other CDNs copy (``docs/path-contract.json``). The rows come from
 e2e.md §2.3 and SPEC §5.4; a deployment of this construct confirmed each of them through the
-``cache-behavior-path-pattern`` field of its access logs, with gzip on ``/v1/manifest/*`` and cache hits on
-``/v1/i-media/*`` (2026-10-16). The managed policies' contents were re-read with
-``aws cloudfront get-cache-policy`` / ``get-origin-request-policy``.
+``cache-behavior-path-pattern`` field of its access logs, with gzip on ``/v1/manifest/*`` (2026-10-16). The managed
+policies' contents were re-read with ``aws cloudfront get-cache-policy`` / ``get-origin-request-policy``. Ad
+insertion is SSAI only, so the SGAI routes (``/v1/i-media/*`` playlists and ``/preconditioned-ads/*`` asset-list
+playlists) are gone.
 """
 
 from collections.abc import Mapping
@@ -42,7 +43,7 @@ class Origin(StrEnum):
     MANIFESTS = "mediatailor-manifests"
     """MediaTailor playback endpoint: sessions, personalised manifests, tracking, beacon redirects."""
     SEGMENTS = "mediatailor-segments"
-    """MediaTailor segment endpoint: transcoded ads and re-hosted preconditioned ad playlists."""
+    """MediaTailor segment endpoint: ad segments MediaTailor transcoded (``/tm/*``)."""
 
 
 class Methods(StrEnum):
@@ -134,16 +135,6 @@ CACHING_OPTIMIZED_UNCOMPRESSED: Final = CachePolicy(
     (1, 86400, 31536000),
 )
 CACHING_DISABLED: Final = CachePolicy(cf.CachePolicy.CACHING_DISABLED, "Managed-CachingDisabled", (0, 0, 0))
-# Puts the viewer Host in the key: fine for manifests.mediatailor (verified), never for S3 or Channel Assembly.
-ORIGIN_CACHE_CONTROL_QUERY_STRINGS: Final = CachePolicy(
-    cf.CachePolicy.USE_ORIGIN_CACHE_CONTROL_HEADERS_QUERY_STRINGS,
-    "UseOriginCacheControlHeaders-QueryStrings",
-    (0, 0, 31536000),
-    key_query_strings=True,
-    key_headers=("host", "origin", "x-http-method", "x-http-method-override", "x-method-override"),
-    key_cookies=True,
-    compression=True,
-)
 CORS_S3_ORIGIN: Final = OriginRequestPolicy(
     cf.OriginRequestPolicy.CORS_S3_ORIGIN,
     "Managed-CORS-S3Origin",
@@ -205,27 +196,6 @@ ROUTES: Final[tuple[Route, ...]] = (
         purpose="Ad segments MediaTailor transcoded (external VAST creatives)",
     ),
     Route(
-        "/preconditioned-ads/*",
-        Origin.SEGMENTS,
-        CACHING_OPTIMIZED_UNCOMPRESSED,
-        None,
-        Cors.MEDIA,
-        compress=False,
-        methods=Methods.READ,
-        # Without this route the SGAI asset lists of preconditioned ads hit S3 and fail (e2e.md §5.4-5.5).
-        purpose="Preconditioned ad playlists MediaTailor re-hosts for SGAI asset lists",
-    ),
-    Route(
-        "/v1/i-media/*",
-        Origin.MANIFESTS,
-        ORIGIN_CACHE_CONTROL_QUERY_STRINGS,
-        None,
-        Cors.MEDIA,
-        compress=True,
-        methods=Methods.READ,
-        purpose="SGAI media playlists: identical across sessions, cached for the origin's max-age (1 s)",
-    ),
-    Route(
         "/v1/manifest/*",
         Origin.MANIFESTS,
         CACHING_DISABLED,
@@ -243,7 +213,8 @@ ROUTES: Final[tuple[Route, ...]] = (
         Cors.PREFLIGHT,
         compress=True,
         methods=Methods.ALL,
-        purpose="Session start (/v1/master, POST /v1/session), tracking, beacon redirects, interstitial asset lists",
+        # Every stitched ad segment is a /v1/segment 301 to the CDN that fires the server-side beacons (e2e.md §4.3).
+        purpose="Session start (/v1/master, POST /v1/session), tracking, ad segment redirects (/v1/segment)",
     ),
     Route(
         DEFAULT_PATH,
@@ -254,8 +225,8 @@ ROUTES: Final[tuple[Route, ...]] = (
         compress=False,
         methods=Methods.READ,
         purpose=(
-            "MPEG-TS content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); "
-            "content manifests under /assets are denied by the bucket policy"
+            "MPEG-TS content and preconditioned ad segments; ad manifest copies, VAST pods and beacons (/ads); EPG "
+            "feeds (/epg); content manifests under /assets are denied by the bucket policy"
         ),
     ),
 )
@@ -314,7 +285,7 @@ def path_contract(*, region: str, media_host: str) -> dict[str, Any]:
 
 
 class MediaDistribution(Construct):
-    """The viewer-facing CloudFront distribution: S3 content through OAC and MediaTailor SSAI/SGAI, routed by
+    """The viewer-facing CloudFront distribution: S3 content through OAC and MediaTailor SSAI, routed by
     :data:`ROUTES`, over HTTP/2 and HTTP/3 with IPv6.
 
     The media bucket's policy belongs to its owner: pass an imported reference (``DataExports.media_bucket``)
@@ -382,7 +353,7 @@ class MediaDistribution(Construct):
         self.distribution = cf.Distribution(
             self,
             "Distribution",
-            comment="FAST Channels: media delivery (S3 content, MediaTailor SSAI and SGAI)",
+            comment="FAST Channels: media delivery (S3 content, MediaTailor SSAI)",
             default_behavior=behaviours.pop(DEFAULT_PATH),
             additional_behaviors=behaviours,
             http_version=cf.HttpVersion.HTTP2_AND_3,
