@@ -452,6 +452,12 @@
                   "TransitionInDays": 0
                 }
               ]
+            },
+            {
+              "ExpirationInDays": 7,
+              "Id": "expire-work",
+              "Prefix": "work/",
+              "Status": "Enabled"
             }
           ]
         },

@@ -11,7 +11,15 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from _stack import Plane, Stage
 from harness import PROGRAMS, Channel, Observation, Player
-from playback import codec_tags, media_segments, renditions, video_codecs
+from playback import (
+    NON_VIDEO_TAGS,
+    codec_tags,
+    media_segments,
+    misaligned,
+    renditions,
+    subtitle_languages,
+    video_codecs,
+)
 
 from fast_channels.core.profiles import ManifestFormat, profile
 
@@ -91,7 +99,7 @@ def test_dash_mpd(observation: Observation, channel: Channel) -> None:
     assert mpd.type == "dynamic" and mpd.periods, mpd
     dash = next(output for output in channel.outputs if "dash" in channel.playback[output])
     expected = {CODEC_TAGS[codec.value] for codec in profile(dash).codecs or ()}
-    video = {codec.partition(".")[0] for codec in mpd.codecs} - {"mp4a"}
+    video = {codec.partition(".")[0] for codec in mpd.codecs} - NON_VIDEO_TAGS
     assert not expected or video == expected, (dash, sorted(mpd.codecs))
 
 
@@ -117,3 +125,35 @@ def test_no_scheduling_errors(stage: Stage, channel: Channel, ingested: Asset, o
         or SCHEDULING_ERROR in alert.get("AlertMessage", "")
     ]
     assert not errors, errors
+
+
+def test_ssai_carries_the_caption_tracks_through_breaks(observation: Observation, ladder: Ladder) -> None:
+    """The channel lists the ladder's caption tracks; their content segments sit on the video grid, and during an
+    ad MediaTailor serves its blank WebVTT (asserted from the second break, like the ads)."""
+    languages = [track.language for track in ladder.captions]
+    assert subtitle_languages(observation.ssai_multivariant) == languages
+    video = observation.ssai["avc"].values()
+    for language in languages:
+        subtitles = observation.ssai.get(f"subtitles:{language}", {})
+        assert subtitles, f"no {language} subtitle segments: {observation.report()}"
+        assert not misaligned(subtitles.values(), video), misaligned(subtitles.values(), video)[:3]
+        assert observation.ssai_filled(f"subtitles:{language}"), observation.report()
+
+
+def test_sgai_ads_carry_the_caption_tracks(observation: Observation, ladder: Ladder) -> None:
+    """Preconditioned house ads were encoded with the ladder's (empty) caption tracks: an interstitial shows the same
+    tracks as the content (HLS Interstitials, Appendix D.1)."""
+    assert observation.ad_multivariants, f"no SGAI ad multivariant: {observation.report()}"
+    for uri, text in observation.ad_multivariants.items():
+        assert subtitle_languages(text) == [track.language for track in ladder.captions], uri
+
+
+def test_dash_periods_carry_text_and_ad_segments_play(observation: Observation, player: Player) -> None:
+    """Every period, ads included, has the IMSC text AdaptationSet; ad segments resolve to the creative's media
+    (v3.0.0 ad MPDs pointed MediaTailor at init segments that did not exist)."""
+    mpd = observation.mpds[-1]
+    assert set(mpd.text_periods) == set(mpd.periods), (mpd.periods, mpd.text_periods)
+    inits = sorted({init for seen in observation.mpds for init in seen.ad_inits})
+    assert inits, f"no DASH ad period: {observation.report()}"
+    response = player.get(inits[0])
+    assert response.content[4:8] == b"ftyp", (inits[0], response.headers.get("content-type"))

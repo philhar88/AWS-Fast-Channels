@@ -18,4 +18,6 @@ new record that supersedes the old one rather than editing history.
 | [0010](0010-ag-ui-protocol.md) | AG-UI as the agent ↔ client protocol | Accepted |
 | [0011](0011-runtime-over-harness.md) | AgentCore Runtime (Strands) over the managed Harness | Accepted |
 | [0012](0012-default-model.md) | Claude Haiku 5.5 as the default model, pluggable via a model spec | Accepted |
-| [0013](0013-captions-roadmap.md) | Captions are on the roadmap, not in v3.0 | Accepted |
+| [0013](0013-captions-roadmap.md) | Captions are on the roadmap, not in v3.0 | Superseded by 0014 |
+| [0014](0014-captions-as-ladder-tracks.md) | Captions are IMSC1 tracks of the ladder: provided, embedded, then generated | Accepted |
+| [0015](0015-pluggable-captioner-elemental-inference.md) | Missing captions come from a pluggable captioner: AWS Elemental Inference smart subtitles | Accepted |

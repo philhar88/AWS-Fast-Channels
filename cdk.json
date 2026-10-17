@@ -82,6 +82,13 @@
         "mediatailor_log_percent": 100,
         "capture_prompts": null
       },
+      "captions": {
+        "enabled": true,
+        "required": false,
+        "engine": "elemental-inference",
+        "max_feeds": 2,
+        "dictionary_id": null
+      },
       "notifications": {
         "email": null
       }

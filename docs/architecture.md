@@ -44,7 +44,7 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 | Stack | Outputs |
 |---|---|
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
-| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai?, sgai?, dash?}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
+| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `CaptionEngine` (`elemental-inference` or `none`), `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai?, sgai?, dash?}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
 | Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
 
 ```bash
@@ -96,14 +96,22 @@ sequenceDiagram
     participant Lib as MediaLibrary table
     participant Bus as fast-channels bus
 
-    Owner->>S3i: PUT movie.mp4.json (sidecar, optional), then movie.mp4
+    participant Cap as Captioner (Elemental Inference)
+
+    Owner->>S3i: PUT movie.en.scc (optional), movie.mp4.json (optional), then movie.mp4
     S3i->>EB: Object Created
     EB->>Trig: rule (retries, DLQ)
-    Trig->>S3i: read sidecar, AdOffsets tag
+    Trig->>S3i: read sidecar, AdOffsets tag, list caption files next to the video
     Trig->>SFN: StartExecution(name = correlation id, IngestRequest)
-    SFN->>MC: Prepare: Probe source (refuse HDR, 50/60 Hz mismatch)
-    SFN->>Lib: Prepare: asset INGESTING
-    SFN->>MC: Transcode: CreateJob (job template + sparse overrides, run-a-job)
+    SFN->>MC: Prepare: Probe source (refuse HDR, 50/60 Hz mismatch; c608 track, audio language)
+    SFN->>Lib: Prepare: asset INGESTING, caption plan
+    opt the spoken language has no provided captions
+        SFN->>MC: ScanCaptions: CEA-608/708 in the video as TTML (run-a-job)
+        opt the scan found none
+            SFN->>Cap: GenerateCaptions: startExecution.sync:2 (proxy job, chunked feeds -> captions/{asset}/…/en.ttml)
+        end
+    end
+    SFN->>MC: Transcode: CreateJob (job template + sparse overrides with caption selectors, run-a-job)
     MC->>S3m: assets/{asset}/{ladder}/main*.m3u8 and .mpd, CMAF segments
     SFN->>S3m: Finalize: verify signatures, patch av1C, normalise BANDWIDTH, break offsets
     SFN->>CA: Register: CreateVodSource (one package configuration per profile), ListAlerts
@@ -111,8 +119,9 @@ sequenceDiagram
     SFN->>Bus: Asset Ready
 ```
 
-The same pipeline encodes a ladder's *kit* (filler slate, break slates and house ads) as child executions of the
-`LadderProvisioner` state machine; see [encoding.md](encoding.md#ladder-kits).
+The same pipeline encodes a ladder's *kit* (filler slate, break slates and house ads, with empty caption tracks) as
+child executions of the `LadderProvisioner` state machine; see [encoding.md](encoding.md#ladder-kits). Where each
+caption track comes from is described in [captions.md](captions.md).
 
 ### Scheduling and publishing
 
@@ -212,7 +221,8 @@ module path.
 | | `MediaLibrary`, `ReferenceCatalogTable` | `TableV2` tables (on demand, PITR, TTL `expires_at`, `GSI1`) |
 | `functions` | `FastFunction` | Python 3.14 arm64 Lambda from the shared workspace bundle, JSON logs, explicit log group with retention, active tracing; `allow()` adds a least-privilege statement |
 | `encoding.ladder` | `EncodingLadder` | MediaConvert job template of one ladder version |
-| `encoding.pipeline` | `IngestPipeline` | MediaConvert queue and role, ingest state machine, trigger rules, DLQ |
+| `encoding.pipeline` | `IngestPipeline`, `Captioner` | MediaConvert queue and role, ingest state machine (with the caption scan and an optional captioner), trigger rules, DLQ; the captioner contract |
+| `encoding.captioners` | `InferenceCaptioner` | MediaConvert proxy queue and role, relay function and state machine that caption a file with AWS Elemental Inference smart subtitles |
 | `encoding.kits` | `LadderProvisioner`, `LadderKit` | Kit state machine; deploy-time custom resource, idempotent by fingerprint |
 | `channel_assembly.origin` | `ChannelAssemblyOrigin` | `S3_SIGV4` source location on the media bucket |
 | `channel_assembly.ad_insertion` | `MediaTailorLogs` | `/aws/vendedlogs/mediatailor/<prefix>` and its delivery destination |

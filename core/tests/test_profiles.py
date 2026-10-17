@@ -59,6 +59,7 @@ def test_applicable_and_selection(standard: Ladder, uhd: Ladder) -> None:
         "_hevc-360p",
         "_aac-lc-128",
         "_aac-he1-64",
+        "_cc-en",  # every profile carries every caption track
     ]
     sd = selected_outputs(standard, profile("hls-sd"))
     assert "_avc-234p" in sd and "_avc-720p-a" not in sd and "_aac-he2-32" in sd

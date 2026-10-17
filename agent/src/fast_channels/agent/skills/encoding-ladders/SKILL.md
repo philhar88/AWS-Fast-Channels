@@ -1,6 +1,6 @@
 ---
 name: encoding-ladders
-description: Encoding ladder rules - AVC/HEVC/AV1 renditions, manifest profiles, the propose then provision flow, ingesting content, MediaConvert encode cost and what a new ladder version implies for channels. Use when the operator asks about quality, codecs, ladders, ingest, encode cost or a new encoding profile.
+description: Encoding ladder rules - AVC/HEVC/AV1 renditions, manifest profiles, caption tracks, the propose then provision flow, ingesting content with its captions, MediaConvert encode cost and what a new ladder version implies for channels. Use when the operator asks about quality, codecs, captions or subtitles, ladders, ingest, encode cost or a new encoding profile.
 ---
 # Encoding ladders
 
@@ -15,6 +15,19 @@ description: Encoding ladder rules - AVC/HEVC/AV1 renditions, manifest profiles,
   below 500 kbit/s so players start fast. The tools enforce these rules.
 - A ladder version is `<id>@<fingerprint>` and never changes. Changing any encode setting creates a new version.
   `encoding___list_ladders` lists them; `encoding___get_ladder` shows every rendition by name.
+
+## Captions
+- A ladder lists its caption tracks (IMSC1 text, one per language; `encoding___get_ladder` shows them). Every
+  asset of the ladder has every track, empty when it has no captions, because Channel Assembly drops ad breaks
+  between sources whose tracks differ. Adding or removing a track is a new ladder version (`ops.captions`).
+- Each track's source is recorded per asset (`library___get_asset` `captions`; `library___find_assets`
+  `captioned` lists the languages that have captions): `provided` (a file that came with the title), `embedded`
+  (CEA-608/708 in the source), `generated` (transcribed by the captioner engine: say it is machine-made and worth
+  a human check where captions are regulated) or `none` (an empty track).
+- When ingesting, pass caption files the catalog or operator names in `captions.files` (uri relative to the
+  source's folder or s3:// in the ingest bucket, and its language); otherwise the pipeline looks in the source and
+  then generates the spoken language. `captions.mode`: `auto` (default), `generate` (ignore captions in the
+  source), `off` (empty tracks). Never invent caption files.
 
 ## Changing a ladder: propose → review → provision
 1. `encoding___propose_ladder` with a `base` version and `ops` (codecs to keep, max/min height, quality_shift

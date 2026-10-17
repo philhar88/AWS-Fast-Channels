@@ -35,6 +35,15 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - **Autopilot**: per-channel EventBridge Scheduler schedules that keep a channel's schedule 24 hours ahead with a
   machine token limited by Cedar to planning and publishing on its own channels. The machine client, its permits and
   the autopilot's error and dead-letter alarms exist only when a channel has an `autopilot_cron`.
+- **Closed captions**: ladders declare IMSC1 caption tracks (`[[captions]]`; English in `standard` and `uhd`) that
+  every asset carries, empty where it has none, so programs, slates and house ads share one rendition set through
+  Channel Assembly, SSAI, SGAI and DASH. Each track comes from a provided file (request `captions.files` or a
+  drop-folder sibling `<stem>.<language>.<ext>`), else from CEA-608/708 in the source (a Probe-visible `c608` track
+  or a caption scan job), else from the stage's captioner: a pluggable state-machine contract whose bundled engine
+  relays a MediaConvert proxy of the file to AWS Elemental Inference smart subtitles in parallel 10-minute chunks and
+  turns the live roll-up into pop-on IMSC1 captions. `captions.enabled`, `required`, `engine`, `max_feeds` and
+  `dictionary_id` configure it; caption provenance is on every asset, `Asset Ready` and `library___get_asset`; the
+  console players have a CC toggle.
 - **Model choice**: Claude Haiku 5.5 by default, as the deployment region's inference profile (`{geo}` resolves to
   `us.`, `eu.`, `au.` or `global.`); a validated ModelSpec in SSM switches among allow-listed models without a
   redeploy; `make model-access` checks Bedrock access; `make eval` runs the scheduling conformance suite.
@@ -108,6 +117,35 @@ place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
 - MediaPackage VOD packaging group and configurations, the Secrets Manager access token and the MediaTailor KMS key.
 - The boto3, crhelper and xmltodict Lambda layers, and the SNS email sender function.
 - `assets/presets.csv` and its preset generator scripts.
+
+### Fixed since the first v3.0.0 tag
+
+- DASH preconditioned ads: the SGAI-ready ad MPDs had an MPD-level `BaseURL`, which MediaTailor ignores, so DASH ad
+  segments redirected to init segments that did not exist (403). Ad MPDs now carry absolute segment templates.
+- VOD source names are at most 50 characters (Channel Assembly's limit; 64 was assumed), so assets with ids longer
+  than about 29 characters no longer fail registration.
+- The Lambda functions ship their locked boto3 instead of the runtime's, whose Elemental Inference model lacks smart
+  subtitles.
+- Caption tracks of titles with off-grid cue points are re-cut on the video's segments in Finalize. MediaConvert cut
+  them differently after an ESAM split, so their subtitle sequence numbers drifted from the video's on every airing
+  and players lost the captions.
+
+### Known issues
+
+AWS service behaviour that Apple's mediastreamvalidator reports at Critical or Must level:
+
+- MediaConvert declares HE-AAC v2 outputs as `mp4a.40.5` in HLS `CODECS` (`mp4a.40.29` in DASH): 535060 on the
+  `avc-234p` variant of every channel ([encoding.md](docs/encoding.md)).
+- Channel Assembly removes a break's `EXT-X-DATERANGE` one playlist update too early: 552026 once per break on every
+  live SSAI and SGAI media playlist ([ad-insertion.md](docs/ad-insertion.md#monitoring-and-troubleshooting)).
+- MediaTailor SSAI stitches blank WebVTT into IMSC1 subtitle renditions during ads (641087, 535008) and sometimes
+  shifts the `EXT-X-PROGRAM-DATE-TIME` of later ads in a pod (536003) or serves an older playlist (552027). SGAI's
+  subtitles are clean ([captions.md](docs/captions.md#limits)).
+
+Players:
+
+- hls.js 1.7.3 players, the console's included, stop showing captions at the first SSAI break, programme boundary or
+  SGAI interstitial (three hls.js subtitle bugs, [console/README.md](console/README.md#known-hlsjs-caption-bugs)).
 
 ## [2.0.0] - 2026-01-30
 

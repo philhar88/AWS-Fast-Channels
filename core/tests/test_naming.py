@@ -47,7 +47,7 @@ def test_runtime_resource_names() -> None:
     assert naming.source_location_name("fast") == "fast-media"
     assert naming.vod_source_name("filler-1a2b3c", version) == "filler-1a2b3c-standard_0123456789"
     long = naming.vod_source_name("a" * 48, version)
-    assert len(long) == naming.MEDIATAILOR_NAME_MAX and long == naming.vod_source_name("a" * 48, version)
+    assert len(long) == naming.VOD_SOURCE_NAME_MAX and long == naming.vod_source_name("a" * 48, version)
 
 
 def test_ladder_key_is_a_deprecated_alias_of_ladder_path() -> None:
@@ -61,3 +61,12 @@ def test_ladder_path_host_hash_and_creative_id() -> None:
     creative = naming.creative_id("house-30", "standard@0123abcd45", "https://d1.cloudfront.net")
     assert creative == f"house-30-standard_0123abcd45-{naming.host_hash('https://d1.cloudfront.net')}"
     assert creative != naming.creative_id("house-30", "standard@0123abcd45", "https://media.example.com")
+
+
+def test_vod_source_names_fit_fifty_characters() -> None:
+    assert naming.vod_source_name("sintel", "standard@046fbb4ccd") == "sintel-standard_046fbb4ccd"
+    long = naming.vod_source_name("e2e-pattern-spoken-20261016191837", "standard@046fbb4ccd")
+    assert len(long) == naming.VOD_SOURCE_NAME_MAX and long.startswith("e2e-pattern-spoken-20261016191837-standard_")
+    agent = naming.agent_vod_source_name("fast", "a" * 48, "standard@046fbb4ccd")
+    assert len(agent) == naming.VOD_SOURCE_NAME_MAX and naming.is_agent_owned(agent, "fast")
+    assert naming.agent_vod_source_name("fast", "pilot", "standard@046fbb4ccd") == "fast-agent-pilot-046fbb4ccd"

@@ -28,6 +28,10 @@ a person. Everything deploys from one AWS CDK (Python) app.
   serves stitched and HLS Interstitials sessions; CloudFront reaches S3 through origin access control and routes
   MediaTailor paths in a verified behaviour order that is also published as a CDN-neutral path contract. See
   [docs/channel-assembly.md](docs/channel-assembly.md) and [docs/delivery-and-multi-cdn.md](docs/delivery-and-multi-cdn.md).
+- **Closed captions on every channel.** Ladders carry IMSC1 caption tracks that every program, slate and ad shares,
+  so captions survive Channel Assembly, SSAI, SGAI and DASH. Each asset's captions come from a provided file (SCC,
+  SRT, WebVTT, TTML, SMPTE-TT), else from the source (CEA-608/708), else AWS Elemental Inference smart subtitles
+  generates them; one setting turns it all on and `required` refuses uncaptioned titles. See [docs/captions.md](docs/captions.md).
 - **Preconditioned ads.** House ads are encoded on each channel's own ladder and served from a static VAST 4.2 pod, so
   MediaTailor never transcodes them and every variant fills exactly, in SSAI and SGAI. Bring your own ad server with
   `ads.mode: external_vast`. See [docs/ad-insertion.md](docs/ad-insertion.md).

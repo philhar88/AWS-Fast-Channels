@@ -15,6 +15,7 @@ from aws_lambda_powertools.metrics import MetricUnit
 from boto3.dynamodb.conditions import Attr
 from pydantic import ValidationError
 
+from fast_channels.core.captions import CaptionPlan
 from fast_channels.core.events import AssetFailed, AssetReady
 from fast_channels.core.ingest import AssetKind, IngestRequest, asset_id_for
 from fast_channels.functions import aws
@@ -79,6 +80,7 @@ def ready(asset: dict[str, Any], encoded: dict[str, Any], registered: list[dict[
             vod_source=source.get("vod_source"),
             duration_ms=encoded["duration_ms"],
             correlation_id=asset["correlation_id"],
+            captions=CaptionPlan.model_validate(asset.get("captions") or {}).provenance(),
         )
     )
     metrics.add_dimension(name="kind", value=asset["kind"])

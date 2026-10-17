@@ -9,30 +9,40 @@ Every kind:
 * multivariant BANDWIDTH and AVERAGE-BANDWIDTH become the ladder's nominal values, so slates and house ads never
   advertise a fraction of the content bitrate (Channel Assembly copies them into the channel; e2e.md §3);
 * I-frame playlists are raised to EXT-X-VERSION 5 when the ladder writes them;
+* caption tracks are cut on the video's segments: Channel Assembly and MediaTailor number every track's segments on
+  their own, and MediaConvert cuts IMSC1 tracks on the plain segment grid after an ESAM split (docs/captions.md);
 * duration and, for content, the break offsets: the boundaries every track shares or, when the request had cue
   points, those of them that are such boundaries.
 
 Ads additionally get an SGAI-ready copy of their manifests under ``ads/<ladder>/<creative id>/``: MediaTailor
 re-hosts only the manifests of preconditioned ads, so media playlists need absolute segment and EXT-X-MAP URIs on
-the content host while the multivariant's child URIs stay relative (e2e.md §5.4-5.5). The DASH manifest gets an
-absolute ``BaseURL``. Segments are not copied, and the creative id embeds the host, so a new host gets a new
-directory instead of rewriting manifests MediaTailor has cached (_review.md, FinalizeAd).
+the content host while the multivariant's child URIs stay relative (e2e.md §5.4-5.5). The DASH manifest gets
+absolute segment templates: MediaTailor resolves them against the copy's location and ignores ``BaseURL``. Segments
+are not copied, and the creative id embeds the host, so a new host gets a new directory instead of rewriting
+manifests MediaTailor has cached (_review.md, FinalizeAd).
 """
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
+from decimal import Decimal
+from fractions import Fraction
+from itertools import accumulate, pairwise
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
-from xml.sax.saxutils import escape
 
 from aws_lambda_powertools import Logger
 from boto3.dynamodb.conditions import Attr
 
+from fast_channels.core import imsc
+from fast_channels.core.captions import CaptionPlan
 from fast_channels.core.ingest import AssetKind
 from fast_channels.core.ladder import Ladder, VideoCodec, VideoRendition
 from fast_channels.core.manifests import (
     absolutize_media_playlist,
+    absolutize_mpd,
+    align_text_timelines,
     attributes,
     bump_iframe_version,
     expected_signature,
@@ -40,8 +50,11 @@ from fast_channels.core.manifests import (
     nominal_bandwidths,
     normalize_bandwidth,
     parse_multivariant,
+    retarget_media_playlist,
+    segment_uris,
+    subtitle_renditions,
 )
-from fast_channels.core.mp4 import av1_level_idx, patch_av1c
+from fast_channels.core.mp4 import Fragment, av1_level_idx, patch_av1c, read_fragment, track_timescale, write_fragment
 from fast_channels.core.naming import creative_id, ladder_path, vod_source_name
 from fast_channels.core.profiles import ManifestFormat, RenditionProfile, applicable, profile
 from fast_channels.functions import aws
@@ -55,6 +68,8 @@ if TYPE_CHECKING:
 
 _CHILD_TAGS: Final = ("#EXT-X-MEDIA:", "#EXT-X-I-FRAME-STREAM-INF:")
 _MAP_URI: Final = re.compile(r'^#EXT-X-MAP:.*?URI="([^"]+)"', re.MULTILINE)
+_NUMBERED: Final = re.compile(r"^(?P<stem>.*?)(?P<number>\d+)(?P<suffix>\.\w+)$")
+_IO_THREADS: Final = 16
 
 logger = Logger()
 
@@ -131,7 +146,7 @@ def finalize(
     """Verify and fix up the encode of ``asset`` (the Prepare output) in ``store``."""
     ladder = Ladder.model_validate(asset["ladder"])
     encode = read_encode(store, ladder, asset["output_prefix"])
-    rewritten = [*patch_av1_inits(store, encode), *normalize(store, encode)]
+    rewritten = [*patch_av1_inits(store, encode), *normalize(store, encode), *align_captions(store, encode)]
     kind = AssetKind(asset["kind"])
     result = Finalized(
         duration_ms=duration_ms(encode.media[encode.video()[0][0]]),
@@ -211,6 +226,69 @@ def normalize(store: Store, encode: Encode) -> list[str]:
     return rewritten
 
 
+def align_captions(store: Store, encode: Encode) -> list[str]:
+    """Re-cut every caption track whose segments are not the video's; returns the keys rewritten.
+
+    The new segments have the video's durations and count, carry the cues that overlap them (clipped) and keep the
+    original segments' boxes; the media playlist becomes the video's with caption URIs, and the text timelines of
+    every MPD the video's. A segment number past the video's last stays in the bucket, unreferenced. ``encode`` is
+    updated in place, so the break offsets see the new playlists.
+    """
+    video = encode.media[encode.video()[0][0]]
+    rewritten: list[str] = []
+    for rendition in subtitle_renditions(encode.main):
+        uri = rendition["URI"]
+        if _durations(encode.media[uri]) != _durations(video):
+            rewritten += _recut_captions(store, encode, uri, video)
+    if rewritten:
+        for p in applicable(encode.ladder):
+            if p.format is ManifestFormat.DASH:
+                mpd = _text(store, key := p.manifest_key(encode.prefix))
+                if (aligned := align_text_timelines(mpd)) != mpd:
+                    rewritten.append(_write_text(store, key, aligned))
+    return rewritten
+
+
+def _recut_captions(store: Store, encode: Encode, uri: str, video: str) -> list[str]:
+    playlist = encode.media[uri]
+    init_uri, originals = _map_uri(playlist, uri), segment_uris(playlist)
+    timescale = track_timescale(_read(store, f"{encode.prefix}{init_uri}"))
+    with ThreadPoolExecutor(_IO_THREADS) as pool:
+        segments = list(pool.map(lambda name: _read(store, f"{encode.prefix}{name}"), originals))
+    fps = encode.ladder.frame_rate.fraction
+    frames = accumulate((round(Decimal(d) * fps.numerator / fps.denominator) for d in _durations(video)), initial=0)
+    try:
+        fragments = [read_fragment(segment) for segment in segments]
+        ticks = [fragments[0].start + round(n * timescale / fps) for n in frames]
+        documents = imsc.recut([f.sample.decode() for f in fragments], [Fraction(t, timescale) for t in ticks])
+        names = _numbered(originals[0], len(documents))
+        bodies = {
+            f"{encode.prefix}{name}": write_fragment(
+                segments[0], Fragment(start=start, duration=end - start, sample=document.encode()), sequence=n
+            )
+            for n, (name, document, (start, end)) in enumerate(zip(names, documents, pairwise(ticks), strict=True), 1)
+        }
+    except ValueError as error:
+        raise InvalidOutputsError(f"{uri} cannot be re-cut on the video's segments: {error}") from error
+    with ThreadPoolExecutor(_IO_THREADS) as pool:
+        list(pool.map(lambda item: store.write(*item), bodies.items()))
+    encode.media[uri] = retarget_media_playlist(video, map_uri=init_uri, segments=names)
+    logger.info("caption track re-cut on the video's segments", extra={"uri": uri, "segments": len(names)})
+    return [*bodies, _write_text(store, f"{encode.prefix}{uri}", encode.media[uri])]
+
+
+def _durations(media_playlist: str) -> list[str]:
+    return [line[8:].split(",", 1)[0] for line in media_playlist.splitlines() if line.startswith("#EXTINF:")]
+
+
+def _numbered(first: str, count: int) -> list[str]:
+    """``count`` segment names numbered like ``first`` (``main_cc-en_000000001.cmft``), from 1."""
+    if (match := _NUMBERED.match(first)) is None:
+        raise InvalidOutputsError(f"{first} is not a numbered segment")
+    width = len(match["number"])
+    return [f"{match['stem']}{n:0{width}d}{match['suffix']}" for n in range(1, count + 1)]
+
+
 def break_offsets(encode: Encode, cue_points_ms: Iterable[int]) -> list[int]:
     """Valid ad-break offsets: segment boundaries common to every track (``encode_timeline``), restricted to the cue
     points if any.
@@ -246,7 +324,7 @@ def sgai_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str
     for p in applicable(encode.ladder):
         if p.format is ManifestFormat.DASH:
             mpd = _text(store, p.manifest_key(encode.prefix))
-            _write_text(store, f"{ad_prefix}{_file(p)}", with_base_url(mpd, segments))
+            _write_text(store, f"{ad_prefix}{_file(p)}", absolutize_mpd(mpd, segments))
     return Creative(
         creative_id=creative,
         ad_prefix=ad_prefix,
@@ -255,24 +333,16 @@ def sgai_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str
     )
 
 
-def with_base_url(mpd: str, base_url: str) -> str:
-    """``mpd`` with an MPD-level ``BaseURL`` (before the first Period, as the schema orders it) so its relative
-    segment templates resolve against ``base_url``."""
-    match = re.search(r"^([ \t]*)<Period\b", mpd, flags=re.MULTILINE)
-    if match is None:
-        raise InvalidOutputsError("the DASH manifest has no Period")
-    indent = match.group(1)
-    return f"{mpd[: match.start()]}{indent}<BaseURL>{escape(base_url)}</BaseURL>\n{mpd[match.start() :]}"
-
-
 def _record(asset: Mapping[str, Any], result: Finalized, *, job_id: str) -> None:
     updated_at = now_iso()
+    captions = CaptionPlan.model_validate(asset.get("captions") or {}).provenance()
     values: dict[str, Any] = {
         "status": AssetStatus.ENCODED.value,
         **asset_index(asset["kind"], asset["ladder_version"], AssetStatus.ENCODED, updated_at),
         "duration_ms": result.duration_ms,
         "break_offsets_ms": result.break_offsets_ms,
         "signature": result.signature,
+        "captions": [c.model_dump(mode="json", exclude_none=True) for c in captions],
         "job_id": job_id,
         "updated_at": updated_at,
     }
@@ -307,6 +377,13 @@ def _modifier(uri: str) -> str:
 
 def _file(p: RenditionProfile) -> str:
     return PurePosixPath(p.manifest_key("x")).name
+
+
+def _read(store: Store, key: str) -> bytes:
+    body = store.read(key)
+    if body is None:
+        raise InvalidOutputsError(f"missing {key}")
+    return body
 
 
 def _text(store: Store, key: str) -> str:

@@ -115,6 +115,31 @@ def test_mpd_ad_periods_and_codecs() -> None:
     assert {"avc1.640028", "hvc1.2.4.L120.B0", "av01.0.08M.10"} <= mpd.codecs
 
 
+def test_subtitles_through_channel_assembly_and_ssai() -> None:
+    """IMSC renditions are picked like audio; during an SSAI ad MediaTailor serves its blank WebVTT instead."""
+    base = "https://cdn.example/v1/master/1bab/fastv3-exp-cc-imsc/hls-imsc.m3u8"
+    multivariant = sample("ssai-imsc-multivariant.m3u8")
+    assert playback.subtitle_languages(multivariant) == ["en"]
+    assert "subtitles:en" in playback.renditions(multivariant, base)
+    url = "https://cdn.example/v1/manifest/1bab/fastv3-exp-cc-imsc/s/sub_1.m3u8"
+    subtitles = playback.media_segments(sample("ssai-imsc-subtitles-during-ad.m3u8"), url)
+    video = playback.media_segments(sample("ssai-imsc-video-during-ad.m3u8"), url)
+    blank = [s for s in subtitles if s.is_ad]
+    assert blank and all(s.uri.endswith("/web.vtt") for s in blank)
+    assert any(not s.is_ad for s in subtitles)
+    assert playback.misaligned(subtitles, video) == []
+    shifted = [Segment(s.uri, s.duration, s.starts + timedelta(seconds=1), s.map_uri) for s in subtitles if s.starts]
+    assert playback.misaligned(shifted, video)
+
+
+def test_mpd_text_periods_and_ad_init_segments() -> None:
+    mpd = playback.parse_mpd(sample("ssai-dash-imsc.mpd"), "https://cdn.example/v1/dash/1bab/c/s.mpd")
+    assert mpd.ad_periods and set(mpd.text_periods) == set(mpd.periods)  # the creative carries the IMSC track
+    assert "stpp" in mpd.codecs or mpd.text_periods
+    [init, *_] = mpd.ad_inits
+    assert "/v1/dashsegment/" in init and init.endswith("/main_v720init.cmfv")
+
+
 def test_vast_pod_media_files_and_creatives() -> None:
     creatives = [
         Creative(

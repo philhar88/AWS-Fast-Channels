@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from fast_channels.core.captions import CaptionTrack
 from fast_channels.core.ladder import (
     BUILTIN_DIR,
     LADDERS_DIR_ENV,
@@ -181,3 +182,39 @@ def test_propose_reports_invalid_candidates(standard: Ladder) -> None:
     assert (nothing.errors, nothing.cost_per_minute_usd) == (["no video renditions left"], 0.0)
     same = propose(standard, LadderOps(drop_rungs=["avc-9999p"]))
     assert same.warnings == ["unknown rung avc-9999p", "no change: the proposal equals the base ladder"]
+
+
+def test_caption_tracks_are_part_of_the_version(standard: Ladder) -> None:
+    bare = standard.with_captions(())
+    assert bare.version == "standard@86bf8088e0"  # ladders without captions keep their pre-caption version
+    assert standard.captions == (CaptionTrack(language="en", label="English"),)
+    assert standard.version != bare.version
+    assert standard.with_captions(standard.captions) == standard
+    renamed = standard.with_captions([CaptionTrack(language="en", label="English CC")])
+    assert renamed.version != standard.version  # the label is the HLS NAME Channel Assembly matches
+
+
+def test_caption_tracks_are_one_per_language(standard: Ladder) -> None:
+    with pytest.raises(ValidationError, match=r"more than one caption track for \['en'\]"):
+        standard.with_captions([CaptionTrack(language="en", label="A"), CaptionTrack(language="en-GB", label="B")])
+
+
+def test_captions_round_trip_through_toml(standard: Ladder, tmp_path: Path) -> None:
+    ladder = standard.with_captions(
+        [CaptionTrack(language="en", label="English"), CaptionTrack(language="es", label="Spanish", kind="subtitles")]
+    )
+    path = tmp_path / "captioned.toml"
+    path.write_text(ladder.to_toml())
+    assert "[[captions]]" in path.read_text()
+    assert Ladder.load(path) == ladder
+
+
+def test_proposals_can_replace_the_caption_tracks(standard: Ladder) -> None:
+    spanish = CaptionTrack(language="es", label="Spanish")
+    proposal = propose(standard, LadderOps(captions=[*standard.captions, spanish]))
+    assert proposal.ladder is not None and proposal.ladder.captions == (*standard.captions, spanish)
+    assert proposal.added == ["cc-es"]
+    removed = propose(standard, LadderOps(captions=[]))
+    assert removed.ladder is not None and removed.ladder.version == standard.with_captions(()).version
+    assert removed.removed == ["cc-en"]
+    assert propose(standard, LadderOps()).ladder == standard  # omitted: keep the base's tracks

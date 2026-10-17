@@ -1,6 +1,7 @@
 """Fixtures for the ingest steps: environment, botocore-stubbed AWS clients and an in-memory object store."""
 
 import json
+import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,9 +141,41 @@ def store() -> type[MemoryStore]:
     return MemoryStore
 
 
+def _with_captions(objects: dict[str, bytes], prefix: str, ladder: Ladder) -> dict[str, bytes]:
+    """The encode as MediaConvert writes it with the ladder's IMSC tracks: a SUBTITLES group in every multivariant
+    (``stpp.ttml.im1t`` in every variant's CODECS) and a subtitle playlist on the first variant's segment grid
+    (docs/captions.md)."""
+    main = objects[f"{prefix}main.m3u8"].decode()
+    first = next(line for line in main.splitlines() if line and not line.startswith("#"))
+    video = objects[f"{prefix}{first}"].decode()
+    rendition = first.removeprefix("main_").removesuffix(".m3u8")
+    media = [
+        f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="{t.label}",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,'
+        f'LANGUAGE="{t.language}",URI="main{t.name_modifier}.m3u8"'
+        for t in ladder.captions
+    ]
+    captioned = dict(objects)
+    for key, body in objects.items():
+        text = body.decode()
+        if key.endswith(".m3u8") and "#EXT-X-STREAM-INF:" in text:
+            lines = [
+                re.sub(r'CODECS="([^"]+)"', r'CODECS="\1,stpp.ttml.im1t"', line) + ',SUBTITLES="subs"'
+                if line.startswith("#EXT-X-STREAM-INF:")
+                else line
+                for line in text.splitlines()
+            ]
+            captioned[key] = ("\n".join([*lines, *media]) + "\n").encode()
+    for t in ladder.captions:
+        playlist = video.replace(rendition, t.name_modifier[1:]).replace(".cmfv", ".cmft")
+        captioned[f"{prefix}main{t.name_modifier}.m3u8"] = playlist.encode()
+    return captioned
+
+
 def _encode(sample: str, asset_id: str, ladder: Ladder = STANDARD) -> tuple[str, dict[str, bytes]]:
     prefix = f"assets/{asset_id}/{ladder_path(ladder.version)}/"
     objects = {f"{prefix}{path.name}": path.read_bytes() for path in (DATA / sample).glob("*.m3u8")}
+    if ladder.captions:
+        objects = _with_captions(objects, prefix, ladder)
     mpd = (DATA / "main_avc.mpd").read_bytes()
     objects |= {f"{prefix}main_{codec}.mpd": mpd for codec in ("avc", "hevc", "av1")}
     for rendition in (r for r in ladder.video if r.codec == "av1"):
@@ -153,9 +186,10 @@ def _encode(sample: str, asset_id: str, ladder: Ladder = STANDARD) -> tuple[str,
 
 @pytest.fixture
 def encode() -> Any:
-    """``encode(sample, asset_id) -> (prefix, objects)``: a STANDARD-ladder encode under
-    ``assets/<asset_id>/<ladder>/`` made of the real HLS manifests of ``data/<sample>``, a real MediaConvert
-    per-codec MPD for each DASH profile and real AV1 init segments."""
+    """``encode(sample, asset_id[, ladder]) -> (prefix, objects)``: a STANDARD-ladder encode under
+    ``assets/<asset_id>/<ladder>/`` made of the real HLS manifests of ``data/<sample>`` (with the ladder's caption
+    tracks added as MediaConvert writes them), a real MediaConvert per-codec MPD for each DASH profile and real AV1
+    init segments."""
     return _encode
 
 

@@ -189,6 +189,11 @@ def _ladder(name: str) -> Ladder:
     return Ladder.builtin(name)
 
 
+@cache
+def _ladder_without_captions(name: str) -> Ladder:
+    return _ladder(name).with_captions(())
+
+
 def _unique(values: tuple[str, ...]) -> tuple[str, ...]:
     if duplicates := sorted({v for v in values if values.count(v) > 1}):
         raise ValueError(f"duplicate entries: {', '.join(duplicates)}")
@@ -422,6 +427,37 @@ class ObservabilityConfig(_Section):
         return _RETENTION[self.log_retention_days]
 
 
+class CaptionEngine(StrEnum):
+    """Who generates captions an asset lacks."""
+
+    ELEMENTAL_INFERENCE = "elemental-inference"
+    NONE = "none"
+
+
+class CaptionsConfig(_Section):
+    enabled: bool = True
+    """Encode the caption tracks the built-in ladders define (``[[captions]]`` in ``ladders/<name>.toml``, IMSC1
+    text), with each asset's captions from its provided files, else from the source, else generated. ``false``
+    deploys the ladders without caption tracks (their caption-less versions)."""
+    required: bool = False
+    """Refuse to encode an asset whose spoken-language caption track would be empty (regulated distribution)."""
+    engine: CaptionEngine = CaptionEngine.ELEMENTAL_INFERENCE
+    """Generates the spoken language's captions when an asset has none: ``elemental-inference`` (AWS Elemental
+    Inference smart subtitles) or ``none`` (the track stays empty, or the asset is refused when captions are
+    required)."""
+    max_feeds: int = Field(default=2, ge=1, le=20)
+    """Elemental Inference feeds the captioner uses at once (one per 10-minute chunk of a title). The account's
+    ``Active feeds per account`` quota (2 by default, adjustable) is shared with every other use of the service."""
+    dictionary_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]+$")
+    """Elemental Inference custom dictionary (names, brands, jargon) every captioner feed uses."""
+
+    @model_validator(mode="after")
+    def _required_needs_tracks(self) -> Self:
+        if self.required and not self.enabled:
+            raise ValueError("required captions need enabled=true")
+        return self
+
+
 class NotificationsConfig(_Section):
     email: str | None = Field(default=None, pattern=_EMAIL)
     """Email subscribed to alarms and asset/ladder failure events."""
@@ -443,12 +479,17 @@ class FastChannelsConfig(_Section):
     ads: AdsConfig = PreconditionedAds()
     agent: AgentConfig = AgentConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
+    captions: CaptionsConfig = CaptionsConfig()
     notifications: NotificationsConfig = NotificationsConfig()
 
     @property
     def removal_policy(self) -> RemovalPolicy:
         """CDK removal policy of stateful resources."""
         return RemovalPolicy.RETAIN if self.removal is Removal.RETAIN else RemovalPolicy.DESTROY
+
+    def ladder(self, name: str) -> Ladder:
+        """Built-in ladder ``name`` as this deployment encodes it: without caption tracks when captions are off."""
+        return _ladder(name) if self.captions.enabled else _ladder_without_captions(name)
 
     @model_validator(mode="after")
     def _consistent(self, info: ValidationInfo) -> Self:

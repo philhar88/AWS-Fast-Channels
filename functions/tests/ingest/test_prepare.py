@@ -1,11 +1,14 @@
+import io
 from fractions import Fraction
 from typing import Any
 
 import pytest
 from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.types import TypeSerializer
+from botocore.response import StreamingBody
 from botocore.stub import ANY
 
+from fast_channels.core.captions import CaptionFile, SourceCaptions
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.naming import digest
 from fast_channels.functions.ingest import prepare
@@ -141,6 +144,20 @@ def test_probe_reads_the_source(stubs: Any) -> None:
     )
 
 
+def test_probe_reads_caption_tracks_languages_and_timecode(stubs: Any) -> None:
+    result = probe_result()
+    container = result["ProbeResults"][0]["Container"]
+    container["StartTimecode"] = "01:00:00;00"
+    container["Tracks"][1]["AudioProperties"]["LanguageCode"] = "spa"
+    container["Tracks"].append({"TrackType": "data", "Codec": "C608", "DataProperties": {}, "Index": 3})
+    stubs["mediaconvert"].add_response("probe", result, {"InputFiles": [{"FileUrl": SOURCE}]})
+
+    probed = prepare.probe(SOURCE)
+
+    assert probed.captions == SourceCaptions(audio_language="es", c608_language="und")
+    assert probed.start_timecode_ms == 3_600_000
+
+
 def test_probe_refuses_unreadable_sources(stubs: Any) -> None:
     stubs["mediaconvert"].add_client_error("probe", "BadRequestException", "Unable to open the input file")
 
@@ -204,6 +221,15 @@ def test_handler_prepares_a_file(stubs: Any, lambda_context: Any) -> None:
     assert "Esam" in job["Settings"]  # GOP 149 is not on the 3-GOP segment grid
     assert job["UserMetadata"]["correlation_id"] == "big-buck-bunny-run"
     assert Ladder.model_validate(result["ladder"]) == STANDARD
+    # No caption file and no c608 track: the spoken language awaits the caption scan, which writes under work/.
+    assert result["captions"]["awaiting"] == "scan" and result["captions"]["spoken_language"] == "en"
+    scan = result["caption_scan"]
+    stem = f"s3://ingest/work/{result['asset_id']}/big-buck-bunny-run/scan"
+    assert scan["Settings"]["Inputs"][0]["FileInput"] == SOURCE
+    assert scan["Settings"]["OutputGroups"][0]["OutputGroupSettings"]["FileGroupSettings"]["Destination"] == stem
+    assert scan["captions_uri"] == f"{stem}_captions.ttml"
+    assert scan["UserMetadata"]["step"] == "caption-scan"
+    assert scan["ClientRequestToken"] == digest("big-buck-bunny-run#caption-scan", 32)
 
 
 def test_handler_prepares_a_generated_slate_without_probing(stubs: Any, lambda_context: Any) -> None:
@@ -226,6 +252,10 @@ def test_handler_prepares_a_generated_slate_without_probing(stubs: Any, lambda_c
     assert result["job"]["AccelerationSettings"] == {"Mode": "DISABLED"}
     assert result["job"]["Settings"]["Inputs"][0]["VideoGenerator"]["Duration"] == 30030
     assert result["estimated_cost_usd"] > 0
+    assert result["job"]["Settings"]["Inputs"][0]["CaptionSelectors"] == {
+        "Captions en": {"SourceSettings": {"SourceType": "NULL_SOURCE"}}
+    }
+    assert result["captions"]["awaiting"] is None and "caption_scan" not in result
 
 
 def test_handler_refuses_hdr_before_claiming(stubs: Any, lambda_context: Any) -> None:
@@ -350,3 +380,61 @@ def test_a_kit_still_replaces_its_previous_encode(stubs: Any, lambda_context: An
     }
 
     prepare.handler({"request": request, "execution": "kit-filler", "execution_arn": EXECUTION}, lambda_context)
+
+
+def scc_body(text: str) -> dict[str, Any]:
+    data = text.encode()
+    return {"Body": StreamingBody(io.BytesIO(data), len(data))}
+
+
+def test_provided_caption_files_are_checked_and_scc_is_lined_up(stubs: Any) -> None:
+    key = "movies/big_buck_bunny.en.scc"
+    stubs["s3"].add_response("head_object", {"ContentLength": 120}, {"Bucket": "ingest", "Key": key})
+    stubs["s3"].add_response(
+        "get_object",
+        scc_body("Scenarist_SCC V1.0\n\n01:00:02;10\t9420 9420\n"),
+        {"Bucket": "ingest", "Key": key, "Range": "bytes=0-65535"},
+    )
+    file = CaptionFile(uri="big_buck_bunny.en.scc", language="en").absolute(SOURCE)
+
+    checked = prepare.checked_caption_file(file, source(), [])
+
+    assert checked.uri == f"s3://ingest/{key}" and checked.offset_ms == -3_600_000
+
+
+@pytest.mark.parametrize(
+    ("uri", "message"),
+    [
+        ("s3://elsewhere/movie.srt", "must be in the ingest bucket"),
+        ("s3://ingest/movies/missing.srt", "cannot read caption file"),
+        ("s3://ingest/movies/empty.srt", "is empty"),
+    ],
+)
+def test_unreadable_caption_files_are_refused(stubs: Any, uri: str, message: str) -> None:
+    if "missing" in uri:
+        stubs["s3"].add_client_error("head_object", "404", http_status_code=404)
+    elif "empty" in uri:
+        stubs["s3"].add_response("head_object", {"ContentLength": 0})
+
+    with pytest.raises(IngestRefusedError, match=message):
+        prepare.checked_caption_file(CaptionFile(uri=uri, language="en"), source(), [])
+
+
+def test_https_caption_files_and_explicit_offsets_are_taken_as_they_are(stubs: Any) -> None:
+    remote = CaptionFile(uri="https://cms.example.com/bbb.en.scc", language="en")
+    assert prepare.checked_caption_file(remote, source(), []) is remote
+    stubs["s3"].add_response("head_object", {"ContentLength": 99})
+    explicit = CaptionFile(uri="s3://ingest/movies/bbb.en.scc", language="en", offset_ms=0)
+    assert prepare.checked_caption_file(explicit, source(), []) == explicit
+
+
+def test_required_captions_refuse_an_asset_that_turns_them_off(
+    stubs: Any, lambda_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CAPTIONS_REQUIRED", "true")
+    expect_ladder(stubs, ladder_item())
+    stubs["mediaconvert"].add_response("probe", probe_result(), {"InputFiles": [{"FileUrl": SOURCE}]})
+    request = {"source_uri": SOURCE, "ladder_version": STANDARD.version, "captions": {"mode": "off"}}
+
+    with pytest.raises(IngestRefusedError, match="captions are required"):
+        prepare.handler({"request": request, "execution": "run", "execution_arn": EXECUTION}, lambda_context)

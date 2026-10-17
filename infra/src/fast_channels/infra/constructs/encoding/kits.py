@@ -10,7 +10,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, cast
 
-from aws_cdk import CustomResource, Duration, Fn
+from aws_cdk import CustomResource, Duration
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3_assets as s3_assets
 from aws_cdk import aws_s3_deployment as s3deploy
@@ -21,7 +21,7 @@ from constructs import Construct, IConstruct
 
 from fast_channels.core.timeline import BREAK_SLATE_GOPS, KIT_SPEC
 from fast_channels.infra import nag
-from fast_channels.infra.arns import arn
+from fast_channels.infra.arns import executions
 from fast_channels.infra.bundling import REPO_ROOT
 from fast_channels.infra.constructs._provider import provider
 from fast_channels.infra.constructs.encoding.pipeline import FUNCTIONS, STEP_FUNCTIONS_INVOKED, IngestPipeline
@@ -119,7 +119,7 @@ class LadderProvisioner(Construct):
             {
                 nag.wildcard_resource(): "X-Ray has no resource-level permissions",
                 nag.wildcard_resource(f"{self.kit.function.function_arn}:*"): "Invoke the step and its versions",
-                nag.wildcard_resource(f"{_executions(pipeline.state_machine)}*"): "Describe and stop the kit's "
+                nag.wildcard_resource(f"{executions(pipeline.state_machine)}*"): "Describe and stop the kit's "
                 "ingest executions, whose names are only known at run time",
             },
         )
@@ -239,7 +239,7 @@ class LadderProvisioner(Construct):
         self.state_machine.grant_execution(is_complete.function, "states:DescribeExecution")
         nag.acknowledge_references(
             cast("IConstruct", is_complete.function.role),
-            {nag.wildcard_resource(f"{_executions(self.state_machine)}:*"): "Poll provisioning executions"},
+            {nag.wildcard_resource(f"{executions(self.state_machine)}:*"): "Poll provisioning executions"},
         )
         return provider(
             self,
@@ -327,10 +327,3 @@ def brand_digest(directory: Path = BRAND_DIR) -> str:
         digest.update(path.name.encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()[:10]
-
-
-def _executions(state_machine: sfn.IStateMachine) -> str:
-    """``arn:...:execution:<state machine name>``, as the CDK Step Functions grants write it."""
-    return arn(
-        state_machine, "states", "execution", Fn.select(6, Fn.split(":", state_machine.state_machine_arn)), colon=True
-    )

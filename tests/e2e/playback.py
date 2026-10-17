@@ -19,8 +19,9 @@ from urllib.parse import urljoin
 from fast_channels.core.manifests import attributes, parse_multivariant
 
 INTERSTITIAL_CLASS: Final = "com.apple.hls.interstitial"
-AD_SEGMENT_MARKERS: Final = ("/segment/", "/tm/", "/ads/", "/preconditioned-ads/")
-"""URI parts of stitched ad segments: beacon redirects, transcoded ads, our preconditioned creatives."""
+AD_SEGMENT_MARKERS: Final = ("/segment/", "/tm/", "/ads/", "/preconditioned-ads/", "/webvtt/")
+"""URI parts of stitched ad segments: beacon redirects, transcoded ads, our preconditioned creatives, and the blank
+WebVTT MediaTailor puts in every subtitle rendition during an SSAI ad (docs/captions.md)."""
 _ASSET_PATH = re.compile(r"/assets/([a-z0-9][a-z0-9-]*)/")
 DASH_AD_MARKER: Final = "/dashsegment/"
 MPD: Final = "{urn:mpeg:dash:schema:mpd:2011}"
@@ -81,6 +82,10 @@ class Mpd:
     periods: tuple[str, ...]
     ad_periods: tuple[str, ...]
     codecs: frozenset[str]
+    text_periods: tuple[str, ...] = ()
+    """Periods with an IMSC (``stpp``) text AdaptationSet."""
+    ad_inits: tuple[str, ...] = ()
+    """The first initialization segment URL of each ad period, as a player resolves it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,9 +104,32 @@ def renditions(multivariant: str, base_url: str) -> dict[str, str]:
         if variant.video_codec:
             picked.setdefault(variant.video_codec, urljoin(base_url, variant.uri))
     for line in multivariant.splitlines():
-        if line.startswith("#EXT-X-MEDIA:") and (media := attributes(line)).get("TYPE") == "AUDIO" and "URI" in media:
-            picked.setdefault(f"audio:{media.get('GROUP-ID', '')}", urljoin(base_url, media["URI"]))
+        if line.startswith("#EXT-X-MEDIA:") and "URI" in (media := attributes(line)):
+            match media.get("TYPE"):
+                case "AUDIO":
+                    picked.setdefault(f"audio:{media.get('GROUP-ID', '')}", urljoin(base_url, media["URI"]))
+                case "SUBTITLES":
+                    picked.setdefault(f"subtitles:{media.get('LANGUAGE', '')}", urljoin(base_url, media["URI"]))
     return picked
+
+
+def subtitle_languages(multivariant: str) -> list[str]:
+    """LANGUAGE of every subtitle rendition, in order."""
+    media = (attributes(line) for line in multivariant.splitlines() if line.startswith("#EXT-X-MEDIA:"))
+    return [m.get("LANGUAGE", "") for m in media if m.get("TYPE") == "SUBTITLES"]
+
+
+def misaligned(
+    subtitles: Iterable[Segment], video: Iterable[Segment], *, tolerance: timedelta = timedelta(milliseconds=250)
+) -> list[Segment]:
+    """Content subtitle segments that start at no video segment start (Channel Assembly keeps IMSC on the video
+    grid; docs/captions.md). Ads are left out: MediaTailor replaces their subtitles."""
+    starts = sorted(s.starts for s in video if s.starts is not None)
+    return [
+        s
+        for s in subtitles
+        if not s.is_ad and s.starts is not None and not any(abs(s.starts - t) <= tolerance for t in starts)
+    ]
 
 
 def video_codecs(multivariant: str) -> set[str]:
@@ -109,10 +137,14 @@ def video_codecs(multivariant: str) -> set[str]:
     return {codec for variant in parse_multivariant(multivariant) if (codec := variant.video_codec)}
 
 
+NON_VIDEO_TAGS: Final = frozenset({"mp4a", "stpp", "wvtt"})
+"""Audio and text sample-entry codes that ``CODECS`` lists next to the video's (IMSC1 is ``stpp.ttml.im1t``)."""
+
+
 def codec_tags(multivariant: str) -> set[str]:
     """Video sample-entry codes in ``CODECS`` (``avc1``, ``hvc1``, ``av01``)."""
     tags = {codec.partition(".")[0] for variant in parse_multivariant(multivariant) for codec in variant.codecs}
-    return {tag for tag in tags if not tag.startswith("mp4a")}
+    return tags - NON_VIDEO_TAGS
 
 
 def media_segments(text: str, base_url: str) -> list[Segment]:
@@ -190,13 +222,36 @@ def asset_list(text: str) -> list[dict[str, Any]]:
     return assets
 
 
-def parse_mpd(text: str) -> Mpd:
-    """Type, period ids, ad period ids (segments from MediaTailor's ``dashsegment`` path) and codecs of an MPD."""
+def parse_mpd(text: str, base_url: str = "") -> Mpd:
+    """Type, period ids, ad period ids (segments from MediaTailor's ``dashsegment`` path), codecs, periods with
+    IMSC text and the first init segment of each ad period (resolved against ``base_url`` and the BaseURLs)."""
     root = ET.fromstring(text)
     periods = root.findall(f"{MPD}Period")
     ads = [p for p in periods if any(DASH_AD_MARKER in (url.text or "") for url in p.iter(f"{MPD}BaseURL"))]
     codecs = {r.get("codecs", "") for r in root.iter(f"{MPD}Representation")} - {""}
-    return Mpd(root.get("type", ""), _ids(periods), _ids(ads), frozenset(codecs))
+    text_periods = [p for p in periods if any(_is_text(a) for a in p.iter(f"{MPD}AdaptationSet"))]
+    root_base = _base(root, base_url)
+    inits = tuple(init for p in ads if (init := _first_init(p, _base(p, root_base))))
+    return Mpd(root.get("type", ""), _ids(periods), _ids(ads), frozenset(codecs), _ids(text_periods), inits)
+
+
+def _is_text(adaptation: ET.Element) -> bool:
+    codecs = [adaptation.get("codecs", ""), *(r.get("codecs", "") for r in adaptation.iter(f"{MPD}Representation"))]
+    return adaptation.get("contentType") == "text" or any(codec.startswith("stpp") for codec in codecs)
+
+
+def _base(element: ET.Element, parent: str) -> str:
+    url = element.find(f"{MPD}BaseURL")
+    return urljoin(parent, (url.text or "").strip()) if url is not None else parent
+
+
+def _first_init(period: ET.Element, base_url: str) -> str | None:
+    for representation in period.iter(f"{MPD}Representation"):
+        template = representation.find(f"{MPD}SegmentTemplate")
+        if template is not None and (init := template.get("initialization")):
+            init = init.replace("$RepresentationID$", representation.get("id", ""))
+            return urljoin(base_url, init.replace("$Bandwidth$", representation.get("bandwidth", "")))
+    return None
 
 
 def _ids(periods: Iterable[ET.Element]) -> tuple[str, ...]:

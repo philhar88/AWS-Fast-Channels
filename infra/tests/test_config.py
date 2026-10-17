@@ -340,3 +340,15 @@ def test_json_schema_documents_every_field() -> None:
 
     assert "Name prefix of every resource" in schema["properties"]["prefix"]["description"]
     assert "description" in schema["$defs"]["ChannelConfig"]["properties"]["autopilot_cron"]
+
+
+def test_captions_decide_the_deployed_ladders(load_config: Load) -> None:
+    config = load_config(with_shipped())
+    assert config.captions.enabled and not config.captions.required
+    assert [t.language for t in config.ladder("standard").captions] == ["en"]
+    off = load_config(with_shipped(**{"captions.enabled": "false"}))
+    assert off.ladder("standard").captions == ()
+    assert off.ladder("standard").version == "standard@86bf8088e0"  # the version v3.0.0 deployed
+    assert "required captions need enabled=true" in config_error(
+        load_config, with_shipped(**{"captions.enabled": "false", "captions.required": "true"})
+    )
