@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from itertools import accumulate
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urljoin
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
@@ -157,6 +158,21 @@ def nominal_bandwidths(ladder: Ladder, multivariant: str) -> dict[str, tuple[int
         if rendition := by_modifier.get(f"_{stem.rsplit('_', 1)[-1]}"):
             nominal[variant.uri] = ladder.nominal_bandwidth(rendition)
     return nominal
+
+
+def absolutize_media_playlist(text: str, base_url: str) -> str:
+    """Make segment URIs absolute against ``base_url`` (which should end with ``/``).
+
+    The CDN never serves an encode's own manifests (``assets/*.m3u8`` are denied, so viewers cannot skip
+    MediaTailor), so a preconditioned ad's manifests are copied under ``ads/``. Their segments stay under
+    ``assets/``, so the copied media playlists point at them with absolute URIs on the CDN; MediaTailor stitches them
+    into SSAI sessions through ``/v1/segment`` redirects.
+    """
+
+    def rewrite(line: str) -> str:
+        return urljoin(base_url, line.strip()) if line.strip() and not line.startswith("#") else line
+
+    return "\n".join(rewrite(line) for line in text.splitlines()) + "\n"
 
 
 def _variant_findings(text: str) -> Iterator[str]:

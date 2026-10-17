@@ -157,6 +157,18 @@ def test_normalisation_adds_a_missing_average_bandwidth() -> None:
     )
 
 
+def test_absolutize_media_playlist() -> None:
+    base = "https://cdn.example.com/ads/standard_843ed1d05a/house-30/"
+    text = read("slate/main_avc-720p.m3u8")
+    out = m.absolutize_media_playlist(text, base)
+    segments = [line for line in out.splitlines() if line and not line.startswith("#")]
+    assert segments == [f"{base}main_avc-720p_{n:05d}.ts" for n in range(1, 6)]
+    tags = [line for line in out.splitlines() if line.startswith("#")]
+    assert tags == [line for line in text.splitlines() if line.startswith("#")]
+    assert m.absolutize_media_playlist(out, "https://elsewhere/") == out
+    assert m.absolutize_media_playlist(SSAI, base).splitlines() == SSAI.splitlines()  # SSAI output: already absolute
+
+
 def test_check_hls_passes_the_capture_and_the_channel() -> None:
     assert m.check_hls(CONTENT) == []
     assert m.check_hls(SLATE) == []

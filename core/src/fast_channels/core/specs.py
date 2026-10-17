@@ -278,8 +278,8 @@ class Creative(BaseModel):
     creative_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     duration_ms: int = Field(gt=0)
     hls_uri: str = Field(
-        description="Absolute URL of the creative's multivariant on the CDN (its own encode; MediaTailor resolves the "
-        "relative child playlists and segments against it)."
+        description="Absolute URL on the CDN of the creative's multivariant copy under ads/ (the CDN does not serve "
+        "assets/*.m3u8); its media playlists carry absolute segment URIs."
     )
     width: int = 1920
     height: int = 1080
