@@ -81,20 +81,24 @@ def test_grid_is_frame_exact(grid: Grid) -> None:
     assert grid.gop_exact(3 * 599) == 599 * grid.segment_ms == 3_597_594  # an hour of segments, still exact
 
 
-def test_cue_points_snap_to_the_segment_grid(grid: Grid) -> None:
-    # Basic tier has no ESAM, so the only boundaries every variant shares are the 6006 ms segment boundaries.
-    assert grid.snap_to_segment(20000) == 18018
-    assert grid.snap_to_segment(40000) == 42042
-    assert grid.snap_to_segment(254254) == 252252  # a GOP boundary is not a segment boundary
-    assert (grid.segment_index(4100), grid.snap_to_segment(4100)) == (1, 6006)
-    assert grid.snap_to_segment(0) == grid.snap_to_segment(3002) == 0
-    assert grid.snap_to_segment(3004) == 6006
+def test_cue_points_snap_to_the_frame(grid: Grid) -> None:
+    # Frame starts rounded to the nearest ms: ESAM splits every variant at the frame boundary nearest to the point.
+    assert (grid.frame_index(13480), grid.snap_to_frame(13480)) == (404, 13480)  # frame 404 starts at 13480.13 ms
+    assert grid.snap_to_frame(27000) == 26994  # frame 809 starts at 26993.63 ms
+    assert grid.snap_to_frame(0) == grid.snap_to_frame(16) == 0
+    assert grid.snap_to_frame(17) == 33  # frame 1 starts at 33.37 ms
     for ms in range(0, 400_000, 7):
-        snapped = grid.snap_to_segment(ms)
-        assert snapped % 6006 == 0 and abs(snapped - ms) <= 3003  # at most half a segment away
-        assert grid.snap_to_segment(snapped) == snapped
+        snapped = grid.snap_to_frame(ms)
+        assert abs(snapped - ms) <= 17 and grid.snap_to_frame(snapped) == snapped  # at most half a frame away
     pal = Grid(frame_rate=FrameRate.parse("25"), gop_frames=50, segment_gops=3)
-    assert (pal.segment_ms, pal.snap_to_segment(20000), pal.segment_index(20000)) == (6000, 18000, 3)
+    assert (pal.snap_to_frame(20010), pal.frame_index(20010)) == (20000, 500)
+
+
+def test_the_segment_grid_needs_no_esam(grid: Grid) -> None:
+    assert all(grid.on_segment_grid(n * 6006) for n in range(200))
+    assert grid.on_segment_grid(6005) and grid.on_segment_grid(6020)  # the same frame
+    assert not grid.on_segment_grid(254254)  # a GOP boundary between segment boundaries
+    assert not grid.on_segment_grid(13480)
 
 
 def test_break_catalogue_constants() -> None:
@@ -220,9 +224,9 @@ def test_breaks_keep_clear_of_program_start_and_end(grid: Grid) -> None:
 
 
 def test_editorial_cue_points_are_honoured_anywhere(grid: Grid) -> None:
-    trailer = _asset(1, minutes=52 / 60, break_offsets_ms=[grid.snap_to_segment(20000)], editorial_breaks=True)
+    trailer = _asset(1, minutes=52 / 60, break_offsets_ms=[grid.snap_to_frame(20000)], editorial_breaks=True)
     brief = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=0.5))
-    assert _offsets(_plan([trailer], grid, brief)) == [[18018]]  # 18 s in, in a 52 s program
+    assert _offsets(_plan([trailer], grid, brief)) == [[19987]]  # frame 599, 20 s in, in a 52 s program
 
 
 def test_min_gap_defaults_to_half_the_cadence(grid: Grid) -> None:
@@ -230,11 +234,11 @@ def test_min_gap_defaults_to_half_the_cadence(grid: Grid) -> None:
     assert BreakPolicy(cadence_minutes=5).min_gap_ms == 150_000
     assert BreakPolicy(cadence_minutes=5, min_gap_minutes=0).min_gap_ms == 0
     # Tears of Steel: cue points 3.9 minutes apart, both kept at a 5-minute cadence (a fixed 6-minute gap dropped one).
-    cues = [grid.snap_to_segment(ms) for ms in (254254, 488488)]
+    cues = [grid.snap_to_frame(ms) for ms in (254254, 488488)]
     tears = _asset(1, minutes=734 / 60, break_offsets_ms=cues, editorial_breaks=True)
     brief = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=5))
     plan = _plan([tears], grid, brief)
-    assert _offsets(plan) == [[252252, 486486]]
+    assert _offsets(plan) == [[254254, 488488]]
     assert plan == _plan([tears], grid, brief)  # deterministic
 
 

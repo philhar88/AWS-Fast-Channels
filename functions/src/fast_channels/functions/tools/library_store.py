@@ -180,7 +180,7 @@ class Asset(Record):
     break_offsets_ms: list[int] = Field([], description="Offsets where every variant has a common segment boundary.")
     cue_points_ms: list[int] = Field(
         [],
-        description="Editorial break positions of the ingest request, on the segment grid; break_offsets_ms keeps "
+        description="Editorial break positions of the ingest request, snapped to frames; break_offsets_ms keeps "
         "only these when set.",
     )
     signature: list[list[str]] = Field([], description="core.manifests.ladder_signature of its HLS manifest.")

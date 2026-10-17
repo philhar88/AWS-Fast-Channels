@@ -41,7 +41,9 @@ class IngestRequest(BaseModel):
     kind: AssetKind = AssetKind.CONTENT
     asset_id: str | None = Field(None, pattern=ASSET_ID_PATTERN, description="Defaults to asset_id_for(source).")
     content_id: str | None = Field(None, min_length=1, max_length=64, description="Catalog content id.")
-    cue_points_ms: list[int] = Field([], description="Editorial ad cue points (ms); snapped to the segment grid.")
+    cue_points_ms: list[int] = Field(
+        [], description="Editorial ad cue points (ms); snapped to the nearest frame (ESAM between segment boundaries)."
+    )
     ladder_version: str = Field(pattern=LADDER_VERSION_PATTERN, description="Ladder version, e.g. standard@0123abcd45.")
     correlation_id: str | None = Field(
         None, pattern=r"^[A-Za-z0-9_-]{1,80}$", description="Trace id; Step Functions execution name."

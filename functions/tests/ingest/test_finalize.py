@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from botocore.stub import ANY
@@ -76,13 +76,51 @@ def test_finalize_is_idempotent(store: Any, encode: Any) -> None:
     [
         ([], CONTENT_BOUNDARIES),
         ([12012, 24024], [12012, 24024]),
-        ([12100], [12012]),
-        ([15015, 40073], []),
+        ([12112], [12012]),
+        ([12113, 13480, 15015, 40073], []),
     ],
-    ids=["natural", "cue-points", "within-half-a-gop", "not-a-boundary"],
+    ids=["natural", "cue-points", "within-100-ms", "not-a-boundary"],
 )
 def test_content_break_offsets(store: Any, encode: Any, cue_points: list[int], offsets: list[int]) -> None:
     prefix, objects = encode("content", "bbb-1a2b3c")
+
+    result = run(store(objects), asset("content", "bbb-1a2b3c", prefix, cue_points))
+
+    assert result.break_offsets_ms == offsets
+    assert result.duration_ms == 40073
+
+
+def esam_split(text: str, durations: list[str]) -> str:
+    """``text`` (a media playlist of the content sample) with its segments replaced by ``durations``."""
+    lines = text.splitlines()
+    header = lines[: next(i for i, line in enumerate(lines) if line.startswith("#EXTINF:"))]
+    stem = next(line for line in lines if line.endswith(".ts")).rsplit("_", 1)[0]
+    segments = [f"#EXTINF:{d},\n{stem}_{n:05d}.ts" for n, d in enumerate(durations, start=1)]
+    return "\n".join([*header, *segments, "#EXT-X-ENDLIST"]) + "\n"
+
+
+# What ESAM made of the content on a real TS job (2026-10-17): cues at 13.480 s and 26.994 s (frames 404 and 809)
+# split every variant there, each adding one short segment, and the 6.006 s grid resumed at 18.018 s and 30.030 s.
+ESAM_DURATIONS: Final = ["6.006", "6.006", "1.468", "4.538", "6.006", "2.970", "3.036", "6.006", "4.037"]
+
+
+@pytest.mark.parametrize(
+    ("cue_points", "offsets"),
+    [
+        ([], [6006, 12012, 13480, 18018, 24024, 26994, 30030, 36036]),
+        ([13480, 26994], [13480, 26994]),
+        ([13481, 26993], [13480, 26994]),
+        ([13480, 15015], [13480]),
+    ],
+    ids=["natural", "frame-snapped-cues", "ms-rounding", "one-not-a-boundary"],
+)
+def test_break_offsets_keep_frame_accurate_cues_that_esam_made_boundaries(
+    store: Any, encode: Any, cue_points: list[int], offsets: list[int]
+) -> None:
+    prefix, objects = encode("content", "bbb-1a2b3c")
+    for rendition in STANDARD.video:
+        key = f"{prefix}main{rendition.name_modifier}.m3u8"
+        objects[key] = esam_split(objects[key].decode(), ESAM_DURATIONS).encode()
 
     result = run(store(objects), asset("content", "bbb-1a2b3c", prefix, cue_points))
 
@@ -129,7 +167,7 @@ def test_missing_media_playlist_fails(store: Any, encode: Any) -> None:
         run(store(objects), asset("slate", "filler-1a2b3c", prefix))
 
 
-def test_ad_gets_an_sgai_ready_copy(store: Any, encode: Any) -> None:
+def test_ad_gets_a_manifest_copy_with_absolute_segment_uris(store: Any, encode: Any) -> None:
     prefix, objects = encode("slate", "house-ad-2-1a2b3c")
     s = store(objects)
 

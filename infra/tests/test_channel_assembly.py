@@ -187,6 +187,8 @@ def test_channel_is_linear_with_filler_outputs_and_as_run_logs(built: Built, tem
         "LogConfiguration": {"LogTypes": ["AS_RUN"]},
         "Tags": None,
     }
+    # The markers MediaTailor stitches SSAI ads at.
+    assert [o["HlsPlaylistSettings"]["AdMarkupType"] for o in channel["Properties"]["Outputs"]] == [["DATERANGE"]]
     guard, _ = one(template, "Custom::ChannelGuard", {"ChannelName": "fast-demo"})
     assert {guard, logical_id(built, built.stack.node.find_child("Origin"))} <= set(channel["DependsOn"])
 
@@ -208,6 +210,7 @@ def test_playback_configuration_is_the_core_spec(template: Template) -> None:
     props = config["Properties"]
     assert props["VideoContentSourceUrl"] == {"Fn::GetAtt": [endpoint, "ChannelUrl"]}
     assert props | {"VideoContentSourceUrl": "<endpoint>", "Tags": []} == expected
+    assert props["InsertionMode"] == "STITCHED_ONLY"  # SSAI only, like the agent's channels (same core spec)
 
 
 def test_token_content_hosts_survive_the_spec_builders() -> None:

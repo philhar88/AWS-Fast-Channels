@@ -1,6 +1,6 @@
 """Offline tests of the e2e helpers (not marked e2e): playlist readers against the samples in ``data/`` (synthetic TS
-playlists in the MediaTailor URL shapes of the research run, e2e.md, and its asset list), the watcher against a fake
-CDN, tool calls against a fake Lambda."""
+playlists in the MediaTailor URL shapes of the research run, e2e.md, and the media playlists of the job that verified
+ESAM), the watcher against a fake CDN, tool calls against a fake Lambda."""
 
 import base64
 import io
@@ -18,7 +18,19 @@ import harness
 import httpx
 import playback
 import pytest
-from harness import ASSET_ID, BREAK_POLICY, CUE_POINT_MS, LEAD, PROGRAMS, Channel, Observation, Player, ToolError, Tools
+from harness import (
+    ASSET_ID,
+    BREAK_POLICY,
+    CUE_POINT_MS,
+    CUE_TOLERANCE_MS,
+    LEAD,
+    PROGRAMS,
+    Channel,
+    Observation,
+    Player,
+    ToolError,
+    Tools,
+)
 from playback import Segment, Window
 
 from fast_channels.core.ladder import Ladder
@@ -28,6 +40,7 @@ from fast_channels.core.manifests import (
     media_segment_durations,
     segment_boundaries_ms,
 )
+from fast_channels.core.mediaconvert import build_job_overrides
 from fast_channels.core.specs import Creative, vast_pod
 from fast_channels.core.timeline import BreakPolicy, PlanInputAsset, ProgrammingBrief, plan_block
 from fast_channels.functions.tools.library_store import iso
@@ -36,6 +49,8 @@ from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE
 DATA = Path(__file__).parent / "data"
 TS_ENCODE = Path(__file__).parents[2] / "core" / "tests" / "data" / "hls-ts"
 """A real MediaConvert TS encode of the standard ladder (content and slate), which the synthetic samples follow."""
+ESAM_ENCODE = DATA / "esam-ts"
+"""The media playlists of a real TS encode of the standard ladder with ESAM cue points at 13480 and 26994 ms."""
 STANDARD = Ladder.builtin("standard")
 CDN = "https://d3pzfwsg0kjqjs.cloudfront.net"
 HASH = "1bab6b4238868b752a9e9daae3e2a4911f2a2fc9"
@@ -45,7 +60,7 @@ CONTENT = f"{CDN}/assets/e2e-pattern-20261016165300/standard_843ed1d05a/"
 """Where the samples' program segments live (``assets/<asset id>/<ladder version>/`` on the CDN)."""
 AD_BREAK = Window(datetime(2026, 10, 16, 16, 55, 54, 364000, UTC), datetime(2026, 10, 16, 16, 56, 24, 394000, UTC))
 """The 30.03 s break of every sample; synthetic-ssai-ad-break fills it with a 15-GOP house ad (5 x 6.006 s)."""
-MEDIA_SAMPLES = ("synthetic-ssai-ad-break.m3u8", "synthetic-ssai-slate-break.m3u8", "synthetic-sgai-media.m3u8")
+MEDIA_SAMPLES = ("synthetic-ssai-ad-break.m3u8", "synthetic-ssai-slate-break.m3u8")
 
 
 def sample(name: str) -> str:
@@ -84,9 +99,8 @@ def test_the_samples_follow_the_ts_encode() -> None:
     the media samples keep its segment grid: no EXT-X-MAP, 6.006 s segments, every one ``.ts`` or a beacon."""
     expected = sorted(expected_signature(STANDARD))
     assert sorted(ladder_signature((TS_ENCODE / "content" / "main.m3u8").read_text())) == expected
-    for name in ("synthetic-ssai-multivariant.m3u8", "synthetic-sgai-multivariant.m3u8"):
-        assert sorted(ladder_signature(sample(name))) == expected, name
-        assert "#EXT-X-MEDIA:" not in sample(name), name
+    assert sorted(ladder_signature(sample("synthetic-ssai-multivariant.m3u8"))) == expected
+    assert "#EXT-X-MEDIA:" not in sample("synthetic-ssai-multivariant.m3u8")
     for name in MEDIA_SAMPLES:
         segments = playback.media_segments(sample(name), MANIFEST)
         assert "#EXT-X-MAP" not in sample(name), name
@@ -130,25 +144,6 @@ def test_program_date_time_carries_forward_by_duration() -> None:
     assert second.uri == f"{CDN}/x/b.ts"
 
 
-def test_interstitial_asset_list_url_with_session_variables() -> None:
-    [(daterange, attributes)] = playback.interstitials(sample("synthetic-sgai-media.m3u8")).items()
-    assert daterange == "1792169754364-34-1F41"
-    assert datetime.fromisoformat(attributes["START-DATE"]) == AD_BREAK.starts
-    variables = playback.defines(sample("synthetic-sgai-multivariant.m3u8"))
-    assert variables["awsSessionId"] == "d8caf024-ff63-4a86-87fa-776d3b05da9d"
-    url = playback.substitute(attributes["X-ASSET-LIST"], variables)
-    assert "aws.sessionData=<blob>&" in url and "{$" not in url
-    assert playback.substitute("{$unknown}", variables) == "{$unknown}"
-
-
-def test_asset_list() -> None:
-    assets = playback.asset_list(sample("pab-assetlist.json"))
-    assert [a["DURATION"] for a in assets] == [6.0, 4.0]
-    assert "/preconditioned-ads/" in assets[0]["URI"]
-    with pytest.raises(ValueError, match="not an asset list"):
-        playback.asset_list('{"message": "failed to generate interstitial manifest"}')
-
-
 def test_vast_pod_has_one_hls_media_file_per_ad() -> None:
     creatives = [
         Creative(creative_id=f"house-{n}", duration_ms=30030, hls_uri=f"{CDN}/ads/{n}/main.m3u8") for n in (1, 2)
@@ -178,24 +173,76 @@ def test_break_windows_shift_later_breaks_by_earlier_ones() -> None:
     ]
 
 
-def test_the_cue_point_snaps_to_a_boundary_of_every_variant() -> None:
-    """The scenario's cue point is off the segment grid, so the run exercises snapping: it moves to 30030 ms, a
-    boundary that every variant of the real TS encode shares (all keep identical EXTINFs; there is no ESAM split)."""
-    snapped = STANDARD.grid.snap_to_segment(CUE_POINT_MS)
-    assert snapped != CUE_POINT_MS
-    assert snapped == 30_030
-    variants = [path.read_text() for path in sorted((TS_ENCODE / "content").glob("main_*.m3u8"))]
+def test_splices_put_the_break_on_the_content_timeline() -> None:
+    """The ad marker of a break and the segments around it: the content segment before it is named as in the encode,
+    which places the break on the content's timeline, and the marker's START-DATE is that segment's end and the
+    first ad segment's start (what test_04 asserts at the cue point)."""
+    [splice] = playback.splices(sample("synthetic-ssai-ad-break.m3u8"), MANIFEST)
+    assert (splice.id, splice.starts, splice.complete) == ("1792169754364-34-1F41", AD_BREAK.starts, True)
+    assert splice.before is not None and splice.after is not None
+    assert (splice.before.name, splice.before.asset_id) == ("main_avc-720p_00005.ts", "e2e-pattern-20261016165300")
+    assert splice.before.ends == splice.starts == splice.after.starts and splice.after.is_ad
+    encode = playback.spans((TS_ENCODE / "content" / "main_avc-720p.m3u8").read_text())
+    assert {span.name: span.ends_ms for span in encode}[splice.before.name] == 5 * STANDARD.grid.segment_ms
+
+
+def test_splices_at_the_edges_of_a_playlist() -> None:
+    marker = '#EXT-X-DATERANGE:ID="b",START-DATE="2026-10-16T12:00:06.006Z",DURATION=30.03,SCTE35-OUT=0xFC30\n'
+    pdt = "#EXT-X-PROGRAM-DATE-TIME:2026-10-16T12:00:00.000Z\n"
+    other = '#EXT-X-DATERANGE:ID="x",START-DATE="2026-10-16T12:00:00.000Z",CLASS="com.example"\n'
+    [leaving] = playback.splices(f"#EXTM3U\n{other}{pdt}#EXTINF:6.006,\na.ts\n{marker}", f"{CDN}/x/0.m3u8")
+    assert leaving.before is not None and leaving.before.name == "a.ts" and leaving.after is None
+    assert not leaving.complete
+    [arriving] = playback.splices(f"#EXTM3U\n{marker}{pdt}#EXTINF:6.006,\nad.ts\n", f"{CDN}/x/0.m3u8")
+    assert arriving.before is None and arriving.after is not None and arriving.after.name == "ad.ts"
+
+
+def test_the_cue_point_needs_esam() -> None:
+    """The scenario's cue point snaps to a frame off the segment grid, so its encode carries ESAM and is billed at
+    the Professional tier; an encode without ESAM has no segment boundary there."""
+    grid = STANDARD.grid
+    cue = grid.snap_to_frame(CUE_POINT_MS)
+    assert cue != CUE_POINT_MS and not grid.on_segment_grid(cue)
+    overrides = build_job_overrides(
+        ladder=STANDARD,
+        media_bucket="media",
+        asset_id=ASSET_ID,
+        source_uri="s3://ingest/e2e/pattern.mp4",
+        generator=None,
+        cue_points_ms=[CUE_POINT_MS],
+        correlation_id="e2e-run",
+        app="fast",
+    )
+    assert overrides.snapped_cue_points_ms == [cue]
+    assert overrides.professional and "Esam" in overrides.settings
+    without_esam = playback.spans((TS_ENCODE / "content" / "main_avc-720p.m3u8").read_text())
+    assert not any(abs(span.ends_ms - cue) <= CUE_TOLERANCE_MS for span in without_esam)
+
+
+def test_esam_splits_every_variant_at_the_frame() -> None:
+    """In the encode that verified ESAM, every variant has the same segments, a boundary at each frame-snapped cue
+    point, a short segment ending there, and the segment grid resuming at the next boundary (what test_02 asserts)."""
+    grid = STANDARD.grid
+    variants = [path.read_text() for path in sorted(ESAM_ENCODE.glob("main_avc-*.m3u8"))]
     assert len(variants) == len(STANDARD.video)
     assert len({tuple(media_segment_durations(variant)) for variant in variants}) == 1
-    assert snapped in segment_boundaries_ms(*variants)
+    shared = segment_boundaries_ms(*variants)
+    for cue in (grid.snap_to_frame(13_480), grid.snap_to_frame(27_000)):
+        assert not grid.on_segment_grid(cue)
+        assert any(abs(boundary - cue) <= CUE_TOLERANCE_MS for boundary in shared), (cue, shared)
+        for variant in variants:
+            segments = playback.spans(variant)
+            [n] = [n for n, span in enumerate(segments) if abs(span.ends_ms - cue) <= CUE_TOLERANCE_MS]
+            assert segments[n].duration_ms < grid.segment_ms
+            assert grid.on_segment_grid(segments[n + 1].ends_ms)
 
 
 def test_the_scenario_plans_one_break_per_program() -> None:
     """The suite's break policy over the 70 s pattern as the tools hand it to the planner: its sidecar cue point is
     its only break offset and is editorial, so the policy's margins and minimum program length do not apply. Three
-    breaks, all on the snapped cue point, the second more than a minute after the first (once MediaTailor imported
-    the creatives)."""
-    cue = STANDARD.grid.snap_to_segment(CUE_POINT_MS)
+    breaks, all on the frame-snapped cue point, the second more than a minute after the first (once MediaTailor
+    imported the creatives)."""
+    cue = STANDARD.grid.snap_to_frame(CUE_POINT_MS)
     pattern = PlanInputAsset(
         asset_id=ASSET_ID,
         vod_source="v",
@@ -246,41 +293,45 @@ def fake_cdn(requests: list[str]) -> Callable[[httpx.Request], httpx.Response]:
     """The stage's CDN answering with the samples (every SSAI media playlist filled with ads)."""
 
     def answer(request: httpx.Request) -> httpx.Response:
-        url, path = str(request.url), request.url.path
-        requests.append(url)
-        if path.endswith("/v1/master/1bab/cfg/hls.m3u8"):
-            name = "synthetic-sgai-multivariant.m3u8" if "GUIDED" in url else "synthetic-ssai-multivariant.m3u8"
-            return httpx.Response(200, text=sample(name))
-        if path.startswith("/v1/manifest/"):
+        requests.append(str(request.url))
+        if request.url.path.endswith("/v1/master/1bab/cfg/hls.m3u8"):
+            return httpx.Response(200, text=sample("synthetic-ssai-multivariant.m3u8"))
+        if request.url.path.startswith("/v1/manifest/"):
             return httpx.Response(200, text=sample("synthetic-ssai-ad-break.m3u8"))
-        if path.startswith("/v1/i-media/"):
-            return httpx.Response(200, text=sample("synthetic-sgai-media.m3u8"))
-        if path.startswith("/v1/interstitials/"):
-            return httpx.Response(200, text=sample("pab-assetlist.json"))
-        if path.startswith("/preconditioned-ads/"):
-            return httpx.Response(200, text="#EXTM3U\n")
         return httpx.Response(404)
 
     return answer
 
 
-def test_watch_stops_once_every_session_saw_its_ads() -> None:
+def test_watch_stops_once_every_variant_showed_ads() -> None:
     requests: list[str] = []
     player = Player(httpx.Client(transport=httpx.MockTransport(fake_cdn(requests)), follow_redirects=True))
     seen = harness.watch(
         player,
-        ssai_url=f"{CDN}/v1/master/1bab/cfg/hls.m3u8",
-        sgai_url=f"{CDN}/v1/master/1bab/cfg/hls.m3u8?aws.insertionMode=GUIDED",
+        url=f"{CDN}/v1/master/1bab/cfg/hls.m3u8",
         breaks=[Window(AD_BREAK.starts - timedelta(minutes=5), AD_BREAK.starts - timedelta(minutes=4)), AD_BREAK],
         ends=datetime.now(UTC) + timedelta(minutes=5),
     )
     assert seen.complete, seen.report()
-    assert sorted(seen.ssai) == ["1280x720", "1920x1080", "640x360"]
-    assert list(seen.interstitials) == ["1792169754364-34-1F41"]
-    assert set(seen.ad_playlists.values()) == {200}
+    assert sorted(seen.ssai) == sorted(seen.splices) == ["1280x720", "1920x1080", "640x360"]
+    assert all(list(found) == ["1792169754364-34-1F41"] for found in seen.splices.values()), seen.report()
+    assert all(splice.complete for found in seen.splices.values() for splice in found.values())
     assert not seen.errors
-    [asset_list] = [url for url in requests if "/v1/interstitials/" in url]
-    assert "aws.sessionData=%3Cblob%3E" in asset_list  # {$awsSessionData} from the multivariant's EXT-X-DEFINE
+    assert len(requests) == 1 + len(seen.ssai)  # one read of each variant was enough
+
+
+def test_observation_keeps_the_first_complete_sighting_of_a_marker() -> None:
+    """A marker first seen at the very end of a playlist (no break segment yet) is replaced by a later read that
+    shows both sides; a complete sighting is kept."""
+    seen = Observation([AD_BREAK])
+    text = sample("synthetic-ssai-ad-break.m3u8")
+    seen.record("1280x720", text[: text.index("#EXT-X-KEY:METHOD=NONE")], MANIFEST)
+    assert not seen.splices["1280x720"]["1792169754364-34-1F41"].complete
+    seen.record("1280x720", text, MANIFEST)
+    complete = seen.splices["1280x720"]["1792169754364-34-1F41"]
+    assert complete.complete
+    seen.record("1280x720", text[text.index("#EXT-X-DISCONTINUITY\n#EXT-X-DATERANGE") :], MANIFEST)
+    assert seen.splices["1280x720"]["1792169754364-34-1F41"] is complete
 
 
 def test_watch_records_errors_and_gives_up_at_the_end() -> None:
@@ -292,8 +343,7 @@ def test_watch_records_errors_and_gives_up_at_the_end() -> None:
     player = Player(httpx.Client(transport=httpx.MockTransport(answer)))
     seen = harness.watch(
         player,
-        ssai_url=f"{CDN}/v1/master/1bab/cfg/hls.m3u8",
-        sgai_url=f"{CDN}/v1/master/1bab/cfg/hls.m3u8?aws.insertionMode=GUIDED",
+        url=f"{CDN}/v1/master/1bab/cfg/hls.m3u8",
         breaks=[AD_BREAK],
         ends=datetime.now(UTC),
     )
@@ -389,11 +439,11 @@ def test_channel_urls_are_those_of_the_hls_output() -> None:
             "name": "fast-demo",
             "ladderVersion": "standard@843ed1d05a",
             "outputs": ["hls"],
-            "playback": {"hls": {"ssai": "u/hls", "sgai": "g/hls"}},
+            "playback": {"hls": f"{CDN}/v1/master/1bab/cfg/hls.m3u8"},
         }
     )
-    assert (channel.url("ssai"), channel.url("sgai")) == ("u/hls", "g/hls")
-    with pytest.raises(AssertionError, match="no dash playback URL for hls"):
+    assert channel.url() == channel.url("hls") == f"{CDN}/v1/master/1bab/cfg/hls.m3u8"
+    with pytest.raises(AssertionError, match="no playback URL for dash"):
         channel.url("dash")
 
 

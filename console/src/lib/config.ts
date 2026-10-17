@@ -1,12 +1,8 @@
-/** Playback URLs of one channel output (CONTRACTS §H; built by `fast_channels.core.specs.playback_urls`). */
-export interface OutputPlayback {
-  readonly ssai?: string;
-  /** The SSAI URL plus `?aws.insertionMode=GUIDED`. */
-  readonly sgai?: string;
-}
-
-/** Output (package profile) name, `hls` (the one HLS MPEG-TS output), mapped to its playback URLs. */
-export type ChannelPlayback = Readonly<Record<string, OutputPlayback>>;
+/**
+ * Output (package profile) name, `hls` (the one HLS MPEG-TS output), mapped to its viewer URL: the MediaTailor SSAI
+ * session URL through the CDN (CONTRACTS §H; built by `fast_channels.core.specs.playback_urls`).
+ */
+export type ChannelPlayback = Readonly<Record<string, string>>;
 
 export interface ChannelConfig {
   readonly name: string;

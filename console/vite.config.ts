@@ -7,9 +7,9 @@ import { defineConfig, type Connect, type Plugin } from "vite";
 
 /**
  * Policy enforced by `npm run preview`. It has the same shape as the OperatorConsole response-headers policy
- * (SPEC §6): no inline script or style, blob: for the hls.js worker and MSE, and AWS hosts for connect-src
- * (the SGAI asset lists live on interstitials.mediatailor.<region>, _review.md §6). So a CSP regression shows up
- * locally before it reaches CloudFront.
+ * (SPEC §6): no inline script or style, blob: for the hls.js worker and MSE, and AWS hosts for connect-src (the
+ * Runtime, the Gateway and Cognito, whose hosts vary by deployment). So a CSP regression shows up locally before it
+ * reaches CloudFront.
  */
 const PREVIEW_CSP = [
   "default-src 'self'",
@@ -18,8 +18,9 @@ const PREVIEW_CSP = [
   "img-src 'self' data:",
   // Cloudscape global-styles embeds Open Sans as data: WOFF2.
   "font-src 'self' data:",
-  // hls.js plays through MSE blob: URLs and gives the metadata text track behind its EXT-X-DATERANGE cues (which time
-  // HLS Interstitials) a data:,WEBVTT source (texttrack-utils.ts createTrackNode).
+  // hls.js plays through MSE blob: URLs. For EXT-X-DATERANGE tags, here the ad markers that Channel Assembly writes and
+  // MediaTailor keeps in the SSAI playlists, it adds a hidden metadata text track with a data:,WEBVTT source
+  // (texttrack-utils.ts createTrackNode). Without data:, the e2e tests log a CSP violation for every session.
   "media-src 'self' blob: data:",
   "worker-src 'self' blob:",
   "connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com",
@@ -32,8 +33,6 @@ const PREVIEW_CSP = [
 const MEDIA_TYPES: Record<string, string> = {
   ".m3u8": "application/vnd.apple.mpegurl",
   ".ts": "video/mp2t",
-  ".json": "application/json",
-  ".gif": "image/gif",
 };
 
 /** Serves the mock-mode media fixtures (`mock/cdn`) at `/mock/cdn` in dev and preview, never in the build output. */

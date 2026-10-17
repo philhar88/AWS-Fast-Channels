@@ -163,8 +163,10 @@ def nominal_bandwidths(ladder: Ladder, multivariant: str) -> dict[str, tuple[int
 def absolutize_media_playlist(text: str, base_url: str) -> str:
     """Make segment URIs absolute against ``base_url`` (which should end with ``/``).
 
-    MediaTailor re-hosts only the manifests of preconditioned SGAI ads, so their segment URIs must be absolute
-    on our CDN (e2e.md §5.5); the multivariant's child URIs stay relative.
+    The CDN never serves an encode's own manifests (``assets/*.m3u8`` are denied, so viewers cannot skip
+    MediaTailor), so a preconditioned ad's manifests are copied under ``ads/``. Their segments stay under
+    ``assets/``, so the copied media playlists point at them with absolute URIs on the CDN; MediaTailor stitches them
+    into SSAI sessions through ``/v1/segment`` redirects.
     """
 
     def rewrite(line: str) -> str:

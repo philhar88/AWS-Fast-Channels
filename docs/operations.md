@@ -295,9 +295,9 @@ us-east-1 list prices, rounded. Your bill is authoritative.
 
 | Item | Price | Notes |
 |---|---|---|
-| Encoding, `standard` ladder | about $0.0375 per content minute ($2.25 per hour), MediaConvert Basic tier | [encoding.md](encoding.md#cost) |
+| Encoding, `standard` ladder | about $0.0375 per content minute ($2.25 per hour), MediaConvert Basic tier; $0.06 ($3.60 per hour) for a title whose cue points need ESAM (Professional tier) | [encoding.md](encoding.md#cost) |
 | Ladder kit | about $0.25 (`standard`) | Once per ladder version |
-| Sample content (`make seed`) | about $1.50 | About 39 minutes of open movies on `standard`; the script prints the estimate and asks first |
+| Sample content (`make seed`) | about $2.30 | About 39 minutes of open movies on `standard`; the three films' cue points fall between segment boundaries, so they encode with ESAM on the Professional tier. The script prints the estimate and asks first |
 | Channel Assembly | $0.10 per running channel-hour (BASIC), $0.35 (STANDARD) | Billed only while `RUNNING`, per minute; auto-stop after 4 hours by default |
 | Ad insertion | $0.25 per 1,000 ads (VOD rate) or $0.50 per 1,000 ads (live rate) | Which rate applies to Channel Assembly sources is not confirmed; budget for the live rate |
 | CloudFront | Data transfer out and requests at CloudFront rates | One viewer-hour at about 3 Mbit/s is about 1.35 GB |
@@ -386,6 +386,8 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | An execution ends at `AlreadyIngesting` | The same file was uploaded again while it was encoding | Nothing to do: the first execution continues |
 | `library___ingest` returns `CONFLICT` (`ExecutionAlreadyExists`) | The same asset was re-ingested in the same agent session | Use another asset id, or a new conversation |
 | Ingest `FAILED` at Finalize (`InvalidOutputsError`) | A manifest is missing or its signature differs from the ladder | Inspect the job in MediaConvert; re-ingest |
+| An encode is billed on the Professional tier | The title has cue points between segment boundaries, so its job carries ESAM | Expected ([encoding.md](encoding.md#cue-points-and-esam)); cue points on the 6.006 s segment grid keep a title on the Basic tier |
+| A cue point has no break offset, and Finalize logs a warning | The point lies beyond the end of the title, or no segment boundary shared by every variant lies within 100 ms of it | Check the cue points against the asset's duration and the segment boundaries in its media playlists |
 | Colour-space warnings 230001/230005 | Untagged source | Harmless |
 
 ### Schedules and playback
@@ -403,7 +405,6 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | Filler plays instead of programs | No program at that time, or a block started in the past | `schedule___get_schedule` shows the gaps; plan from now + 10 minutes |
 | SSAI 504 for a few minutes after a channel change | Channel policy propagation | Wait |
 | First ad break shows only slate | MediaTailor imports a new creative (`NEW_CREATIVE`) | Expected for the first break of each creative |
-| SGAI does not show ads | Player without HLS Interstitials, a blocked asset-list request to `interstitials.mediatailor…`, or hls.js 1.7.3 (the console included) stalling at the break with muxed audio | See [ad-insertion.md](ad-insertion.md#monitoring-and-troubleshooting) |
 
 ### Agent and console
 

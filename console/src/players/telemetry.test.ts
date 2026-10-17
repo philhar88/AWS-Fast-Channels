@@ -8,7 +8,6 @@ describe("isAdSegment", () => {
     ["https://d1.cloudfront.net/v1/segment/h/cfg/session/1/2", true],
     ["https://d1.cloudfront.net/tm/h/transcode/asset_1080_0_1.ts", true],
     ["https://d1.cloudfront.net/ads/standard_3f9c/cr-a/main_avc-720p_00001.ts", true],
-    ["https://d1.cloudfront.net/preconditioned-ads/111/import/index_1.ts", true],
     ["https://d1.cloudfront.net/assets/ads-special/standard/main_avc-720p_00001.ts", false],
   ])("%s is an ad: %s", (url, expected) => {
     expect(isAdSegment(url, "https://d1.cloudfront.net", page)).toBe(expected);

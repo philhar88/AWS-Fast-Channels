@@ -96,9 +96,9 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 - **Model conformance**: `make eval MODEL=<bedrock model id>` before proposing a model for `agent.allowed_models`.
 - **End-to-end tests** (`tests/e2e`, marker `e2e`) run against a deployed stage: the stack-output contract; an
   upload with a sidecar through MediaConvert to a VOD source; the default ladder's kit as MediaTailor reads it;
-  programs published through the tools, then SSAI and SGAI sessions watching the breaks air with ads from the
-  second break on; the agent over AG-UI with the autopilot's token; and stopping the channel (also done at teardown,
-  whatever failed). One run id is the correlation id of everything, so `scripts/trace.py <run id>` shows the run.
+  programs published through the tools, then SSAI sessions watching the breaks air with ads from the second break
+  on; the agent over AG-UI with the autopilot's token; and stopping the channel (also done at teardown, whatever
+  failed). One run id is the correlation id of everything, so `scripts/trace.py <run id>` shows the run.
   Run them with `uv run pytest tests/e2e -m e2e --prefix <prefix>` against a fresh stage (about 40 minutes; see
   [tests/e2e/README.md](tests/e2e/README.md)), or through the manual **End-to-end** workflow
   (`.github/workflows/e2e.yml`, AWS access through an OIDC role), which deploys a throwaway stage, runs the tests and

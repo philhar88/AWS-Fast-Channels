@@ -81,24 +81,27 @@ test("two approvals are answered one run at a time, each with one card", async (
   expect(problems).toEqual([]);
 });
 
-test("channel plays SSAI and SGAI side by side and fires SGAI beacons", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 1800 });
+test("channel plays its SSAI stream through the stitched ad break", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1600 });
   const problems = await open(page, "#/channels/fast-demo");
-  await expect(page.locator("video")).toHaveCount(2);
+  await expect(page.locator("video")).toHaveCount(1);
+  // For the break's EXT-X-DATERANGE, hls.js adds a hidden metadata track with a data: source: media-src allows it.
+  await expect(page.locator('video > track[kind="metadata"]')).toHaveAttribute("src", "data:,WEBVTT");
   const log = page.getByRole("table", { name: "Ad events" });
-  // The mock break starts 12 s into both streams (mock/cdn/channel/*.m3u8).
+  // The mock break starts 12 s into the stream and lasts 8 s (mock/cdn/channel/hls.m3u8).
   await expect(log.getByText("Stitched ad started")).toBeVisible({ timeout: 30_000 });
-  await expect(log.getByText("INTERSTITIAL_STARTED")).toBeVisible({ timeout: 30_000 });
-  await expect(log.getByText("Beacon impression")).toBeVisible();
-  await expect(page.getByText(/Ad 1 of 2 · guided/)).toBeVisible();
+  await expect(page.getByText("Ad · stitched")).toBeVisible();
   await screenshot(page, "channels");
+  // Both ads play through, their muxed AAC behind discontinuities, and the content resumes.
+  await expect(log.getByText("Stitched ad ended")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Content", { exact: true })).toBeVisible();
   expect(problems).toEqual([]);
 });
 
 test("a stopped channel is off air until it starts, then plays without a reload", async ({ page }) => {
   const problems = await open(page, "#/channels/fast-kids");
-  await expect(page.getByText("Off air", { exact: true })).toHaveCount(2);
-  await expect(page.getByText("fast-kids is stopped", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("Off air", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("fast-kids is stopped", { exact: true })).toHaveCount(1);
   await expect(page.locator("video")).toHaveCount(0);
   const guide = page.getByRole("table", { name: "Programs" });
   await expect(guide.getByText("Published", { exact: true }).first()).toBeVisible();
@@ -112,14 +115,13 @@ test("a stopped channel is off air until it starts, then plays without a reload"
   // The start skipped the program it would have joined midway, and the guide shows it at once.
   await expect(page.getByText(/Skipped because their start had passed: .+ \(.+\)\. Filler plays/)).toBeVisible();
   await expect(guide.getByText("Skipped", { exact: true })).toHaveCount(1);
-  await expect(page.locator("video")).toHaveCount(2);
+  await expect(page.locator("video")).toHaveCount(1);
   const rows = page.getByRole("table", { name: "Ad events" }).getByRole("row");
-  await expect(rows.filter({ hasText: "SSAI" }).filter({ hasText: "MANIFEST_PARSED" })).toHaveCount(1);
-  await expect(rows.filter({ hasText: "SGAI" }).filter({ hasText: "MANIFEST_PARSED" })).toHaveCount(1);
+  await expect(rows.filter({ hasText: "MANIFEST_PARSED" })).toHaveCount(1);
 
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Stop channel" }).click();
-  await expect(page.getByText("Off air", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("Off air", { exact: true })).toHaveCount(1);
   await expect(page.locator("video")).toHaveCount(0);
   expect(problems).toEqual([]);
 });
@@ -127,16 +129,16 @@ test("a stopped channel is off air until it starts, then plays without a reload"
 test("a player reloads a stream that fails while the channel starts, with backoff", async ({ page }) => {
   // What a starting channel answers through the CDN; hls.js retries once itself, then gives up (fatal).
   let requests = 0;
-  await page.route("**/mock/cdn/channel/ssai.m3u8", (route) =>
+  await page.route("**/mock/cdn/channel/hls.m3u8", (route) =>
     ++requests <= 2
       ? route.fulfill({ status: 504, contentType: "application/json", body: '{"message":"failed to generate manifest: Unable to obtain template playlist."}' })
       : route.continue(),
   );
   const problems = await open(page, "#/channels/fast-demo");
-  const ssai = page.getByRole("table", { name: "Ad events" }).getByRole("row").filter({ hasText: "SSAI" });
-  await expect(ssai.filter({ hasText: "Retry 1" })).toContainText("manifestLoadError (HTTP 504): reloading in 2 s");
-  await expect(ssai.filter({ hasText: "MANIFEST_PARSED" })).toHaveCount(1, { timeout: 10_000 });
-  await expect(page.locator("video")).toHaveCount(2);
+  const rows = page.getByRole("table", { name: "Ad events" }).getByRole("row");
+  await expect(rows.filter({ hasText: "Retry 1" })).toContainText("manifestLoadError (HTTP 504): reloading in 2 s");
+  await expect(rows.filter({ hasText: "MANIFEST_PARSED" })).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.locator("video")).toHaveCount(1);
   expect(requests).toBeGreaterThanOrEqual(3);
   expect(problems).toEqual([]);
 });

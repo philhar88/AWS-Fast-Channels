@@ -5,18 +5,16 @@ import styles from "./HlsPlayer.module.css";
 import { describeError, superviseSession } from "./retry";
 import {
   attachPlaybackTelemetry,
-  attachSgaiTelemetry,
   attachSsaiTelemetry,
   type AdState,
-  type InsertionMode,
   type PlayerEvent,
   type PlayerEventLevel,
   type TelemetrySink,
 } from "./telemetry";
 
 export interface HlsPlayerProps {
+  /** The SSAI session URL of a channel output. */
   readonly src: string;
-  readonly mode: InsertionMode;
   /** Root of the media CDN; stitched ad segments are recognised by their path below it. */
   readonly cdnBaseUrl: string;
   readonly label: string;
@@ -24,16 +22,16 @@ export interface HlsPlayerProps {
 }
 
 /**
- * An hls.js 1.7 player that reports ad activity. Give it a `key` per stream: ad state belongs to one session.
- * Mount it only while the channel is on air (players/gate.ts); a session that fails anyway, as a starting channel's
- * does, is reopened with backoff and each reload is logged. hls.js runs its transmuxer in a blob: worker and plays
- * through MSE blob: URLs, which the console CSP allows.
+ * An hls.js 1.7 player of an SSAI stream that reports its stitched ads. Give it a `key` per stream: ad state belongs
+ * to one session. Mount it only while the channel is on air (players/gate.ts); a session that fails anyway, as a
+ * starting channel's does, is reopened with backoff and each reload is logged. hls.js runs its transmuxer in a blob:
+ * worker and plays through MSE blob: URLs, which the console CSP allows.
  */
-export function HlsPlayer({ src, mode, cdnBaseUrl, label, onEvent }: HlsPlayerProps) {
+export function HlsPlayer({ src, cdnBaseUrl, label, onEvent }: HlsPlayerProps) {
   const video = useRef<HTMLVideoElement>(null);
   const [adState, setAdState] = useState<AdState>({ kind: "content" });
   const emit = useEffectEvent((level: PlayerEventLevel, name: string, detail: string) => {
-    onEvent({ mode, level, name, detail });
+    onEvent({ level, name, detail });
   });
 
   useEffect(() => {
@@ -57,17 +55,13 @@ export function HlsPlayer({ src, mode, cdnBaseUrl, label, onEvent }: HlsPlayerPr
     }
     const open = () => {
       const hls = new Hls({
-        enableInterstitialPlayback: mode === "sgai",
-        interstitialLiveLookAhead: 10,
+        // The playback configuration is STITCHED_ONLY: ads are segments in the playlist, never HLS Interstitials.
+        enableInterstitialPlayback: false,
         // Desktop/TV start estimate: with its 500 kbit/s default, hls.js would start every session on the lowest rung.
         abrEwmaDefaultEstimate: 2_000_000,
       });
       attachPlaybackTelemetry(hls, sink);
-      if (mode === "ssai") {
-        attachSsaiTelemetry(hls, sink, cdnBaseUrl);
-      } else {
-        attachSgaiTelemetry(hls, sink, media);
-      }
+      attachSsaiTelemetry(hls, sink, cdnBaseUrl);
       hls.loadSource(src);
       hls.attachMedia(media);
       return hls;
@@ -76,7 +70,7 @@ export function HlsPlayer({ src, mode, cdnBaseUrl, label, onEvent }: HlsPlayerPr
       sink.adState({ kind: "content" });
       sink.event("warning", `Retry ${attempt}`, `${describeError(error)}: reloading in ${delayMs / 1000} s`);
     });
-  }, [src, mode, cdnBaseUrl]);
+  }, [src, cdnBaseUrl]);
 
   return (
     <div className={styles.player}>
@@ -94,11 +88,5 @@ function AdBadge({ state }: { state: AdState }) {
       return <Badge color="grey">Content</Badge>;
     case "stitched":
       return <Badge color="red">Ad · stitched</Badge>;
-    case "guided":
-      return (
-        <Badge color="blue">
-          Ad {state.asset} of {state.of} · guided
-        </Badge>
-      );
   }
 }

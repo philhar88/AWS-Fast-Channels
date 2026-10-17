@@ -9,10 +9,12 @@ Every kind:
 * duration and, for content, the break offsets: the segment boundaries every variant shares or, when the request had
   cue points, those of them that are such boundaries.
 
-Ads additionally get an SGAI-ready copy of their playlists under ``ads/<ladder>/<creative id>/``: MediaTailor
-re-hosts only the manifests of preconditioned ads, so media playlists need absolute segment URIs on the content host
-while the multivariant's child URIs stay relative (e2e.md §5.4-5.5). Segments are not copied, and the creative id
-embeds the host, so a new host gets a new directory instead of rewriting manifests MediaTailor has cached
+Ads additionally get a copy of their playlists under ``ads/<ladder>/<creative id>/``, which the VAST pod lists:
+MediaTailor fetches the creative through the CDN, and the CDN never serves an encode's own manifests (``assets/*.m3u8``
+are denied, so viewers cannot skip MediaTailor). The copied media playlists point at the original segments under
+``assets/`` with absolute URIs on the CDN, which MediaTailor stitches into SSAI sessions through ``/v1/segment``
+redirects; the multivariant's child URIs stay relative (e2e.md §5.4-5.5). Segments are not copied, and the creative
+id embeds the host, so a new host gets a new directory instead of rewriting manifests MediaTailor has cached
 (_review.md, FinalizeAd).
 """
 
@@ -47,6 +49,11 @@ if TYPE_CHECKING:
 
 HLS: Final = profile("hls")
 """The profile of the encode's one multivariant playlist (``main.m3u8``)."""
+CUE_POINT_TOLERANCE_MS: Final = 100
+"""How far a cue point may be from the shared segment boundary it maps to: Channel Assembly's rule that an ad break's
+``OffsetMillis`` be within 100 ms of a segment boundary (API reference; channel-assembly.md §5.3 saw farther offsets
+moved to the nearest boundary, seconds away from the editorial point). With ESAM the boundary sits at the cue
+point's frame, a millisecond or so off once the EXTINF values are summed."""
 
 logger = Logger()
 
@@ -57,11 +64,13 @@ class InvalidOutputsError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class Creative:
-    """The SGAI-ready copy of an ad encode."""
+    """The manifest copy of an ad encode, as the VAST pod lists it (``core.specs.Creative``)."""
 
     creative_id: str
     ad_prefix: str
+    """Media-bucket prefix of the copy, ``ads/<ladder>/<creative id>/``."""
     hls_uri: str
+    """CDN URL of the copy's multivariant playlist."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +140,7 @@ def finalize(
         rewritten=rewritten,
     )
     if kind is AssetKind.AD:
-        return replace(result, creative=sgai_copy(store, encode, asset["asset_id"], content_base_url))
+        return replace(result, creative=ad_copy(store, encode, asset["asset_id"], content_base_url))
     registration = {
         "asset_id": asset["asset_id"],
         "ladder_version": ladder.version,
@@ -159,7 +168,7 @@ def read_encode(store: Store, ladder: Ladder, prefix: str) -> Encode:
 def normalize(store: Store, encode: Encode) -> list[str]:
     """Nominal bandwidths in the multivariant playlist; returns the keys rewritten.
 
-    ``encode`` is updated in place so the SGAI copy sees the rewritten text.
+    ``encode`` is updated in place so an ad's manifest copy gets the rewritten text.
     """
     fixed = normalize_bandwidth(encode.main, nominal_bandwidths(encode.ladder, encode.main))
     if fixed == encode.main:
@@ -172,26 +181,26 @@ def break_offsets(encode: Encode, cue_points_ms: Iterable[int]) -> list[int]:
     """Valid ad-break offsets: the segment boundaries every variant shares (``encode_timeline``), restricted to the
     cue points if any.
 
-    Prepare snapped the cue points to the segment grid; each maps to the nearest shared boundary within half a GOP,
-    and points without one are dropped with a warning.
+    Prepare snapped the cue points to frames, and ESAM split every variant at those between segment boundaries. Each
+    maps to the nearest shared boundary within :data:`CUE_POINT_TOLERANCE_MS`; points without one are dropped with a
+    warning.
     """
     boundaries = timeline(encode.main, encode.media.__getitem__).boundaries_ms
     cue_points = sorted(set(cue_points_ms))
     if not cue_points:
         return boundaries
-    tolerance = encode.ladder.grid.gop_ms // 2
     offsets = set()
     for point in cue_points:
         nearest = min(boundaries, key=lambda b: abs(b - point), default=None)
-        if nearest is not None and abs(nearest - point) <= tolerance:
+        if nearest is not None and abs(nearest - point) <= CUE_POINT_TOLERANCE_MS:
             offsets.add(nearest)
         else:
             logger.warning("cue point is not a segment boundary of every variant; dropped", extra={"cue_ms": point})
     return sorted(offsets)
 
 
-def sgai_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str) -> Creative:
-    """Write the SGAI-ready playlists of an ad under ``ads/<ladder>/<creative id>/`` (see the module docstring)."""
+def ad_copy(store: Store, encode: Encode, asset_id: str, content_base_url: str) -> Creative:
+    """Write the manifest copy of an ad under ``ads/<ladder>/<creative id>/`` (see the module docstring)."""
     base = content_base_url.rstrip("/")
     creative = creative_id(asset_id, encode.ladder.version, content_base_url)
     ad_prefix = f"ads/{ladder_path(encode.ladder.version)}/{creative}/"

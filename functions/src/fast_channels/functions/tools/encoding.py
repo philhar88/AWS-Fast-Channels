@@ -74,7 +74,10 @@ class LadderSummary(BaseModel):
     description: str | None
     max_height: int | None
     renditions: int | None = Field(description="Number of video renditions.")
-    cost_per_minute_usd: float | None = Field(description="MediaConvert cost per content-minute (estimate).")
+    cost_per_minute_usd: float | None = Field(
+        description="MediaConvert cost per content-minute (Basic-tier estimate; cue points between segment boundaries "
+        "bill an ingest at the Professional tier, see library___ingest)."
+    )
     kit: KitSummary
 
 

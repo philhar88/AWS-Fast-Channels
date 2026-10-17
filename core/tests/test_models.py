@@ -76,7 +76,7 @@ def test_ingest_request() -> None:
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version="standard")
     with pytest.raises(ValidationError, match="Extra inputs"):  # no caption files or caption mode any more
         IngestRequest.model_validate({"source_uri": "s3://i/a.mp4", "ladder_version": LV, "captions": {"mode": "auto"}})
-    assert "segment grid" in (IngestRequest.model_fields["cue_points_ms"].description or "")
+    assert "nearest frame" in (IngestRequest.model_fields["cue_points_ms"].description or "")
     with pytest.raises(ValidationError):
         GeneratorInput(image_s3_uri="s3://kit/slate.jpg", duration_gops=1, label="x")
 

@@ -49,19 +49,21 @@ def main() -> None:
         edge_attr=EDGE,
     ):
         content_owner = Users("Content owner\n/ CMS")
-        viewers = Users("Viewers\n(SSAI / SGAI players)")
+        viewers = Users("Viewers\n(HLS players)")
         operators = Users("Operators")
 
         with Cluster("Ingest & encoding"):
             ingest_bucket = S3("Ingest bucket")
             pipeline = StepFunctions("Ingest pipeline\n(probe → encode →\nfinalize → register)")
-            mediaconvert = ElementalMediaconvert("MediaConvert\none HLS encode\nMPEG-TS: AVC + AAC muxed\n(Basic tier)")
+            mediaconvert = ElementalMediaconvert(
+                "MediaConvert\none HLS encode\nMPEG-TS: AVC + AAC muxed\n(Basic tier; Professional\nwith ESAM cues)"
+            )
             media_bucket = S3("Media bucket\n(HLS playlists,\nTS segments)")
             library = Dynamodb("Media library\n(assets, ladders,\nchannels, EPG)")
 
         with Cluster("Linear channels"):
             channel_assembly = ElementalMediatailor("MediaTailor\nChannel Assembly\n(LINEAR, S3 SigV4 origin)")
-            ad_insertion = ElementalMediatailor("MediaTailor\nad insertion\nSSAI + SGAI")
+            ad_insertion = ElementalMediatailor("MediaTailor\nad insertion\nSSAI (stitched)")
 
         with Cluster("Delivery"):
             cdn = CloudFront("CloudFront\n(OAC, ordered\nMediaTailor behaviours)")

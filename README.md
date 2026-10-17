@@ -6,10 +6,9 @@ FAST Channels on AWS is a reference architecture for free ad-supported streaming
 from video-on-demand files, monetised with ad insertion and delivered through a CDN, with no live encoder. Mezzanines
 are encoded once by AWS Elemental MediaConvert into plain HLS: MPEG-TS segments with H.264 video and AAC audio muxed
 into every variant, on MediaConvert's Basic tier. AWS Elemental MediaTailor Channel Assembly plays them as 24/7
-schedules, MediaTailor inserts ads server-side (SSAI) or server-guided (SGAI), and
-Amazon CloudFront delivers it all. Operators build and run the schedules by talking to a scheduling agent on Amazon
-Bedrock AgentCore, whose tools do every calculation and whose actions are authorised by Cedar policies and approved by
-a person. Everything deploys from one AWS CDK (Python) app.
+schedules, MediaTailor inserts ads server-side (SSAI), and Amazon CloudFront delivers it all. Operators build and run
+the schedules by talking to a scheduling agent on Amazon Bedrock AgentCore, whose tools do every calculation and whose
+actions are authorised by Cedar policies and approved by a person. Everything deploys from one AWS CDK (Python) app.
 
 ![FAST Channels on AWS architecture](docs/images/architecture.png)
 
@@ -23,16 +22,19 @@ a person. Everything deploys from one AWS CDK (Python) app.
 - **Plain HLS for under $0.04 per content minute.** A validated, fingerprinted ladder (`standard`: H.264 at 720p,
   1080p and 360p with AAC muxed into MPEG-TS segments) compiles to a MediaConvert job template that stays on the Basic
   tier. Channel Assembly reads each encode's own multivariant playlist, with nominal `BANDWIDTH` and frame-exact GOPs
-  and 6 s segments; editorial cue points snap to the segment grid. See [docs/encoding.md](docs/encoding.md).
-- **Channel Assembly → MediaTailor SSAI and SGAI → CloudFront with OAC.** LINEAR channels read the private media bucket
-  with SigV4; a channel policy admits only the channel's own playback configuration; one `PLAYER_SELECT` configuration
-  serves stitched and HLS Interstitials sessions; CloudFront reaches S3 through origin access control and routes
+  and 6 s segments. See [docs/encoding.md](docs/encoding.md).
+- **Frame-accurate ad cues.** Editorial cue points snap to the nearest frame. A cue point between segment boundaries
+  adds ESAM to that title's job, which splits every variant at that frame and bills the job on MediaConvert's
+  Professional tier (about $0.06 per content minute); cue points on the segment grid cost nothing extra. See
+  [docs/encoding.md](docs/encoding.md#cue-points-and-esam).
+- **Channel Assembly → MediaTailor SSAI → CloudFront with OAC.** LINEAR channels read the private media bucket with
+  SigV4; a channel policy admits only the channel's own playback configuration, which stitches ads into a
+  personalised manifest per session (`STITCHED_ONLY`); CloudFront reaches S3 through origin access control and routes
   MediaTailor paths in a verified behaviour order that is also published as a CDN-neutral path contract. See
   [docs/channel-assembly.md](docs/channel-assembly.md) and [docs/delivery-and-multi-cdn.md](docs/delivery-and-multi-cdn.md).
-- **Preconditioned ads, SSAI first.** House ads are encoded on each channel's own ladder and served from a static
+- **Preconditioned ads, server-side.** House ads are encoded on each channel's own ladder and served from a static
   VAST 4.2 pod, so MediaTailor never transcodes them and every variant fills exactly. SSAI works with every HLS
-  player; SGAI (HLS Interstitials) comes from the same playback configuration. Bring your own ad server with
-  `ads.mode: external_vast`. See [docs/ad-insertion.md](docs/ad-insertion.md).
+  player. Bring your own ad server with `ads.mode: external_vast`. See [docs/ad-insertion.md](docs/ad-insertion.md).
 - **Traceability.** Every service logs to CloudWatch with retention; one correlation id threads an upload through Step
   Functions, MediaConvert, Channel Assembly, the ad decision request and the CDN logs. `make trace ID=<id>` prints the
   timeline; a dashboard, alarms and saved queries come with the deployment. See
@@ -43,12 +45,12 @@ a person. Everything deploys from one AWS CDK (Python) app.
 ## The operator console
 
 Operators work with the agent in a Cognito-protected console. The agent plans in tools, shows the plan and asks
-before anything changes on air; the channel view plays the same channel through SSAI and SGAI side by side, with ad
-and interstitial events and the program guide.
+before anything changes on air; the channel view plays the channel in an SSAI player, with its ad events and the
+program guide.
 
 ![Scheduling assistant asking for approval to publish a plan](docs/images/console-assistant.png)
 
-![Channel view: SSAI and SGAI players, ad events and the program guide](docs/images/console-channel.jpg)
+![Channel view: the SSAI player, ad events and the program guide](docs/images/console-channel.jpg)
 
 ## Prerequisites
 
@@ -104,7 +106,8 @@ and interstitial events and the program guide.
    ```
 
 5. **Load sample content.** `make seed` loads four open-licensed titles (about 39 minutes of video) into the
-   reference catalog and the media library. It first shows the encode estimate (about $1.50) and asks you to confirm.
+   reference catalog and the media library. It first shows the encode estimate (about $2.30: the three films' cue
+   points need ESAM, so they encode on the Professional tier) and asks you to confirm.
    The Blender Foundation's servers refuse MediaConvert's own HTTPS fetcher, so the script streams each file (about
    1.6 GB in all) through your machine into the ingest bucket as `samples/<content id>.<ext>`, after a JSON sidecar
    with its catalog id, cue points and correlation id. That upload starts the ingest, exactly as a CMS dropping files
@@ -124,8 +127,8 @@ and interstitial events and the program guide.
 7. **Start the channel.** Every program airs at its planned time; a channel started after a program's start skips
    the programs it missed (the agent lists them, and the guide marks them `SKIPPED`) and airs the rest on time. Ask
    *"Start fast-demo"* (and approve), or use **Start** in the Channels view. A BASIC channel costs $0.10 per running
-   hour and stops automatically after four hours. The Channels view plays an SSAI and an SGAI session side by side,
-   with the ad and beacon events of each.
+   hour and stops automatically after four hours. The Channels view plays the channel in an SSAI player, with its ad
+   events.
 
 `make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`); see
 [docs/operations.md](docs/operations.md) for configuration and day-two operations.
@@ -137,6 +140,7 @@ us-east-1 list prices; see [docs/operations.md](docs/operations.md#costs) for ev
 | Item | Price |
 |---|---|
 | Encoding with the `standard` ladder (AVC + AAC to 1080p, MediaConvert Basic tier) | about $0.0375 per content minute ($2.25 per content hour) |
+| The same, for a title with cue points between segment boundaries (ESAM, Professional tier) | about $0.06 per content minute ($3.60 per content hour) |
 | Ladder kit (slates and house ads), once per ladder version | about $0.25 |
 | Channel Assembly, per running channel-hour | $0.10 BASIC, $0.35 STANDARD |
 | MediaTailor ad insertion | $0.25 (VOD rate) or $0.50 (live rate) per 1,000 ads |
@@ -238,9 +242,9 @@ are never deleted automatically. Details in [docs/operations.md](docs/operations
 | Document | Contents |
 |---|---|
 | [Architecture](docs/architecture.md) | Planes, stacks and outputs, ownership rule, ingest, scheduling and playback flows, construct catalogue, data model |
-| [Encoding](docs/encoding.md) | Ladder model, the standard ladder, MediaConvert settings, the HLS output, frame rates, cue points, kits, cost, custom ladders |
+| [Encoding](docs/encoding.md) | Ladder model, the standard ladder, MediaConvert settings, the HLS output, frame rates, cue points and ESAM, kits, cost, custom ladders |
 | [Channel Assembly](docs/channel-assembly.md) | SigV4 origin, source groups, channels and tiers, slates, programs, EPG, quotas, bring-your-own content |
-| [Ad insertion](docs/ad-insertion.md) | SSAI and SGAI, playback configuration, preconditioned ads, external VAST, ADS variables, beaconing |
+| [Ad insertion](docs/ad-insertion.md) | SSAI sessions, playback configuration, preconditioned ads, external VAST, ADS variables, beaconing |
 | [Delivery and multi-CDN](docs/delivery-and-multi-cdn.md) | CloudFront behaviours, OAC, path contract, content domain, multi-CDN, capacity |
 | [The scheduling agent](docs/agent.md) | AgentCore usage, tool reference, Cedar, approvals, autopilot, AG-UI, models, memory |
 | [Integrate your CMS](docs/integrate-your-cms.md) | Catalog contract, OpenAPI Gateway target, ingest contract, events |

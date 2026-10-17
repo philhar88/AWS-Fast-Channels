@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ingest import IngestRequest, asset_id_for
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.mediaconvert import build_job_overrides
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools import library
@@ -215,9 +216,43 @@ def test_ingest_starts_the_pipeline_named_after_the_session(ddb: Stubber, s3: St
         "execution_name": name,
         "execution_arn": f"arn:aws:states:us-east-1:123456789012:execution:fast-ingest:{name}",
         "started_at": "2026-10-16T12:00:01.000Z",
-        "cost_per_minute_usd": encode_cost_per_minute(STANDARD),
-        "estimated_cost_usd": encode_cost(STANDARD, 596_462),
+        # 300 s is between boundaries of the 6.006 s segment grid: ESAM splits there, at the Professional tier.
+        "pricing_tier": "PROFESSIONAL",
+        "cost_per_minute_usd": encode_cost_per_minute(STANDARD, professional=True),
+        "estimated_cost_usd": encode_cost(STANDARD, 596_462, professional=True),
     }
+
+
+@pytest.mark.parametrize(
+    ("cue_points", "tier"),
+    [([6006, 300_310], "BASIC"), ([6006, 13_480], "PROFESSIONAL")],
+    ids=["segment-boundaries", "one-between-boundaries"],
+)
+def test_ingest_prices_esam_as_the_pipeline_will(ddb: Stubber, sfn: Stubber, cue_points: list[int], tier: str) -> None:
+    source = "https://cdn.example.com/film.mp4"
+    ladder(ddb)
+    get(ddb, store.asset_key(asset_id_for(source), STANDARD.version), None)
+    sfn.add_response(
+        "start_execution",
+        {"executionArn": library.execution_arn(MACHINE, f"session-1-{asset_id_for(source)}"), "startDate": STARTED},
+        {"stateMachineArn": MACHINE, "name": f"session-1-{asset_id_for(source)}", "input": ANY},
+    )
+    request = library.IngestInput(source_uri=source, cue_points_ms=cue_points, duration_ms=60_000)
+
+    result = library.ingest(request, CTX)
+
+    professional = build_job_overrides(
+        ladder=STANDARD,
+        media_bucket="media",
+        asset_id="film",
+        source_uri=source,
+        generator=None,
+        cue_points_ms=cue_points,
+        correlation_id="run",
+        app="fast",
+    ).professional
+    assert result.pricing_tier == tier == ("PROFESSIONAL" if professional else "BASIC")
+    assert result.estimated_cost_usd == encode_cost(STANDARD, 60_000, professional=professional)
 
 
 def test_ingest_retries_failed_assets_and_skips_the_s3_check_for_https(ddb: Stubber, sfn: Stubber) -> None:
@@ -232,6 +267,7 @@ def test_ingest_retries_failed_assets_and_skips_the_s3_check_for_https(ddb: Stub
     )
     result = library.ingest(library.IngestInput(source_uri=source, kind="ad"), CTX)
     assert result.kind == "ad" and result.estimated_cost_usd is None
+    assert (result.pricing_tier, result.cost_per_minute_usd) == ("BASIC", encode_cost_per_minute(STANDARD))
 
 
 @pytest.mark.parametrize(

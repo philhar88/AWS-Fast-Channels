@@ -2,8 +2,9 @@
 
 - :class:`ChannelAssemblyOrigin` (``origin``): the media bucket as an ``S3_SIGV4`` source location.
 - :class:`MediaTailorLogs` (``ad_insertion``): one vended-logs destination shared by every playback configuration.
-- :class:`AdInsertion` (``ad_insertion``): a playback configuration (SSAI and SGAI) with its three vended-log
-  deliveries; :func:`playback_configuration_template` is what agent-created channels reuse (``MediaExports``).
+- :class:`AdInsertion` (``ad_insertion``): a playback configuration (SSAI only, ``STITCHED_ONLY``) with its three
+  vended-log deliveries; :func:`playback_configuration_template` is what agent-created channels reuse
+  (``MediaExports``).
 - :class:`LinearChannel` (``channel``): an IaC channel with its own ``AdInsertion``, SigV4-only channel policy and
   lifecycle.
 - :class:`AsRunLogging` (``as_run``): retention on the account's as-run log and an ``AIRED`` reconciler for the EPG.

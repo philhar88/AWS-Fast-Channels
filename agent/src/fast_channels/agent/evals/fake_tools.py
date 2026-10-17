@@ -139,9 +139,7 @@ class FakeScheduleTools:
             "outputs": ["hls"],
             "tier": "BASIC",
             "playback_configuration": channel,
-            "playback": {
-                "hls": {"ssai": f"{playback}/hls.m3u8", "sgai": f"{playback}/hls.m3u8?aws.insertionMode=GUIDED"},
-            },
+            "playback": {"hls": f"{playback}/hls.m3u8"},
         }
 
     def get_brief(self, channel: str) -> Payload:

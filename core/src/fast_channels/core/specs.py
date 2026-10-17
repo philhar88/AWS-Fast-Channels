@@ -65,8 +65,8 @@ ADS_VARIABLES: Final[frozenset[str]] = frozenset(
 
 
 def channel_outputs(profiles: Sequence[RenditionProfile]) -> list[dict[str, Any]]:
-    """Channel ``Outputs``: one HLS output per profile, ManifestName = SourceGroup = profile name, DATERANGE markup
-    (SGAI needs it)."""
+    """Channel ``Outputs``: one HLS output per profile, ManifestName = SourceGroup = profile name, ad markers as
+    ``EXT-X-DATERANGE`` (the markup Channel Assembly writes for live HLS; MediaTailor inserts ads there)."""
     return [
         {"ManifestName": p.name, "SourceGroup": p.name, "HlsPlaylistSettings": deepcopy(_HLS_SETTINGS)}
         for p in profiles
@@ -186,7 +186,7 @@ def playback_configuration(
 ) -> dict[str, Any]:
     """Playback configuration in API shape (``GetPlaybackConfiguration`` fields, including ``LogConfiguration``).
 
-    PLAYER_SELECT serves SSAI and SGAI from one config; ``AdConditioning NONE`` stitches ads preconditioned on the
+    ``STITCHED_ONLY``: server-side ad insertion only. ``AdConditioning NONE`` stitches ads preconditioned on the
     channel ladder (the only exact result in e2e.md §4.1). No SlateAdUrl: MediaTailor would transcode it, and an
     unfilled avail shows the Channel Assembly slate, which is already on the ladder. Use
     :func:`playback_configuration_requests` to call the API.
@@ -197,7 +197,7 @@ def playback_configuration(
         "Name": name,
         "VideoContentSourceUrl": video_content_source_url,
         "AdDecisionServerUrl": validate_ads_url(ads_url),
-        "InsertionMode": "PLAYER_SELECT",
+        "InsertionMode": "STITCHED_ONLY",
         "CdnConfiguration": {"AdSegmentUrlPrefix": content_base_url, "ContentSegmentUrlPrefix": content_base_url},
         "AdConditioningConfiguration": {"StreamingMediaFileConditioning": "NONE"},
         "PersonalizationThresholdSeconds": 5,
@@ -277,7 +277,10 @@ class Creative(BaseModel):
 
     creative_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     duration_ms: int = Field(gt=0)
-    hls_uri: str = Field(description="Absolute multivariant of the SGAI-ready (absolute segment URI) copy.")
+    hls_uri: str = Field(
+        description="Absolute URL on the CDN of the creative's multivariant copy under ads/ (the CDN does not serve "
+        "assets/*.m3u8); its media playlists carry absolute segment URIs."
+    )
     width: int = 1920
     height: int = 1080
 
@@ -338,15 +341,11 @@ def vast_pod(
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<VAST version="4.2" xmlns="http://www.iab.com/VAST">{ads}</VAST>\n'
 
 
-def playback_urls(*, cdn_base: str, playback_prefix_hls: str, outputs: Sequence[str]) -> dict[str, dict[str, str]]:
-    """Viewer URLs per channel output, through the CDN: ``ssai`` and ``sgai`` (``?aws.insertionMode=GUIDED``).
+def playback_urls(*, cdn_base: str, playback_prefix_hls: str, outputs: Sequence[str]) -> dict[str, str]:
+    """Viewer URL (SSAI) per channel output, through the CDN.
 
     ``playback_prefix_hls`` is the playback configuration's HLS ``ManifestEndpointPrefix``.
     """
     cdn = cdn_base.rstrip("/")
     hls_path = urlsplit(playback_prefix_hls).path.rstrip("/")
-    urls: dict[str, dict[str, str]] = {}
-    for output in outputs:
-        ssai = f"{cdn}{hls_path}/{output}.m3u8"
-        urls[output] = {"ssai": ssai, "sgai": f"{ssai}?aws.insertionMode=GUIDED"}
-    return urls
+    return {output: f"{cdn}{hls_path}/{output}.m3u8" for output in outputs}

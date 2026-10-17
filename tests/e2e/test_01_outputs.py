@@ -31,3 +31,7 @@ def test_stack_outputs_well_formed(stage: Stage) -> None:
     for channel in channels:
         assert {"name", "ladderVersion", "outputs", "playback"} <= channel.keys(), channel
         assert set(channel["playback"]) == set(channel["outputs"]), channel
+        # One SSAI viewer URL per output (core.specs.playback_urls), through the CDN.
+        cdn = urls["CdnBaseUrl"].rstrip("/")
+        for output, url in channel["playback"].items():
+            assert isinstance(url, str) and url.startswith(cdn) and url.endswith(f"/{output}.m3u8"), channel

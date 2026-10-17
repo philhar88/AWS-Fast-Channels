@@ -36,6 +36,7 @@ from boto3.s3.transfer import TransferConfig
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
 from fast_channels.core.ingest import IngestRequest
+from fast_channels.core.mediaconvert import needs_esam
 from fast_channels.core.naming import slug
 from fast_channels.functions.aws import execution_arn
 from fast_channels.functions.tools.catalog import catalog_item
@@ -178,7 +179,8 @@ def print_plan(titles: list[Title], ladder: Ladder) -> float:
     total = 0.0
     for title in titles:
         duration_ms = title.content.duration_ms
-        cost = encode_cost(ladder, duration_ms) if duration_ms else None
+        professional = needs_esam(ladder, title.request.cue_points_ms)  # off-grid cue points add ESAM
+        cost = encode_cost(ladder, duration_ms, professional=professional) if duration_ms else None
         if title.needs_ingest and cost is not None:
             total += cost
         status = title.status or "-"

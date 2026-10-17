@@ -59,7 +59,6 @@ describe("isRetryable", () => {
     ["a fatal playlist timeout", { details: ErrorDetails.LEVEL_LOAD_TIMEOUT, response: undefined }, true],
     ["an error hls.js still retries itself", { fatal: false }, false],
     ["a fatal media error", { type: ErrorTypes.MEDIA_ERROR, details: ErrorDetails.BUFFER_APPEND_ERROR }, false],
-    ["a non-fatal asset list error", { details: ErrorDetails.ASSET_LIST_LOAD_ERROR, fatal: false }, false],
   ])("%s: %s", (_case, fields, expected) => {
     expect(isRetryable(error(fields))).toBe(expected);
   });

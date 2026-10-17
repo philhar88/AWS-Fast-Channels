@@ -57,8 +57,8 @@ class ChannelExports:
     hls_prefix: str
     """``HlsConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
 
-    def playback(self, cdn_base_url: str) -> dict[str, dict[str, str]]:
-        """Viewer URLs per output through the CDN at ``cdn_base_url`` (``core.specs.playback_urls``).
+    def playback(self, cdn_base_url: str) -> dict[str, str]:
+        """Viewer (SSAI) URL per output through the CDN at ``cdn_base_url`` (``core.specs.playback_urls``).
 
         The prefix is a CloudFormation attribute: its path is cut out with ``Fn::Split``, so the core builder
         still composes the URLs.
@@ -95,7 +95,7 @@ class MediaExports:
     """Vended-logs delivery destination that agent-created playback configurations deliver to."""
 
 
-def channel_playback(cdn_base_url: str, channel: ChannelExports) -> dict[str, dict[str, str]]:
+def channel_playback(cdn_base_url: str, channel: ChannelExports) -> dict[str, str]:
     """:meth:`ChannelExports.playback` as a function (kept for v3.0 imports)."""
     return channel.playback(cdn_base_url)
 

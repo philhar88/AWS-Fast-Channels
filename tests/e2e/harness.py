@@ -12,21 +12,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
-from urllib.parse import urljoin
 
 import agui
 import httpx
-from playback import (
-    Segment,
-    Window,
-    ad_seconds,
-    asset_list,
-    defines,
-    interstitials,
-    media_segments,
-    renditions,
-    substitute,
-)
+from playback import Segment, Splice, Window, ad_seconds, media_segments, renditions, splices
 
 from fast_channels.functions.tools.registry import CORRELATION_FIELD, SEPARATOR
 
@@ -36,9 +25,13 @@ ASSET_ID: Final = f"{CONTENT_ID}-{datetime.now(UTC):%Y%m%d%H%M%S}"
 """A new asset per run: the pipeline refuses to re-encode a READY asset in place (its VOD source serves that media)."""
 PATTERN_SECONDS: Final = 70
 CUE_POINT_MS: Final = 32_000
-"""Off the segment grid on purpose: it snaps to the boundary after segment 5, 30030 ms at 29.97 fps
-(``Grid.snap_to_segment``). The Basic tier has no ESAM to cut a segment at the cue point itself, so the segment grid
-(6006 ms) is the only set of boundaries every variant shares."""
+"""Off the segment grid and off the frame grid on purpose. It snaps to the nearest frame (``Grid.snap_to_frame``:
+frame 959 at 29.97 fps, 31999 ms), between the segment boundaries at 30030 and 36036 ms, so the encode carries ESAM:
+every variant is split at that frame (a segment of 59 frames, about 1.97 s, ends there) and the job is billed at the
+Professional tier. The tests compute the snapped value from the ladder's grid."""
+CUE_TOLERANCE_MS: Final = 1
+"""Segment boundaries are cumulative EXTINFs (three decimals) rounded to the ms; a frame-snapped cue point is the
+frame start rounded to the ms. The two may differ by one ms."""
 PROGRAMS: Final = 3
 LEAD: Final = timedelta(minutes=2, seconds=30)
 """From planning to the first program: publishing and starting the channel fit in it."""
@@ -104,18 +97,18 @@ class Channel:
     name: str
     ladder_version: str
     outputs: tuple[str, ...]
-    playback: Mapping[str, Mapping[str, str]]
-    """Viewer URLs per output: ``ssai`` and ``sgai`` (HLS Interstitials)."""
+    playback: Mapping[str, str]
+    """Viewer URL (SSAI) per output (``core.specs.playback_urls``)."""
 
     @classmethod
     def of(cls, entry: Mapping[str, Any]) -> Channel:
         return cls(entry["name"], entry["ladderVersion"], tuple(entry["outputs"]), entry["playback"])
 
-    def url(self, mode: str, output: str = "hls") -> str:
-        """The ``mode`` (``ssai`` or ``sgai``) viewer URL of ``output``."""
-        if url := self.playback.get(output, {}).get(mode):
+    def url(self, output: str = "hls") -> str:
+        """The viewer URL of ``output``."""
+        if isinstance(url := self.playback.get(output), str) and url:
             return url
-        raise AssertionError(f"channel {self.name} has no {mode} playback URL for {output}: {dict(self.playback)}")
+        raise AssertionError(f"channel {self.name} has no playback URL for {output}: {dict(self.playback)}")
 
 
 # --- tools ---------------------------------------------------------------------------------------------------------
@@ -207,7 +200,7 @@ class Player:
 
 @dataclass
 class Observation:
-    """What one SSAI and one SGAI (HLS Interstitials) session saw while the scheduled breaks aired."""
+    """What one SSAI session saw, in every variant, while the scheduled breaks aired."""
 
     breaks: list[Window]
     house_ads: frozenset[str] = frozenset()
@@ -215,13 +208,8 @@ class Observation:
     ssai_multivariant: str = ""
     ssai: dict[str, dict[str, Segment]] = field(default_factory=dict)
     """Every distinct segment per variant (keyed like ``playback.renditions``: ``1280x720``, ...), by URI."""
-    interstitials: dict[str, dict[str, str]] = field(default_factory=dict)
-    assets: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    """Asset list per interstitial id (fetched once, when the DATERANGE first appears)."""
-    ad_playlists: dict[str, int] = field(default_factory=dict)
-    """HTTP status of the first asset of each filled asset list (the SGAI ad playlist on the CDN)."""
-    ad_multivariants: dict[str, str] = field(default_factory=dict)
-    """The first asset of each filled asset list, as MediaTailor re-hosts it (its variants)."""
+    splices: dict[str, dict[str, Splice]] = field(default_factory=dict)
+    """Every ad marker per variant, by DATERANGE ID, with the segments around it (the first complete sighting)."""
     errors: list[str] = field(default_factory=list)
 
     def ssai_ad_seconds(self, variant: str) -> list[float]:
@@ -234,54 +222,49 @@ class Observation:
         return any(seconds > 0 for seconds in self.ssai_ad_seconds(variant)[1:])
 
     @property
-    def sgai_filled(self) -> bool:
-        return any(self.assets.values())
-
-    @property
     def complete(self) -> bool:
-        return bool(self.ssai) and all(self.ssai_filled(variant) for variant in self.ssai) and self.sgai_filled
+        return bool(self.ssai) and all(self.ssai_filled(variant) for variant in self.ssai)
+
+    def record(self, variant: str, text: str, url: str) -> None:
+        """Add what one read of a variant's media playlist showed."""
+        self.ssai.setdefault(variant, {}).update((s.uri, s) for s in media_segments(text, url))
+        markers = self.splices.setdefault(variant, {})
+        for splice in splices(text, url):
+            if splice.id not in markers or not markers[splice.id].complete:
+                markers[splice.id] = splice
 
     def report(self) -> str:
-        """Per-break ad seconds of every SSAI variant, SGAI asset counts and errors."""
+        """Per-break ad seconds and ad-marker times of every variant, and errors."""
         ssai = "; ".join(f"{v} {self.ssai_ad_seconds(v)}" for v in self.ssai)
-        sgai = {interstitial: len(assets) for interstitial, assets in self.assets.items()}
+        markers = "; ".join(
+            f"{v} {[f'{s.starts:%H:%M:%S.%f}'[:-3] for s in found.values()]}" for v, found in self.splices.items()
+        )
         return (
             f"breaks at {[f'{w.starts:%H:%M:%S}' for w in self.breaks]}; SSAI ad seconds per break: {ssai}; "
-            f"SGAI interstitials {sorted(self.interstitials)} with assets {sgai}; errors {self.errors[:5]}"
+            f"ad markers: {markers}; errors {self.errors[:5]}"
         )
 
 
 def watch(
     player: Player,
     *,
-    ssai_url: str,
-    sgai_url: str,
+    url: str,
     breaks: list[Window],
     ends: datetime,
     house_ads: Collection[str] = (),
 ) -> Observation:
-    """Play one session of each kind until every break was seen filled, or until ``ends``: every SSAI variant, and
-    the first SGAI variant (its interstitials are the same in every variant).
+    """Play an SSAI session in every variant until every variant was seen with ads, or until ``ends``.
 
-    Errors are recorded, not raised, so one bad response does not hide what the other session saw.
+    Errors are recorded, not raised, so one bad response does not hide what the other variants showed.
     """
     seen = Observation(breaks, frozenset(house_ads))
-    ssai = player.get(ssai_url)
-    seen.ssai_multivariant = ssai.text
-    ssai_media = renditions(ssai.text, str(ssai.url))
-    sgai = player.get(sgai_url)
-    sgai_media = next(iter(renditions(sgai.text, str(sgai.url)).values()))
-    variables = defines(sgai.text)
+    multivariant = player.get(url)
+    seen.ssai_multivariant = multivariant.text
+    media = renditions(multivariant.text, str(multivariant.url))
     while True:
-        for variant, url in ssai_media.items():
-            if (text := _text(player, url, seen)) is not None:
-                seen.ssai.setdefault(variant, {}).update((s.uri, s) for s in media_segments(text, url))
-        if (text := _text(player, sgai_media, seen)) is not None:
-            for daterange, attributes in interstitials(text).items():
-                if daterange not in seen.interstitials:
-                    seen.interstitials[daterange] = attributes
-                    assets = urljoin(sgai_media, substitute(attributes.get("X-ASSET-LIST", ""), variables))
-                    _fetch_assets(player, seen, daterange, assets)
+        for variant, playlist in media.items():
+            if (text := _text(player, playlist, seen)) is not None:
+                seen.record(variant, text, playlist)
         if seen.complete or datetime.now(UTC) >= ends:
             return seen
         time.sleep(POLL_SECONDS)
@@ -293,23 +276,6 @@ def _text(player: Player, url: str, seen: Observation) -> str | None:
     except (AssertionError, httpx.HTTPError, TransientResponseError) as error:
         seen.errors.append(str(error))
         return None
-
-
-def _fetch_assets(player: Player, seen: Observation, daterange: str, url: str) -> None:
-    """Read an interstitial's asset list, and the first ad's media playlist through the CDN."""
-    if (text := _text(player, url, seen)) is None:
-        return
-    seen.assets[daterange] = assets = asset_list(text)
-    if assets:
-        uri = assets[0]["URI"]
-        try:
-            response = player.client.get(uri)
-        except httpx.HTTPError as error:
-            seen.errors.append(f"GET {uri}: {error!r}")
-            return
-        seen.ad_playlists[uri] = response.status_code
-        if response.is_success:
-            seen.ad_multivariants[uri] = response.text
 
 
 # --- agent ---------------------------------------------------------------------------------------------------------
