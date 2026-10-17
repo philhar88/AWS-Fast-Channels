@@ -106,7 +106,7 @@
     },
     "cue_points_ms": {
       "default": [],
-      "description": "Editorial ad cue points (ms); snapped to the segment grid.",
+      "description": "Editorial ad cue points (ms); snapped to the nearest frame (ESAM between segment boundaries).",
       "items": {
         "type": "integer"
       },

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from itertools import accumulate
 from typing import TYPE_CHECKING, Final
-from urllib.parse import urljoin
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
@@ -158,19 +157,6 @@ def nominal_bandwidths(ladder: Ladder, multivariant: str) -> dict[str, tuple[int
         if rendition := by_modifier.get(f"_{stem.rsplit('_', 1)[-1]}"):
             nominal[variant.uri] = ladder.nominal_bandwidth(rendition)
     return nominal
-
-
-def absolutize_media_playlist(text: str, base_url: str) -> str:
-    """Make segment URIs absolute against ``base_url`` (which should end with ``/``).
-
-    MediaTailor re-hosts only the manifests of preconditioned SGAI ads, so their segment URIs must be absolute
-    on our CDN (e2e.md §5.5); the multivariant's child URIs stay relative.
-    """
-
-    def rewrite(line: str) -> str:
-        return urljoin(base_url, line.strip()) if line.strip() and not line.startswith("#") else line
-
-    return "\n".join(rewrite(line) for line in text.splitlines()) + "\n"
 
 
 def _variant_findings(text: str) -> Iterator[str]:

@@ -1,10 +1,11 @@
 """MediaConvert settings compiled from a ladder: one Apple HLS group of MPEG-TS outputs, plus per-job overrides.
 
 Each output is one variant: an AVC rung with the AAC-LC track muxed into the same transport stream, so every variant
-shares every segment boundary and MediaConvert writes a plain multivariant playlist without audio groups. Every
-setting stays on the Basic pricing tier (AVC single-pass HQ with QVBR; no ESAM, ad markers, acceleration, audio
+shares every segment boundary and MediaConvert writes a plain multivariant playlist without audio groups. The
+template stays on the Basic pricing tier (AVC single-pass HQ with QVBR; no ad markers, acceleration, audio
 normalisation, captions or ID3). Frame rates are normalised to the ladder (``SPECIFIED`` + ``DUPLICATE_DROP``) so
-GOPs, segments and slates share one grid. Each job sends only sparse overrides (Inputs, Destination): CreateJob
+GOPs, segments and slates share one grid. Each job sends only sparse overrides (Inputs, Destination and, for
+editorial cue points between segment boundaries, ESAM, which makes that job Professional tier): CreateJob
 deep-merges them into the template (ARCHITECTURE-SPEC App. A).
 """
 
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from fast_channels.core.esam import build_esam
 from fast_channels.core.naming import ladder_path
 from fast_channels.core.tags import TAG_APP, TAG_LADDER
 
@@ -179,12 +181,17 @@ class GeneratorInput(BaseModel):
 
 
 class JobOverrides(BaseModel):
-    """Per-asset CreateJob parameters to send together with the ladder's JobTemplate."""
+    """Per-asset CreateJob parameters to send together with the ladder's JobTemplate.
+
+    ``professional`` says the job carries ESAM, a Professional-tier feature that bills every output of the job at that
+    tier.
+    """
 
     settings: dict[str, Any]
     user_metadata: dict[str, str]
     destination_prefix: str
     snapped_cue_points_ms: list[int]
+    professional: bool = False
 
 
 def output_prefix(asset_id: str, ladder_version: str) -> str:
@@ -229,16 +236,19 @@ def build_job_overrides(
     correlation_id: str,
     app: str,
 ) -> JobOverrides:
-    """Sparse job settings for one asset: its input and destination.
+    """Sparse job settings for one asset: its input, destination and, when needed, ESAM for its cue points.
 
-    Cue points are snapped to the segment grid, the only boundaries every variant shares on the Basic tier; the
-    snapped values are what Channel Assembly ad breaks must use.
+    Cue points are snapped to the nearest frame; the snapped values are what Channel Assembly ad breaks use. Points on
+    the natural segment grid are boundaries of every variant already. Any other point adds ESAM, which splits every
+    variant at that frame and makes the job Professional tier.
     """
     if (source_uri is None) == (generator is None):
         raise ValueError("exactly one of source_uri and generator is required")
     if generator is not None and cue_points_ms:
         raise ValueError("generated slates and house ads have no cue points")
-    snapped = sorted({ladder.grid.snap_to_segment(ms) for ms in cue_points_ms} - {0})
+    grid = ladder.grid
+    snapped = sorted({grid.snap_to_frame(ms) for ms in cue_points_ms} - {0})
+    esam = any(not grid.on_segment_grid(ms) for ms in snapped)
     prefix = output_prefix(asset_id, ladder.version)
     settings: dict[str, Any] = {
         "Inputs": [_input(ladder, source_uri, generator)],
@@ -251,9 +261,15 @@ def build_job_overrides(
             }
         ],
     }
+    if esam:
+        settings["Esam"] = build_esam(snapped)
     metadata = {"app": app, "asset_id": asset_id, "ladder": ladder.version, "correlation_id": correlation_id}
     if generator is not None:
         metadata["label"] = generator.label
     return JobOverrides(
-        settings=settings, user_metadata=metadata, destination_prefix=prefix, snapped_cue_points_ms=snapped
+        settings=settings,
+        user_metadata=metadata,
+        destination_prefix=prefix,
+        snapped_cue_points_ms=snapped,
+        professional=esam,
     )

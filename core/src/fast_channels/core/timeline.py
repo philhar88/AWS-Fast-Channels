@@ -125,18 +125,21 @@ class Grid(BaseModel):
         """Duration of exactly ``n`` GOPs, computed from frames so it never accumulates rounding drift."""
         return self.frame_rate.frames_to_ms(n * self.gop_frames)
 
-    def segment_index(self, ms: Millis) -> int:
-        """Index of the segment boundary nearest to ``ms``."""
+    def frame_index(self, ms: Millis) -> int:
+        """Index of the frame nearest to ``ms``."""
         rate = self.frame_rate
-        return round(Fraction(ms * rate.numerator, 1000 * rate.denominator * self.gop_frames * self.segment_gops))
+        return round(Fraction(ms * rate.numerator, 1000 * rate.denominator))
 
-    def snap_to_segment(self, ms: Millis) -> Millis:
-        """``ms`` moved to the nearest segment boundary.
+    def snap_to_frame(self, ms: Millis) -> Millis:
+        """``ms`` moved to the nearest frame start, rounded to the nearest millisecond (frame 404 at 29.97 fps starts
+        at 13480.13 ms: 13480). ESAM splits every variant at the frame boundary nearest to a point, so it splits at that
+        frame (verified with points 0.13 ms before and 0.37 ms after a frame start)."""
+        rate = self.frame_rate
+        return round(Fraction(self.frame_index(ms) * 1000 * rate.denominator, rate.numerator))
 
-        Encodes stay on MediaConvert's Basic tier, which has no ESAM, so the only boundaries every variant shares are
-        the segment grid's; editorial cue points are snapped to it before they reach Channel Assembly.
-        """
-        return self.gop_exact(self.segment_index(ms) * self.segment_gops)
+    def on_segment_grid(self, ms: Millis) -> bool:
+        """Whether ``ms`` is (the frame of) a boundary of the natural segment grid, which needs no ESAM split."""
+        return self.frame_index(ms) % (self.gop_frames * self.segment_gops) == 0
 
 
 class BreakPolicy(BaseModel):

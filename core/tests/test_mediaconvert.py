@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from syrupy.extensions.json import JSONSnapshotExtension
 
+from fast_channels.core.esam import build_esam
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.manifests import media_segment_durations, parse_multivariant, segment_boundaries_ms
+from fast_channels.core.manifests import media_segment_durations, parse_multivariant
 from fast_channels.core.mediaconvert import (
     AUDIO_SELECTOR,
     GROUP_TYPE,
@@ -199,7 +200,7 @@ def test_video_settings(
 
 def test_settings_stay_on_the_basic_tier(standard: Ladder, settings: dict[str, Any]) -> None:
     props = job_template_props(standard, name="fast-standard", queue_arn="arn:queue", category="fast")
-    file = _overrides(standard, cue_points_ms=[20000, 40000])
+    file = _overrides(standard, cue_points_ms=[18018, 42042])  # on the segment grid: no ESAM
     slate = _overrides(
         standard,
         source_uri=None,
@@ -259,6 +260,7 @@ def test_file_overrides(standard: Ladder, settings: dict[str, Any]) -> None:
         "user_metadata",
         "destination_prefix",
         "snapped_cue_points_ms",
+        "professional",
     }
     assert set(o.settings) == {"Inputs", "OutputGroups"}
     assert o.settings["Inputs"] == [
@@ -289,21 +291,23 @@ def test_file_overrides(standard: Ladder, settings: dict[str, Any]) -> None:
     assert o.snapped_cue_points_ms == []
 
 
-def test_cue_points_snap_to_the_segment_grid(standard: Ladder) -> None:
-    def snapped(cues: list[int]) -> list[int]:
-        o = _overrides(standard, cue_points_ms=cues)
-        assert "Esam" not in o.settings  # never ESAM: it is Professional tier
-        return o.snapped_cue_points_ms
+def test_cue_points_on_the_segment_grid_need_no_esam(standard: Ladder) -> None:
+    o = _overrides(standard, cue_points_ms=[0, 6006, 12012, 12000])  # 12000 is within half a frame of 12012
+    assert (o.snapped_cue_points_ms, o.professional, "Esam" in o.settings) == ([6006, 12012], False, False)
+    o = _overrides(standard, cue_points_ms=[6006, 12100])
+    assert (o.snapped_cue_points_ms, o.professional, "Esam" in o.settings) == ([6006, 12112], True, True)
+    o = _overrides(standard, cue_points_ms=[0, 6006, 12012, 42042])
+    assert (o.snapped_cue_points_ms, o.professional, "Esam" in o.settings) == ([6006, 12012, 42042], False, False)
 
-    assert snapped([0, 6000, 12010]) == [6006, 12012]  # 0 is not a break
-    assert snapped([20000, 40000, 40001]) == [18018, 42042]  # deduplicated
-    assert snapped([40000, 20000]) == [18018, 42042]  # sorted
-    assert snapped([3003]) == []  # nearest boundary is the start
-    cues = [5000, 20000, 33000, 100_000, 254_254]
-    assert all(abs(s - c) <= 3003 for s, c in zip(snapped(cues), cues, strict=True))
-    # Snapped cue points are boundaries of every variant of a real encode, so Channel Assembly can break there.
-    variants = [(CAPTURE / f"content/main{r.name_modifier}.m3u8").read_text() for r in standard.video]
-    assert set(snapped([5000, 20000, 33000])) <= set(segment_boundaries_ms(*variants))
+
+def test_cue_points_snap_to_the_frame_and_add_esam(standard: Ladder) -> None:
+    # The cues of the ESAM probe (2026-10-17): MediaConvert split all three variants at 13.480 s and 26.994 s.
+    o = _overrides(standard, cue_points_ms=[27000, 13480, 13480, 0])
+    assert o.snapped_cue_points_ms == [13480, 26994]  # frames 404 and 809, sorted, deduplicated, 0 is no break
+    assert o.professional
+    assert o.settings["Esam"] == build_esam([13480, 26994])
+    assert o.settings["Esam"]["ResponseSignalPreroll"] == 0  # the default 4 s can signal a segment early
+    assert all(abs(standard.grid.snap_to_frame(ms) - ms) <= 17 for ms in range(0, 120_000, 997))  # half a frame
 
 
 def test_generator_overrides(standard: Ladder) -> None:

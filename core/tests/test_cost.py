@@ -9,12 +9,18 @@ from fast_channels.core.cost import (
 )
 from fast_channels.core.ladder import Ladder, VideoRendition
 
-SD, HD = VIDEO_USD_PER_MINUTE
+SD, HD = VIDEO_USD_PER_MINUTE["BASIC"]
 
 
-def test_basic_tier_prices() -> None:
+def test_tier_prices() -> None:
     assert (SD, HD) == (0.0075, 0.015)  # AVC <= 30 fps, Basic tier, us-east-1, per output minute
+    assert VIDEO_USD_PER_MINUTE["PROFESSIONAL"] == (0.012, 0.024)  # single-pass HQ
     assert (HIGH_FRAME_RATE_FACTOR, MIN_BILLED_SECONDS) == (1.25, 10)
+
+
+def test_a_job_with_esam_bills_every_output_at_the_professional_tier(standard: Ladder) -> None:
+    assert encode_cost_per_minute(standard, professional=True) == pytest.approx(0.024 + 0.024 + 0.012)
+    assert encode_cost(standard, 3_600_000, professional=True) == pytest.approx(3.60)  # per content hour
 
 
 def test_standard_costs_under_four_cents_a_minute(standard: Ladder) -> None:

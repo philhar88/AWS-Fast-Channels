@@ -155,7 +155,7 @@ def config() -> dict[str, object]:
 
 
 def test_playback_configuration(config: dict[str, object]) -> None:
-    assert config["InsertionMode"] == "PLAYER_SELECT"
+    assert config["InsertionMode"] == "STITCHED_ONLY"  # SSAI only
     assert config["AdConditioningConfiguration"] == {"StreamingMediaFileConditioning": "NONE"}
     assert "DashConfiguration" not in config and "HlsConfiguration" not in config
     assert config["CdnConfiguration"] == {"AdSegmentUrlPrefix": CDN, "ContentSegmentUrlPrefix": CDN}
@@ -251,17 +251,8 @@ def test_vast_pod() -> None:
 def test_playback_urls() -> None:
     prefix = "https://abc.mediatailor.us-east-1.amazonaws.com/v1/master/h/fast-demo/"
     urls = specs.playback_urls(cdn_base=f"{CDN}/", outputs=["hls"], playback_prefix_hls=prefix)
-    assert urls == {
-        "hls": {
-            "ssai": f"{CDN}/v1/master/h/fast-demo/hls.m3u8",
-            "sgai": f"{CDN}/v1/master/h/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
-        },
-    }
+    assert urls == {"hls": f"{CDN}/v1/master/h/fast-demo/hls.m3u8"}
     assert specs.playback_urls(cdn_base=CDN, outputs=[], playback_prefix_hls=prefix) == {}
-    with pytest.raises(TypeError):
-        specs.playback_urls(  # type: ignore[call-arg]
-            cdn_base=CDN, outputs=["hls"], playback_prefix_hls=prefix, playback_prefix_dash=prefix
-        )
 
 
 def test_vast_pod_repeats_creatives_to_cover_the_longest_break() -> None:
