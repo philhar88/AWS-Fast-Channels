@@ -18,7 +18,8 @@ const PREVIEW_CSP = [
   "img-src 'self' data:",
   // Cloudscape global-styles embeds Open Sans as data: WOFF2.
   "font-src 'self' data:",
-  // hls.js plays through MSE blob: URLs and gives its text tracks a data:,WEBVTT source (texttrack-utils.ts).
+  // hls.js plays through MSE blob: URLs and gives the metadata text track behind its EXT-X-DATERANGE cues (which time
+  // HLS Interstitials) a data:,WEBVTT source (texttrack-utils.ts createTrackNode).
   "media-src 'self' blob: data:",
   "worker-src 'self' blob:",
   "connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com",
@@ -30,8 +31,7 @@ const PREVIEW_CSP = [
 
 const MEDIA_TYPES: Record<string, string> = {
   ".m3u8": "application/vnd.apple.mpegurl",
-  ".m4s": "video/iso.segment",
-  ".mp4": "video/mp4",
+  ".ts": "video/mp2t",
   ".json": "application/json",
   ".gif": "image/gif",
 };

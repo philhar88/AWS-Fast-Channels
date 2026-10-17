@@ -26,12 +26,8 @@ export const MOCK_CONFIG: AppConfig = {
   cdnBaseUrl: CDN,
   epgBaseUrl: `${CDN}/epg`,
   channels: [
-    {
-      name: "fast-demo",
-      ladderVersion: LADDER,
-      playback: { hls, "hls-avc": hls, "hls-hevc": hls, "hls-av1": hls, "dash-avc": { dash: `${CDN}/channel/dash-avc.mpd` } },
-    },
-    { name: "fast-kids", ladderVersion: LADDER, playback: { hls, "hls-avc": hls } },
+    { name: "fast-demo", ladderVersion: LADDER, playback: { hls } },
+    { name: "fast-kids", ladderVersion: LADDER, playback: { hls } },
   ],
 };
 
@@ -71,7 +67,6 @@ export const ASSETS: readonly Asset[] = [
       content_id: item.content_id,
       duration_ms: item.duration_ms,
       break_offset_count: Math.floor(item.duration_ms / SEGMENT_MS),
-      captioned: ["en"],
       vod_source: `${assetId(item.content_id)}-standard_3f9c2a71d0`,
       updated_at: "2026-10-15T21:14:03.000Z",
     }),
@@ -86,7 +81,6 @@ export const ASSETS: readonly Asset[] = [
       title: `Break slate, ${gops} GOPs`,
       duration_ms: gops * GOP_MS,
       break_offset_count: 0,
-      captioned: [],
       vod_source: `slate-${gops}g-standard_3f9c2a71d0`,
       updated_at: "2026-10-15T20:02:41.000Z",
     }),
@@ -101,7 +95,6 @@ export const ASSETS: readonly Asset[] = [
       title: `House ad, ${gops} GOPs`,
       duration_ms: gops * GOP_MS,
       break_offset_count: 0,
-      captioned: [],
       updated_at: "2026-10-15T20:05:12.000Z",
     }),
   ),
@@ -114,7 +107,6 @@ export const ASSETS: readonly Asset[] = [
     title: "Agent 327: Operation Barbershop",
     content_id: "agent327",
     break_offset_count: 0,
-    captioned: [],
     updated_at: "2026-10-16T11:52:37.000Z",
   },
   {
@@ -125,7 +117,6 @@ export const ASSETS: readonly Asset[] = [
     owner: "pipeline",
     title: "HDR trailer (refused: HDR source into an SDR ladder)",
     break_offset_count: 0,
-    captioned: [],
     updated_at: "2026-10-16T09:31:08.000Z",
   },
 ];
@@ -135,11 +126,10 @@ export const LADDERS: readonly Ladder[] = [
     ladder_version: LADDER,
     status: "READY",
     owner: "iac",
-    description: "AVC 8 + HEVC 4 + AV1 4 + AAC 3, capped at 1080p (default)",
-    codecs: ["av1", "avc", "hevc"],
-    renditions: 16,
+    description: "AVC + AAC-LC muxed in MPEG-TS, up to 1080p, 29.97 fps",
+    renditions: 3,
     max_height: 1080,
-    cost_per_minute_usd: 0.56,
+    cost_per_minute_usd: 0.0375,
     kit: {
       filler: "slate-30g-standard_3f9c2a71d0",
       break_slates: [15, 30, 45, 60].map((gops) => `slate-${gops}g-standard_3f9c2a71d0`),
@@ -147,25 +137,23 @@ export const LADDERS: readonly Ladder[] = [
     },
   },
   {
-    ladder_version: "uhd@8b1e44c2f7",
+    ladder_version: "standard-hq@8b1e44c2f7",
     status: "PROVISIONING",
-    owner: "iac",
-    description: "AVC 8 + HEVC Main10 7 + AV1 10-bit 7 + AAC 4, up to 2160p",
-    codecs: ["av1", "avc", "hevc"],
-    renditions: 22,
-    max_height: 2160,
-    cost_per_minute_usd: 1.36,
-    kit: { break_slates: ["slate-15g-uhd_8b1e44c2f7"], house_ads: [] },
+    owner: "agent",
+    description: "derived from standard@3f9c2a71d0, QVBR +1",
+    renditions: 3,
+    max_height: 1080,
+    cost_per_minute_usd: 0.0375,
+    kit: { break_slates: ["slate-15g-standard-hq_8b1e44c2f7"], house_ads: [] },
   },
   {
-    ladder_version: "standard-av1@51d0e8b3aa",
+    ladder_version: "standard-720p@51d0e8b3aa",
     status: "PROPOSED",
     owner: "agent",
-    description: "derived from standard@3f9c2a71d0",
-    codecs: ["av1"],
-    renditions: 4,
-    max_height: 1080,
-    cost_per_minute_usd: 0.21,
+    description: "derived from standard@3f9c2a71d0, without avc-1080p",
+    renditions: 2,
+    max_height: 720,
+    cost_per_minute_usd: 0.0225,
     kit: { break_slates: [], house_ads: [] },
   },
 ];
@@ -174,9 +162,9 @@ export const LADDERS: readonly Ladder[] = [
 function viaOtherCdn(playback: ChannelPlayback): ChannelPlayback {
   const move = (url: string) => url.replace(CDN, "https://cdn-b.example.net");
   return Object.fromEntries(
-    Object.entries(playback).map(([output, { ssai, sgai, dash }]): [string, OutputPlayback] => [
+    Object.entries(playback).map(([output, { ssai, sgai }]): [string, OutputPlayback] => [
       output,
-      { ...(ssai ? { ssai: move(ssai) } : {}), ...(sgai ? { sgai: move(sgai) } : {}), ...(dash ? { dash: move(dash) } : {}) },
+      { ...(ssai ? { ssai: move(ssai) } : {}), ...(sgai ? { sgai: move(sgai) } : {}) },
     ]),
   );
 }
