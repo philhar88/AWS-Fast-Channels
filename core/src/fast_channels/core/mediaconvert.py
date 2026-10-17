@@ -7,11 +7,13 @@ normalisation, ``MpdManifestBandwidthType: MAX``, ``CustomLanguageCode``, I-fram
 (Inputs, Destination, optional Esam): CreateJob deep-merges them into the template (ARCHITECTURE-SPEC App. A).
 """
 
+import re
 from collections.abc import Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from fast_channels.core.captions import CaptionKind, CaptionPlan, CaptionTrack
 from fast_channels.core.esam import build_esam
 from fast_channels.core.ladder import AudioProfile, AudioRendition, Ladder, VideoCodec, VideoRendition
 from fast_channels.core.naming import ladder_path
@@ -19,6 +21,9 @@ from fast_channels.core.profiles import applicable, selected_outputs
 from fast_channels.core.tags import TAG_APP, TAG_LADDER
 
 AUDIO_SELECTOR: Final = "Audio Selector 1"
+SCAN_SELECTOR: Final = "Captions scan"
+SCAN_VIDEO: Final = "_scan"
+SCAN_CAPTIONS: Final = "_captions"
 LANGUAGE: Final = "en"  # BCP-47 "en", not MediaConvert's default "eng" (ladders.md §3.3 item 6)
 STREAM_NAME: Final = "English"  # NAME in EXT-X-MEDIA; MediaConvert allows no hyphens here (mediaconvert.md §11)
 _AAC_PROFILE: Final = {AudioProfile.LC: "LC", AudioProfile.HE_V1: "HEV1", AudioProfile.HE_V2: "HEV2"}
@@ -157,6 +162,27 @@ def _audio_output(ladder: Ladder, a: AudioRendition) -> dict[str, Any]:
     }
 
 
+def _caption_output(track: CaptionTrack) -> dict[str, Any]:
+    # IMSC1 text: fMP4 segments on the video grid, listed in HLS (stpp.ttml.im1t) and DASH alike. Accessibility
+    # writes the HLS CHARACTERISTICS and the DASH caption role; style passthrough keeps 608 positions.
+    accessibility = "ENABLED" if track.kind is CaptionKind.CAPTIONS else "DISABLED"
+    return {
+        "NameModifier": track.name_modifier,
+        "ContainerSettings": {"Container": "CMFC"},
+        "CaptionDescriptions": [
+            {
+                "CaptionSelectorName": track.selector,
+                "CustomLanguageCode": track.language,
+                "LanguageDescription": track.label,
+                "DestinationSettings": {
+                    "DestinationType": "IMSC",
+                    "ImscDestinationSettings": {"Accessibility": accessibility, "StylePassthrough": "ENABLED"},
+                },
+            }
+        ],
+    }
+
+
 def additional_manifests(ladder: Ladder) -> list[dict[str, Any]]:
     """One ``AdditionalManifests`` entry per distinct manifest suffix of the applicable profiles."""
     manifests: dict[str, list[str]] = {}
@@ -205,6 +231,7 @@ def compile_job_settings(ladder: Ladder) -> dict[str, Any]:
                 "Outputs": [
                     *(_video_output(ladder, r) for r in ladder.video),
                     *(_audio_output(ladder, a) for a in ladder.audio),
+                    *(_caption_output(c) for c in ladder.captions),
                 ],
             }
         ],
@@ -254,8 +281,13 @@ def output_prefix(asset_id: str, ladder_version: str) -> str:
     return f"assets/{asset_id}/{ladder_path(ladder_version)}/"
 
 
-def _input(ladder: Ladder, source_uri: str | None, generator: GeneratorInput | None) -> dict[str, Any]:
-    audio = {"AudioSelectors": {AUDIO_SELECTOR: {"DefaultSelection": "DEFAULT"}}}
+def _input(
+    ladder: Ladder, source_uri: str | None, generator: GeneratorInput | None, captions: CaptionPlan
+) -> dict[str, Any]:
+    audio: dict[str, Any] = {"AudioSelectors": {AUDIO_SELECTOR: {"DefaultSelection": "DEFAULT"}}}
+    if ladder.captions:
+        # The template's caption outputs read these selectors by name, so every job defines all of them.
+        audio["CaptionSelectors"] = captions.selectors(ladder.captions)
     if generator is None:
         return {
             "FileInput": source_uri,
@@ -295,12 +327,15 @@ def build_job_overrides(
     source_uri: str | None,
     generator: GeneratorInput | None,
     cue_points_ms: Sequence[int] = (),
+    captions: CaptionPlan | None = None,
     correlation_id: str,
     app: str,
 ) -> JobOverrides:
-    """Sparse job settings for one asset: input, destination and (only when needed) ESAM for its cue points.
+    """Sparse job settings for one asset: input (with its caption selectors), destination and (only when needed)
+    ESAM for its cue points.
 
     Cue points are snapped to the GOP grid; the snapped values are what Channel Assembly ad breaks must use.
+    ``captions`` is the resolved plan; without one every caption track is empty (slates and house ads).
     """
     if (source_uri is None) == (generator is None):
         raise ValueError("exactly one of source_uri and generator is required")
@@ -310,7 +345,7 @@ def build_job_overrides(
     snapped = sorted({grid.snap_to_gop(ms) for ms in cue_points_ms} - {0})
     prefix = output_prefix(asset_id, ladder.version)
     settings: dict[str, Any] = {
-        "Inputs": [_input(ladder, source_uri, generator)],
+        "Inputs": [_input(ladder, source_uri, generator, captions or CaptionPlan())],
         "OutputGroups": [
             {
                 "OutputGroupSettings": {
@@ -332,3 +367,60 @@ def build_job_overrides(
         snapped_cue_points_ms=snapped,
         acceleration="DISABLED" if generator is not None else None,
     )
+
+
+def caption_scan_settings(*, source_uri: str, destination: str) -> dict[str, Any]:
+    """Settings of a caption scan job (no template): CC1 of the source's CEA-608/708 as a TTML file.
+
+    Probe cannot see captions carried in video SEI, MPEG-2 user data or MXF VANC. An ``EMBEDDED`` selector reads all
+    three, and finds nothing without failing: the TTML then has no ``<p>`` (docs/captions.md). A caption output needs
+    a video output in its group (an audio output does not count), so the group also writes a 256x144 picture, which
+    nothing reads. Outputs: ``<destination>_captions.ttml`` and ``<destination>_scan.mp4`` (an S3 URI and stem).
+    """
+    avc = {"RateControlMode": "QVBR", "QvbrSettings": {"QvbrQualityLevel": 1}, "MaxBitrate": 64_000}
+    embedded = {"SourceType": "EMBEDDED", "EmbeddedSourceSettings": {"Source608ChannelNumber": 1}}
+    return {
+        "TimecodeConfig": {"Source": "ZEROBASED"},
+        "Inputs": [
+            {
+                "FileInput": source_uri,
+                "TimecodeSource": "ZEROBASED",
+                "VideoSelector": {"Rotate": "AUTO"},
+                "CaptionSelectors": {SCAN_SELECTOR: {"SourceSettings": embedded}},
+            }
+        ],
+        "OutputGroups": [
+            {
+                "Name": "File Group",
+                "CustomName": "caption_scan",
+                "OutputGroupSettings": {
+                    "Type": "FILE_GROUP_SETTINGS",
+                    "FileGroupSettings": {"Destination": destination},
+                },
+                "Outputs": [
+                    {
+                        "NameModifier": SCAN_VIDEO,
+                        "ContainerSettings": {"Container": "MP4", "Mp4Settings": {}},
+                        "VideoDescription": {
+                            "Width": 256,
+                            "Height": 144,
+                            "CodecSettings": {"Codec": "H_264", "H264Settings": avc},
+                        },
+                    },
+                    {
+                        "NameModifier": SCAN_CAPTIONS,
+                        "Extension": "ttml",
+                        "ContainerSettings": {"Container": "RAW"},
+                        "CaptionDescriptions": [
+                            {"CaptionSelectorName": SCAN_SELECTOR, "DestinationSettings": {"DestinationType": "TTML"}}
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def count_cues(ttml: str) -> int:
+    """Number of cues (``<p>`` elements) of a TTML document."""
+    return len(re.findall(r"<(?:\w+:)?p[\s>]", ttml))

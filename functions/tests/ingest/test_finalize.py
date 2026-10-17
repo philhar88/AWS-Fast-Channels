@@ -1,16 +1,21 @@
+import re
+from fractions import Fraction
+from pathlib import Path
 from typing import Any
 
 import pytest
 from botocore.stub import ANY
 
+from fast_channels.core import imsc
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.manifests import ladder_signature, parse_multivariant
-from fast_channels.core.mp4 import AV1C_PATH, find_boxes
+from fast_channels.core.manifests import ladder_signature, media_segment_durations, parse_multivariant
+from fast_channels.core.mp4 import AV1C_PATH, Fragment, find_boxes, read_fragment, write_fragment
 from fast_channels.core.naming import creative_id, ladder_path
 from fast_channels.functions.ingest import finalize
-from fast_channels.functions.ingest.finalize import InvalidOutputsError, child_uris, duration_ms, with_base_url
+from fast_channels.functions.ingest.finalize import InvalidOutputsError, child_uris, duration_ms
 
 STANDARD = Ladder.builtin("standard")
+CAPTIONS = Path(__file__).parents[3] / "core/tests/data/captions"
 CONTENT_BASE = "https://media.example.com"
 PROFILES = ("hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc")
 
@@ -102,6 +107,73 @@ def test_content_break_offsets(store: Any, encode: Any, cue_points: list[int], o
     assert result.duration_ms == 10010
 
 
+def caption_track(prefix: str, cut_ms: list[tuple[int, int]], cues: list[tuple[int, int, str]]) -> dict[str, bytes]:
+    """An English IMSC track cut at ``cut_ms``, with ``cues`` split at the boundaries as MediaConvert writes them:
+    real Tears of Steel segments as templates, a text adaptation set in every MPD."""
+    template = (CAPTIONS / "tos-cc-en_000000002.cmft").read_bytes()
+    document = imsc.parse(read_fragment(template).sample.decode())
+    playlist = ["#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-TARGETDURATION:6", "#EXT-X-MEDIA-SEQUENCE:1"]
+    playlist += ["#EXT-X-PLAYLIST-TYPE:VOD", '#EXT-X-MAP:URI="main_cc-eninit.cmft"']
+    objects = {f"{prefix}main_cc-eninit.cmft": (CAPTIONS / "tos-cc-eninit.cmft").read_bytes()}
+    for n, (start, end) in enumerate(cut_ms, 1):
+        pieces = [
+            imsc.Cue(Fraction(max(a, start), 1000), Fraction(min(b, end), 1000), '<p region="bottom"', f">{text}</p>")
+            for a, b, text in cues
+            if a < end and b > start
+        ]
+        sample = document.render(pieces).encode()
+        fragment = Fragment(start=start * 90, duration=(end - start) * 90, sample=sample)
+        objects[f"{prefix}main_cc-en_{n:09d}.cmft"] = write_fragment(template, fragment, sequence=n)
+        playlist += [f"#EXTINF:{(end - start) / 1000:.3f},", f"main_cc-en_{n:09d}.cmft"]
+    objects[f"{prefix}main_cc-en.m3u8"] = "\n".join([*playlist, "#EXT-X-ENDLIST", ""]).encode()
+    timeline = "".join(f'<S t="{a * 90}" d="{(b - a) * 90}"/>' for a, b in cut_ms)
+    text_set = (
+        '<AdaptationSet mimeType="application/mp4" lang="en" codecs="stpp">'
+        '<SegmentTemplate timescale="90000" startNumber="1"/><Representation id="9" bandwidth="256" codecs="stpp">'
+        '<SegmentTemplate media="main_cc-en_$Number%09d$.cmft" initialization="main_cc-eninit.cmft" startNumber="1">'
+        f"<SegmentTimeline>{timeline}</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet>"
+    )
+    mpd = (Path(__file__).parent / "data/main_avc.mpd").read_text().replace("</Period>", f"{text_set}</Period>")
+    return objects | {f"{prefix}main_{codec}.mpd": mpd.encode() for codec in ("avc", "hevc", "av1")}
+
+
+def test_caption_tracks_are_recut_on_the_video_segments(store: Any, encode: Any) -> None:
+    prefix, objects = encode("content", "src25i-1a2b3c")  # video [4.004, 6.006]: ESAM split at 4.004 s
+    # MediaConvert's IMSC track goes back to the plain 6.006 s grid after the split: [4.004, 2.002, 4.004].
+    cues = [(3000, 4004, "Before the break."), (5000, 7000, "Straddles 6.006 s."), (8000, 9000, "Later.")]
+    s = store(objects | caption_track(prefix, [(0, 4004), (4004, 6006), (6006, 10010)], cues))
+
+    result = run(s, asset("content", "src25i-1a2b3c", prefix))
+
+    playlist = s.objects[f"{prefix}main_cc-en.m3u8"].decode()
+    assert media_segment_durations(playlist) == [4.004, 6.006]
+    assert '#EXT-X-MAP:URI="main_cc-eninit.cmft"' in playlist and "main_cc-en_000000002.cmft" in playlist
+    fragments = [read_fragment(s.objects[f"{prefix}main_cc-en_00000000{n}.cmft"]) for n in (1, 2)]
+    assert [(f.start, f.duration) for f in fragments] == [(0, 360_360), (360_360, 540_540)]
+    cues_per_segment = [imsc.parse(f.sample.decode()).cues for f in fragments]
+    assert [[(imsc.clock_time(c.begin), imsc.clock_time(c.end)) for c in segment] for segment in cues_per_segment] == [
+        [("00:00:03.000", "00:00:04.004")],
+        [("00:00:05.000", "00:00:07.000"), ("00:00:08.000", "00:00:09.000")],
+    ]
+    mpd = s.objects[f"{prefix}main_avc.mpd"].decode()
+    timelines = re.findall(r"<SegmentTimeline>.*?</SegmentTimeline>", mpd, re.DOTALL)
+    video, text = timelines[0], timelines[-1]  # the text adaptation set comes last
+    assert " ".join(text.split()) == " ".join(video.split())
+    assert result.break_offsets_ms == [4004]  # the caption track shares the boundary again
+    assert {f"{prefix}main_cc-en_000000001.cmft", f"{prefix}main_cc-en.m3u8", f"{prefix}main_avc.mpd"} <= set(
+        result.rewritten
+    )
+    assert run(store(s.objects), asset("content", "src25i-1a2b3c", prefix)).rewritten == []
+
+
+def test_an_unreadable_caption_segment_fails_the_encode(store: Any, encode: Any) -> None:
+    prefix, objects = encode("content", "src25i-1a2b3c")
+    captions = caption_track(prefix, [(0, 6006), (6006, 10010)], [])
+    captions[f"{prefix}main_cc-en_000000002.cmft"] = (CAPTIONS / "tos-cc-eninit.cmft").read_bytes()
+    with pytest.raises(InvalidOutputsError, match=r"main_cc-en\.m3u8 cannot be re-cut.*one moof"):
+        run(store(objects | captions), asset("content", "src25i-1a2b3c", prefix))
+
+
 def test_missing_profile_manifest_fails(store: Any, encode: Any) -> None:
     prefix, objects = encode("slate", "filler-1a2b3c")
     del objects[f"{prefix}main_av1.mpd"]
@@ -153,7 +225,9 @@ def test_ad_gets_an_sgai_ready_copy(store: Any, encode: Any) -> None:
     assert f"{ads}main_aac-he2-32.m3u8" in s.objects
     assert not any(k.startswith(ads) and k.endswith((".cmfv", ".cmfa")) for k in s.writes)
     mpd = s.objects[f"{ads}main_avc.mpd"].decode()
-    assert f"<BaseURL>{CONTENT_BASE}/{prefix}</BaseURL>" in mpd
+    # MediaTailor ignores BaseURL and resolves templates against the copy's location: they must be absolute.
+    assert "<BaseURL>" not in mpd
+    assert f'initialization="{CONTENT_BASE}/{prefix}main_avc-540pinit.cmfv"' in mpd
     assert {f"{ads}main_hevc.mpd", f"{ads}main_av1.mpd", f"{ads}main_sd.m3u8"} <= s.objects.keys()
 
 
@@ -165,17 +239,6 @@ def test_dash_profile_of_the_vast_follows_the_package_profiles(store: Any, encod
 
     assert result.creative is not None
     assert result.creative.dash_uri.endswith("/main_hevc.mpd")
-
-
-def test_with_base_url_goes_before_the_first_period() -> None:
-    mpd = '<?xml version="1.0"?>\n<MPD type="static">\n  <Period id="1">\n  </Period>\n</MPD>\n'
-
-    assert with_base_url(mpd, "https://cdn/a&b/") == (
-        '<?xml version="1.0"?>\n<MPD type="static">\n  <BaseURL>https://cdn/a&amp;b/</BaseURL>\n'
-        '  <Period id="1">\n  </Period>\n</MPD>\n'
-    )
-    with pytest.raises(InvalidOutputsError):
-        with_base_url("<MPD/>", "https://cdn/")
 
 
 def test_duration_is_exact() -> None:

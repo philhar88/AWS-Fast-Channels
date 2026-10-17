@@ -37,7 +37,9 @@ CONTENT_ID: Final = "e2e-pattern"
 ASSET_ID: Final = f"{CONTENT_ID}-{datetime.now(UTC):%Y%m%d%H%M%S}"
 """A new asset per run: the pipeline refuses to re-encode a READY asset in place (its VOD source serves that media)."""
 PATTERN_SECONDS: Final = 70
-CUE_POINT_MS: Final = 30_000
+CUE_POINT_MS: Final = 32_000
+"""Snaps to GOP 16 (32032 ms at 29.97 fps), between segment boundaries: the encode takes the ESAM path, and Finalize
+re-cuts its caption track on the video's segments (docs/captions.md)."""
 PROGRAMS: Final = 3
 LEAD: Final = timedelta(minutes=2, seconds=30)
 """From planning to the first program: publishing and starting the channel fit in it."""
@@ -46,6 +48,14 @@ BREAK_POLICY: Final = {"cadence_minutes": 0.5, "min_gap_minutes": 0.25, "max_bre
 that one ad fills exactly would hide pod-fill problems such as LEFTOVER_AVAIL_EXCEEDED_THRESHOLD). The first break
 of new creatives airs its slate while MediaTailor imports them (NEW_CREATIVE), so ad fill is asserted from the
 second break on."""
+
+SPOKEN_ASSET_ID: Final = f"{CONTENT_ID}-spoken-{datetime.now(UTC):%Y%m%d%H%M%S}"
+SPOKEN_SECONDS: Final = 24
+SPEECH: Final = (
+    "Welcome to the FAST Channels end to end test. These closed captions were generated from the program audio, "
+    "because the source did not provide any."
+)
+"""What the speaking test pattern says (Amazon Polly); the generated captions must transcribe it."""
 
 USER_AGENT: Final = "fast-channels-e2e/3.0"
 POLL_SECONDS: Final = 4.0
@@ -220,6 +230,8 @@ class Observation:
     """Asset list per interstitial id (fetched once, when the DATERANGE first appears)."""
     ad_playlists: dict[str, int] = field(default_factory=dict)
     """HTTP status of the first asset of each filled asset list (the SGAI ad media playlist on the CDN)."""
+    ad_multivariants: dict[str, str] = field(default_factory=dict)
+    """The first asset of each filled asset list, as MediaTailor re-hosts it (its renditions, captions included)."""
     mpds: list[Mpd] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -251,7 +263,7 @@ class Observation:
 
     def report(self) -> str:
         """Per-break ad seconds of every SSAI rendition, SGAI asset counts, DASH ad periods and errors."""
-        ssai = "; ".join(f"{r} {self.ssai_ad_seconds(r)}" for r in self.ssai)
+        ssai = "; ".join(f"{r} {self.ssai_ad_seconds(r)}" for r in self.ssai)  # subtitles: blank WebVTT in ads
         sgai = {interstitial: len(assets) for interstitial, assets in self.assets.items()}
         return (
             f"breaks at {[f'{w.starts:%H:%M:%S}' for w in self.breaks]}; SSAI ad seconds per break: {ssai}; "
@@ -293,7 +305,7 @@ def watch(
                     assets = urljoin(sgai_media, substitute(attributes.get("X-ASSET-LIST", ""), variables))
                     _fetch_assets(player, seen, daterange, assets)
         if (text := _text(player, dash, seen)) is not None:
-            seen.mpds.append(parse_mpd(text))
+            seen.mpds.append(parse_mpd(text, dash))
         if seen.complete or datetime.now(UTC) >= ends:
             return seen
         time.sleep(POLL_SECONDS)
@@ -313,10 +325,15 @@ def _fetch_assets(player: Player, seen: Observation, daterange: str, url: str) -
         return
     seen.assets[daterange] = assets = asset_list(text)
     if assets:
+        uri = assets[0]["URI"]
         try:
-            seen.ad_playlists[assets[0]["URI"]] = player.client.get(assets[0]["URI"]).status_code
+            response = player.client.get(uri)
         except httpx.HTTPError as error:
-            seen.errors.append(f"GET {assets[0]['URI']}: {error!r}")
+            seen.errors.append(f"GET {uri}: {error!r}")
+            return
+        seen.ad_playlists[uri] = response.status_code
+        if response.is_success:
+            seen.ad_multivariants[uri] = response.text
 
 
 # --- agent ---------------------------------------------------------------------------------------------------------
@@ -356,6 +373,28 @@ def ask_agent(http: httpx.Client, *, invoke_url: str, token: str, prompt: str) -
 # --- synthetic source ----------------------------------------------------------------------------------------------
 
 
+CAPTION_SECONDS: Final = 5
+"""One provided caption cue every 5 s of the test pattern (``render_captions``)."""
+
+
+def caption_text(n: int) -> str:
+    return f"Test pattern caption {n}"
+
+
+def render_captions(path: Path, *, seconds: int) -> Path:
+    """A WebVTT file for the test pattern: cue ``n`` (``caption_text(n)``) from ``n x 5`` s, 4 s long."""
+    cues = (
+        f"{_vtt_time(start)} --> {_vtt_time(start + 4)}\n{caption_text(n)}"
+        for n, start in enumerate(range(0, seconds - 4, CAPTION_SECONDS), start=1)
+    )
+    path.write_text("WEBVTT\n\n" + "\n\n".join(cues) + "\n")
+    return path
+
+
+def _vtt_time(seconds: int) -> str:
+    return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}.000"
+
+
 def render_test_pattern(path: Path, *, seconds: int, fps: int = 30) -> Path:
     """``seconds`` of a 1080p ffmpeg ``testsrc2`` pattern with a 1 kHz stereo tone: H.264 High (2 s GOP) and AAC
     in MP4, a stand-in for a broadcaster's mezzanine."""
@@ -369,6 +408,25 @@ def render_test_pattern(path: Path, *, seconds: int, fps: int = 30) -> Path:
         "-g", str(2 * fps), "-keyint_min", str(2 * fps), "-sc_threshold", "0",
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
         "-shortest", "-movflags", "+faststart", str(path),
+    ]  # fmt: skip
+    subprocess.run(command, check=True)
+    return path
+
+
+def render_speech(path: Path, speech: Path, *, seconds: int, fps: int = 30) -> Path:
+    """The test pattern with ``speech`` (an audio file, e.g. from Amazon Polly) as its sound after 2 s of silence:
+    a source whose spoken language has no captions, for the captioner."""
+    if (ffmpeg := shutil.which("ffmpeg")) is None:
+        raise AssertionError("ffmpeg is required to render the e2e test pattern (e.g. apt-get install ffmpeg)")
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", f"testsrc2=size=1920x1080:rate={fps}:duration={seconds}",
+        "-i", str(speech),
+        "-filter_complex", f"[1:a]adelay=2000|2000,apad,atrim=0:{seconds}[a]", "-map", "0:v", "-map", "[a]",
+        "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+        "-g", str(2 * fps), "-keyint_min", str(2 * fps), "-sc_threshold", "0",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-t", str(seconds), "-movflags", "+faststart", str(path),
     ]  # fmt: skip
     subprocess.run(command, check=True)
     return path

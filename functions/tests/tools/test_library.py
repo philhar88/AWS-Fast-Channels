@@ -84,6 +84,14 @@ def asset(**changes: Any) -> store.Asset:
         "content_id": "bbb",
         "duration_ms": 596_462,
         "break_offsets_ms": [6006, 12012, 18018],
+        "captions": [
+            {
+                "language": "en",
+                "origin": "generated",
+                "uri": "s3://ingest/captions/bbb/en.ttml",
+                "engine": "elemental-inference",
+            }
+        ],
         "vod_source": "fast-bbb-1a2b3c",
         "correlation_id": "session-0-bbb-1a2b3c",
         "updated_at": NOW,
@@ -133,6 +141,7 @@ def test_find_assets_returns_compact_rows(ddb: Stubber) -> None:
         "content_id": "bbb",
         "duration_ms": 596_462,
         "break_offset_count": 3,
+        "captioned": ["en"],
         "vod_source": "fast-bbb-1a2b3c",
         "updated_at": NOW,
     }
@@ -148,6 +157,7 @@ def test_get_asset_prefers_the_default_ladder(ddb: Stubber) -> None:
     assert detail.break_offsets_ms == [6006, 12012, 18018]
     assert detail.correlation_id == "session-0-bbb-1a2b3c"
     assert detail.other_ladder_versions == [UHD.version]
+    assert [(c.language, c.origin, c.engine) for c in detail.captions] == [("en", "generated", "elemental-inference")]
 
 
 def test_get_asset_falls_back_to_the_latest_encode(ddb: Stubber) -> None:

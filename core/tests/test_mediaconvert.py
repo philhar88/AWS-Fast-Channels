@@ -8,13 +8,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from syrupy.extensions.json import JSONSnapshotExtension
 
+from fast_channels.core.captions import CaptionFile, CaptionKind, CaptionPlan, CaptionSource, CaptionTrack
 from fast_channels.core.esam import build_esam
 from fast_channels.core.ladder import Ladder, VideoCodec
 from fast_channels.core.mediaconvert import (
     GeneratorInput,
     additional_manifests,
     build_job_overrides,
+    caption_scan_settings,
     compile_job_settings,
+    count_cues,
     job_template_props,
     output_prefix,
 )
@@ -158,7 +161,11 @@ def test_audio_outputs(settings: dict[str, Any], standard: Ladder) -> None:
 
 def test_output_order_is_multivariant_order(settings: dict[str, Any], standard: Ladder) -> None:
     names = [o["NameModifier"] for o in settings["OutputGroups"][0]["Outputs"]]
-    assert names == [r.name_modifier for r in standard.video] + [a.name_modifier for a in standard.audio]
+    assert names == [
+        *(r.name_modifier for r in standard.video),
+        *(a.name_modifier for a in standard.audio),
+        *(c.name_modifier for c in standard.captions),
+    ]
     assert names[0] == "_avc-720p-a"
 
 
@@ -180,7 +187,10 @@ def test_options_change_the_template(standard: Ladder, uhd: Ladder) -> None:
     options = standard.options.model_copy(update={"iframe_playlists": True, "loudness_lkfs": None, "film_grain": True})
     outputs = compile_job_settings(standard.model_copy(update={"options": options}))["OutputGroups"][0]["Outputs"]
     assert outputs[0]["ContainerSettings"]["CmfcSettings"]["IFrameOnlyManifest"] == "INCLUDE"
-    assert "AudioNormalizationSettings" not in outputs[-1]["AudioDescriptions"][0]
+    assert (
+        "AudioNormalizationSettings"
+        not in _output({"OutputGroups": [{"Outputs": outputs}]}, "_aac-he2-32")["AudioDescriptions"][0]
+    )
     av1 = next(o for o in outputs if o["NameModifier"] == "_av1-1080p")
     assert av1["VideoDescription"]["CodecSettings"]["Av1Settings"]["FilmGrainSynthesis"] == "ENABLED"
     uhd_hevc = _output(compile_job_settings(uhd), "_hevc-2160p-b")["VideoDescription"]["CodecSettings"]
@@ -208,7 +218,8 @@ def test_file_overrides_match_the_golden_input(standard: Ladder) -> None:
         app="fast",
     )
     (source,) = o.settings["Inputs"]
-    assert source == GOLDEN["Inputs"][0] | {"FileInput": "s3://in/bbb.mp4"}
+    empty = {"Captions en": {"SourceSettings": {"SourceType": "NULL_SOURCE"}}}  # no caption plan: empty tracks
+    assert source == GOLDEN["Inputs"][0] | {"FileInput": "s3://in/bbb.mp4", "CaptionSelectors": empty}
     group = o.settings["OutputGroups"][0]["OutputGroupSettings"]
     destination = f"s3://media/assets/bbb-1a2b3c/{standard.version.replace('@', '_')}/main"
     assert group == {"Type": "CMAF_GROUP_SETTINGS", "CmafGroupSettings": {"Destination": destination}}
@@ -291,3 +302,79 @@ def test_override_errors(standard: Ladder) -> None:
             correlation_id="c",
             app="fast",
         )
+
+
+def test_caption_outputs_are_imsc_tracks_in_every_manifest(settings: dict[str, Any], standard: Ladder) -> None:
+    assert _output(settings, "_cc-en") == {
+        "NameModifier": "_cc-en",
+        "ContainerSettings": {"Container": "CMFC"},
+        "CaptionDescriptions": [
+            {
+                "CaptionSelectorName": "Captions en",
+                "CustomLanguageCode": "en",
+                "LanguageDescription": "English",
+                "DestinationSettings": {
+                    "DestinationType": "IMSC",
+                    "ImscDestinationSettings": {"Accessibility": "ENABLED", "StylePassthrough": "ENABLED"},
+                },
+            }
+        ],
+    }
+    # MediaConvert writes SUBTITLES into every variant of every manifest, so every manifest lists the tracks.
+    assert all(m["SelectedOutputs"][-1] == "_cc-en" for m in additional_manifests(standard))
+    subtitles = standard.with_captions([CaptionTrack(language="es", label="Spanish", kind=CaptionKind.SUBTITLES)])
+    description = _output(compile_job_settings(subtitles), "_cc-es")["CaptionDescriptions"][0]
+    assert description["DestinationSettings"]["ImscDestinationSettings"]["Accessibility"] == "DISABLED"
+
+
+def test_jobs_define_every_caption_selector(standard: Ladder) -> None:
+    plan = CaptionPlan(
+        sources=(CaptionSource.provided(CaptionFile(uri="s3://in/bbb.en.srt", language="en"), language="en"),)
+    )
+    common = {"ladder": standard, "media_bucket": "media", "asset_id": "a", "correlation_id": "c", "app": "fast"}
+    file = build_job_overrides(**common, source_uri="s3://in/bbb.mp4", generator=None, captions=plan)
+    assert file.settings["Inputs"][0]["CaptionSelectors"] == {
+        "Captions en": {
+            "SourceSettings": {"SourceType": "SRT", "FileSourceSettings": {"SourceFile": "s3://in/bbb.en.srt"}}
+        }
+    }
+    still = build_job_overrides(
+        **common,
+        source_uri=None,
+        generator=GeneratorInput(image_s3_uri="s3://b/s.png", duration_gops=15, label="filler"),
+    )
+    assert still.settings["Inputs"][0]["CaptionSelectors"] == {
+        "Captions en": {"SourceSettings": {"SourceType": "NULL_SOURCE"}}
+    }
+    bare = build_job_overrides(
+        **common | {"ladder": standard.with_captions(())}, source_uri="s3://in/bbb.mp4", generator=None
+    )
+    assert "CaptionSelectors" not in bare.settings["Inputs"][0]
+
+
+def test_caption_scan_reads_embedded_captions_as_ttml() -> None:
+    settings = caption_scan_settings(source_uri="s3://in/bbb.mxf", destination="s3://in/work/a/c/scan")
+    (source,) = settings["Inputs"]
+    assert source["FileInput"] == "s3://in/bbb.mxf" and source["TimecodeSource"] == "ZEROBASED"
+    embedded = {"SourceType": "EMBEDDED", "EmbeddedSourceSettings": {"Source608ChannelNumber": 1}}
+    assert source["CaptionSelectors"] == {"Captions scan": {"SourceSettings": embedded}}
+    assert "AudioSelectors" not in source
+    (group,) = settings["OutputGroups"]
+    assert group["OutputGroupSettings"] == {
+        "Type": "FILE_GROUP_SETTINGS",
+        "FileGroupSettings": {"Destination": "s3://in/work/a/c/scan"},
+    }
+    video, captions = group["Outputs"]
+    # A caption output needs a video output in its group (an audio output does not count): a tiny picture.
+    assert (video["NameModifier"], video["ContainerSettings"]["Container"]) == ("_scan", "MP4")
+    assert (video["VideoDescription"]["Width"], video["VideoDescription"]["Height"]) == (256, 144)
+    assert "AudioDescriptions" not in video
+    assert captions["CaptionDescriptions"][0]["DestinationSettings"] == {"DestinationType": "TTML"}
+    assert (captions["NameModifier"], captions["Extension"]) == ("_captions", "ttml")
+
+
+def test_count_cues() -> None:
+    empty = '<tt><head><styling><style xml:id="s"/></styling></head><body><div/></body></tt>'
+    assert count_cues(empty) == 0
+    assert count_cues('<tt><body><div><p begin="1s">Hello</p><p begin="2s">There</p></div></body></tt>') == 2
+    assert count_cues("<tt:tt><tt:body><tt:div><tt:p>x</tt:p></tt:div></tt:body></tt:tt>") == 1

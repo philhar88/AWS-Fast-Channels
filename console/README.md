@@ -184,6 +184,19 @@ stops. A missing feed (403/404 from S3) means "nothing published yet".
 - *On air* marks the program scheduled now only while the channel runs, and never a skipped one, since filler plays
   in its slot.
 
+### Known hls.js caption bugs
+
+The players use stock hls.js 1.7.3, whose subtitle loading stops for the rest of a session in three cases, still
+present in its canary in October 2026 ([captions.md](../docs/captions.md#through-channel-assembly-ad-insertion-and-players)):
+
+- `SubtitleStreamController.onSubtitleFragProcessed` returns on a failed fragment, which then stays loaded but never
+  buffered, so the controller waits on it. SSAI's blank WebVTT ad segments in IMSC1 renditions fail at every break.
+- `TimelineController._parseIMSC1` parses a fragment before the main stream has the initial PTS of its discontinuity
+  (`initPTS.baseTime` of undefined); `_parseVTTs` queues WebVTT fragments in that case.
+- `SubtitleStreamController.onMediaDetaching` resets `tracksBuffered` to an empty array, which only
+  `onSubtitleTracksUpdated` refills. After an SGAI interstitial borrows the media element (`transferMedia`),
+  `onSubtitleFragProcessed` finds no buffered list for the track and returns.
+
 ### Known player caveat
 
 hls.js 1.7.3 starts an append-in-place interstitial only once the buffered A/V range reaches within 10 ms of the

@@ -20,7 +20,8 @@
                 "_avc-234p",
                 "_aac-lc-128",
                 "_aac-he1-64",
-                "_aac-he2-32"
+                "_aac-he2-32",
+                "_cc-en"
               ]
             },
             {
@@ -31,7 +32,8 @@
                 "_hevc-540p",
                 "_hevc-360p",
                 "_aac-lc-128",
-                "_aac-he1-64"
+                "_aac-he1-64",
+                "_cc-en"
               ]
             },
             {
@@ -42,7 +44,8 @@
                 "_av1-540p",
                 "_av1-360p",
                 "_aac-lc-128",
-                "_aac-he1-64"
+                "_aac-he1-64",
+                "_cc-en"
               ]
             },
             {
@@ -58,7 +61,8 @@
                 "_av1-360p",
                 "_aac-lc-128",
                 "_aac-he1-64",
-                "_aac-he2-32"
+                "_aac-he2-32",
+                "_cc-en"
               ]
             },
             {
@@ -72,7 +76,8 @@
                 "_hevc-720p",
                 "_av1-1080p",
                 "_av1-720p",
-                "_aac-lc-128"
+                "_aac-lc-128",
+                "_cc-en"
               ]
             }
           ],
@@ -1046,6 +1051,26 @@
             "Container": "CMFC"
           },
           "NameModifier": "_aac-he2-32"
+        },
+        {
+          "CaptionDescriptions": [
+            {
+              "CaptionSelectorName": "Captions en",
+              "CustomLanguageCode": "en",
+              "DestinationSettings": {
+                "DestinationType": "IMSC",
+                "ImscDestinationSettings": {
+                  "Accessibility": "ENABLED",
+                  "StylePassthrough": "ENABLED"
+                }
+              },
+              "LanguageDescription": "English"
+            }
+          ],
+          "ContainerSettings": {
+            "Container": "CMFC"
+          },
+          "NameModifier": "_cc-en"
         }
       ]
     }

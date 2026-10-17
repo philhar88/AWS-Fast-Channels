@@ -134,6 +134,7 @@ An ingest is one [`IngestRequest`](../contracts/ingest-request.schema.json):
 | `asset_id` | Optional; defaults to the file name's slug plus 6 hex of the URI (`big-buck-bunny-1a2b3c`) |
 | `content_id` | Your catalog id |
 | `cue_points_ms` | Editorial ad cue points; snapped to the GOP grid ([encoding.md](encoding.md#cue-points-and-the-esam-rule)) |
+| `captions` | Optional: `files` (caption files with their `language`), `spoken_language`, `mode` (`auto`, `generate`, `off`); see [captions.md](captions.md#providing-caption-files) |
 | `ladder_version` | e.g. `standard@86bf8088e0` (output `DefaultLadderVersion`; `encoding___list_ladders` lists the others) |
 | `correlation_id` | Optional trace id, `[A-Za-z0-9_-]{1,80}`; becomes the Step Functions execution name. Execution names cannot repeat for 90 days: use a new one per request (a new request that reuses one fails with `DuplicateCorrelationId`) |
 | `metadata` | String map; `title` is copied to the library asset |
@@ -150,7 +151,10 @@ aws s3 cp movie.mp4.json "s3://$INGEST_BUCKET/library/movie.mp4.json"   # {"cont
 aws s3 cp movie.mp4      "s3://$INGEST_BUCKET/library/movie.mp4"
 ```
 
-Without sidecar cue points, the v2 `AdOffsets` object tag still works (milliseconds separated by spaces or commas).
+Caption files next to the video named `<stem>.<language>.<ext>` (`movie.en.scc`, uploaded before the video) are its
+provided captions unless the sidecar lists `captions.files`. Without sidecar cue points, the v2 `AdOffsets` object
+tag still works (milliseconds separated by spaces or commas). Keys under `work/` and `captions/` belong to the
+pipeline and never start an ingest.
 Keys with whitespace are rejected with an `Asset Failed` event. A redelivered S3 event resolves to the same execution,
 so an upload is encoded once. This is also how `make seed` loads the sample titles: it writes each sidecar as
 `samples/<content id>.<ext>.json`, then streams the file to `samples/<content id>.<ext>`.
@@ -183,8 +187,9 @@ bucket, assets that already exist (unless they failed) and ladders that are not 
 estimate first.
 
 Ingest refuses sources without video or audio, HDR sources and frame-rate conversions across the 50/60 Hz families;
-see [encoding.md](encoding.md#frame-rates-interlace-and-hdr). A finished ingest leaves a `READY` library asset with
-its duration, valid break offsets and Channel Assembly VOD source.
+see [encoding.md](encoding.md#frame-rates-interlace-and-hdr), and, when the stage requires captions, sources whose
+spoken-language track would be empty ([captions.md](captions.md)). A finished ingest leaves a `READY` library asset
+with its duration, valid break offsets, the origin of each caption track and its Channel Assembly VOD source.
 
 ## Events
 
@@ -193,7 +198,7 @@ Subscribe to the bus to keep your CMS in sync (schemas in
 
 | Detail type | When | Detail |
 |---|---|---|
-| `Asset Ready` | An asset is encoded, verified and (content, slates) registered | `asset_id`, `kind`, `ladder_version`, `vod_source`, `duration_ms`, `correlation_id` |
+| `Asset Ready` | An asset is encoded, verified and (content, slates) registered | `asset_id`, `kind`, `ladder_version`, `vod_source`, `duration_ms`, `correlation_id`, `captions` (per track: `language`, `origin` provided/embedded/generated/none, `uri`, `engine`) |
 | `Asset Failed` | An ingest failed, or a request was refused: invalid (`InvalidIngestRequest`), not encodable with its ladder or already encoded (`IngestRefusedError`), or a reused correlation id (`DuplicateCorrelationId`) | `asset_id`, `kind`, `ladder_version`, `error`, `cause`, `correlation_id` |
 | `Ladder Ready`, `Ladder Failed` | A ladder version's kit finished | `ladder_version`, `correlation_id`, `job_template` or `error`/`cause` |
 | `Schedule Published` | A plan went on air | `channel`, `plan_id`, `programs`, `start_ms`, `end_ms`, `correlation_id` |

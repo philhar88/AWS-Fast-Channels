@@ -6,6 +6,7 @@ with an off-grid cue point. channel-assembly/: the CA channel multivariant, an S
 MediaTailor-rehosted preconditioned ad from the e2e run.
 """
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -55,11 +56,13 @@ def test_channel_assembly_preserves_the_ladder_signature() -> None:
 
 @pytest.mark.parametrize("asset", ["slate", "src25i"])
 def test_standard_encode_matches_the_expected_signature_per_profile(standard: Ladder, asset: str) -> None:
-    for p in applicable(standard):
+    ladder = standard.with_captions(())  # the captures predate caption tracks
+    for p in applicable(ladder):
         if p.format == "HLS":
             text = read(f"standard-job/{asset}/{Path(p.manifest_key('')).name}")
-            assert m.ladder_signature(text) == m.expected_signature(standard, p), p.name
-    assert m.expected_signature(standard) == m.ladder_signature(read(f"standard-job/{asset}/main.m3u8"))
+            assert m.ladder_signature(text) == m.expected_signature(ladder, p), p.name
+    assert m.expected_signature(ladder) == m.ladder_signature(read(f"standard-job/{asset}/main.m3u8"))
+    assert m.expected_signature(standard)[-1] == ("subtitles", "en", "English", "")
 
 
 def test_media_segment_durations() -> None:
@@ -181,3 +184,76 @@ def test_check_hls_structure_rules() -> None:
     assert "audio group a: NAME and CHANNELS are required" in findings
     assert "audio group a: exactly one rendition must be DEFAULT=YES" in findings
     assert profile("hls").name == "hls"
+
+
+def test_subtitle_renditions_are_part_of_the_signature(standard: Ladder) -> None:
+    encoded = read("captions/p1-cmaf-main_mimsc_en.m3u8")  # MediaConvert CMAF, IMSC (research encode)
+    assert m.ladder_signature(encoded)[-1] == ("subtitles", "en", "English", "")
+    assert [a["URI"] for a in m.subtitle_renditions(encoded)] == ["main_imsc_en.m3u8"]
+    # Channel Assembly renames subtitle playlists by position (sub_1) but keeps LANGUAGE and NAME.
+    channel = read("captions/hls-imsc.p1en.m3u8")
+    assert m.ladder_signature(channel)[-1] == m.ladder_signature(encoded)[-1]
+    assert not [f for f in m.check_hls(encoded) if "subtitles" in f.lower()]
+
+
+def test_check_hls_reports_broken_subtitle_groups() -> None:
+    # An additional manifest without the caption output still references the group (docs/captions.md).
+    dangling = read("captions/p1-cmaf-main_mnone.as-written.m3u8")
+    assert any("SUBTITLES group 'subs' has no rendition" in f for f in m.check_hls(dangling))
+    duplicate = read("captions/p1-cmaf-main_mimsc_en.m3u8") + (
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="eng",URI="x.m3u8"\n'
+    )
+    findings = m.check_hls(duplicate)
+    assert "subtitles English: NAME must be unique in group subs" in findings
+    assert "subtitles English: LANGUAGE 'eng' should be a 2-letter BCP-47 code" in findings
+
+
+def test_absolutize_mpd_points_ad_templates_at_the_segments() -> None:
+    mpd = read("captions/ads-ad-imsc-main.mpd")
+    base = "https://cdn.example/assets/ad/a&b/"
+    fixed = m.absolutize_mpd(mpd, base)
+    assert 'initialization="https://cdn.example/assets/ad/a&amp;b/main_v720init.cmfv"' in fixed
+    assert 'media="https://cdn.example/assets/ad/a&amp;b/main_v720_$Number%09d$.cmfv"' in fixed
+    assert '<SegmentTemplate timescale="90000" startNumber="1"/>' in fixed  # no URLs: unchanged
+    assert m.absolutize_mpd(fixed, "https://elsewhere/") == fixed  # absolute URLs stay
+    assert fixed.count("https://cdn.example/") == mpd.count('initialization="') + mpd.count('media="')
+
+
+def test_retarget_media_playlist_puts_another_track_on_the_references_segments() -> None:
+    reference = read("golden-job/index_avc_1080p.m3u8")
+    count = len(m.segment_uris(reference))
+    names = [f"main_cc-en_{n:09d}.cmft" for n in range(1, count + 1)]
+
+    retargeted = m.retarget_media_playlist(reference, map_uri="main_cc-eninit.cmft", segments=names)
+
+    assert m.segment_uris(retargeted) == names
+    assert m.media_segment_durations(retargeted) == m.media_segment_durations(reference)
+    assert '#EXT-X-MAP:URI="main_cc-eninit.cmft"' in retargeted
+    with pytest.raises(ValueError, match="segment URIs"):
+        m.retarget_media_playlist(reference, map_uri="x", segments=names[1:])
+
+
+def test_align_text_timelines_copies_each_periods_video_timeline() -> None:
+    """tos-esam-main.mpd: Tears of Steel with ESAM splits at 254.254 s and 488.488 s (three periods), trimmed to one
+    video representation and the IMSC track; MediaConvert cut the text on the plain 6.006 s grid after each split."""
+    mpd = read("captions/tos-esam-main.mpd")
+
+    def timelines(text: str) -> list[tuple[str, str]]:
+        pairs = []
+        for period in re.findall(r"<Period\b.*?</Period>", text, re.DOTALL):
+            video, caption = re.findall(r"<SegmentTimeline>.*?</SegmentTimeline>", period, re.DOTALL)
+            pairs.append((" ".join(video.split()), " ".join(caption.split())))
+        return pairs
+
+    assert [v == c for v, c in timelines(mpd)] == [True, False, False]
+
+    aligned = m.align_text_timelines(mpd)
+
+    assert all(v == c for v, c in timelines(aligned))
+    text_sets = re.findall(r'<AdaptationSet[^>]*codecs="stpp">.*?</AdaptationSet>', aligned, re.DOTALL)
+    # The adaptation set's and the representation's SegmentTemplate, per period.
+    assert [re.findall(r'startNumber="(\d+)"', s) for s in text_sets] == [["1", "1"], ["44", "44"], ["84", "84"]]
+    assert m.align_text_timelines(aligned) == aligned
+    text_template = '<SegmentTemplate timescale="90000" presentationTimeOffset="0" media="main_cc'
+    with pytest.raises(ValueError, match="timescales differ"):
+        m.align_text_timelines(mpd.replace(text_template, text_template.replace("90000", "1000")))

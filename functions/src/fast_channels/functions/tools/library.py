@@ -13,6 +13,7 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from fast_channels.core.captions import CaptionOrigin, CaptionProvenance, CaptionsRequest
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind, IngestRequest
 from fast_channels.core.naming import mediatailor_name
@@ -68,13 +69,17 @@ class AssetSummary(BaseModel):
     content_id: str | None = None
     duration_ms: int | None = Field(None, description="Running time of the content, without ad breaks.")
     break_offset_count: int = Field(description="Number of valid ad-break offsets; library___get_asset lists them.")
+    captioned: list[str] = Field(
+        [], description="Languages whose caption track has captions; library___get_asset says where each came from."
+    )
     vod_source: str | None = Field(None, description="Channel Assembly VOD source; ads have none.")
     updated_at: str
 
     @classmethod
     def of(cls, asset: Asset) -> Self:
-        fields = asset.model_dump(include=set(cls.model_fields) - {"break_offset_count"})
-        return cls(**fields, break_offset_count=len(asset.break_offsets_ms))
+        fields = asset.model_dump(include=set(cls.model_fields) - {"break_offset_count", "captioned"})
+        captioned = [c.language for c in asset.captions if c.origin is not CaptionOrigin.NONE]
+        return cls(**fields, break_offset_count=len(asset.break_offsets_ms), captioned=captioned)
 
 
 class FindAssetsOutput(BaseModel):
@@ -107,6 +112,11 @@ class AssetDetail(AssetSummary):
         description="Offsets into the content (ms) where every track has a common segment boundary: the only "
         "valid ad-break positions."
     )
+    captions: list[CaptionProvenance] = Field(
+        [],
+        description="Every caption track in ladder order: provided (a file), embedded (in the source), generated "
+        "(by the captioner engine; worth a human check) or none (an empty track).",
+    )
     source_location: str | None = Field(None, description="Source location of the VOD source; null = the deployment's.")
     packages: dict[str, str] = Field(
         description="Source group (rendition profile) -> manifest path, as registered for external content or "
@@ -131,7 +141,15 @@ def get_asset(request: GetAssetInput, ctx: ToolContext) -> AssetDetail:
     return AssetDetail(
         **AssetSummary.of(asset).model_dump(),
         **asset.model_dump(
-            include={"break_offsets_ms", "source_location", "packages", "source_uri", "correlation_id", "error"}
+            include={
+                "break_offsets_ms",
+                "captions",
+                "source_location",
+                "packages",
+                "source_uri",
+                "correlation_id",
+                "error",
+            }
         ),
         other_ladder_versions=sorted(v.ladder_version for v in versions if v is not asset),
     )
@@ -180,6 +198,12 @@ class IngestInput(BaseModel):
         pattern=LADDER_VERSION_PATTERN,
         description="Ladder version to encode with (PROVISIONING or READY); omit for the deployment default.",
     )
+    captions: CaptionsRequest | None = Field(
+        None,
+        description="Caption files that come with the title (uri relative to the source's folder or s3://, "
+        "language, optional format), its spoken_language, and mode: auto (default: provided files, else captions "
+        "in the source, else generated), generate (always generate the spoken language) or off (empty tracks).",
+    )
 
 
 class IngestOutput(BaseModel):
@@ -211,6 +235,7 @@ def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
         asset_id=request.asset_id,
         content_id=request.content_id,
         cue_points_ms=request.cue_points_ms,
+        captions=request.captions,
         ladder_version=ladder_version,
         metadata={"agent_session": ctx.correlation_id} | ({"title": request.title} if request.title else {}),
     )

@@ -5,7 +5,9 @@ Two rules invoke this function asynchronously (retries, then the pipeline's dead
 * ``Object Created`` in the ingest bucket, for video file extensions. The request is the object plus its optional
   JSON sidecar ``<key>.json`` (any IngestRequest field except ``source_uri`` and ``generator``; upload it first)
   and, when the sidecar has no cue points, the v2-compatible ``AdOffsets`` object tag (milliseconds separated by
-  spaces or commas, e.g. ``30000 90000``).
+  spaces or commas, e.g. ``30000 90000``). When the sidecar lists no caption files, caption files next to the
+  video named ``<stem>.<language>.<ext>`` (``movie.en.scc`` for ``movie.mov``; upload them first too) are its
+  provided captions. Keys under the pipeline's own prefixes (``work/``, ``captions/``) are ignored.
 * ``Ingest Requested`` on the ``fast-channels`` bus; the detail is an IngestRequest.
 
 The sidecar is read here, before StartExecution, so that its ``correlation_id`` becomes the execution name
@@ -22,14 +24,16 @@ re-upload with an unchanged sidecar); it cannot start, and is reported as ``Asse
 import json
 import re
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
+from fast_channels.core.captions import CAPTION_EXTENSIONS, LANGUAGE_PATTERN
 from fast_channels.core.events import DETAIL_TYPES, AssetFailed
-from fast_channels.core.ingest import AssetKind, IngestRequest, asset_id_for
+from fast_channels.core.ingest import RESERVED_PREFIXES, AssetKind, IngestRequest, asset_id_for
 from fast_channels.core.naming import digest
 from fast_channels.functions import aws
 from fast_channels.functions.aws import execution_arn
@@ -59,6 +63,9 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, str]:
     """Start the ingest execution of ``event``; invalid requests are reported as ``Asset Failed`` events."""
     config = settings()
     config.require("ingest_state_machine_arn", "default_ladder_version")
+    if event.get("source") == "aws.s3" and str(event["detail"]["object"]["key"]).startswith(RESERVED_PREFIXES):
+        logger.info("pipeline file, not an upload", extra={"key": event["detail"]["object"]["key"]})
+        return {"status": "IGNORED"}
     try:
         request = request_for(event, default_ladder_version=config.default_ladder_version)
     except (InvalidEventError, ValidationError) as error:
@@ -142,7 +149,31 @@ def _object_request(detail: dict[str, Any], default_ladder_version: str) -> Inge
     fields = {"ladder_version": default_ladder_version, **sidecar, "source_uri": f"s3://{bucket}/{key}"}
     if not fields.get("cue_points_ms") and (offsets := _tagged_offsets(bucket, key)):
         fields["cue_points_ms"] = offsets
+    captions = fields.get("captions") or {}
+    if isinstance(captions, dict) and "files" not in captions and (files := caption_siblings(bucket, key)):
+        fields["captions"] = captions | {"files": files}
     return IngestRequest.model_validate(fields)
+
+
+_SIBLING: Final = re.compile(rf"(?P<language>{LANGUAGE_PATTERN[1:-1]})(?P<extension>\.[A-Za-z]+)")
+
+
+def caption_siblings(bucket: str, key: str) -> list[dict[str, str]]:
+    """Caption files next to a video, ``<stem>.<language>.<ext>``, as CaptionFile fields (URIs relative to the
+    video's folder), sorted by key."""
+    folder, _, name = key.rpartition("/")
+    stem = f"{PurePosixPath(name).stem}."
+    prefix = f"{folder}/{stem}" if folder else stem
+    pages = aws.client("s3").get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
+    files = []
+    for item in (item for page in pages for item in page.get("Contents", [])):
+        sibling = str(item["Key"])
+        match = _SIBLING.fullmatch(sibling[len(prefix) :])
+        if match and match["extension"].lower() in CAPTION_EXTENSIONS:
+            files.append({"uri": sibling.rpartition("/")[2], "language": match["language"]})
+    if files:
+        logger.info("caption files found next to the upload", extra={"captions": files})
+    return files
 
 
 def _sidecar(bucket: str, key: str) -> dict[str, Any]:

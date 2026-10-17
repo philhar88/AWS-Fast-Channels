@@ -85,6 +85,8 @@ export interface Asset {
   readonly duration_ms?: number;
   /** How many valid ad-break offsets the asset has (library___get_asset lists them). */
   readonly break_offset_count: number;
+  /** Languages whose caption track has captions (provided, embedded or generated); the others are empty. */
+  readonly captioned: readonly string[];
   readonly vod_source?: string;
   readonly updated_at: string;
 }

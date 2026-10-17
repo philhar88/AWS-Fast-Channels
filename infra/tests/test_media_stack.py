@@ -26,6 +26,7 @@ AGREED_OUTPUTS = {
     "LadderProvisionerArn",
     "SourceLocationName",
     "DefaultLadderVersion",
+    "CaptionEngine",
     "Channels",
     "DashboardUrl",
 }

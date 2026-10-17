@@ -86,7 +86,16 @@ def applicable(ladder: Ladder) -> list[RenditionProfile]:
 
 
 def selected_outputs(ladder: Ladder, p: RenditionProfile) -> list[str]:
-    """NameModifiers of the profile's video outputs plus the audio outputs those use, in ladder order."""
+    """NameModifiers of the profile's video outputs, the audio outputs those use and every caption output, in ladder
+    order.
+
+    Every profile carries every caption track: MediaConvert writes ``SUBTITLES`` and ``stpp`` into every variant
+    of every additional manifest, so a manifest without the tracks would reference a group it lacks.
+    """
     video = [r for r in ladder.video if p.selects(r)]
     groups = {r.audio_group for r in video}
-    return [r.name_modifier for r in video] + [a.name_modifier for a in ladder.audio if a.group_id in groups]
+    return [
+        *(r.name_modifier for r in video),
+        *(a.name_modifier for a in ladder.audio if a.group_id in groups),
+        *(c.name_modifier for c in ladder.captions),
+    ]

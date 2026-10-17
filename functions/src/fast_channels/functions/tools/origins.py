@@ -18,9 +18,9 @@ from botocore.exceptions import ClientError
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind
-from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
+from fast_channels.core.manifests import SUBTITLES_ROW, expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.mediaconvert import output_prefix
-from fast_channels.core.naming import agent_owned_name, is_agent_owned
+from fast_channels.core.naming import agent_owned_name, agent_vod_source_name, is_agent_owned
 from fast_channels.core.profiles import ManifestFormat, applicable, profile
 from fast_channels.core.specs import http_package_configurations
 from fast_channels.core.tags import resource_tags
@@ -322,7 +322,7 @@ def register_vod_source(request: RegisterVodSourceInput, ctx: ToolContext) -> Re
     reference = _timeline_package(request.packages)
     encode = manifests.timeline(reference.path, texts[reference.source_group])
 
-    name = agent_owned_name(config.prefix, request.asset_id, ladder_version.partition("@")[2])
+    name = agent_vod_source_name(config.prefix, request.asset_id, ladder_version)
     arn = _create_vod_source(request.source_location, name, request.packages, _tags(ctx, ladder_version))
     store.put(
         Asset(
@@ -505,11 +505,17 @@ def _child(manifest_path: str, uri: str) -> str:
 
 
 def _difference(expected: Sequence[Sequence[str]], actual: Sequence[Sequence[str]]) -> str:
-    rows = zip(expected, actual, strict=False)
-    if diff := next(((n, want, got) for n, (want, got) in enumerate(rows, 1) if want != got), None):
-        n, want, got = diff
-        return f"variant {n} is {'/'.join(got)} but the ladder has {'/'.join(want)}"
-    return f"{len(actual)} variants but the ladder has {len(expected)}"
+    """The first difference between two ladder signatures, in variants and then in subtitle renditions."""
+    for kind, subtitles in (("variant", False), ("subtitle rendition", True)):
+        want = [row for row in expected if (row[0] == SUBTITLES_ROW) is subtitles]
+        got = [row for row in actual if (row[0] == SUBTITLES_ROW) is subtitles]
+        rows = zip(want, got, strict=False)
+        if diff := next(((n, w, g) for n, (w, g) in enumerate(rows, 1) if w != g), None):
+            n, w, g = diff
+            return f"{kind} {n} is {'/'.join(g)} but the ladder has {'/'.join(w)}"
+        if len(want) != len(got):
+            return f"{len(got)} {kind}s but the ladder has {len(want)}"
+    return "the signatures differ"
 
 
 # --- update_package_configurations ---------------------------------------------------------------------------------

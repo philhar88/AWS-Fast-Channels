@@ -37,7 +37,7 @@ BASE_URL = f"https://{BUCKET}.s3.{REGION}.amazonaws.com"
 ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/fast-origins-role"
 NOW = "2026-10-16T12:00:00Z"
 WHEN = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
-STANDARD = Ladder.builtin("standard")
+STANDARD = Ladder.builtin("standard").with_captions(())  # the external content fixtures have no captions
 VOD_SOURCE = f"fast-agent-pilot-{STANDARD.fingerprint}"
 VOD_ARN = f"arn:aws:mediatailor:{REGION}:{ACCOUNT}:vodSource/{LOCATION}/{VOD_SOURCE}"
 CTX = ToolContext(tool="origins___register_vod_source", correlation_id="session-1")
@@ -111,7 +111,7 @@ def ladder(ddb: Stubber) -> None:
     get(
         ddb,
         store.ladder_key(STANDARD.version),
-        store.LadderRecord(ladder_version=STANDARD.version, status="READY").to_item(),
+        store.LadderRecord(ladder_version=STANDARD.version, status="READY", ladder=STANDARD).to_item(),
     )
 
 

@@ -1,8 +1,9 @@
 """Encoding ladders: the single definition of every rendition a channel profile carries.
 
-Channel Assembly matches variants by position and requires every VOD source of a channel (programs, filler,
-ad slates, house ads) to share the exact rendition set (channel-assembly.md §0.3), so a ladder is immutable and
-identified by a content fingerprint. ``ladder.version`` (``<id>@<fingerprint>``) is the key used everywhere.
+Channel Assembly matches variants and subtitle renditions by position and requires every VOD source of a channel
+(programs, filler, ad slates, house ads) to share the exact rendition set (channel-assembly.md §0.3,
+docs/captions.md), so a ladder is immutable and identified by a content fingerprint.
+``ladder.version`` (``<id>@<fingerprint>``) is the key used everywhere.
 """
 
 import hashlib
@@ -20,6 +21,7 @@ from typing import Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from fast_channels.core.captions import CaptionTrack, primary_language
 from fast_channels.core.cost import encode_cost_per_minute
 from fast_channels.core.timeline import FrameRate, Grid
 
@@ -151,6 +153,7 @@ class Ladder(BaseModel):
     segment_seconds: float = Field(6, gt=0)
     video: tuple[VideoRendition, ...] = Field(min_length=1)
     audio: tuple[AudioRendition, ...] = Field(min_length=1)
+    captions: tuple[CaptionTrack, ...] = ()
     options: LadderOptions = LadderOptions()
 
     @model_validator(mode="after")
@@ -170,10 +173,13 @@ class Ladder(BaseModel):
 
     @cached_property
     def fingerprint(self) -> str:
-        """10-hex SHA-256 of the canonical JSON of everything except ``id`` and ``description``."""
-        canonical = json.dumps(
-            self.model_dump(mode="json", exclude={"id", "description"}), sort_keys=True, separators=(",", ":")
-        )
+        """10-hex SHA-256 of the canonical JSON of everything except ``id`` and ``description``.
+
+        A ladder without caption tracks leaves ``captions`` out, so it keeps the version it had before ladders
+        could carry them.
+        """
+        exclude = {"id", "description"} | (set() if self.captions else {"captions"})
+        canonical = json.dumps(self.model_dump(mode="json", exclude=exclude), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()[:10]
 
     @property
@@ -199,7 +205,8 @@ class Ladder(BaseModel):
         return ceil(video * PEAK_FACTOR) + audio, video + audio
 
     def pricing_tier(self) -> Literal["BASIC", "PROFESSIONAL"]:
-        """MediaConvert pricing tier: Basic covers AVC single-pass only, without normalisation or acceleration.
+        """MediaConvert pricing tier: Basic covers AVC single-pass only, without normalisation, acceleration or
+        captions.
 
         The deinterlacer runs in NORMAL mode, which leaves progressive frames untouched.
         """
@@ -207,6 +214,7 @@ class Ladder(BaseModel):
             self.codecs == {VideoCodec.AVC}
             and self.options.loudness_lkfs is None
             and self.options.acceleration == "DISABLED"
+            and not self.captions
         )
         return "BASIC" if basic else "PROFESSIONAL"
 
@@ -218,6 +226,9 @@ class Ladder(BaseModel):
         names = [r.name for r in self.video] + [a.group_id for a in self.audio]
         if duplicates := sorted({n for n in names if names.count(n) > 1}):
             yield f"duplicate rendition names {duplicates}"
+        languages = [primary_language(t.language) for t in self.captions]
+        if duplicates := sorted({lang for lang in languages if languages.count(lang) > 1}):
+            yield f"more than one caption track for {duplicates}"
         groups, used = {a.group_id for a in self.audio}, {r.audio_group for r in self.video}
         if missing := sorted(used - groups):
             yield f"unknown audio groups {missing}"
@@ -277,10 +288,14 @@ class Ladder(BaseModel):
         lines = [f"{key} = {_toml_value(data[key])}" for key in ("id", "description", "gop_seconds", "segment_seconds")]
         lines.insert(2, f"frame_rate = {_toml_value(str(self.frame_rate))}")
         lines += ["", "[options]", *(f"{k} = {_toml_value(v)}" for k, v in data["options"].items())]
-        for table in ("video", "audio"):
+        for table in ("video", "audio", "captions"):
             for row in data[table]:
                 lines += ["", f"[[{table}]]", *(f"{k} = {_toml_value(v)}" for k, v in row.items())]
         return "\n".join(lines) + "\n"
+
+    def with_captions(self, tracks: Iterable[CaptionTrack]) -> Ladder:
+        """This ladder with ``tracks`` as its caption tracks: a new version, unless they are the ones it has."""
+        return Ladder.model_validate(self.model_dump() | {"captions": tuple(tracks)})
 
 
 def _toml_value(value: Any) -> str:
@@ -303,6 +318,7 @@ class LadderOps(BaseModel):
     min_height: int | None = Field(None, gt=0)
     quality_shift: int = Field(0, ge=-2, le=2)
     drop_rungs: list[str] = []
+    captions: list[CaptionTrack] | None = None  # replaces the caption tracks; [] removes them
     new_id: str | None = Field(None, pattern=r"^[a-z][a-z0-9-]*$", max_length=24)
 
 
@@ -329,7 +345,11 @@ def _keep(rendition: VideoRendition, ops: LadderOps) -> bool:
 
 
 def _rendition_names(ladder: Ladder) -> set[str]:
-    return {r.name for r in ladder.video} | {a.group_id for a in ladder.audio}
+    return (
+        {r.name for r in ladder.video}
+        | {a.group_id for a in ladder.audio}
+        | {c.name_modifier[1:] for c in ladder.captions}
+    )
 
 
 def propose(base: Ladder, ops: LadderOps) -> LadderProposal:
@@ -355,6 +375,7 @@ def propose(base: Ladder, ops: LadderOps) -> LadderProposal:
         "id": ops.new_id or base.id,
         "video": tuple(video),
         "audio": tuple(a for a in base.audio if a.group_id in used),
+        "captions": base.captions if ops.captions is None else tuple(ops.captions),
     }
     candidate = Ladder.model_construct(**fields)  # unvalidated, so the rejected candidate can still be costed
     errors = candidate.problems() if video else ["no video renditions left"]

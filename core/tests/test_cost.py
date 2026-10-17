@@ -16,10 +16,10 @@ def test_short_outputs_bill_ten_seconds(standard: Ladder) -> None:
 
 def test_basic_tier_and_high_frame_rate(standard: Ladder) -> None:
     avc = [r.model_dump() for r in standard.video if r.codec is VideoCodec.AVC]
-    basic = Ladder.model_validate(
-        standard.model_dump() | {"video": avc, "options": {"loudness_lkfs": None, "acceleration": "DISABLED"}}
-    )
+    options = {"loudness_lkfs": None, "acceleration": "DISABLED"}
+    basic = Ladder.model_validate(standard.model_dump() | {"video": avc, "options": options, "captions": ()})
     assert basic.pricing_tier() == "BASIC"
+    assert basic.with_captions(standard.captions).pricing_tier() == "PROFESSIONAL"  # captions need Professional
     assert encode_cost_per_minute(basic) == pytest.approx(4 * 0.0075 + 4 * 0.015 + 3 * 0.003)
     fast = Ladder.model_validate(basic.model_dump() | {"frame_rate": "59.94"})
     assert encode_cost_per_minute(fast) == pytest.approx((4 * 0.0075 + 4 * 0.015) * 1.25 + 3 * 0.003)
