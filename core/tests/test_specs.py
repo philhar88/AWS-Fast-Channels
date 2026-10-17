@@ -24,7 +24,7 @@ def test_channel_outputs_are_hls_only() -> None:
         {
             "ManifestName": "hls",
             "SourceGroup": "hls",
-            "HlsPlaylistSettings": {"ManifestWindowSeconds": 60, "AdMarkupType": ["DATERANGE"]},  # SGAI needs DATERANGE
+            "HlsPlaylistSettings": {"ManifestWindowSeconds": 60, "AdMarkupType": ["DATERANGE"]},  # ad markers
         }
     ]
     outputs[0]["HlsPlaylistSettings"]["AdMarkupType"].append("x")  # callers get independent copies
