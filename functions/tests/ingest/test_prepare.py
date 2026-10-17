@@ -6,6 +6,8 @@ from boto3.dynamodb.conditions import Attr
 from boto3.dynamodb.types import TypeSerializer
 from botocore.stub import ANY
 
+from fast_channels.core.cost import encode_cost
+from fast_channels.core.esam import build_esam
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.naming import digest
 from fast_channels.functions.ingest import prepare
@@ -181,7 +183,20 @@ def test_load_ladder_falls_back_to_the_builtin_definition(stubs: Any) -> None:
     assert prepare.load_ladder(STANDARD.version) == (STANDARD, TEMPLATE)
 
 
-def test_handler_prepares_a_file(stubs: Any, lambda_context: Any) -> None:
+@pytest.mark.parametrize(
+    ("cue_points", "snapped", "esam"),
+    [
+        # 298 s is between segment boundaries: frame 8931 (297.9977 s) gets an ESAM split, at the Professional tier.
+        ([298_000], [297_998], True),
+        # 300.3 s is segment boundary 50 of the 6.006 s grid: every variant has it already, so the job stays Basic.
+        ([300_310], [300_300], False),
+        ([], [], False),
+    ],
+    ids=["between-boundaries", "on-the-grid", "none"],
+)
+def test_handler_prepares_a_file(
+    stubs: Any, lambda_context: Any, cue_points: list[int], snapped: list[int], esam: bool
+) -> None:
     expect_ladder(stubs, ladder_item())
     stubs["mediaconvert"].add_response(
         "probe", probe_result(Height=720, Width=1280), {"InputFiles": [{"FileUrl": SOURCE}]}
@@ -191,7 +206,7 @@ def test_handler_prepares_a_file(stubs: Any, lambda_context: Any) -> None:
         "source_uri": SOURCE,
         "ladder_version": STANDARD.version,
         "content_id": "bbb",
-        "cue_points_ms": [298_000],
+        "cue_points_ms": cue_points,
         "metadata": {"title": "Big Buck Bunny"},
     }
 
@@ -202,15 +217,18 @@ def test_handler_prepares_a_file(stubs: Any, lambda_context: Any) -> None:
     assert result["asset_id"].startswith("big-buck-bunny-")
     assert result["correlation_id"] == "big-buck-bunny-run"
     assert result["title"] == "Big Buck Bunny"
-    assert result["cue_points_ms"] == [300_300]  # snapped to the 6.006 s segment grid: segment boundary 50
+    assert result["cue_points_ms"] == snapped  # snapped to the nearest frame
     assert result["warnings"] == ["the source is 720 lines high; rungs above it are upscaled"]
-    assert result["estimated_cost_usd"] > 0
+    assert result["estimated_cost_usd"] == encode_cost(STANDARD, 596_400, professional=esam)
     assert result["output_prefix"] == f"assets/{result['asset_id']}/standard_{STANDARD.fingerprint}/"
     job = result["job"]
     assert set(job) == {"JobTemplate", "Settings", "UserMetadata", "ClientRequestToken"}  # no acceleration
     assert job["JobTemplate"] == TEMPLATE
     assert job["ClientRequestToken"] == digest("big-buck-bunny-run", 32)
-    assert set(job["Settings"]) == {"Inputs", "OutputGroups"}  # no ESAM on the Basic tier
+    # The job sent to Transcode carries ESAM exactly when a cue point is between segment boundaries.
+    assert set(job["Settings"]) == {"Inputs", "OutputGroups"} | ({"Esam"} if esam else set())
+    if esam:
+        assert job["Settings"]["Esam"] == build_esam(snapped)
     assert job["Settings"]["Inputs"][0]["FileInput"] == SOURCE
     [group] = job["Settings"]["OutputGroups"]
     assert group["OutputGroupSettings"]["HlsGroupSettings"]["Destination"] == (

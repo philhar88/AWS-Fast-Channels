@@ -4,8 +4,9 @@
 2. Probe a source file (MediaConvert Probe, with this function's credentials) and refuse what the ladder cannot
    carry: no video or audio track, HDR into an SDR ladder (every v3 ladder is SDR), or a conversion between the
    50 Hz and 60 Hz frame-rate families unless the ladder sets ``allow_frame_rate_conversion`` (_review.md, media).
-3. Snap the cue points to the segment grid and build the sparse job overrides
-   (``core.mediaconvert.build_job_overrides``).
+3. Snap the cue points to the nearest frame and build the sparse job overrides
+   (``core.mediaconvert.build_job_overrides``). A cue point between segment boundaries adds ESAM, which splits every
+   variant at that frame and bills the whole job at MediaConvert's Professional tier; the cost estimate follows.
 4. Write the asset item as INGESTING (with the execution ARN). Another execution that is still running the same
    encode makes this one a duplicate. An encode that is already ENCODED or READY is refused for a source file:
    its VOD source may be on air, and a second encode would overwrite the manifests and segments it serves in place
@@ -122,7 +123,9 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         "output_prefix": overrides.destination_prefix,
         "cue_points_ms": overrides.snapped_cue_points_ms,
         "warnings": notes,
-        "estimated_cost_usd": encode_cost(ladder, duration_ms) if duration_ms else None,
+        "estimated_cost_usd": (
+            encode_cost(ladder, duration_ms, professional=overrides.professional) if duration_ms else None
+        ),
     }
     _claim(
         asset,
@@ -131,7 +134,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         execution_arn=event["execution_arn"],
         replaces_encodes=request.generator is not None,
     )
-    logger.info("prepared", extra={"cue_points_ms": asset["cue_points_ms"]})
+    logger.info("prepared", extra={"cue_points_ms": asset["cue_points_ms"], "esam": overrides.professional})
     return {
         **asset,
         "ladder": ladder.model_dump(mode="json"),

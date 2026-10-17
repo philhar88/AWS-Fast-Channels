@@ -210,12 +210,7 @@ def test_get_channel_returns_playback_urls_per_output(aws_stubs: SimpleNamespace
     result = channels.get_channel(ChannelInput(channel="fast-demo"), CTX)
 
     cdn = "https://d111111abcdef8.cloudfront.net"
-    assert result.playback == {
-        "hls": {
-            "ssai": f"{cdn}/v1/master/1bab6b42/fast-demo/hls.m3u8",
-            "sgai": f"{cdn}/v1/master/1bab6b42/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
-        },
-    }
+    assert result.playback == {"hls": f"{cdn}/v1/master/1bab6b42/fast-demo/hls.m3u8"}  # SSAI only
     assert (result.state, result.auto_stop_at, result.arn) == (
         "RUNNING",
         "2026-10-16T09:20:00Z",
@@ -241,12 +236,7 @@ def test_get_channel_lists_playback_urls_per_cdn_primary_first(
     primary, alternate = result.cdn_playback
     assert (primary.cdn, primary.playback) == ("cloudfront", result.playback)
     assert alternate.cdn == "cdn-b"
-    assert alternate.playback == {
-        "hls": {
-            "ssai": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8",
-            "sgai": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
-        },
-    }
+    assert alternate.playback == {"hls": "https://cdn-b.example.net/v1/master/1bab6b42/fast-demo/hls.m3u8"}
     assert "cdn_playback" in result.model_dump(exclude_none=True)
 
 
@@ -663,9 +653,7 @@ def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: Si
     assert record["Item"]["owner"] == "agent" and record["Item"]["gsi1sk"] == f"agent#{AGENT}"
     assert "ConditionExpression" in record
     assert result.name == AGENT and result.state == "STOPPED"
-    assert (
-        result.playback["hls"]["ssai"] == f"https://d111111abcdef8.cloudfront.net/v1/master/1bab6b42/{AGENT}/hls.m3u8"
-    )
+    assert result.playback["hls"] == f"https://d111111abcdef8.cloudfront.net/v1/master/1bab6b42/{AGENT}/hls.m3u8"
 
 
 def test_create_channel_rolls_back_when_a_step_fails(aws_stubs: SimpleNamespace) -> None:

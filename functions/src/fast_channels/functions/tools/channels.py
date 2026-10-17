@@ -3,7 +3,7 @@
 Channels defined in ``cdk.json`` are owned by CloudFormation (``owner = iac``); the agent may start and stop them but
 creates and deletes only its own ``<prefix>-agent-*`` channels (the Gateway's Cedar policy enforces the same rule).
 An agent channel is assembled from the same ``core.specs`` builders the CDK constructs use: a LINEAR channel with
-the ladder kit's filler slate, AS_RUN logs, a per-channel PLAYER_SELECT playback configuration with its three
+the ladder kit's filler slate, AS_RUN logs, a per-channel STITCHED_ONLY playback configuration with its three
 vended-log deliveries, and a SigV4-only channel policy for exactly that configuration (e2e.md §2.7-2.11).
 
 A started channel bills by the hour, so ``start_channel`` first creates a one-time EventBridge Scheduler schedule that
@@ -98,8 +98,8 @@ def _in_transition(error: ChannelStateTimeoutError, channel: str) -> ToolError:
 
 
 type ChannelOwner = Literal[store.Owner.IAC, store.Owner.AGENT]
-type Playback = dict[str, dict[str, str]]
-"""Viewer URLs per channel output: ``ssai`` and ``sgai``."""
+type Playback = dict[str, str]
+"""Viewer URL (SSAI) per channel output."""
 
 
 class ChannelSummary(BaseModel):
@@ -133,8 +133,8 @@ class ChannelDetail(ChannelSummary):
     arn: str | None
     playback_configuration: str | None = Field(description="MediaTailor playback configuration (ad insertion).")
     playback: Playback = Field(
-        description="Viewer URLs per output through the primary CDN: ssai and sgai (HLS Interstitials). Empty when "
-        "the channel has no playback configuration."
+        description="Viewer URL (SSAI) per output through the primary CDN. Empty when the channel has no playback "
+        "configuration."
     )
     cdn_playback: list[CdnPlayback] | None = Field(
         None,
@@ -298,9 +298,9 @@ def _detail(record: store.ChannelRecord, live: dict[str, Any] | None) -> Channel
 
 @tool("channels", access=Access.READ)
 def get_channel(payload: ChannelInput, ctx: ToolContext) -> ChannelDetail:
-    """Get one channel: live state, owner, tier, ladder version, outputs, the viewer playback URLs per output
-    (ssai and sgai; per CDN when several are configured) and the pending auto-stop time. Give operators these URLs
-    verbatim; never build playback URLs yourself."""
+    """Get one channel: live state, owner, tier, ladder version, outputs, the viewer playback URL per output (SSAI;
+    per CDN when several are configured) and the pending auto-stop time. Give operators these URLs verbatim; never
+    build playback URLs yourself."""
     record = require_channel(payload.channel)
     return _detail(record, _describe(record.name))
 
@@ -584,7 +584,7 @@ def _channel_url(created: dict[str, Any]) -> str:
 @tool("channels", access=Access.WRITE, approval=Approval.CONFIRM)
 def create_channel(payload: CreateChannelInput, ctx: ToolContext) -> ChannelDetail:
     """Create an agent-owned linear channel <prefix>-agent-<name> with its ad-insertion playback configuration
-    (SSAI and SGAI), logs and channel policy. The ladder version must be READY (encoding___list_ladders), and the
+    (SSAI), logs and channel policy. The ladder version must be READY (encoding___list_ladders), and the
     channel airs only assets encoded with it. The channel is created STOPPED and costs nothing until
     channels___start_channel; fill it with schedule___plan and schedule___publish. Fails with QUOTA at the
     deployment's agent-channel limit and CONFLICT when the name is taken."""
