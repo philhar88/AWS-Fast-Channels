@@ -43,7 +43,7 @@ log-group-scoped policy.
 | Tool call | Gateway request id | AgentCore Gateway | `gateway_request_id` (with `mcp_message_id`, `gateway_id`, `gateway_target_id`) on every log line of the call; `request_id` in the Gateway's `APPLICATION_LOGS` |
 | Program | Program name `<yyyymmddThhmmss>-<asset_id>` | `schedule___plan` | `PROGRAM#` item, Channel Assembly `CreateProgram`, the as-run log (`programName`), the EPG feeds |
 | Ad break | SCTE-35 `SegmentationEventId` and UPID (`FST3` + content id) | `schedule___plan` (deterministic) | HLS `DATERANGE` `ID`/`SCTE35-OUT`, the ADS request (`evid=`, `upid=`), MediaTailor `MAKING_ADS_REQUEST`, the CloudFront log of the VAST request |
-| Viewing session | MediaTailor session id = `[session.uuid]` = `aws.sessionId` = `awsSessionId` (SGAI) | MediaTailor | The ADS request (`sid=`), vended logs (`sessionId`), CloudFront logs (query string; `cmcd-session-id` when the player sends CMCD with that id) |
+| Viewing session | MediaTailor session id = `[session.uuid]` = `aws.sessionId` | MediaTailor | The ADS request (`sid=`), vended logs (`sessionId`), CloudFront logs (query string; `cmcd-session-id` when the player sends CMCD with that id) |
 | CDN request | `x-edge-request-id` = `Server-Timing: cdn-rid` = `x-amz-cf-id` | CloudFront | Access logs; response headers the player sees |
 | Lambda invocation | X-Ray trace id | Lambda | `xray_trace_id` on every Powertools log line; the X-Ray trace map |
 

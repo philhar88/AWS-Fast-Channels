@@ -235,9 +235,7 @@ def test_channels_output_lists_playback_urls_per_output(template: Mapping[str, A
             "name": "fast-demo",
             "ladderVersion": Ladder.builtin("standard").version,
             "outputs": ["hls"],
-            "playback": {
-                "hls": {"ssai": "https://X/X/hls.m3u8", "sgai": "https://X/X/hls.m3u8?aws.insertionMode=GUIDED"}
-            },
+            "playback": {"hls": "https://X/X/hls.m3u8"},  # SSAI only
         }
     ]
 

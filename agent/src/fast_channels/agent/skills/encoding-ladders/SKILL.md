@@ -32,13 +32,18 @@ description: Encoding ladder rules - AVC renditions with muxed AAC in plain HLS,
 - `library___ingest` (approval) encodes a mezzanine from the ingest bucket or an https URL with a ladder
   version that is PROVISIONING or READY; use the ladder of the channel that will air it. Pass the catalog
   `duration_ms` to get a cost estimate, and quote it before asking for approval.
-- Editorial cue points are moved to the nearest 6 s segment boundary, so a break airs within about 3 s of its cue.
+- Editorial cue points are frame-accurate: a break airs on the frame of its cue. A cue point between 6 s segment
+  boundaries adds ESAM to that title's encode, which splits every rendition at that frame and bills the whole
+  encode on MediaConvert's Professional tier; cue points on segment boundaries need nothing. The tool returns
+  `pricing_tier` (`BASIC` or `PROFESSIONAL`) with its estimate: say which before asking for approval.
 - It returns at once; poll `library___get_ingest_status` with the `execution_name` until `done`, then check that
   the asset is READY.
 
 ## Cost
 - Encoding is billed per output minute on the MediaConvert Basic tier: about $0.015 per minute for each HD rung
-  (720p and above) and $0.0075 for each SD rung, so `standard` costs about $0.0375 per content minute. Quote the
-  tool's `cost_per_minute_usd` or `estimated_cost_usd`, never your own arithmetic.
+  (720p and above) and $0.0075 for each SD rung, so `standard` costs about $0.0375 per content minute. A title
+  whose cue points need ESAM is billed on the Professional tier, about $0.06 per content minute on `standard`
+  (about 1.6 times). Ladder costs from `encoding___list_ladders` and `encoding___propose_ladder` are Basic-tier.
+  Quote the tool's `cost_per_minute_usd` or `estimated_cost_usd`, never your own arithmetic.
 - Dropping a rung lowers encode and storage cost: without `avc-1080p` there is no full-HD picture, without
   `avc-360p` viewers on slow connections buffer more. Say which.

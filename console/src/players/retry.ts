@@ -15,8 +15,7 @@ export const retryDelayMs = (attempt: number): number => Math.min(RETRY_FIRST_MS
 
 /**
  * hls.js gave up loading the manifest, a media playlist or a segment (manifestLoadError, levelLoadError, their
- * timeouts, an empty or unparsable playlist). Interstitial asset-list and asset errors are never fatal: hls.js
- * falls back to the primary content itself.
+ * timeouts, an empty or unparsable playlist).
  */
 export const isRetryable = ({ fatal, type }: ErrorData): boolean => fatal && type === ErrorTypes.NETWORK_ERROR;
 

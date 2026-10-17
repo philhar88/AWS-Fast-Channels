@@ -11,7 +11,7 @@ MediaConvert settings, what an encode writes, how cue points become ad breaks, a
 - [MediaConvert settings](#mediaconvert-settings)
 - [What an encode writes](#what-an-encode-writes)
 - [Frame rates, interlace and HDR](#frame-rates-interlace-and-hdr)
-- [Cue points and the segment grid](#cue-points-and-the-segment-grid)
+- [Cue points and ESAM](#cue-points-and-esam)
 - [What the pipeline verifies and fixes](#what-the-pipeline-verifies-and-fixes)
 - [Ladder kits](#ladder-kits)
 - [Cost](#cost)
@@ -95,7 +95,8 @@ resource names the `@` becomes `_`.
 ## The standard ladder
 
 `standard@843ed1d05a` runs at 29.97 fps with a 2.002 s GOP (60 frames) and 6.006 s segments: three AVC variants with
-AAC-LC 128 kbit/s stereo muxed into each, on the MediaConvert Basic tier, about **$0.0375 per content minute**.
+AAC-LC 128 kbit/s stereo muxed into each, on the MediaConvert Basic tier, about **$0.0375 per content minute**
+($0.06 for a title whose cue points need [ESAM](#cue-points-and-esam)).
 
 `BANDWIDTH` and `AVERAGE-BANDWIDTH` are the nominal values the pipeline writes into every multivariant playlist (see
 [Finalize](#what-the-pipeline-verifies-and-fixes)): `BANDWIDTH = ceil(max_kbps × 1.1) + audio`,
@@ -113,8 +114,8 @@ compares codec families only.
 
 ## MediaConvert settings
 
-`fast_channels.core.mediaconvert.compile_job_settings` compiles the ladder into the job template. Every setting stays
-on MediaConvert's Basic tier.
+`fast_channels.core.mediaconvert.compile_job_settings` compiles the ladder into the job template. Every setting of
+the template stays on MediaConvert's Basic tier.
 
 | Setting | Value | Why |
 |---|---|---|
@@ -128,8 +129,11 @@ on MediaConvert's Basic tier.
 | Captions | `CaptionLanguageSetting NONE` | Writes `CLOSED-CAPTIONS=NONE` on every variant (Apple 433088) |
 | I-frame playlists | `IFrameOnlyManifest EXCLUDE` | Not used |
 
-Not used: ESAM, ad markers, accelerated transcoding, audio normalisation, captions and subtitles. Each job sends
-only sparse overrides (its input and destination), which CreateJob deep-merges into the template.
+Not used: ad markers, accelerated transcoding, audio normalisation, captions and subtitles. Each job sends only
+sparse overrides, which CreateJob deep-merges into the template (`build_job_overrides`): its input and destination
+and, only for a title with a cue point between segment boundaries, `Esam` (an `SccXml` signal processing
+notification, `ResponseSignalPreroll` 0). The template never carries ESAM. ESAM is a Professional-tier feature, so
+such a job is billed on the Professional tier ([cue points](#cue-points-and-esam)).
 
 ## What an encode writes
 
@@ -150,8 +154,9 @@ main_avc-360p.m3u8
 ```
 
 Media playlists are `EXT-X-VERSION:3`, `TARGETDURATION:6`, `PLAYLIST-TYPE:VOD`, with `#EXTINF:6.006,` for every
-segment but the last, identical in every variant. There is no `EXT-X-MAP`. mediastreamvalidator passes a `standard`
-encode; it reports only the ShouldAuth advisory 242528 (no subtitle group).
+segment but the last, identical in every variant. An [ESAM split](#cue-points-and-esam) replaces the segment that
+holds a cue point with two shorter ones, in every variant. There is no `EXT-X-MAP`. mediastreamvalidator passes a
+`standard` encode; it reports only the ShouldAuth advisory 242528 (no subtitle group).
 
 ### The `hls` rendition profile
 
@@ -182,19 +187,34 @@ names the profiles it registers and a channel the outputs it serves:
 - Sources without a video or an audio track are refused (every variant carries audio).
 - Sources smaller than the top rung are upscaled; the asset records a warning.
 
-## Cue points and the segment grid
+## Cue points and ESAM
 
 Channel Assembly can only insert an ad break where **every track** has a segment boundary, within 100 ms
 ([ADR-0008](adr/0008-ad-break-alignment.md)). Every variant is cut on the same GOP grid and carries its audio in the
-same segments, so every segment boundary is such a boundary.
+same segments, so every segment boundary is such a boundary, and a boundary forced into the video splits the audio
+with it.
 
 1. Editorial cue points (`cue_points_ms` from the CMS, a sidecar, or the v2 `AdOffsets` S3 object tag) are snapped
-   to the nearest segment boundary (`Grid.snap_to_segment`, the 6.006 s grid at 29.97 fps). A break therefore lands
-   within ±3 s (half a segment) of the editorial cue: `600000` (10:00) becomes `600600`. Points that snap to 0 are
-   dropped, and points that snap to the same boundary become one.
-2. MediaConvert's Basic tier has no ESAM, so no segment is split and every segment but the last is 6.006 s.
-3. With cue points, the asset's break offsets are the snapped points. Without, they are every interior segment
-   boundary shared by all variants: about 600 candidate offsets per hour.
+   to the nearest frame (`Grid.snap_to_frame`), rounded to the millisecond, so a break lands within half a frame of
+   the cue (about ±17 ms at 29.97 fps): `600000` (10:00) becomes `599999`, the start of frame 17982. Points that snap
+   to 0 are dropped, and points that snap to the same frame become one.
+2. A point on the natural segment grid (`Grid.on_segment_grid`: every 6.006 s at 29.97 fps, such as `600600`) is
+   already a boundary of every variant and needs nothing.
+3. Any other point adds ESAM to that title's job (`core.esam.build_esam`): an ESAM signal processing notification
+   (`SccXml` only) with an SCTE-35 placement opportunity (time_signal, segmentation type `0x34`) at each snapped
+   point, and `ResponseSignalPreroll` 0 (the default 4000 ms can put the split a segment early). MediaConvert forces
+   an IDR and a segment boundary at that frame in every variant, and the grid resumes at its next natural boundary:
+   in a real job, cue points at 13.480 s and 26.994 s gave segments 12.012–13.480–18.018 s and 24.024–26.994–30.030 s
+   in all three variants. Each such point adds one short segment. The segments carry no SCTE-35
+   (`Scte35Source NONE`): Channel Assembly takes the breaks from the schedule.
+4. ESAM is a Professional-tier feature, and MediaConvert bills every output of a job that uses it at that tier: about
+   **$0.06 per content minute** on `standard` instead of $0.0375 ([cost](#cost)). Only titles with off-grid cue
+   points pay it (`JobOverrides.professional`); the job template, the kits and every other title stay on the Basic
+   tier. To keep a title on the Basic tier, place its cue points on the segment grid.
+5. With cue points, the asset's break offsets are the snapped points: Finalize keeps a point when a segment boundary
+   that every variant shares lies within 100 ms of it (with ESAM, that boundary is the snapped frame) and drops any
+   other point with a warning. Without cue points, the break offsets are every interior segment boundary shared by
+   all variants: about 600 candidate offsets per hour.
 
 The library stores the valid offsets per asset (`break_offsets_ms`, plus the snapped `cue_points_ms`); the planner
 never invents one. It picks the offsets closest to the channel's break cadence, and trusts editorial cue points where
@@ -214,10 +234,12 @@ The `Finalize` step runs after every encode:
   values (formula above). Measured values of a static slate or house ad would otherwise advertise a fraction of the
   content bitrate, and Channel Assembly copies them into the channel.
 - **Duration and break offsets** are computed from the media playlists: the segment boundaries every variant shares
-  exactly (`manifests.segment_boundaries_ms`), or, for an asset with cue points, those of its snapped points.
-- **Ads** get an SGAI-ready copy under `ads/<ladder>/<creative_id>/`: media playlists with absolute segment URIs on
-  the content host, the multivariant's child URIs kept relative (MediaTailor re-hosts only the manifests of
-  preconditioned ads; see [ad-insertion.md](ad-insertion.md#preconditioned-ads)).
+  exactly (`manifests.segment_boundaries_ms`), or, for an asset with cue points, its snapped points that lie within
+  100 ms of such a boundary.
+- **Ads** get a copy of their manifests under `ads/<ladder>/<creative_id>/`: the multivariant with its child URIs
+  kept relative, and media playlists with absolute segment URIs on the content host. The CDN never serves
+  `assets/*.m3u8`, so MediaTailor reads a preconditioned ad from the copy
+  ([ad-insertion.md](ad-insertion.md#preconditioned-ads)).
 
 Content and slates are then registered as Channel Assembly VOD sources named `<asset_id>-<ladder key>` with one
 package configuration per `package_profiles` entry; ads are not registered.
@@ -251,20 +273,22 @@ runtime `encoding___provision_ladder` runs the same state machine for agent-prop
 
 ## Cost
 
-Estimates come from `fast_channels.core.cost`: us-east-1 on-demand list prices of the Basic tier, first pricing
-band, billed per output, per started second, with a 10 s minimum. They are what the tools report
-(`library___ingest`, `encoding___propose_ladder`); your bill is authoritative.
+Estimates come from `fast_channels.core.cost`: us-east-1 on-demand list prices, first pricing band, billed per
+output, per started second, with a 10 s minimum (`encode_cost(ladder, duration_ms, professional=…)`). Jobs are billed
+on the Basic tier; a job with [ESAM](#cue-points-and-esam) is billed on the Professional tier for every output. The
+estimates are what the tools report (`library___ingest`, `encoding___propose_ladder`); your bill is authoritative.
 
 | Ladder | Tier | Per content minute | Per content hour | Kit (once per ladder version) |
 |---|---|---|---|---|
 | `standard` | Basic | $0.0375 | $2.25 | about $0.25 |
+| `standard`, title with off-grid cue points (ESAM) | Professional | $0.06 | $3.60 | |
 
-Where the money goes, per content minute: `avc-720p` $0.015 and `avc-1080p` $0.015 (HD), `avc-360p` $0.0075 (SD).
-The audio is muxed into each variant's output, so it adds no output of its own. The multi-codec CMAF ladder this
-replaced cost about $0.56 per content minute on the Professional tier
-([ADR-0016](adr/0016-plain-hls-ts-avc-aac-basic-tier.md)).
+Where the money goes, per content minute: `avc-720p` $0.015 and `avc-1080p` $0.015 (HD), `avc-360p` $0.0075 (SD);
+with ESAM $0.024, $0.024 and $0.012. The audio is muxed into each variant's output, so it adds no output of its own.
+Kits have no cue points and stay on the Basic tier. The multi-codec CMAF ladder this replaced cost about $0.56 per
+content minute on the Professional tier ([ADR-0016](adr/0016-plain-hls-ts-avc-aac-basic-tier.md)).
 
-Encode times measured on the demo stage (Basic tier, no acceleration, 2026-10-17):
+Encode times measured on the demo stage (Basic tier without ESAM, no acceleration, 2026-10-17):
 
 | Title | Length | Encode time |
 |---|---|---|
@@ -274,12 +298,12 @@ Encode times measured on the demo stage (Basic tier, no acceleration, 2026-10-17
 | Sintel trailer | 0:52 | 15 s |
 | Kit items (slates, house ads) | 30–120 s each | 10–41 s each |
 
-AVC on the Basic tier, per output minute:
+AVC single-pass HQ, per output minute:
 
-| Frame rate | SD (< 720 lines) | HD (720–1080 lines) |
-|---|---|---|
-| Up to 30 fps | $0.0075 | $0.015 |
-| Above 30, up to 60 fps (×1.25) | $0.0094 | $0.0188 |
+| Frame rate | Basic SD (< 720 lines) | Basic HD (720–1080 lines) | Professional SD | Professional HD |
+|---|---|---|---|---|
+| Up to 30 fps | $0.0075 | $0.015 | $0.012 | $0.024 |
+| Above 30, up to 60 fps (×1.25) | $0.0094 | $0.0188 | $0.015 | $0.03 |
 
 Landscape outputs are measured vertically, portrait outputs horizontally. To cut cost further, drop rungs your
 audience does not need: `standard` without `avc-1080p` costs $0.0225 per minute (the agent's `propose_ladder` reports
@@ -330,7 +354,7 @@ before a channel can switch.
   AV1 or 4K output.
 - **No captions or subtitles.** Every variant declares `CLOSED-CAPTIONS=NONE` and there are no subtitle renditions
   ([ADR-0016](adr/0016-plain-hls-ts-avc-aac-basic-tier.md)).
-- **SGAI in hls.js.** hls.js 1.7.3 stalls entering an append-in-place interstitial when AAC audio is muxed into the
-  content segments; SSAI and other players are not affected
-  ([ad-insertion.md](ad-insertion.md#monitoring-and-troubleshooting)).
+- **ESAM segments.** Each off-grid cue point adds a short segment to every variant, for which Channel Assembly
+  reports `SEGMENT_DURATION_MISMATCH` warnings; the tools filter them
+  ([channel-assembly.md](channel-assembly.md#alerts)).
 - **Untagged sources** raise MediaConvert colour-space warnings 230001/230005. They are harmless.

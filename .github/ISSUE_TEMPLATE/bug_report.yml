@@ -22,5 +22,5 @@ body:
     id: area
     attributes:
       label: Area
-      options: [Ingest and encoding, Channel Assembly, Ad insertion (SSAI/SGAI), Delivery (CloudFront), Agent and tools, Console, Deployment, Documentation]
+      options: [Ingest and encoding, Channel Assembly, Ad insertion (SSAI), Delivery (CloudFront), Agent and tools, Console, Deployment, Documentation]
     validations: { required: true }

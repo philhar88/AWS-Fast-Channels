@@ -133,6 +133,7 @@ def test_job_template_is_the_compiled_ladder(template: Template) -> None:
         assert hls == {"IframeOnlyManifest": "EXCLUDE"}  # the Java bean name, not IFrameOnlyManifest
     assert props["Queue"]["Fn::GetAtt"][0].startswith("IngestQueue")
     assert "AccelerationSettings" not in props  # Basic tier: no accelerated transcoding
+    assert "Esam" not in props["SettingsJson"]  # Basic tier: ESAM comes per job, with the cue points that need it
     assert props["StatusUpdateInterval"] == "SECONDS_60"
     assert props["Tags"] == {"fast:app": "fast", "fast:ladder": STANDARD.version, "fast:owner": "iac"}
 
@@ -209,6 +210,8 @@ def test_ingest_definition(template: Template) -> None:
         "ClientRequestToken": "{% $asset.job.ClientRequestToken %}",
     }
     assert "Tags" not in transcode["Arguments"]  # Tags would need mediaconvert:TagResource (mediaconvert.md §7.4)
+    # Prepare's Settings reach CreateJob whole, Esam included (cue points between segment boundaries).
+    assert "Esam" not in json.dumps(transcode)
     assert transcode["Retry"][0]["ErrorEquals"] == [
         "MediaConvert.TooManyRequestsException",
         "MediaConvert.InternalServerErrorException",
@@ -268,6 +271,22 @@ def test_finalize_and_register_settings(template: Template) -> None:
     assert finalize["PACKAGE_PROFILES"] == ",".join(PROFILES)
     assert finalize["CONTENT_BASE_URL"] == "https://media.example.com"
     assert register["SOURCE_LOCATION"] == "fast-origin"
+
+
+def s3_writes(template: Template, role_prefix: str) -> set[str]:
+    """Media-bucket key patterns a role may PutObject to."""
+    return {
+        resource["Fn::Join"][1][-1]
+        for s in policy_statements(template, role_prefix)
+        if "s3:PutObject" in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])
+        for resource in (s["Resource"] if isinstance(s["Resource"], list) else [s["Resource"]])
+    }
+
+
+def test_finalize_writes_encode_manifests_and_ad_manifest_copies(template: Template) -> None:
+    # Ads get copies under ads/: the CDN never serves assets/*.m3u8, and MediaTailor reads VAST MediaFiles through it.
+    assert s3_writes(template, "IngestFinalize") == {"/assets/*", "/ads/*"}
+    assert s3_writes(template, "KitsKit") == {"/ads/*"}  # VAST pods and the beacon
 
 
 def test_dynamodb_grants_are_item_level_on_the_table(template: Template) -> None:

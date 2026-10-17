@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from fast_channels.core.cost import encode_cost, encode_cost_per_minute
 from fast_channels.core.ingest import ASSET_ID_PATTERN, LADDER_VERSION_PATTERN, AssetKind, IngestRequest
+from fast_channels.core.mediaconvert import needs_esam
 from fast_channels.core.naming import mediatailor_name
 from fast_channels.functions import aws
 from fast_channels.functions.aws import execution_arn
@@ -177,7 +178,9 @@ class IngestInput(BaseModel):
         None, pattern=ASSET_ID_PATTERN, description="Library id; omit to derive a stable id from the file name."
     )
     cue_points_ms: list[int] = Field(
-        [], description="Editorial ad-break positions in ms (catalog cue_points_ms); snapped to the segment grid."
+        [],
+        description="Editorial ad-break positions in ms (catalog cue_points_ms); snapped to the nearest frame. A "
+        "point between segment boundaries adds ESAM, which bills the encode at MediaConvert's Professional tier.",
     )
     duration_ms: int | None = Field(
         None, gt=0, description="Running time in ms (catalog duration_ms); only used for the cost estimate."
@@ -196,7 +199,11 @@ class IngestOutput(BaseModel):
     execution_name: str = Field(description="Pass to library___get_ingest_status.")
     execution_arn: str
     started_at: str
-    cost_per_minute_usd: float = Field(description="Estimated MediaConvert cost per minute of content.")
+    pricing_tier: Literal["BASIC", "PROFESSIONAL"] = Field(
+        description="MediaConvert pricing tier of the encode: PROFESSIONAL when a cue point is between segment "
+        "boundaries (ESAM splits every rendition at its frame), else BASIC."
+    )
+    cost_per_minute_usd: float = Field(description="Estimated MediaConvert cost per minute of content, at that tier.")
     estimated_cost_usd: float | None = Field(None, description="Estimated encode cost; null when duration is unknown.")
 
 
@@ -204,9 +211,10 @@ class IngestOutput(BaseModel):
 def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
     """Encode a mezzanine file into the media library with a ladder version (MediaConvert, billed per output
     minute). Encode with the ladder of the channel that will air it; pass the catalog duration_ms to get
-    estimated_cost_usd. Returns as soon as the ingest pipeline starts; poll library___get_ingest_status with the
-    execution_name until done (minutes). Refuses assets already in the library unless they FAILED, and S3 sources
-    outside the ingest bucket."""
+    estimated_cost_usd. Cue points between segment boundaries make ad breaks frame-accurate with ESAM, at the
+    Professional tier (about 1.6 times the Basic cost). Returns as soon as the ingest pipeline starts; poll
+    library___get_ingest_status with the execution_name until done (minutes). Refuses assets already in the library
+    unless they FAILED, and S3 sources outside the ingest bucket."""
     config = settings()
     config.require("ingest_state_machine_arn", "ingest_bucket")
     ladder_version = request.ladder_version or _default_ladder_version()
@@ -239,7 +247,11 @@ def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
             f"this session already ingested {asset_id} (execution {name})",
             hint="Check it with library___get_ingest_status; to encode the file again, pass a different asset_id.",
         ) from error
-    logger.info("ingest started", extra={"asset_id": asset_id, "ladder_version": ladder_version, "execution": name})
+    esam = needs_esam(ladder, request.cue_points_ms)  # the rule Prepare's job overrides follow
+    logger.info(
+        "ingest started",
+        extra={"asset_id": asset_id, "ladder_version": ladder_version, "execution": name, "esam": esam},
+    )
     return IngestOutput(
         asset_id=asset_id,
         ladder_version=ladder_version,
@@ -247,8 +259,9 @@ def ingest(request: IngestInput, ctx: ToolContext) -> IngestOutput:
         execution_name=name,
         execution_arn=started["executionArn"],
         started_at=store.iso(started["startDate"]),
-        cost_per_minute_usd=encode_cost_per_minute(ladder),
-        estimated_cost_usd=encode_cost(ladder, request.duration_ms) if request.duration_ms else None,
+        pricing_tier="PROFESSIONAL" if esam else "BASIC",
+        cost_per_minute_usd=encode_cost_per_minute(ladder, professional=esam),
+        estimated_cost_usd=encode_cost(ladder, request.duration_ms, professional=esam) if request.duration_ms else None,
     )
 
 

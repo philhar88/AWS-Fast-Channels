@@ -8,7 +8,7 @@ describe("playerGate", () => {
     ["STOPPED", false, { kind: "off-air", state: "STOPPED" }],
     ["MISSING", false, { kind: "off-air", state: "MISSING" }],
     [undefined, false, { kind: "checking" }],
-    // The Gateway failed before it answered once: try the stream, the players back off while it fails.
+    // The Gateway failed before it answered once: try the stream, the player backs off while it fails.
     [undefined, true, { kind: "play" }],
     // A failed poll keeps the last state the Gateway reported.
     ["STOPPED", true, { kind: "off-air", state: "STOPPED" }],

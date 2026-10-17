@@ -133,7 +133,7 @@ An ingest is one [`IngestRequest`](../contracts/ingest-request.schema.json):
 | `kind` | `content` (default), `slate` or `ad` |
 | `asset_id` | Optional; defaults to the file name's slug plus 6 hex of the URI (`big-buck-bunny-1a2b3c`) |
 | `content_id` | Your catalog id |
-| `cue_points_ms` | Editorial ad cue points; snapped to the nearest segment boundary (every 6.006 s at 29.97 fps, so within ±3 s of the cue) ([encoding.md](encoding.md#cue-points-and-the-segment-grid)) |
+| `cue_points_ms` | Editorial ad cue points; snapped to the nearest frame (within about ±17 ms at 29.97 fps). A point between segment boundaries (the 6.006 s grid at 29.97 fps) adds ESAM to the job, which bills that title's encode on the MediaConvert Professional tier: about $0.06 instead of $0.0375 per content minute on `standard` ([encoding.md](encoding.md#cue-points-and-esam)) |
 | `ladder_version` | e.g. `standard@843ed1d05a` (output `DefaultLadderVersion`; `encoding___list_ladders` lists the others) |
 | `correlation_id` | Optional trace id, `[A-Za-z0-9_-]{1,80}`; becomes the Step Functions execution name. Execution names cannot repeat for 90 days: use a new one per request (a new request that reuses one fails with `DuplicateCorrelationId`) |
 | `metadata` | String map; `title` is copied to the library asset |
@@ -150,8 +150,10 @@ aws s3 cp movie.mp4.json "s3://$INGEST_BUCKET/library/movie.mp4.json"   # {"cont
 aws s3 cp movie.mp4      "s3://$INGEST_BUCKET/library/movie.mp4"
 ```
 
-The sidecar's cue point `600000` (10:00) becomes a break offset of `600600`, the nearest segment boundary. Without
-sidecar cue points, the v2 `AdOffsets` object tag still works (milliseconds separated by spaces or commas).
+The sidecar's cue point `600000` (10:00) becomes a break offset of `599999`, the start of the nearest frame. It is not
+on the segment grid, so the encode adds ESAM and is billed on the Professional tier; a cue point of `600600`, a
+segment boundary, would keep it on the Basic tier. Without sidecar cue points, the v2 `AdOffsets` object tag still
+works (milliseconds separated by spaces or commas).
 Keys with whitespace are rejected with an `Asset Failed` event. A redelivered S3 event resolves to the same execution,
 so an upload is encoded once. This is also how `make seed` loads the sample titles: it writes each sidecar as
 `samples/<content id>.<ext>.json`, then streams the file to `samples/<content id>.<ext>`.
@@ -181,7 +183,7 @@ aws events put-events --entries '[{
 
 **3. Ask the agent** (`library___ingest`, approval required). It also refuses `s3://` sources outside the ingest
 bucket, assets that already exist (unless they failed) and ladders that are not provisioned, and it returns the cost
-estimate first.
+estimate first, with the `pricing_tier` (`BASIC`, or `PROFESSIONAL` when the cue points need ESAM).
 
 Ingest refuses sources without video or audio, HDR sources and frame-rate conversions across the 50/60 Hz families;
 see [encoding.md](encoding.md#frame-rates-interlace-and-hdr). The encode carries no captions or subtitles: captions in

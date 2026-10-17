@@ -45,6 +45,8 @@ from harness import (  # noqa: E402
 from playback import break_windows  # noqa: E402
 
 from fast_channels.core.ingest import AssetKind  # noqa: E402
+from fast_channels.core.manifests import parse_multivariant  # noqa: E402
+from fast_channels.core.mediaconvert import output_prefix  # noqa: E402
 from fast_channels.functions.aws import execution_arn  # noqa: E402
 from fast_channels.functions.tools.library_store import (  # noqa: E402
     GSI1,
@@ -194,6 +196,19 @@ def upload_and_wait(stage: Stage, library: Table, source: Path, sidecar: dict[st
 
 
 @pytest.fixture(scope="session")
+def variant_playlists(stage: Stage, ingested: Asset, ladder: Ladder) -> dict[str, str]:
+    """The media playlist of every variant of the test pattern's encode (read from S3), by its URI in
+    ``main.m3u8``."""
+    s3 = stage.session.client("s3", region_name=stage.region)
+    bucket, prefix = stage.output(Plane.DATA, "MediaBucketName"), output_prefix(ingested.asset_id, ladder.version)
+
+    def text(key: str) -> str:
+        return str(s3.get_object(Bucket=bucket, Key=f"{prefix}{key}")["Body"].read().decode())
+
+    return {variant.uri: text(variant.uri) for variant in parse_multivariant(text("main.m3u8"))}
+
+
+@pytest.fixture(scope="session")
 def plan(tools: Tools, channel: Channel, ingested: Asset) -> dict[str, Any]:
     """``schedule___plan``: the test pattern three times, starting in a few minutes, one break per program."""
     start = (datetime.now(UTC) + LEAD).replace(microsecond=0)
@@ -231,15 +246,14 @@ def observation(
     published: dict[str, Any],
     running: dict[str, Any],
 ) -> Observation:
-    """SSAI and SGAI sessions watched from the first program until every break was seen filled (or until shortly
-    after the last break)."""
+    """An SSAI session watched in every variant from the first program until every variant was seen with ads (or
+    until shortly after the last break)."""
     breaks = break_windows(published["programs"])
     assert len(breaks) >= 2, f"two breaks are needed (the first one airs its slate): {published['programs']}"
     until(datetime.fromisoformat(published["programs"][0]["start"]) - timedelta(seconds=10))
     return watch(
         player,
-        ssai_url=channel.url("ssai"),
-        sgai_url=channel.url("sgai"),
+        url=channel.url(),
         breaks=breaks,
         ends=breaks[-1].ends + timedelta(seconds=45),
         house_ads=house_ad_assets(library, ladder.version),

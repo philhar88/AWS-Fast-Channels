@@ -42,66 +42,6 @@
       "cors": "media"
     },
     {
-      "path": "/preconditioned-ads/*",
-      "origin": "mediatailor-segments",
-      "purpose": "Preconditioned ad playlists MediaTailor re-hosts for SGAI asset lists",
-      "methods": [
-        "GET",
-        "HEAD",
-        "OPTIONS"
-      ],
-      "compress": false,
-      "cache": {
-        "min_ttl": 1,
-        "default_ttl": 86400,
-        "max_ttl": 31536000,
-        "key": {
-          "query_strings": "none",
-          "headers": [],
-          "cookies": "none"
-        },
-        "compression": false,
-        "cloudfront_policy": {
-          "id": "b2884449-e4de-46a7-ac36-70bc7f1ddd6d",
-          "name": "Managed-CachingOptimizedForUncompressedObjects"
-        }
-      },
-      "cors": "media"
-    },
-    {
-      "path": "/v1/i-media/*",
-      "origin": "mediatailor-manifests",
-      "purpose": "SGAI media playlists: identical across sessions, cached for the origin's max-age (1 s)",
-      "methods": [
-        "GET",
-        "HEAD",
-        "OPTIONS"
-      ],
-      "compress": true,
-      "cache": {
-        "min_ttl": 0,
-        "default_ttl": 0,
-        "max_ttl": 31536000,
-        "key": {
-          "query_strings": "all",
-          "headers": [
-            "host",
-            "origin",
-            "x-http-method",
-            "x-http-method-override",
-            "x-method-override"
-          ],
-          "cookies": "all"
-        },
-        "compression": true,
-        "cloudfront_policy": {
-          "id": "4cc15a8a-d715-48a4-82b8-cc0b614638fe",
-          "name": "UseOriginCacheControlHeaders-QueryStrings"
-        }
-      },
-      "cors": "media"
-    },
-    {
       "path": "/v1/manifest/*",
       "origin": "mediatailor-manifests",
       "purpose": "SSAI HLS media playlists (per session, gzip)",
@@ -142,7 +82,7 @@
     {
       "path": "/v1/*",
       "origin": "mediatailor-manifests",
-      "purpose": "Session start (/v1/master, POST /v1/session), tracking, beacon redirects, interstitial asset lists",
+      "purpose": "Session start (/v1/master, POST /v1/session), tracking, ad segment redirects (/v1/segment)",
       "methods": [
         "GET",
         "HEAD",
@@ -188,7 +128,7 @@
     {
       "path": "*",
       "origin": "media",
-      "purpose": "MPEG-TS content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); content manifests under /assets are denied by the bucket policy",
+      "purpose": "MPEG-TS content and preconditioned ad segments; ad manifest copies, VAST pods and beacons (/ads); EPG feeds (/epg); content manifests under /assets are denied by the bucket policy",
       "methods": [
         "GET",
         "HEAD",

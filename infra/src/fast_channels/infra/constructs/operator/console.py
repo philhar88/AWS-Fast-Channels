@@ -46,16 +46,17 @@ def content_security_policy(*, region: str, url_suffix: str, connect_sources: Se
     """The console's CSP (console/README.md, verified in Playwright under the production bundle).
 
     ``data:`` fonts are Cloudscape's embedded Open Sans; ``blob:`` media are hls.js MSE buffers, and ``data:`` media
-    the hidden ``metadata`` track (``src="data:,WEBVTT"``) that hls.js creates for EXT-X-DATERANGE cues, which time
-    the SGAI interstitial transitions; the hls.js transmuxer runs in a ``blob:`` worker. ``connect-src`` covers the
-    media CDN, SGAI asset lists (``*.mediatailor``), the Runtime, the Gateway and Cognito, plus ``connect_sources``.
+    the hidden ``metadata`` track (``src="data:,WEBVTT"``) that hls.js creates for EXT-X-DATERANGE tags: SSAI
+    playlists still carry Channel Assembly's DATERANGE ad markers. The hls.js transmuxer runs in a ``blob:`` worker.
+    ``connect-src`` covers the media CDN, the Runtime, the Gateway and Cognito, plus ``connect_sources``. No
+    MediaTailor host: SSAI players fetch everything through the CDN (MediaTailor writes relative manifest URIs, and
+    the ``/v1/segment`` ad segment redirects point back at the CDN).
     """
     aws = f"{region}.{url_suffix}"
     connect = dict.fromkeys(
         [
             "'self'",
             *connect_sources,
-            f"https://*.mediatailor.{aws}",
             f"https://bedrock-agentcore.{aws}",
             f"https://*.gateway.bedrock-agentcore.{aws}",
             f"https://cognito-idp.{aws}",
@@ -127,7 +128,8 @@ class OperatorConsole(Construct):
     Args:
         cognito_domain_url: managed login domain (``https://<prefix>.auth.<region>.amazoncognito.com``).
         media_urls: media CDN and content base URLs the players fetch from.
-        connect_sources: further ``connect-src`` sources, e.g. third-party ad beacon hosts with external VAST.
+        connect_sources: further ``connect-src`` sources, e.g. another media CDN (ad beacons need none: MediaTailor
+            fires them server-side).
         dist: the console build; required whenever the stack's assets are bundled (``cdk deploy``/``synth``).
             Otherwise (``cdk destroy``, unit tests with bundling off) a placeholder page stands in for a missing
             build.

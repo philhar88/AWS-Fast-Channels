@@ -80,8 +80,8 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
 
 - a **LINEAR** channel (programs play once, back to back; gaps play the filler slate) with the ladder kit's filler
   slate, one output per profile and `AS_RUN` logging;
-- its own **playback configuration** of the same name (`PLAYER_SELECT`, so SSAI and SGAI) with three vended-log
-  deliveries ([ad-insertion.md](ad-insertion.md#the-playback-configuration));
+- its own **playback configuration** of the same name (`STITCHED_ONLY`: server-side ad insertion) with three
+  vended-log deliveries ([ad-insertion.md](ad-insertion.md#the-playback-configuration));
 - a **channel policy** that admits only `mediatailor.amazonaws.com` for exactly that playback configuration (SigV4),
   so anonymous requests to the channel get 403 ([ADR-0007](adr/0007-sigv4-channel-origin-no-cdn-shield.md));
 - a `CHANNEL#<name>` item in the media library (ladder, outputs, playback prefixes, owner `iac`, brief);
@@ -130,7 +130,8 @@ Programs are runtime data: the deployment creates none. The agent plans and publ
 
 - Program names are deterministic: `<yyyymmddThhmmss>-<asset_id>` of the planned UTC start (at most 64 characters).
 - An ad break is placed at one of the asset's valid offsets, its segment boundaries or its editorial cue points
-  snapped to them ([encoding.md](encoding.md#cue-points-and-the-segment-grid)), nearest to the brief's cadence. A
+  (snapped to the nearest frame, with an ESAM split when off the segment grid;
+  [encoding.md](encoding.md#cue-points-and-esam)), nearest to the brief's cadence. A
   break *inserts* its slate: a 10-minute program with two 60 s breaks airs for 12 minutes. The cadence runs across
   program boundaries within a block.
 - Break policy (in the channel brief):
@@ -248,9 +249,10 @@ is set to the last deploying stack's `observability.log_retention_days`, and del
 ## Alerts
 
 `origins___list_alerts` returns a channel's, VOD source's or source location's alerts, most severe first.
-`SCHEDULING_ERROR` alerts break playback and must be fixed. `SEGMENT_DURATION_MISMATCH` and `BANDWIDTH_MISMATCH` are
-informational (the multivariant advertises the ladder's nominal BANDWIDTH, not the measured one) and are hidden unless
-`include_noise` is set; they would otherwise bury real alerts (Channel Assembly stops at about 50 per program).
+`SCHEDULING_ERROR` alerts break playback and must be fixed. `SEGMENT_DURATION_MISMATCH` (the short segments of an
+ESAM split, and a title's last segment) and `BANDWIDTH_MISMATCH` (the multivariant advertises the ladder's nominal
+BANDWIDTH, not the measured one) are informational and are hidden unless `include_noise` is set; they would
+otherwise bury real alerts (Channel Assembly stops at about 50 per program).
 `schedule___publish` and `channels___start_channel` return the filtered alerts too.
 
 ## Quotas and rate limits
