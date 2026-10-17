@@ -17,9 +17,9 @@ v3 next to v2, move your content and channels over, then delete the v2 stack. Th
 | Runtime | Python 3.12 Lambda functions with boto3, crhelper and xmltodict layers | Python 3.14 arm64 Lambda functions from one bundle, Powertools, Step Functions with JSONata |
 | Packaging | MediaConvert outputs re-packaged by MediaPackage VOD (HLS, DASH and CMAF packaging configurations); Channel Assembly read MediaPackage with a Secrets Manager token | One plain HLS encode per asset (MediaConvert Apple HLS group, MPEG-TS segments, AVC with AAC muxed); Channel Assembly reads the media bucket directly with SigV4. No MediaPackage, Secrets Manager or KMS key |
 | Ladder | Generated from `assets/presets.csv`; AVC and HEVC up to 2160p | A validated TOML ladder, `standard` (AVC with muxed AAC to 1080p, MediaConvert Basic tier); fingerprinted versions ([encoding](encoding.md)) |
-| Ad breaks | `AdOffsets` S3 tag, ESAM for every offset | Cue points from a sidecar, the catalog or the same `AdOffsets` tag, snapped to the 6 s segment grid, no ESAM ([ADR-0008](adr/0008-ad-break-alignment.md)) |
+| Ad breaks | `AdOffsets` S3 tag, ESAM for every offset | Cue points from a sidecar, the catalog or the same `AdOffsets` tag, snapped to the nearest frame; ESAM only for points between segment boundaries, which bills that title's job on the MediaConvert Professional tier ([ADR-0008](adr/0008-ad-break-alignment.md)) |
 | Ads | `AdServerUrl` parameter (a demo VAST by default), creatives transcoded by MediaTailor | Preconditioned house ads per ladder and a static VAST pod by default; `ads.mode: external_vast` for your own server ([ad insertion](ad-insertion.md)) |
-| Ad insertion | SSAI | SSAI and SGAI (HLS Interstitials) from one `PLAYER_SELECT` playback configuration per channel |
+| Ad insertion | SSAI | SSAI from one `STITCHED_ONLY` playback configuration per channel, preconditioned house ads by default |
 | Channels | One sample channel; programs scheduled by hand in the MediaTailor console | IaC channels from `cdk.json`, agent-created channels, schedules planned and published by the agent's tools, autopilot, EPG feeds ([Channel Assembly](channel-assembly.md)) |
 | Operation | AWS console | Operator console with the scheduling agent on Amazon Bedrock AgentCore, Cognito users and Cedar policies ([agent](agent.md)) |
 | Delivery | CloudFront in front of MediaPackage | CloudFront with OAC to S3 and ordered MediaTailor behaviours; a CDN-neutral path contract ([delivery](delivery-and-multi-cdn.md)) |
@@ -50,8 +50,10 @@ v3 next to v2, move your content and channels over, then delete the v2 stack. Th
      see [integrate-your-cms.md](integrate-your-cms.md#ingest-contract).
    - `AdOffsets` tags keep working when the copy preserves tags (`aws s3 cp` and `aws s3 sync` copy tags by default with
      AWS CLI v2's `--copy-props default`).
-   - Budget the encode: about $0.0375 per content minute ($2.25 per hour) on `standard`. The pipeline runs 20
-     MediaConvert jobs at a time and queues the rest.
+   - Budget the encode: about $0.0375 per content minute ($2.25 per hour) on `standard`, and $0.06 ($3.60 per hour)
+     for titles whose cue points fall between segment boundaries and so need ESAM
+     ([encoding.md](encoding.md#cue-points-and-esam)). The pipeline runs 20 MediaConvert jobs at a time and queues
+     the rest.
    - Sources at 25 or 50 fps are refused by the 29.97 fps `standard` ladder; add a 50 Hz ladder first
      ([encoding.md](encoding.md#frame-rates-interlace-and-hdr)).
 3. **Load the catalog** so the agent can pick titles: write your titles into the `ReferenceCatalog` table, or put

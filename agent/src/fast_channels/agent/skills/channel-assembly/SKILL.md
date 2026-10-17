@@ -50,11 +50,11 @@ description: MediaTailor Channel Assembly rules for FAST channels - creating, st
 - A break plays a slate whose length is the break policy's `slate_gops` (15, 30, 45 or 60 GOPs, about 30, 60,
   90 or 120 s).
 - The plan tool chooses every break offset from the asset's valid offsets near the policy's cadence: its
-  editorial cue points, moved to the nearest 6 s segment boundary, or else any segment boundary. You only choose
-  the policy: `cadence_minutes`, `min_gap_minutes`, `max_breaks`, `slate_gops`.
+  editorial cue points, accurate to the frame, or else any 6 s segment boundary. You only choose the policy:
+  `cadence_minutes`, `min_gap_minutes`, `max_breaks`, `slate_gops`.
 - SCTE-35 signalling (TIME_SIGNAL) and event ids are deterministic per program; never set them yourself.
 
 ## Alerts
 - `origins___list_alerts` for the channel after every schedule change and before starting it. SCHEDULING_ERROR
-  alerts break playback and must be fixed; the expected SEGMENT_DURATION_MISMATCH and BANDWIDTH_MISMATCH
-  warnings are filtered out.
+  alerts break playback and must be fixed; the expected SEGMENT_DURATION_MISMATCH (short segments at
+  frame-accurate cue points) and BANDWIDTH_MISMATCH warnings are filtered out.

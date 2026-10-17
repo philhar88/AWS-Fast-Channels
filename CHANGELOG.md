@@ -7,8 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [3.0.0] - 2026-10-16
 
 A rewrite of FAST Channels on AWS on the AWS CDK (Python), with agentic scheduling on Amazon Bedrock AgentCore, one
-plain HLS encode per asset (MPEG-TS, AVC with AAC muxed, MediaConvert Basic tier), SSAI and SGAI, and end-to-end
-traceability. v2 deployments are not upgraded in place; see [docs/migration-from-v2.md](docs/migration-from-v2.md).
+plain HLS encode per asset (MPEG-TS, AVC with AAC muxed, MediaConvert Basic tier), frame-accurate ad cues, SSAI, and
+end-to-end traceability. v2 deployments are not upgraded in place; see
+[docs/migration-from-v2.md](docs/migration-from-v2.md).
 
 ### BREAKING
 
@@ -29,8 +30,8 @@ traceability. v2 deployments are not upgraded in place; see [docs/migration-from
   `library`, `origins`, `schedule`, `channels`, `encoding`), a Cedar policy engine in `ENFORCE` mode generated from
   the tool registry, human approval for the 11 tools that change what airs or cost money, AgentCore Memory (sessions
   and operator preferences, tool traffic excluded from extraction), and agent telemetry.
-- **Operator console** (React, Cloudscape, hls.js): chat with tool activity and approval cards; SSAI and SGAI players
-  side by side with ad, interstitial and beacon events; EPG timeline; channel start and stop; library and ladders.
+- **Operator console** (React, Cloudscape, hls.js): chat with tool activity and approval cards; an SSAI player with
+  ad events; EPG timeline; channel start and stop; library and ladders.
 - **Autopilot**: per-channel EventBridge Scheduler schedules that keep a channel's schedule 24 hours ahead with a
   machine token limited by Cedar to planning and publishing on its own channels. The machine client, its permits and
   the autopilot's error and dead-letter alarms exist only when a channel has an `autopilot_cron`.
@@ -44,14 +45,17 @@ traceability. v2 deployments are not upgraded in place; see [docs/migration-from
   High with AAC-LC 128 kbit/s stereo muxed in (`avc-720p` first, `avc-1080p`, `avc-360p`), 29.97 fps, 2 s closed GOPs,
   6.006 s segments and `CLOSED-CAPTIONS=NONE`, on the Basic tier at about $0.0375 per content minute. The encode's own
   `main.m3u8` is the one rendition profile, `hls`.
+- **Frame-accurate ad cues**: cue points snap to the nearest frame; a point between segment boundaries adds ESAM to
+  that title's job, which splits every variant at that frame and bills the job on the Professional tier (about $0.06
+  per content minute).
 - **Ingest pipeline** (Step Functions, JSONata): uploads with JSON sidecars, `Ingest Requested` events or tool calls;
-  probe-based refusals (HDR, 50/60 Hz conversions); cue points snapped to the segment grid; output verification
+  probe-based refusals (HDR, 50/60 Hz conversions); cue points snapped to the nearest frame; output verification
   against the ladder signature, nominal `BANDWIDTH`, break-offset discovery; VOD source registration. An encode that
   is `READY` is never overwritten in place, a reused correlation id is reported (`DuplicateCorrelationId`), and every
   refusal or failure ends in an `Asset Failed` event.
 - **Ladder kits**: filler slate, four break slates, two house ads and a VAST 4.2 pod per ladder version, encoded at
   deploy time or by the agent.
-- **Channels**: IaC LINEAR channels with per-channel `PLAYER_SELECT` playback configurations, SigV4-only channel
+- **Channels**: IaC LINEAR channels with per-channel `STITCHED_ONLY` playback configurations, SigV4-only channel
   policies, update guards and lifecycle handling; agent-created channels from the same specifications; auto-stop after
   a maximum runtime.
 - **Schedules**: deterministic planning with programming briefs (ratings, genres, dayparts and a break policy whose
@@ -61,7 +65,6 @@ traceability. v2 deployments are not upgraded in place; see [docs/migration-from
   record in DynamoDB (kept 30 days after each program ends), EPG feeds in JSON and XMLTV, as-run reconciliation.
   Starting a stopped channel late removes the programs whose start has passed (reported as `skipped`, `SKIPPED` in
   the guide) and airs the rest at their planned times.
-- **SGAI** (HLS Interstitials) next to SSAI, including preconditioned ads re-hosted for asset lists.
 - **Bring-your-own content**: agent tools to create SigV4 source locations for your buckets, register pre-encoded
   content after a ladder-signature check, and update package configurations.
 - **Delivery**: one CloudFront distribution (HTTP/2 and HTTP/3, IPv6, OAC) whose behaviours come from one routing
@@ -116,12 +119,25 @@ traceability. v2 deployments are not upgraded in place; see [docs/migration-from
   ([ADR-0016](docs/adr/0016-plain-hls-ts-avc-aac-basic-tier.md)). The first tag encoded one CMAF group of AV1, HEVC
   and AVC with HLS and DASH manifests per rendition profile and IMSC1 captions, on the Professional tier at about
   $0.56 per content minute; every feature brought MediaConvert, MediaTailor or hls.js behaviour to work around. The
-  encode is now three AVC variants with AAC muxed in, about $0.0375 per content minute, and SSAI is the focus. Gone:
-  the `uhd` ladder, rendition profiles other than `hls`, DASH outputs and playback URLs, HEVC, AV1, audio rendition
-  groups, I-frame playlists, ESAM, accelerated transcoding, loudness normalisation, and captions (the `captions.*`
-  settings, the Elemental Inference captioner, caption fields in requests, events and tools, and the console's CC
-  toggle). Cue points snap to the 6.006 s segment grid, so a break lands within ±3 s of its cue. Every ladder version
-  changes: kits re-provision and assets re-encode.
+  encode is now three AVC variants with AAC muxed in, about $0.0375 per content minute. Gone: the `uhd` ladder,
+  rendition profiles other than `hls`, DASH outputs and playback URLs, HEVC, AV1, audio rendition groups, I-frame
+  playlists, accelerated transcoding, loudness normalisation, and captions (the `captions.*` settings, the Elemental
+  Inference captioner, caption fields in requests, events and tools, and the console's CC toggle). Every ladder
+  version changes: kits re-provision and assets re-encode.
+- **SSAI only** ([ADR-0017](docs/adr/0017-ssai-only-frame-accurate-cues-with-esam.md)). The first tag served SSAI and
+  SGAI (HLS Interstitials) from `PLAYER_SELECT` playback configurations; they are now `STITCHED_ONLY`. Gone:
+  `?aws.insertionMode=GUIDED` URLs, asset lists, client-side beacons, the `/preconditioned-ads/*` and `/v1/i-media/*`
+  CloudFront routes, and the console's SGAI player. Playback URLs (the `Channels` output, `channels___get_channel`,
+  `core.specs.playback_urls`) are one SSAI URL per output instead of `{ssai, sgai}`. Preconditioned house ads stay:
+  their manifest copies under `ads/` are the VAST `MediaFile`s, and MediaTailor stitches their segments through
+  `/v1/segment` redirects.
+- **Frame-accurate cue points with ESAM** ([ADR-0017](docs/adr/0017-ssai-only-frame-accurate-cues-with-esam.md)).
+  Cue points snap to the nearest frame (about ±17 ms at 29.97 fps) instead of the first tag's 2 s GOP grid. As in the
+  first tag, a point between segment boundaries adds ESAM to that title's job only (`SccXml`, `ResponseSignalPreroll`
+  0); on the MPEG-TS ladder it splits all three variants at that frame (verified at 13.480 s and 26.994 s) and the
+  grid resumes. Such a job is billed on the Professional tier, about $0.06 instead of $0.0375 per content minute
+  (`library___ingest` reports `pricing_tier`); job templates, kits and other titles stay on the Basic tier. Finalize
+  keeps a cue point when a segment boundary of every variant lies within 100 ms of it.
 
 ### Fixed since the first v3.0.0 tag
 
@@ -134,14 +150,9 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ([ad-insertion.md](docs/ad-insertion.md#monitoring-and-troubleshooting)):
 
 - Channel Assembly removes a break's `EXT-X-DATERANGE` one playlist update too early: 552026 for most breaks on every
-  live media playlist of the Channel Assembly origin, SSAI and SGAI.
+  live media playlist of the Channel Assembly origin and SSAI.
 - MediaTailor SSAI writes the `EXT-X-PROGRAM-DATE-TIME` of the second and later ads in a pod one segment off in some
   reloads (536003).
-
-Players:
-
-- hls.js 1.7.3 players, the console's included, stall entering an append-in-place SGAI interstitial when AAC audio is
-  muxed into the content. SSAI and players other than hls.js are not affected; verify SGAI on your player.
 
 ## [2.0.0] - 2026-01-30
 

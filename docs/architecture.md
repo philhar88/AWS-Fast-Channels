@@ -3,14 +3,14 @@
 FAST Channels on AWS turns mezzanine files into always-on, ad-supported linear channels without a live encoder.
 Every title is encoded once into plain HLS: MPEG-TS segments with H.264 video and AAC audio muxed into every variant.
 AWS Elemental MediaTailor Channel Assembly plays those VOD sources as a linear schedule, MediaTailor ad insertion
-fills the breaks (server-side or server-guided), and Amazon CloudFront delivers everything. A scheduling agent on
+stitches ads into the breaks server-side (SSAI), and Amazon CloudFront delivers everything. A scheduling agent on
 Amazon Bedrock AgentCore builds the schedules through typed tools, under Cedar policies and human approval.
 
 ![Architecture](images/architecture.png)
 
 - [Planes and stacks](#planes-and-stacks)
 - [Ownership: CloudFormation owns containers, the runtime owns contents](#ownership-cloudformation-owns-containers-the-runtime-owns-contents)
-- [Flows](#flows): [ingest](#ingest), [scheduling and publishing](#scheduling-and-publishing), [playback](#playback-ssai-and-sgai)
+- [Flows](#flows): [ingest](#ingest), [scheduling and publishing](#scheduling-and-publishing), [playback](#playback-ssai)
 - [Construct catalogue](#construct-catalogue)
 - [Data model](#data-model)
 - [Design principles](#design-principles)
@@ -44,7 +44,7 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 | Stack | Outputs |
 |---|---|
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
-| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: {ssai, sgai}}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
+| Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: <SSAI URL>}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
 | Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
 
 ```bash
@@ -102,8 +102,8 @@ sequenceDiagram
     Trig->>S3i: read sidecar, AdOffsets tag
     Trig->>SFN: StartExecution(name = correlation id, IngestRequest)
     SFN->>MC: Prepare: Probe source (refuse HDR, 50/60 Hz mismatch)
-    SFN->>Lib: Prepare: asset INGESTING, cue points snapped to the segment grid
-    SFN->>MC: Transcode: CreateJob (job template + sparse overrides, run-a-job)
+    SFN->>Lib: Prepare: asset INGESTING, cue points snapped to the nearest frame
+    SFN->>MC: Transcode: CreateJob (job template + sparse overrides, ESAM for off-grid cue points, run-a-job)
     MC->>S3m: assets/{asset}/{ladder}/main.m3u8, main_{rendition}.m3u8, MPEG-TS segments
     SFN->>S3m: Finalize: verify the signature, normalise BANDWIDTH, break offsets
     SFN->>CA: Register: CreateVodSource (one package configuration per profile), ListAlerts
@@ -154,10 +154,10 @@ sequenceDiagram
 The autopilot follows the same path with a machine token on a schedule; Cedar limits it to read tools plus
 `schedule___plan` and `schedule___publish`. See [agent.md](agent.md).
 
-### Playback: SSAI and SGAI
+### Playback: SSAI
 
-One playback configuration per channel (`InsertionMode: PLAYER_SELECT`) serves both modes. The player chooses with a
-query string.
+One playback configuration per channel (`InsertionMode: STITCHED_ONLY`) stitches the ads into a personalised manifest
+per viewing session.
 
 ```mermaid
 sequenceDiagram
@@ -167,32 +167,18 @@ sequenceDiagram
     participant MT as MediaTailor ad insertion
     participant CA as Channel Assembly
     participant S3 as Media bucket (OAC)
-    participant IL as interstitials.mediatailor (direct)
 
-    rect rgb(240, 245, 255)
-    note over P,S3: SSAI (stitched): one personalised manifest per session
     P->>CF: GET /v1/master/{hash}/{channel}/hls.m3u8
     CF->>MT: forward (no cache)
     MT->>CA: GET channel manifest (SigV4)
     MT->>CF: GET /ads/{ladder}/vast.xml with ch, sid, evid, upid, dur_ms
     MT-->>P: manifest with ad segments stitched in
     P->>CF: GET /v1/manifest/... every target duration (gzip, no cache)
-    P->>CF: GET content and ad segments
+    P->>CF: GET content segments
     CF->>S3: on a cache miss (OAC)
-    end
-
-    rect rgb(240, 255, 245)
-    note over P,IL: SGAI (HLS Interstitials): shared media playlists, ads chosen per viewer
-    P->>CF: GET /v1/master/...hls.m3u8?aws.insertionMode=GUIDED
-    CF->>MT: forward
-    MT-->>P: multivariant pointing to /v1/i-media/...
-    P->>CF: GET /v1/i-media/... (shared across sessions, cached for 1 s)
-    CF->>MT: on a cache miss
-    MT->>CA: GET channel manifest (SigV4)
-    P->>IL: GET X-ASSET-LIST of the break's DATERANGE
-    IL-->>P: asset list (preconditioned ad playlists, TRACKING with aws.reportingMode=CLIENT)
-    P->>CF: GET /preconditioned-ads/... and ad segments
-    end
+    P->>CF: GET /v1/segment/... (ad segment, beacons fired server-side)
+    CF->>MT: forward (no cache)
+    MT-->>P: 301 to the ad segment on the CDN
 ```
 
 The channel policy admits only the channel's own playback configuration (SigV4), so viewers cannot read Channel
@@ -259,8 +245,8 @@ channels are built from the same functions (`core.specs`).
 `ReferenceCatalog` holds `CONTENT#<content_id>` / `META` items (GSI1 `GENRE#<genre>` / `<title>`).
 
 Media bucket keys: `assets/<asset_id>/<ladder>/main*.m3u8` plus MPEG-TS segments (`.ts`); `ads/<ladder>/vast.xml`,
-`ads/<ladder>/<creative_id>/…` (SGAI-ready ad manifests) and `ads/b.gif`; `epg/<channel>.json|.xml`. In keys a ladder
-version `standard@843ed1d05a` is written `standard_843ed1d05a`.
+`ads/<ladder>/<creative_id>/…` (copies of the ad manifests, which MediaTailor reads) and `ads/b.gif`;
+`epg/<channel>.json|.xml`. In keys a ladder version `standard@843ed1d05a` is written `standard_843ed1d05a`.
 
 Domain events on the `<prefix>-fast-channels` bus (source `fast-channels.<prefix>`, schema in
 [`contracts/events.schema.json`](../contracts/events.schema.json)): `Ingest Requested` (in), `Asset Ready`,
