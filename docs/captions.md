@@ -196,6 +196,15 @@ are no sound or music descriptions or speaker labels, which is why every generat
   video's durations and count, every cue clipped to its new segments (pieces of a cue split at the old boundaries
   joined first), MediaConvert's boxes and document head kept, and the media playlist and the DASH text timelines
   copied from the video's. Encodes without ESAM are left as they are.
+- **What an offset does in SSAI.** MediaTailor places every break at the video's media sequence number in every
+  rendition. With a subtitle offset of N, the subtitle playlist's break starts N segments early, replacing content
+  entries already served, and ends N segments late; around breaks every rendition's
+  `EXT-X-DISCONTINUITY-SEQUENCE` changes between reloads (mediastreamvalidator 652018 and 652014, Critical;
+  536001-536004 and 552027). HLS lets every rendition number its segments on its own (HLS 2nd edition §4.4.3.2), so
+  this is a MediaTailor defect that our tracks set off. Channel Assembly caches source playlists
+  ([manifest caching](https://docs.aws.amazon.com/mediatailor/latest/ug/channel-assembly-manifest-caching.html)): a
+  track rewritten after registration keeps airing as it was until `UpdateVodSource`, which the pipeline's Register
+  step calls for an existing source. An offset a channel has built up stays until the channel restarts.
 
 ## Through Channel Assembly, ad insertion and players
 

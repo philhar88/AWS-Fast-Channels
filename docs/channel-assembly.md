@@ -52,6 +52,12 @@ own: it passes the ladder's IMSC tracks through, renamed by position (`sub_1.m3u
 silently loses its ad breaks ([captions.md](captions.md#why-imsc1-and-why-caption-tracks-belong-to-the-ladder)). Registration runs one VOD source at a time (the API
 allows 1 TPS) and then checks the source's alerts. Ads are not registered: MediaTailor reads them from the VAST pod.
 
+Channel Assembly caches a VOD source's playlists
+([manifest caching](https://docs.aws.amazon.com/mediatailor/latest/ug/channel-assembly-manifest-caching.html)). If
+you rewrite the manifests of a registered source in place, call `UpdateVodSource` (re-running Register does), or
+channels keep airing the old playlists: in a test, Tears of Steel still aired with its old caption playlist more
+than two hours after the rewrite in S3.
+
 ## Channels
 
 ### IaC channels
