@@ -100,10 +100,9 @@ def _media_exports(stack: Stack) -> MediaExports:
                 name="fast-demo",
                 arn=f"arn:aws:mediatailor:{REGION}:{ACCOUNT}:channel/fast-demo",
                 ladder_version=LADDER,
-                outputs=("hls", "hls-avc", "dash-avc"),
+                outputs=("hls",),
                 playback_configuration_name="fast-fast-demo",
                 hls_prefix=config.attr_hls_configuration_manifest_endpoint_prefix,
-                dash_prefix=config.attr_dash_configuration_manifest_endpoint_prefix,
             ),
         ),
         playback_configuration_template=json.dumps({"content_base_url": CDN, "log_destination_arn": DESTINATION}),
@@ -912,10 +911,9 @@ def test_console_config_follows_contracts_h() -> None:
                 "fast-demo",
                 "arn",
                 LADDER,
-                ("hls", "dash-avc"),
+                ("hls",),
                 "fast-fast-demo",
                 "https://h.mediatailor.us-east-1.amazonaws.com/v1/master/abc/fast-fast-demo/",
-                "https://h.mediatailor.us-east-1.amazonaws.com/v1/dash/abc/fast-fast-demo/",
             ),
         ),
     ).document()
@@ -942,7 +940,6 @@ def test_console_config_follows_contracts_h() -> None:
                     "ssai": f"{CDN}/v1/master/abc/fast-fast-demo/hls.m3u8",
                     "sgai": f"{CDN}/v1/master/abc/fast-fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
                 },
-                "dash-avc": {"dash": f"{CDN}/v1/dash/abc/fast-fast-demo/dash-avc.mpd"},
             },
         }
     ]

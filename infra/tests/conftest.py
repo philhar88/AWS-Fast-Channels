@@ -2,7 +2,8 @@
 
 import json
 import re
-from collections.abc import Callable, Mapping
+import shutil
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from aws_cdk import App, Stack
 from aws_cdk.assertions import Template
 from syrupy.extensions.json import JSONSnapshotExtension
 
+from fast_channels.core.ladder import BUILTIN_DIR, LADDERS_DIR_ENV, Ladder, LadderOps, propose
 from fast_channels.infra.app import build
 from fast_channels.infra.config import FastChannelsConfig
 
@@ -84,6 +86,20 @@ def deployment() -> Callable[..., Deployment]:
 def default(deployment: Callable[..., Deployment]) -> Deployment:
     """The shipped configuration in us-east-1."""
     return deployment()
+
+
+@pytest.fixture(scope="module")
+def second_ladder(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Ladder]:
+    """A ladders directory (``FAST_LADDERS_DIR``) with ``standard`` and a second built-in, ``mobile``: standard up
+    to 720p."""
+    directory = tmp_path_factory.mktemp("ladders")
+    shutil.copy(BUILTIN_DIR / "standard.toml", directory)
+    mobile = propose(Ladder.builtin("standard"), LadderOps(max_height=720, new_id="mobile")).ladder
+    assert mobile is not None
+    (directory / "mobile.toml").write_text(mobile.to_toml())
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(LADDERS_DIR_ENV, str(directory))
+        yield mobile
 
 
 @pytest.fixture

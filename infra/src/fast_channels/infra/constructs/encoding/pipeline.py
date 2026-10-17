@@ -2,7 +2,7 @@
 (SPEC §5.1)."""
 
 from collections.abc import Sequence
-from typing import Final, Protocol
+from typing import Final
 
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_dynamodb as dynamodb
@@ -18,10 +18,10 @@ from aws_cdk import aws_stepfunctions_tasks as tasks
 from constructs import Construct
 
 from fast_channels.core.events import DETAIL_TYPES, event_source
-from fast_channels.core.ingest import CAPTIONS_PREFIX, WORK_PREFIX, IngestRequest
+from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.tags import Owner, resource_tags
 from fast_channels.infra import nag
-from fast_channels.infra.arns import arn, executions
+from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.functions import FastFunction
 from fast_channels.infra.constructs.queues import dead_letter_queue
 from fast_channels.infra.grants import allow
@@ -35,21 +35,6 @@ EVENT_MAX_AGE: Final = Duration.hours(6)
 FUNCTIONS: Final = "fast_channels.functions.ingest"
 """Package of the pipeline's and the kit's step handlers."""
 STEP_FUNCTIONS_INVOKED: Final = "Invoked synchronously by Step Functions, which retries and catches its failures"
-CAPTION_SCAN_TIMEOUT: Final = Duration.hours(2)
-CAPTIONER_TIMEOUT: Final = Duration.hours(6)
-
-
-class Captioner(Protocol):
-    """A state machine that honours the captioner contract (``functions.ingest.captions``): it reads the mezzanine,
-    may use ``work/`` of the ingest bucket, and writes the captions under ``captions/``."""
-
-    @property
-    def engine(self) -> str:
-        """The engine's name, recorded with every track it generates (``elemental-inference``)."""
-        ...
-
-    @property
-    def state_machine(self) -> sfn.IStateMachine: ...
 
 
 class IngestPipeline(Construct):
@@ -57,12 +42,9 @@ class IngestPipeline(Construct):
 
     A Standard state machine (JSONata; ALL-level logs with execution data to
     ``/aws/vendedlogs/states/<prefix>-ingest``; X-Ray) takes an IngestRequest
-    (``contracts/ingest-request.schema.json``) and runs ``Prepare`` (probe, refusals, caption plan, sparse job
-    overrides, item INGESTING) -> [``ScanCaptions`` (a MediaConvert job looking for CEA-608/708 in the video)
-    -> ``CaptionsScanned`` -> [``GenerateCaptions`` (the captioner, StartExecution
-    ``.sync:2``) -> ``CaptionsGenerated``, or ``CaptionGenerationFailed``]] when the spoken language has no
-    captions yet -> ``Transcode`` (MediaConvert CreateJob with the run-a-job integration; Role and Queue are
-    literals, the job template and overrides come from Prepare) -> ``Finalize`` (verify outputs, AV1 av1C, nominal
+    (``contracts/ingest-request.schema.json``) and runs ``Prepare`` (probe, refusals, sparse job overrides, item
+    INGESTING) -> ``Transcode`` (MediaConvert CreateJob with the run-a-job integration; Role and Queue are
+    literals, the job template and overrides come from Prepare) -> ``Finalize`` (verify outputs, nominal
     BANDWIDTH, break offsets; the SGAI copy of ads) -> ``Register`` (a Map with MaxConcurrency 1 creating the VOD
     source; empty for ads) -> ``Publish`` (item READY, ``Asset Ready``). Every step catches into
     ``PublishFailure`` (item FAILED, ``Asset Failed``) and a Fail state; an execution that finds the same encode
@@ -76,7 +58,7 @@ class IngestPipeline(Construct):
 
     Args:
         prefix: deployment prefix (names, ``fast:app``, MediaConvert ``UserMetadata.app``, event source).
-        ingest_bucket: mezzanines and their sidecars; MediaConvert and Probe read it.
+        ingest_bucket: mezzanines, their sidecars and the kits' brand stills; MediaConvert and Probe read it.
         media_bucket: encoder outputs (``assets/``) and ad manifests (``ads/``).
         library: the media library table.
         event_bus: the ``fast-channels`` bus (``Asset Ready``/``Asset Failed`` out, ``Ingest Requested`` in).
@@ -87,8 +69,6 @@ class IngestPipeline(Construct):
         log_retention: retention of every log group.
         removal_policy: removal policy of the log groups and the dead-letter queue.
         concurrent_jobs: concurrent MediaConvert jobs of the pipeline's on-demand queue.
-        captioner: generates the spoken language's captions when an asset has none; ``None``: never generated.
-        captions_required: refuse assets whose spoken-language caption track would be empty.
 
     Attributes:
         state_machine: the ingest state machine (MediaExports ``ingest_state_machine``).
@@ -98,7 +78,7 @@ class IngestPipeline(Construct):
         queue: the ``CfnQueue``.
         dead_letter_queue: events that could not start an ingest.
         log_group: the state machine's log group.
-        trigger, prepare, captions, finalize, register, publish: the step functions (``FastFunction``).
+        trigger, prepare, finalize, register, publish: the step functions (``FastFunction``).
     """
 
     def __init__(
@@ -118,11 +98,8 @@ class IngestPipeline(Construct):
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         concurrent_jobs: int = 20,
-        captioner: Captioner | None = None,
-        captions_required: bool = False,
     ) -> None:
         super().__init__(scope, id)
-        self.captioner = captioner
         self.prefix = prefix
         self.ingest_bucket = ingest_bucket
         self.media_bucket = media_bucket
@@ -148,23 +125,10 @@ class IngestPipeline(Construct):
         self.role = self._mediaconvert_role()
         self.role_arn = self.role.role_arn
 
-        caption_settings = {
-            "INGEST_BUCKET": ingest_bucket.bucket_name,
-            "CAPTIONS_REQUIRED": str(captions_required).lower(),
-            "CAPTIONER": captioner.engine if captioner else "",
-        }
         self.prepare = self._step(
             "Prepare",
             "Ingest: probe, check and turn an asset into a MediaConvert job",
-            {
-                "FAST_PREFIX": prefix,
-                "LIBRARY_TABLE": library.table_name,
-                "MEDIA_BUCKET": media_bucket.bucket_name,
-                **caption_settings,
-            },
-        )
-        self.captions = self._step(
-            "Captions", "Ingest: resolve an asset's captions after the caption scan or generation", caption_settings
+            {"FAST_PREFIX": prefix, "LIBRARY_TABLE": library.table_name, "MEDIA_BUCKET": media_bucket.bucket_name},
         )
         self.finalize = self._step(
             "Finalize",
@@ -216,16 +180,8 @@ class IngestPipeline(Construct):
                 "creation) and X-Ray, which has no resource-level permissions",
                 **{
                     nag.wildcard_resource(f"{step.function.function_arn}:*"): "Invoke the step and its versions"
-                    for step in (self.prepare, self.captions, self.finalize, self.register, self.publish)
+                    for step in (self.prepare, self.finalize, self.register, self.publish)
                 },
-                **(
-                    {
-                        nag.wildcard_resource(f"{executions(captioner.state_machine)}*"): "Describe and stop the "
-                        "captioner executions it starts, whose names are only known at run time"
-                    }
-                    if captioner
-                    else {}
-                ),
             },
         )
 
@@ -275,19 +231,13 @@ class IngestPipeline(Construct):
             role,
             ["s3:GetObject"],
             [self.ingest_bucket.arn_for_objects("*")],
-            why="Mezzanines and caption files may have any key",
+            why="Mezzanines and the kits' brand stills may have any key",
         )
         allow(
             role,
             ["s3:PutObject"],
             [self.media_bucket.arn_for_objects("assets/*")],
             why="Encodes go to assets/<asset>/<ladder>/",
-        )
-        allow(
-            role,
-            ["s3:PutObject"],
-            [self.ingest_bucket.arn_for_objects(f"{WORK_PREFIX}*")],
-            why="Caption scans go to work/<asset>/<correlation id>/",
         )
         return role
 
@@ -298,20 +248,12 @@ class IngestPipeline(Construct):
         prepare.allow(["mediaconvert:Probe"], ["*"], why="mediaconvert:Probe has no resource-level permissions")
         # Probe reads the source with the caller's credentials (mediaconvert.md §7.3).
         prepare.allow(["s3:GetObject"], [self.ingest_bucket.arn_for_objects("*")], why="Mezzanines of any key")
-        # ListBucket turns a missing caption file into a 404 instead of a 403.
-        prepare.allow(["s3:ListBucket"], [self.ingest_bucket.bucket_arn])
-        self.captions.allow(
-            ["s3:GetObject"],
-            [self.ingest_bucket.arn_for_objects(f"{prefix}*") for prefix in (WORK_PREFIX, CAPTIONS_PREFIX)],
-            why="Caption scans and generated captions of any asset",
-        )
-        self.captions.allow(["s3:ListBucket"], [self.ingest_bucket.bucket_arn])
         prepare.allow(["dynamodb:GetItem", "dynamodb:PutItem"], library)
         # Whether the execution holding an INGESTING item still runs (a literal ARN: the machine needs this role).
         executions = arn(self, "states", "execution", f"{self.prefix}-ingest:*", colon=True)
         prepare.allow(["states:DescribeExecution"], [executions], why="Executions of the ingest state machine")
 
-        finalize.allow(["s3:GetObject", "s3:PutObject"], assets, why="Manifests and init segments of any encode")
+        finalize.allow(["s3:GetObject", "s3:PutObject"], assets, why="Manifests of any encode")
         finalize.allow(["s3:PutObject"], [self.media_bucket.arn_for_objects("ads/*")], why="SGAI-ready ad manifests")
         # ListBucket turns a missing manifest into a 404 instead of a 403.
         finalize.allow(
@@ -388,7 +330,6 @@ class IngestPipeline(Construct):
                 "JobTemplate": "{% $asset.job.JobTemplate %}",
                 "Settings": "{% $asset.job.Settings %}",
                 "UserMetadata": "{% $asset.job.UserMetadata %}",
-                "AccelerationSettings": "{% $asset.job.AccelerationSettings %}",
                 "ClientRequestToken": "{% $asset.job.ClientRequestToken %}",
             },
             integration_pattern=sfn.IntegrationPattern.RUN_JOB,
@@ -449,74 +390,9 @@ class IngestPipeline(Construct):
             outputs="{% $states.result.Payload %}",
         )
         prepare.add_catch(duplicate, errors=["IngestInProgressError"], outputs="{% $states.errorOutput %}")
-        caption_steps = self._caption_states(steps, transcode)
         for step in (prepare, transcode, finalize, register, publish):
             step.add_catch(failed, outputs="{% $states.errorOutput %}")
-        for caption_step in caption_steps:
-            caption_step.add_catch(failed, outputs="{% $states.errorOutput %}")
-        awaits_scan = sfn.Choice.jsonata(steps, "AwaitsCaptionScan")
-        awaits_scan.when(sfn.Condition.jsonata("{% $asset.captions.awaiting = 'scan' %}"), caption_steps[0])
-        awaits_scan.otherwise(transcode)
-        transcode.next(finalize).next(register).next(publish)
-        return prepare.next(awaits_scan)
-
-    def _caption_states(self, steps: Construct, transcode: sfn.IChainable) -> list[sfn.TaskStateBase]:
-        """ScanCaptions -> CaptionsScanned -> [GenerateCaptions -> CaptionsGenerated | CaptionGenerationFailed]
-        -> ``transcode``; returns the tasks, entry first (each catches into PublishFailure)."""
-
-        def resolve(id: str, step: str, **extra: str) -> tasks.LambdaInvoke:
-            fields = {"step": step, "asset": "{% $asset %}", **extra}
-            return tasks.LambdaInvoke.jsonata(
-                steps,
-                id,
-                lambda_function=self.captions.function,
-                payload=sfn.TaskInput.from_object(fields),
-                assign={"asset": "{% $states.result.Payload %}"},
-            )
-
-        scan = tasks.MediaConvertCreateJob.jsonata(
-            steps,
-            "ScanCaptions",
-            create_job_request={
-                "Role": self.role_arn,
-                "Queue": self.queue_arn,
-                "Settings": "{% $asset.caption_scan.Settings %}",
-                "UserMetadata": "{% $asset.caption_scan.UserMetadata %}",
-                "ClientRequestToken": "{% $asset.caption_scan.ClientRequestToken %}",
-            },
-            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
-            task_timeout=sfn.Timeout.duration(CAPTION_SCAN_TIMEOUT),
-        )
-        scan.add_retry(
-            errors=["MediaConvert.TooManyRequestsException", "MediaConvert.InternalServerErrorException"],
-            interval=Duration.seconds(5),
-            max_attempts=4,
-            backoff_rate=2,
-            jitter_strategy=sfn.JitterType.FULL,
-        )
-        scanned = resolve("CaptionsScanned", "scanned")
-        scan.next(scanned)
-        if self.captioner is None:
-            scanned.next(transcode)
-            return [scan, scanned]
-        generate = tasks.StepFunctionsStartExecution.jsonata(
-            steps,
-            "GenerateCaptions",
-            state_machine=self.captioner.state_machine,
-            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
-            input=sfn.TaskInput.from_text("{% $asset.captioner_input %}"),
-            task_timeout=sfn.Timeout.duration(CAPTIONER_TIMEOUT),
-        )
-        generated = resolve("CaptionsGenerated", "generated", result="{% $states.input.Output %}")
-        generation_failed = resolve("CaptionGenerationFailed", "failed", error="{% $states.input %}")
-        generate.add_catch(generation_failed, outputs="{% $states.errorOutput %}")
-        awaits_generation = sfn.Choice.jsonata(steps, "AwaitsCaptionGeneration")
-        awaits_generation.when(sfn.Condition.jsonata("{% $asset.captions.awaiting = 'generation' %}"), generate)
-        awaits_generation.otherwise(transcode)
-        scanned.next(awaits_generation)
-        generate.next(generated).next(transcode)
-        generation_failed.next(transcode)
-        return [scan, scanned, generated, generation_failed]
+        return prepare.next(transcode).next(finalize).next(register).next(publish)
 
     def _trigger(self, default_ladder_version: str) -> FastFunction:
         trigger = FastFunction(

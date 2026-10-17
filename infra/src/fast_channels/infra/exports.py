@@ -19,7 +19,7 @@ from aws_cdk import aws_stepfunctions as sfn
 from fast_channels.core.specs import playback_urls
 
 _PREFIX_PARTS: Final = 8
-"""``https://<id>.mediatailor.<r>.amazonaws.com/v1/{master|dash}/<hash>/<config>/`` split on ``/``
+"""``https://<id>.mediatailor.<r>.amazonaws.com/v1/master/<hash>/<config>/`` split on ``/``
 (ad-insertion.md §1): indexes 3 to 6 are the path."""
 
 
@@ -52,23 +52,20 @@ class ChannelExports:
     arn: str
     ladder_version: str
     outputs: tuple[str, ...]
-    """Channel output (= source group = rendition profile) names, e.g. ``("hls", "hls-avc", "dash-avc")``."""
+    """Channel output (= source group = rendition profile) names, e.g. ``("hls",)``."""
     playback_configuration_name: str
     hls_prefix: str
     """``HlsConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
-    dash_prefix: str
-    """``DashConfiguration.ManifestEndpointPrefix`` of the playback configuration (MediaTailor host)."""
 
     def playback(self, cdn_base_url: str) -> dict[str, dict[str, str]]:
         """Viewer URLs per output through the CDN at ``cdn_base_url`` (``core.specs.playback_urls``).
 
-        The prefixes are CloudFormation attributes: their path is cut out with ``Fn::Split``, so the core builder
+        The prefix is a CloudFormation attribute: its path is cut out with ``Fn::Split``, so the core builder
         still composes the URLs.
         """
         return playback_urls(
             cdn_base=cdn_base_url,
             playback_prefix_hls=_resolvable_prefix(self.hls_prefix),
-            playback_prefix_dash=_resolvable_prefix(self.dash_prefix),
             outputs=self.outputs,
         )
 
