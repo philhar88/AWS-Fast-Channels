@@ -2,12 +2,13 @@
 CDN-neutral path contract, and its standard-logs-v2 access logs.
 
 The routing table :data:`ROUTES` is the single source of truth: :class:`MediaDistribution` renders it as CloudFront
-behaviours and :func:`path_contract` as the JSON other CDNs copy (``docs/path-contract.json``). The rows come from
-e2e.md §2.3 and SPEC §5.4; a deployment of this construct confirmed each of them through the
-``cache-behavior-path-pattern`` field of its access logs, with gzip on ``/v1/manifest/*`` (2026-10-16). The managed
-policies' contents were re-read with ``aws cloudfront get-cache-policy`` / ``get-origin-request-policy``. Ad
-insertion is SSAI only, so the SGAI routes (``/v1/i-media/*`` playlists and ``/preconditioned-ads/*`` asset-list
-playlists) are gone.
+behaviours and :func:`path_contract` as the JSON other CDNs copy (``docs/path-contract.json``). The rows follow
+MediaTailor's production CloudFront configuration (MediaTailor User Guide, "Production-ready CloudFront configuration
+for MediaTailor": ``/tm/*`` to the segments origin, ``/v1/*`` uncached to the manifests origin, the content origin as
+the default); a deployment of this construct confirmed each of them through the ``cache-behavior-path-pattern`` field
+of its access logs. The managed policies' contents were re-read with ``aws cloudfront get-cache-policy`` /
+``get-origin-request-policy``. Ad insertion is SSAI only, so the guide's SGAI route (``/v1/i-media/*``) is left out,
+and MediaTailor's server-side beacon redirects are ``/v1/segment/*`` requests, which ``/v1/*`` covers.
 """
 
 from collections.abc import Mapping
@@ -140,20 +141,16 @@ CORS_S3_ORIGIN: Final = OriginRequestPolicy(
     "Managed-CORS-S3Origin",
     ("origin", "access-control-request-headers", "access-control-request-method"),
 )
-# Forwards Accept-Encoding, so MediaTailor gzips the playlists (verified on /v1/manifest/*, e2e.md §4.3).
+# Forwards every viewer header, including the four MediaTailor requires from a CDN (MediaTailor User Guide, "Required
+# headers for MediaTailor CDN integration"): Accept-Encoding (it gzips the playlists, verified on /v1/manifest/...),
+# User-Agent and X-Forwarded-For (ad targeting) and Host (request routing); and every query string (ADS variables,
+# aws.* session options). Nothing behind /v1/* is cached, so forwarding everything cannot fragment a cache.
 ALL_VIEWER_AND_CLOUDFRONT_HEADERS: Final = OriginRequestPolicy(
     cf.OriginRequestPolicy.ALL_VIEWER_AND_CLOUDFRONT_2022,
     "Managed-AllViewerAndCloudFrontHeaders-2022-06",
     ("*",),
     query_strings=True,
     cookies=True,
-)
-# User-Agent and X-Forwarded-For feed ad targeting; every query string carries ADS variables and aws.* options.
-MEDIATAILOR_PERSONALIZED_MANIFESTS: Final = OriginRequestPolicy(
-    cf.OriginRequestPolicy.ELEMENTAL_MEDIA_TAILOR,
-    "Managed-Elemental-MediaTailor-PersonalizedManifests",
-    ("origin", "access-control-request-headers", "access-control-request-method", "user-agent", "x-forwarded-for"),
-    query_strings=True,
 )
 
 
@@ -196,25 +193,18 @@ ROUTES: Final[tuple[Route, ...]] = (
         purpose="Ad segments MediaTailor transcoded (external VAST creatives)",
     ),
     Route(
-        "/v1/manifest/*",
+        "/v1/*",
         Origin.MANIFESTS,
         CACHING_DISABLED,
         ALL_VIEWER_AND_CLOUDFRONT_HEADERS,
         Cors.PREFLIGHT,
         compress=True,
-        methods=Methods.READ,
-        purpose="SSAI HLS media playlists (per session, gzip)",
-    ),
-    Route(
-        "/v1/*",
-        Origin.MANIFESTS,
-        CACHING_DISABLED,
-        MEDIATAILOR_PERSONALIZED_MANIFESTS,
-        Cors.PREFLIGHT,
-        compress=True,
         methods=Methods.ALL,
         # Every stitched ad segment is a /v1/segment 301 to the CDN that fires the server-side beacons (e2e.md §4.3).
-        purpose="Session start (/v1/master, POST /v1/session), tracking, ad segment redirects (/v1/segment)",
+        purpose=(
+            "SSAI sessions: multivariant (/v1/master), media playlists (/v1/manifest, gzip), POST /v1/session, "
+            "tracking, ad segment redirects (/v1/segment)"
+        ),
     ),
     Route(
         DEFAULT_PATH,

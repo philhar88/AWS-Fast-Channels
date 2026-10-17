@@ -110,7 +110,7 @@ def main() -> int:
     ladder = provisioned_ladder(library, ladder_version)
     titles = [title_of(library, content, ladder_version) for content in sample_titles(CATALOG, args.titles or ())]
 
-    print(f"Deployment {stage.prefix} in {stage.region}, ladder {ladder_version} (MediaConvert Basic tier)\n")
+    print(f"Deployment {stage.prefix} in {stage.region}, ladder {ladder_version}\n")
     estimate = print_plan(titles, ladder)
     pending = [title for title in titles if title.needs_ingest]
     if args.dry_run:
@@ -175,7 +175,7 @@ def title_of(library: Table, content: ContentItem, ladder_version: str) -> Title
 
 def print_plan(titles: list[Title], ladder: Ladder) -> float:
     """Print each title's status and encode cost; returns the total for the titles that need an ingest."""
-    print(f"{'title':<26} {'duration':>9}  {'library':<10} {'encode cost':>11}")
+    print(f"{'title':<26} {'duration':>9}  {'library':<10} {'tier':<12} {'encode cost':>11}")
     total = 0.0
     for title in titles:
         duration_ms = title.content.duration_ms
@@ -185,8 +185,9 @@ def print_plan(titles: list[Title], ladder: Ladder) -> float:
             total += cost
         status = title.status or "-"
         price = "skipped" if not title.needs_ingest else f"${cost:.2f}" if cost is not None else "unknown"
-        print(f"{title.content.content_id:<26} {minutes(duration_ms):>9}  {status:<10} {price:>11}")
-    print(f"{'total':<26} {'':>9}  {'':<10} {f'${total:.2f}':>11}")
+        tier = "PROFESSIONAL" if professional else "BASIC"
+        print(f"{title.content.content_id:<26} {minutes(duration_ms):>9}  {status:<10} {tier:<12} {price:>11}")
+    print(f"{'total':<26} {'':>9}  {'':<10} {'':<12} {f'${total:.2f}':>11}")
     return total
 
 
