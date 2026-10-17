@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.naming import is_agent_owned
-from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, applicable, profile
+from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
 
@@ -189,11 +189,6 @@ def _ladder(name: str) -> Ladder:
     return Ladder.builtin(name)
 
 
-@cache
-def _ladder_without_captions(name: str) -> Ladder:
-    return _ladder(name).with_captions(())
-
-
 def _unique(values: tuple[str, ...]) -> tuple[str, ...]:
     if duplicates := sorted({v for v in values if values.count(v) > 1}):
         raise ValueError(f"duplicate entries: {', '.join(duplicates)}")
@@ -332,7 +327,7 @@ class PreconditionedAds(_Section):
 
 
 class ExternalVastAds(_Section):
-    """A third-party ad decision server; MediaTailor transcodes its creatives (single-codec outputs only)."""
+    """A third-party ad decision server; MediaTailor transcodes its creatives to the channel's variants."""
 
     mode: Literal[AdsMode.EXTERNAL_VAST]
     url: str = Field(pattern=r"^https?://\S+$")
@@ -427,37 +422,6 @@ class ObservabilityConfig(_Section):
         return _RETENTION[self.log_retention_days]
 
 
-class CaptionEngine(StrEnum):
-    """Who generates captions an asset lacks."""
-
-    ELEMENTAL_INFERENCE = "elemental-inference"
-    NONE = "none"
-
-
-class CaptionsConfig(_Section):
-    enabled: bool = True
-    """Encode the caption tracks the built-in ladders define (``[[captions]]`` in ``ladders/<name>.toml``, IMSC1
-    text), with each asset's captions from its provided files, else from the source, else generated. ``false``
-    deploys the ladders without caption tracks (their caption-less versions)."""
-    required: bool = False
-    """Refuse to encode an asset whose spoken-language caption track would be empty (regulated distribution)."""
-    engine: CaptionEngine = CaptionEngine.ELEMENTAL_INFERENCE
-    """Generates the spoken language's captions when an asset has none: ``elemental-inference`` (AWS Elemental
-    Inference smart subtitles) or ``none`` (the track stays empty, or the asset is refused when captions are
-    required)."""
-    max_feeds: int = Field(default=2, ge=1, le=20)
-    """Elemental Inference feeds the captioner uses at once (one per 10-minute chunk of a title). The account's
-    ``Active feeds per account`` quota (2 by default, adjustable) is shared with every other use of the service."""
-    dictionary_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]+$")
-    """Elemental Inference custom dictionary (names, brands, jargon) every captioner feed uses."""
-
-    @model_validator(mode="after")
-    def _required_needs_tracks(self) -> Self:
-        if self.required and not self.enabled:
-            raise ValueError("required captions need enabled=true")
-        return self
-
-
 class NotificationsConfig(_Section):
     email: str | None = Field(default=None, pattern=_EMAIL)
     """Email subscribed to alarms and asset/ladder failure events."""
@@ -479,7 +443,6 @@ class FastChannelsConfig(_Section):
     ads: AdsConfig = PreconditionedAds()
     agent: AgentConfig = AgentConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
-    captions: CaptionsConfig = CaptionsConfig()
     notifications: NotificationsConfig = NotificationsConfig()
 
     @property
@@ -488,28 +451,17 @@ class FastChannelsConfig(_Section):
         return RemovalPolicy.RETAIN if self.removal is Removal.RETAIN else RemovalPolicy.DESTROY
 
     def ladder(self, name: str) -> Ladder:
-        """Built-in ladder ``name`` as this deployment encodes it: without caption tracks when captions are off."""
-        return _ladder(name) if self.captions.enabled else _ladder_without_captions(name)
+        """Built-in ladder ``name`` (``ladders/<name>.toml``), loaded once."""
+        return _ladder(name)
 
     @model_validator(mode="after")
     def _consistent(self, info: ValidationInfo) -> Self:
-        problems = [
-            *self._ladder_problems(),
-            *(problem for channel in self.channels.iac for problem in self._channel_problems(channel)),
-        ]
+        problems = [problem for channel in self.channels.iac for problem in self._channel_problems(channel)]
         if region := (info.context or {}).get("region"):
             problems += self._region_problems(region)
         if problems:
             raise ValueError("\n".join(problems))
         return self
-
-    def _ladder_problems(self) -> list[str]:
-        return [
-            f"{CONTEXT_KEY}.channel_assembly.package_profiles: {name!r} selects no rendition of ladder {ladder!r}"
-            for ladder in self.ladders.builtin
-            for name in self.channel_assembly.package_profiles
-            if profile(name) not in applicable(_ladder(ladder))
-        ]
 
     def _channel_problems(self, channel: ChannelConfig) -> list[str]:
         where = f"{CONTEXT_KEY}.channels.iac[{channel.name}]"
@@ -519,14 +471,6 @@ class FastChannelsConfig(_Section):
             return [f"{where}: ladder {channel.ladder!r} is not in ladders.builtin {list(self.ladders.builtin)}"]
         if extra := [o for o in channel.outputs if o not in self.channel_assembly.package_profiles]:
             return [f"{where}: outputs {extra} are not in channel_assembly.package_profiles"]
-        ladder = _ladder(channel.ladder)
-        if empty := [o for o in channel.outputs if profile(o) not in applicable(ladder)]:
-            return [f"{where}: outputs {empty} select no rendition of ladder {channel.ladder!r}"]
-        if self.ads.mode is AdsMode.EXTERNAL_VAST and (mixed := _mixed_codec_outputs(ladder, channel.outputs)):
-            return [
-                f"{where}: outputs {mixed} mix codecs, but external_vast creatives are transcoded by "
-                "MediaTailor, which only works on single-codec outputs such as hls-avc"
-            ]
         return []
 
     def _region_problems(self, region: str) -> list[str]:
@@ -581,10 +525,6 @@ class FastChannelsConfig(_Section):
             return cls.model_validate(data, context={"region": region})
         except ValidationError as error:
             raise ConfigError(_describe(error)) from None
-
-
-def _mixed_codec_outputs(ladder: Ladder, outputs: tuple[str, ...]) -> list[str]:
-    return [o for o in outputs if len({r.codec for r in ladder.video if profile(o).selects(r)}) > 1]
 
 
 def _expand_prefix(data: dict[str, Any]) -> None:

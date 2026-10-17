@@ -4,7 +4,7 @@
 events of the deployment's channels. Channel Assembly writes one event per program start and output, e.g.
 ``{"channelName": "fast-demo", "eventType": "VodProgramStart", "programName": "20261016T120000-bbb-1a2b3c",
 "sourceGroup": "hls", "timeStamp": "2026-10-16T12:00:03.170Z", ...}`` (channel-assembly.md §7.2), so the first
-event of a start updates the program's ``PROGRAM`` item and the duplicates of the other outputs are no-ops.
+event of a start updates the program's ``PROGRAM`` item and its duplicates (other outputs, redeliveries) are no-ops.
 Programs the media library does not know (published outside the schedule tools) are ignored.
 """
 

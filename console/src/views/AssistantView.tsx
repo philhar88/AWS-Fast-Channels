@@ -28,7 +28,7 @@ import styles from "./AssistantView.module.css";
 const SUGGESTIONS = [
   { id: "plan", text: "Fill fast-demo for the next two hours with family titles" },
   { id: "status", text: "Which channels are on air right now?" },
-  { id: "ladder", text: "Propose an AV1-only ladder capped at 1080p and estimate its cost" },
+  { id: "ladder", text: "Propose a cheaper ladder without the 1080p rung and estimate its cost" },
 ];
 
 /** Chat with the scheduling agent (AG-UI over AgentCore Runtime). CONFIRM tools stop at an approval card. */

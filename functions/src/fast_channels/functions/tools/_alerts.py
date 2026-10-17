@@ -1,8 +1,8 @@
 """Channel Assembly alerts (ListAlerts) without the warnings this design raises by construction.
 
-Two PLAYBACK_WARNING codes are expected: ``SEGMENT_DURATION_MISMATCH`` (2 s ESAM split segments next to 6 s ones) and
-``BANDWIDTH_MISMATCH`` (QVBR slates next to content). One 13-program e2e run raised 132 and 64 of them, burying the
-real alerts (e2e.md §3 and §9 item 13). On a channel ARN, Channel Assembly reports each program alert as
+Two PLAYBACK_WARNING codes are expected: ``SEGMENT_DURATION_MISMATCH`` (a program's short last segment next to full
+6 s ones) and ``BANDWIDTH_MISMATCH`` (QVBR slates next to content). One 13-program e2e run raised 132 and 64 of them,
+burying the real alerts (e2e.md §3 and §9 item 13). On a channel ARN, Channel Assembly reports each program alert as
 ``PROGRAM_ALERT`` with the underlying code in the message, so the filter reads both.
 """
 

@@ -1,40 +1,30 @@
-"""The timeline of an HLS encode: its duration and the segment boundaries every track shares.
+"""The timeline of an HLS encode: its duration and the segment boundaries every variant shares.
 
 One rule for the ingest pipeline (``ingest.finalize``, the encodes it verifies) and the agent's
 ``origins___register_vod_source`` (content encoded elsewhere), so both give the same break offsets for the same
 encode. Channel Assembly can only insert an ad break where every track the player may select has a segment
-boundary (channel-assembly.md §5.3):
-
-* renditions of one video codec share their GOP and segment grid, so the first variant of each codec stands for
-  its codec, and the first variant overall is the reference timeline (offsets are in video time);
-* audio segments end on codec frame boundaries that differ by codec and profile, so every audio rendition counts;
-* IMSC subtitle segments follow the video grid, but they are tracks too, so every subtitle rendition counts.
+boundary (channel-assembly.md §5.3). Audio is muxed into every MPEG-TS segment, so a variant is one track and its
+boundaries are those of its media playlist; the first variant is the reference timeline.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
-from fast_channels.core.manifests import attributes, parse_multivariant, segment_boundaries_ms
+from fast_channels.core.manifests import parse_multivariant, segment_boundaries_ms
 
 
 @dataclass(frozen=True, slots=True)
 class Timeline:
-    """Duration of the reference video playlist, and the interior boundaries every track shares (ms)."""
+    """Duration of the reference variant's media playlist, and the interior boundaries every variant shares (ms)."""
 
     duration_ms: int
     boundaries_ms: list[int]
 
 
 def timeline_uris(multivariant: str) -> list[str]:
-    """The media playlists that stand for every track, reference first: the first variant, the first variant of
-    each other video codec, then every audio and subtitle rendition (URIs as written in ``multivariant``)."""
-    by_codec: dict[str | None, str] = {}
-    for variant in parse_multivariant(multivariant):
-        by_codec.setdefault(variant.video_codec, variant.uri)
-    media = [attributes(line) for line in multivariant.splitlines() if line.startswith("#EXT-X-MEDIA:")]
-    renditions = [a["URI"] for kind in ("AUDIO", "SUBTITLES") for a in media if a.get("TYPE") == kind and "URI" in a]
-    return list(dict.fromkeys([*by_codec.values(), *renditions]))
+    """The media playlist of every variant, reference (first) first, as written in ``multivariant``."""
+    return list(dict.fromkeys(v.uri for v in parse_multivariant(multivariant)))
 
 
 def duration_ms(media_playlist: str) -> int:

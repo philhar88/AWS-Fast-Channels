@@ -10,150 +10,6 @@
       "title": "AssetKind",
       "type": "string"
     },
-    "CaptionFile": {
-      "additionalProperties": false,
-      "description": "A caption file provided with a source, for one language.",
-      "properties": {
-        "uri": {
-          "description": "s3:// or https:// URI, or a key relative to the source file's folder (movie.en.scc).",
-          "maxLength": 2048,
-          "minLength": 1,
-          "title": "Uri",
-          "type": "string"
-        },
-        "language": {
-          "description": "BCP-47 language of the captions, e.g. en.",
-          "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
-          "title": "Language",
-          "type": "string"
-        },
-        "format": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CaptionFormat"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Defaults to the format the file extension implies."
-        },
-        "offset_ms": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Shift added to every cue time (negative is earlier). Defaults to 0, and for SCC files to minus the hour (or source timecode) they were authored from, e.g. -3600000 for 01:00:00;00.",
-          "title": "Offset Ms"
-        },
-        "frame_rate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FrameRate"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Timecode rate of an SCC file; MediaConvert's default."
-        }
-      },
-      "required": [
-        "uri",
-        "language"
-      ],
-      "title": "CaptionFile",
-      "type": "object"
-    },
-    "CaptionFormat": {
-      "description": "Sidecar caption formats MediaConvert reads (``SourceType``).",
-      "enum": [
-        "scc",
-        "srt",
-        "webvtt",
-        "ttml",
-        "smpte-tt",
-        "imsc",
-        "stl",
-        "smi"
-      ],
-      "title": "CaptionFormat",
-      "type": "string"
-    },
-    "CaptionMode": {
-      "description": "How an ingest finds captions: ``auto`` uses provided files, then captions in the source, then generates;\n``generate`` ignores captions in the source; ``off`` writes empty tracks.",
-      "enum": [
-        "auto",
-        "generate",
-        "off"
-      ],
-      "title": "CaptionMode",
-      "type": "string"
-    },
-    "CaptionsRequest": {
-      "additionalProperties": false,
-      "description": "The captions part of an ingest request.",
-      "properties": {
-        "mode": {
-          "$ref": "#/$defs/CaptionMode",
-          "default": "auto"
-        },
-        "files": {
-          "default": [],
-          "description": "Provided caption files, at most one per language.",
-          "items": {
-            "$ref": "#/$defs/CaptionFile"
-          },
-          "title": "Files",
-          "type": "array"
-        },
-        "spoken_language": {
-          "anyOf": [
-            {
-              "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Language of the main audio: what embedded and generated captions are in. Defaults to the language of the source's first audio track, then the ladder's first caption track.",
-          "title": "Spoken Language"
-        }
-      },
-      "title": "CaptionsRequest",
-      "type": "object"
-    },
-    "FrameRate": {
-      "additionalProperties": false,
-      "description": "Exact frame rate as a fraction; accepts ``\"29.97\"``, ``\"30000/1001\"``, ``25`` or ``29.97`` on input.",
-      "properties": {
-        "numerator": {
-          "exclusiveMinimum": 0,
-          "title": "Numerator",
-          "type": "integer"
-        },
-        "denominator": {
-          "exclusiveMinimum": 0,
-          "title": "Denominator",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "numerator",
-        "denominator"
-      ],
-      "title": "FrameRate",
-      "type": "object"
-    },
     "GeneratorInput": {
       "additionalProperties": false,
       "description": "A still-image input (slate or house ad) rendered for exactly ``duration_gops`` GOPs of the ladder.",
@@ -250,24 +106,12 @@
     },
     "cue_points_ms": {
       "default": [],
-      "description": "Editorial ad cue points (ms); snapped to the GOP grid.",
+      "description": "Editorial ad cue points (ms); snapped to the segment grid.",
       "items": {
         "type": "integer"
       },
       "title": "Cue Points Ms",
       "type": "array"
-    },
-    "captions": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/CaptionsRequest"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Provided caption files and how to find or generate the rest (default: auto)."
     },
     "ladder_version": {
       "description": "Ladder version, e.g. standard@0123abcd45.",

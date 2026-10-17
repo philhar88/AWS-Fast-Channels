@@ -1,13 +1,11 @@
 /** Playback URLs of one channel output (CONTRACTS §H; built by `fast_channels.core.specs.playback_urls`). */
 export interface OutputPlayback {
   readonly ssai?: string;
-  /** HLS outputs only: the SSAI URL plus `?aws.insertionMode=GUIDED`. */
+  /** The SSAI URL plus `?aws.insertionMode=GUIDED`. */
   readonly sgai?: string;
-  /** DASH outputs only (MediaTailor offers no DASH SGAI). */
-  readonly dash?: string;
 }
 
-/** Output (package profile) name, e.g. `hls`, `hls-avc`, `dash-avc`, mapped to its playback URLs. */
+/** Output (package profile) name, `hls` (the one HLS MPEG-TS output), mapped to its playback URLs. */
 export type ChannelPlayback = Readonly<Record<string, OutputPlayback>>;
 
 export interface ChannelConfig {

@@ -29,10 +29,9 @@ RECORD = {
     "arn": "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-demo",
     "tier": "BASIC",
     "ladder_version": "standard@86bf8088e0",
-    "outputs": ["hls", "dash-avc"],
+    "outputs": ["hls"],
     "playback_configuration_name": CHANNEL,
     "hls_prefix": "https://abc.mediatailor.us-east-1.amazonaws.com/v1/master/h/fast-demo/",
-    "dash_prefix": "https://abc.mediatailor.us-east-1.amazonaws.com/v1/dash/h/fast-demo/",
     "channel_url": BASE,
 }
 BRIEF = '{"break_policy": {"cadence_minutes": 12.5}, "ratings": ["TV-G"]}'
@@ -148,13 +147,10 @@ def test_guard_treats_a_new_channel_name_as_not_running(
 
 
 def test_endpoint_returns_the_channel_base_url(stub: Stub, cfn_event: Event, context: Any) -> None:
-    outputs = [
-        {"ManifestName": m, "SourceGroup": m, "PlaybackUrl": f"{BASE}{m}{ext}"}
-        for m, ext in (("hls", ".m3u8"), ("dash-avc", ".mpd"))
-    ]
+    outputs = [{"ManifestName": "hls", "SourceGroup": "hls", "PlaybackUrl": f"{BASE}hls.m3u8"}]
     stub("mediatailor").add_response("describe_channel", describe("STOPPED", outputs), {"ChannelName": CHANNEL})
 
-    response = handler(cfn_event(ENDPOINT, "Create", {"ChannelName": CHANNEL, "Outputs": ["hls", "dash-avc"]}), context)
+    response = handler(cfn_event(ENDPOINT, "Create", {"ChannelName": CHANNEL, "Outputs": ["hls"]}), context)
 
     assert response == {"PhysicalResourceId": CHANNEL, "Data": {"ChannelUrl": BASE}}
 

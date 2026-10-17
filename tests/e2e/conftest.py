@@ -9,7 +9,7 @@ call, so ``scripts/trace.py <run id>`` shows the whole run.
 import json
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -33,15 +33,10 @@ from harness import (  # noqa: E402
     LEAD,
     PATTERN_SECONDS,
     PROGRAMS,
-    SPEECH,
-    SPOKEN_ASSET_ID,
-    SPOKEN_SECONDS,
     Channel,
     Observation,
     Player,
     Tools,
-    render_captions,
-    render_speech,
     render_test_pattern,
     until,
     wait_for,
@@ -146,11 +141,10 @@ def player() -> Iterator[Player]:
 def ingested(
     stage: Stage, library: Table, channel: Channel, run_id: str, tmp_path_factory: pytest.TempPathFactory
 ) -> Asset:
-    """The synthetic source with its caption file (a drop-folder sibling, ``<asset>.en.vtt``), uploaded to the
-    ingest bucket after its sidecar, once its encode is READY."""
+    """The synthetic source, uploaded to the ingest bucket after its sidecar (with the cue point), once its encode is
+    READY."""
     folder = tmp_path_factory.mktemp("source")
     source = render_test_pattern(folder / f"{ASSET_ID}.mp4", seconds=PATTERN_SECONDS)
-    captions = render_captions(folder / f"{ASSET_ID}.en.vtt", seconds=PATTERN_SECONDS)
     sidecar = {
         "asset_id": ASSET_ID,
         "content_id": CONTENT_ID,
@@ -159,42 +153,14 @@ def ingested(
         "correlation_id": run_id,
         "metadata": {"title": "End-to-end test pattern"},
     }
-    return upload_and_wait(stage, library, source, sidecar, siblings=[captions])
-
-
-@pytest.fixture(scope="session")
-def spoken(
-    stage: Stage, library: Table, channel: Channel, run_id: str, tmp_path_factory: pytest.TempPathFactory
-) -> Asset:
-    """A test pattern that speaks (Amazon Polly) without captions, once its encode is READY: the captioner made
-    its English track. Skipped on stages that never generate captions (output ``CaptionEngine`` ``none``)."""
-    if stage.output(Plane.MEDIA, "CaptionEngine") == "none":
-        pytest.skip(f"stage {stage.prefix} does not generate captions (fast-channels.captions.engine=none)")
-    folder = tmp_path_factory.mktemp("spoken")
-    polly = stage.session.client("polly", region_name=stage.region)
-    speech = polly.synthesize_speech(Engine="neural", VoiceId="Joanna", OutputFormat="mp3", Text=SPEECH)
-    (audio := folder / "speech.mp3").write_bytes(speech["AudioStream"].read())
-    source = render_speech(folder / f"{SPOKEN_ASSET_ID}.mp4", audio, seconds=SPOKEN_SECONDS)
-    sidecar = {
-        "asset_id": SPOKEN_ASSET_ID,
-        "content_id": f"{CONTENT_ID}-spoken",
-        "ladder_version": channel.ladder_version,
-        "correlation_id": f"{run_id}-spoken",
-        "captions": {"spoken_language": "en"},
-        "metadata": {"title": "End-to-end speaking test pattern"},
-    }
     return upload_and_wait(stage, library, source, sidecar)
 
 
-def upload_and_wait(
-    stage: Stage, library: Table, source: Path, sidecar: dict[str, Any], *, siblings: Sequence[Path] = ()
-) -> Asset:
-    """Upload ``siblings`` and the JSON sidecar, then ``source`` under ``e2e/``; the asset once READY."""
+def upload_and_wait(stage: Stage, library: Table, source: Path, sidecar: dict[str, Any]) -> Asset:
+    """Upload the JSON sidecar, then ``source`` under ``e2e/``; the asset once READY."""
     bucket, key = stage.output(Plane.DATA, "IngestBucketName"), f"e2e/{source.name}"
     asset_id, ladder_version, correlation_id = sidecar["asset_id"], sidecar["ladder_version"], sidecar["correlation_id"]
     s3 = stage.session.client("s3", region_name=stage.region)
-    for sibling in siblings:
-        s3.upload_file(str(sibling), bucket, f"e2e/{sibling.name}")
     s3.put_object(Bucket=bucket, Key=f"{key}.json", Body=json.dumps(sidecar).encode(), ContentType="application/json")
     s3.upload_file(str(source), bucket, key)
 
@@ -265,8 +231,8 @@ def observation(
     published: dict[str, Any],
     running: dict[str, Any],
 ) -> Observation:
-    """SSAI, SGAI and DASH sessions watched from the first program until every break was seen filled (or until
-    shortly after the last break)."""
+    """SSAI and SGAI sessions watched from the first program until every break was seen filled (or until shortly
+    after the last break)."""
     breaks = break_windows(published["programs"])
     assert len(breaks) >= 2, f"two breaks are needed (the first one airs its slate): {published['programs']}"
     until(datetime.fromisoformat(published["programs"][0]["start"]) - timedelta(seconds=10))
@@ -274,7 +240,6 @@ def observation(
         player,
         ssai_url=channel.url("ssai"),
         sgai_url=channel.url("sgai"),
-        dash_url=channel.url("dash"),
         breaks=breaks,
         ends=breaks[-1].ends + timedelta(seconds=45),
         house_ads=house_ad_assets(library, ladder.version),

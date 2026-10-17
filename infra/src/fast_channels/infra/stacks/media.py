@@ -7,7 +7,7 @@ from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
 
 from fast_channels.core.naming import source_location_name
-from fast_channels.infra.config import AdsMode, CaptionEngine, PriceClass
+from fast_channels.infra.config import AdsMode, PriceClass
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.channel_assembly import (
     AS_RUN_LOG_GROUP,
@@ -19,13 +19,7 @@ from fast_channels.infra.constructs.channel_assembly import (
     playback_configuration_template,
 )
 from fast_channels.infra.constructs.delivery import CdnAccessLogs, MediaDistribution
-from fast_channels.infra.constructs.encoding import (
-    EncodingLadder,
-    InferenceCaptioner,
-    IngestPipeline,
-    LadderKit,
-    LadderProvisioner,
-)
+from fast_channels.infra.constructs.encoding import EncodingLadder, IngestPipeline, LadderKit, LadderProvisioner
 from fast_channels.infra.constructs.events import FastEventBus
 from fast_channels.infra.constructs.observability import MediaObservability
 from fast_channels.infra.exports import ChannelExports, MediaExports
@@ -63,9 +57,8 @@ class MediaStack(Stack):
         exports: what the operator plane consumes (:class:`MediaExports`).
         distribution: the media distribution (EdgeStack logs it when the stage is not in us-east-1).
         access_logs: its standard-logs-v2 delivery when this stack is in us-east-1, else ``None``.
-        events, delivery, origin, vended_logs, captioner, pipeline, ladders, provisioner, kits, reaper, as_run,
-        channels, observability: the media-plane constructs (``ladders`` and ``kits`` by built-in ladder name;
-        ``captioner`` is ``None`` when captions are never generated).
+        events, delivery, origin, vended_logs, pipeline, ladders, provisioner, kits, reaper, as_run, channels,
+        observability: the media-plane constructs (``ladders`` and ``kits`` by built-in ladder name).
     """
 
     def __init__(
@@ -111,18 +104,6 @@ class MediaStack(Stack):
         self.vended_logs = MediaTailorLogs(
             self, "MediaTailorLogs", prefix=prefix, log_retention=retention, removal_policy=removal
         )
-        self.captioner: InferenceCaptioner | None = None
-        if config.captions.enabled and config.captions.engine is CaptionEngine.ELEMENTAL_INFERENCE:
-            self.captioner = InferenceCaptioner(
-                self,
-                "Captioner",
-                prefix=prefix,
-                ingest_bucket=data.ingest_bucket,
-                max_feeds=config.captions.max_feeds,
-                dictionary_id=config.captions.dictionary_id,
-                log_retention=retention,
-                removal_policy=removal,
-            )
         self.pipeline = IngestPipeline(
             self,
             "Ingest",
@@ -137,8 +118,6 @@ class MediaStack(Stack):
             default_ladder_version=default_ladder_version,
             log_retention=retention,
             removal_policy=removal,
-            captioner=self.captioner,
-            captions_required=config.captions.required,
         )
         self.ladders = {
             name: EncodingLadder(
@@ -257,19 +236,11 @@ class MediaStack(Stack):
 
     def _trace_log_groups(self) -> list[logs.ILogGroup]:
         """Log groups the saved trace queries search besides the bus and MediaConvert logs: the pipeline's state
-        machines (the captioner's too) and steps, MediaTailor's vended logs and the as-run log (``Trace program``)."""
+        machines and steps, MediaTailor's vended logs and the as-run log (``Trace program``)."""
         pipeline = self.pipeline
-        functions = (
-            pipeline.trigger,
-            pipeline.prepare,
-            pipeline.captions,
-            pipeline.finalize,
-            pipeline.register,
-            pipeline.publish,
-        )
+        functions = (pipeline.trigger, pipeline.prepare, pipeline.finalize, pipeline.register, pipeline.publish)
         return [
             pipeline.log_group,
-            *([self.captioner.log_group] if self.captioner else []),
             self.provisioner.log_group,
             *(function.log_group for function in (*functions, self.provisioner.kit)),
             self.vended_logs.log_group,
@@ -295,7 +266,6 @@ class MediaStack(Stack):
             "LadderProvisionerArn": exports.ladder_provisioner.state_machine_arn,
             "SourceLocationName": exports.source_location_name,
             "DefaultLadderVersion": exports.default_ladder_version,
-            "CaptionEngine": self.captioner.engine if self.captioner else "none",
             "Channels": self.to_json_string(
                 [
                     {

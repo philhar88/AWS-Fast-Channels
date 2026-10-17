@@ -65,11 +65,6 @@ class Settings:
     max_agent_channels: int = field(default_factory=lambda: int(_env("MAX_AGENT_CHANNELS") or 0))
     scheduler_group: str = field(default_factory=lambda: _env("SCHEDULER_GROUP"))
     scheduler_role_arn: str = field(default_factory=lambda: _env("SCHEDULER_ROLE_ARN"))
-    captions_required: bool = field(default_factory=lambda: _env("CAPTIONS_REQUIRED") == "true")
-    captioner: str = field(default_factory=lambda: _env("CAPTIONER"))
-    """Engine of the deployment's captioner (``elemental-inference``), empty when captions are never generated."""
-    inference_dictionary: str = field(default_factory=lambda: _env("INFERENCE_DICTIONARY"))
-    """Elemental Inference custom dictionary id the captioner's feeds use, if any."""
     region: str = field(default_factory=lambda: _env("AWS_REGION"))
 
     @property

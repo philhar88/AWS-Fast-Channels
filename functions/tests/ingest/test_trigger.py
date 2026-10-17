@@ -43,15 +43,6 @@ def expect_sidecar(stubs: Any, sidecar: dict[str, Any] | None) -> None:
         stubs["s3"].add_response("get_object", body(sidecar), {"Bucket": "ingest", "Key": f"{KEY}.json"})
 
 
-def expect_siblings(stubs: Any, *names: str) -> None:
-    contents = [{"Key": f"movies/{name}"} for name in ("big_buck_bunny.mp4", "big_buck_bunny.mp4.json", *names)]
-    stubs["s3"].add_response(
-        "list_objects_v2",
-        {"Contents": contents, "IsTruncated": False},
-        {"Bucket": "ingest", "Prefix": "movies/big_buck_bunny."},
-    )
-
-
 def expect_start(stubs: Any, request: IngestRequest) -> None:
     stubs["stepfunctions"].add_response(
         "start_execution",
@@ -75,7 +66,6 @@ def test_upload_with_sidecar_and_tag(stubs: Any, lambda_context: Any) -> None:
         {"TagSet": [{"Key": "AdOffsets", "Value": "30000 90000,120000"}]},
         {"Bucket": "ingest", "Key": KEY},
     )
-    expect_siblings(stubs)
     name = default_name(f"ingest/{KEY}#0066A1B2C3")
     expect_start(
         stubs,
@@ -95,7 +85,6 @@ def test_upload_with_sidecar_and_tag(stubs: Any, lambda_context: Any) -> None:
 def test_sidecar_cue_points_win_over_the_tag(stubs: Any, lambda_context: Any) -> None:
     sidecar = {"cue_points_ms": [60000], "correlation_id": "my-ingest-1", "ladder_version": STANDARD.version}
     expect_sidecar(stubs, sidecar)
-    expect_siblings(stubs)
     expect_start(stubs, IngestRequest(source_uri=SOURCE, **sidecar))
 
     assert trigger.handler(upload(), lambda_context) == {
@@ -108,49 +97,8 @@ def test_sidecar_cue_points_win_over_the_tag(stubs: Any, lambda_context: Any) ->
 def test_upload_without_sidecar_or_tags(stubs: Any, lambda_context: Any) -> None:
     expect_sidecar(stubs, None)
     stubs["s3"].add_response("get_object_tagging", {"TagSet": []}, {"Bucket": "ingest", "Key": KEY})
-    expect_siblings(stubs)
     name = default_name(f"ingest/{KEY}#0066A1B2C3")
     expect_start(stubs, IngestRequest(source_uri=SOURCE, ladder_version=STANDARD.version, correlation_id=name))
-
-    trigger.handler(upload(), lambda_context)
-
-
-def test_caption_files_next_to_the_upload_are_provided_captions(stubs: Any, lambda_context: Any) -> None:
-    expect_sidecar(stubs, {"cue_points_ms": [60000], "captions": {"spoken_language": "en"}})
-    expect_siblings(
-        stubs,
-        "big_buck_bunny.en.scc",
-        "big_buck_bunny.pt-BR.SRT",
-        "big_buck_bunny.en.txt",  # not a caption format
-        "big_buck_bunny.2.mp4",  # another upload
-        "big_buck_bunny.forced.en.vtt",  # not <stem>.<language>.<ext>
-    )
-    name = default_name(f"ingest/{KEY}#0066A1B2C3")
-    files = [
-        {"uri": "big_buck_bunny.en.scc", "language": "en"},
-        {"uri": "big_buck_bunny.pt-BR.SRT", "language": "pt-BR"},
-    ]
-    expect_start(
-        stubs,
-        IngestRequest(
-            source_uri=SOURCE,
-            ladder_version=STANDARD.version,
-            cue_points_ms=[60000],
-            captions={"spoken_language": "en", "files": files},
-            correlation_id=name,
-        ),
-    )
-
-    assert trigger.handler(upload(), lambda_context)["status"] == "STARTED"
-
-
-def test_a_sidecar_that_lists_caption_files_turns_discovery_off(stubs: Any, lambda_context: Any) -> None:
-    sidecar = {"cue_points_ms": [60000], "captions": {"files": [{"uri": "s3://ingest/cc/bbb.ttml", "language": "en"}]}}
-    expect_sidecar(stubs, sidecar)
-    name = default_name(f"ingest/{KEY}#0066A1B2C3")
-    expect_start(
-        stubs, IngestRequest(source_uri=SOURCE, ladder_version=STANDARD.version, correlation_id=name, **sidecar)
-    )
 
     trigger.handler(upload(), lambda_context)
 
@@ -285,8 +233,3 @@ def test_unsupported_event_is_rejected(expect_event: Any, lambda_context: Any) -
         "detail": {"bucket": {"name": "b"}, "object": {"key": "k.mp4"}},
     }
     assert trigger.handler(event | {"source": "other"}, lambda_context)["status"] == "REJECTED"
-
-
-@pytest.mark.parametrize("key", ["work/bbb-1a2b3c/run-1/scan_scan.mp4", "captions/bbb-1a2b3c/run-1/en.mp4"])
-def test_the_pipelines_own_files_never_start_an_ingest(key: str, lambda_context: Any) -> None:
-    assert trigger.handler(upload(key), lambda_context) == {"status": "IGNORED"}

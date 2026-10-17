@@ -78,10 +78,23 @@ def test_grid_is_frame_exact(grid: Grid) -> None:
     assert (grid.gop_ms, grid.segment_ms) == (2002, 6006)
     assert grid.gop_exact(15) == 30030  # a "30 s" slate at 29.97
     assert grid.gop_exact(150) == 300300  # no drift over long offsets
-    assert grid.snap_to_gop(20000) == 20020
-    assert grid.snap_to_gop(40000) == 40040
-    assert grid.gop_index(4100) == 2
-    assert grid.snap_to_gop(0) == 0
+    assert grid.gop_exact(3 * 599) == 599 * grid.segment_ms == 3_597_594  # an hour of segments, still exact
+
+
+def test_cue_points_snap_to_the_segment_grid(grid: Grid) -> None:
+    # Basic tier has no ESAM, so the only boundaries every variant shares are the 6006 ms segment boundaries.
+    assert grid.snap_to_segment(20000) == 18018
+    assert grid.snap_to_segment(40000) == 42042
+    assert grid.snap_to_segment(254254) == 252252  # a GOP boundary is not a segment boundary
+    assert (grid.segment_index(4100), grid.snap_to_segment(4100)) == (1, 6006)
+    assert grid.snap_to_segment(0) == grid.snap_to_segment(3002) == 0
+    assert grid.snap_to_segment(3004) == 6006
+    for ms in range(0, 400_000, 7):
+        snapped = grid.snap_to_segment(ms)
+        assert snapped % 6006 == 0 and abs(snapped - ms) <= 3003  # at most half a segment away
+        assert grid.snap_to_segment(snapped) == snapped
+    pal = Grid(frame_rate=FrameRate.parse("25"), gop_frames=50, segment_gops=3)
+    assert (pal.segment_ms, pal.snap_to_segment(20000), pal.segment_index(20000)) == (6000, 18000, 3)
 
 
 def test_break_catalogue_constants() -> None:
@@ -207,9 +220,9 @@ def test_breaks_keep_clear_of_program_start_and_end(grid: Grid) -> None:
 
 
 def test_editorial_cue_points_are_honoured_anywhere(grid: Grid) -> None:
-    trailer = _asset(1, minutes=52 / 60, break_offsets_ms=[20020], editorial_breaks=True)
+    trailer = _asset(1, minutes=52 / 60, break_offsets_ms=[grid.snap_to_segment(20000)], editorial_breaks=True)
     brief = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=0.5))
-    assert _offsets(_plan([trailer], grid, brief)) == [[20020]]  # 20 s in, in a 52 s program
+    assert _offsets(_plan([trailer], grid, brief)) == [[18018]]  # 18 s in, in a 52 s program
 
 
 def test_min_gap_defaults_to_half_the_cadence(grid: Grid) -> None:
@@ -217,10 +230,11 @@ def test_min_gap_defaults_to_half_the_cadence(grid: Grid) -> None:
     assert BreakPolicy(cadence_minutes=5).min_gap_ms == 150_000
     assert BreakPolicy(cadence_minutes=5, min_gap_minutes=0).min_gap_ms == 0
     # Tears of Steel: cue points 3.9 minutes apart, both kept at a 5-minute cadence (a fixed 6-minute gap dropped one).
-    tears = _asset(1, minutes=734 / 60, break_offsets_ms=[254254, 488488], editorial_breaks=True)
+    cues = [grid.snap_to_segment(ms) for ms in (254254, 488488)]
+    tears = _asset(1, minutes=734 / 60, break_offsets_ms=cues, editorial_breaks=True)
     brief = ProgrammingBrief(break_policy=BreakPolicy(cadence_minutes=5))
     plan = _plan([tears], grid, brief)
-    assert _offsets(plan) == [[254254, 488488]]
+    assert _offsets(plan) == [[252252, 486486]]
     assert plan == _plan([tears], grid, brief)  # deterministic
 
 
@@ -243,7 +257,7 @@ def test_content_rules(grid: Grid) -> None:
 
 def test_schedule_checks(grid: Grid) -> None:
     other = _plan([_asset(9)], grid).programs[0]
-    mismatched = _asset(2, ladder_version="uhd@0123abcd45")
+    mismatched = _asset(2, ladder_version="custom@0123abcd45")
     plan = _plan([_asset(1), mismatched], grid, existing=(other,), now_ms=T0 - MINUTE)
     found = {(v.code, v.severity) for v in plan.violations}
     assert ("LEAD_TIME", "warning") in found

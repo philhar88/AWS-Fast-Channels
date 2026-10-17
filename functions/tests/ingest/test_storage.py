@@ -14,8 +14,8 @@ def _body(data: bytes) -> StreamingBody:
 
 def test_content_types() -> None:
     assert content_type("a/main.m3u8") == "application/vnd.apple.mpegurl"
-    assert content_type("a/main_avc.MPD") == "application/dash+xml"
-    assert content_type("a/init.cmfv") == "video/mp4"
+    assert content_type("a/main_avc-720p_00001.TS") == "video/mp2t"
+    assert content_type("ads/fast_standard/vast.xml") == "application/xml"
     assert content_type("ads/b.gif") == "image/gif"
     assert content_type("a/blob") == "binary/octet-stream"
 

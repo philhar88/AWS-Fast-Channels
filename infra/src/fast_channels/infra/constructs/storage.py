@@ -13,7 +13,6 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
-from fast_channels.core.ingest import WORK_PREFIX
 from fast_channels.functions.media_library import GSI1, TTL_ATTRIBUTE
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
@@ -23,7 +22,6 @@ __all__ = [
     "DEFAULT_LOG_EXPIRATION",
     "GSI1",
     "TTL_ATTRIBUTE",
-    "WORK_EXPIRATION",
     "MediaLibrary",
     "MediaStorage",
     "ReferenceCatalogTable",
@@ -32,8 +30,6 @@ ASSETS_PREFIX: Final = "assets/"
 """Encoder outputs ``assets/<asset_id>/<ladder_version>/``; their manifests are for Channel Assembly only."""
 
 DEFAULT_LOG_EXPIRATION: Final = Duration.days(90)
-WORK_EXPIRATION: Final = Duration.days(7)
-"""How long the ingest pipeline's intermediate files (``work/``) are kept: long enough to debug an ingest."""
 _ABORT_UPLOADS: Final = s3.LifecycleRule(
     id="abort-incomplete-uploads", abort_incomplete_multipart_upload_after=Duration.days(7)
 )
@@ -42,9 +38,8 @@ _ABORT_UPLOADS: Final = s3.LifecycleRule(
 class MediaStorage(Construct):
     """The deployment's three buckets, each SSE-S3, bucket-owner enforced, private and TLS 1.2+ only.
 
-    - ``ingest_bucket``: mezzanines (and optional ``<key>.json`` sidecars and caption files), generated captions
-      ``captions/<asset>/`` and, for :data:`WORK_EXPIRATION`, caption scans and their proxies ``work/<asset>/``.
-      EventBridge notifications are on; objects move to Intelligent-Tiering.
+    - ``ingest_bucket``: mezzanines and their optional ``<key>.json`` sidecars. EventBridge notifications are on;
+      objects move to Intelligent-Tiering.
     - ``media_bucket``: encoder outputs ``assets/<asset>/<ladder>/``, preconditioned ads ``ads/<ladder>/`` and
       EPG feeds ``epg/<channel>.{json,xml}``. Channel Assembly reads its manifests with SigV4, CloudFront reads
       everything else through OAC; SSE-KMS would break Channel Assembly (channel-assembly.md §2.4).
@@ -88,7 +83,6 @@ class MediaStorage(Construct):
                         )
                     ],
                 ),
-                s3.LifecycleRule(id="expire-work", prefix=WORK_PREFIX, expiration=WORK_EXPIRATION),
             ],
         )
         # Native EventBridge notifications; the L2 flag would add a custom-resource Lambda (cdk-standards.md §7.1).
@@ -131,10 +125,10 @@ class MediaStorage(Construct):
 
     def allow_cloudfront_read(self) -> None:
         """Let CloudFront distributions of this account read the media bucket through OAC, except content
-        manifests: ``assets/*.m3u8`` and ``assets/*.mpd`` are only for Channel Assembly.
+        manifests: ``assets/*.m3u8`` are only for Channel Assembly.
 
         The deny stops casual direct playback of an asset from the CDN; it does not make ads mandatory. Content
-        segments stay public at predictable names (``assets/<asset>/<ladder>/main_<rendition>_<n>.cmfv``, and every
+        segments stay public at predictable names (``assets/<asset>/<ladder>/main_<rendition>_<n>.ts``, and every
         SSAI playlist shows the prefix), so anyone can rebuild an ad-free playlist. Where that matters, protect
         ``/assets/*`` with CloudFront signed cookies or URLs, or a token check at the edge.
         """
@@ -158,10 +152,7 @@ class MediaStorage(Construct):
                 effect=iam.Effect.DENY,
                 principals=[cloudfront],
                 actions=["s3:GetObject"],
-                resources=[
-                    self.media_bucket.arn_for_objects(f"{ASSETS_PREFIX}*.m3u8"),
-                    self.media_bucket.arn_for_objects(f"{ASSETS_PREFIX}*.mpd"),
-                ],
+                resources=[self.media_bucket.arn_for_objects(f"{ASSETS_PREFIX}*.m3u8")],
             )
         )
 

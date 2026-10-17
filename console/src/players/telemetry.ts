@@ -101,8 +101,8 @@ export function attachSgaiTelemetry(hls: Hls, sink: TelemetrySink, media: HTMLMe
 }
 
 /**
- * Both modes: what was loaded and which rendition plays (the codec selector's effect), and fatal errors the player
- * does not recover from. Retryable ones are logged with their reload (`superviseSession`).
+ * Both modes: what was loaded and which rendition plays, and fatal errors the player does not recover from.
+ * Retryable ones are logged with their reload (`superviseSession`).
  */
 export function attachPlaybackTelemetry(hls: Hls, sink: TelemetrySink): void {
   hls.on(Events.MANIFEST_PARSED, (_event, { levels }) => {
@@ -117,23 +117,9 @@ export function attachPlaybackTelemetry(hls: Hls, sink: TelemetrySink): void {
       sink.event("info", "LEVEL_SWITCHED", `${size}${variant.videoCodec ?? "video"}${rate}`);
     }
   });
-  hls.on(Events.SUBTITLE_TRACKS_UPDATED, (_event, { subtitleTracks }) => {
-    const names = subtitleTracks.map((track) => `${track.name} (${track.lang ?? "und"})`);
-    sink.event("info", "SUBTITLE_TRACKS_UPDATED", names.length ? `Captions: ${names.join(", ")}` : "No caption tracks");
-  });
-  hls.on(Events.SUBTITLE_TRACK_SWITCH, (_event, { id }) => {
-    const track = hls.subtitleTracks[id];
-    sink.event("info", "SUBTITLE_TRACK_SWITCH", track ? `Captions on: ${track.name}` : "Captions off");
-  });
   hls.on(Events.ERROR, (_event, error) => {
     if (error.fatal && !isRetryable(error)) {
       sink.event("error", "ERROR", `${error.type}: ${describeError(error)}`);
     }
   });
-}
-
-/** Shows the first caption track (IMSC1, one per ladder language) or none; hls.js renders it as TextTrack cues. */
-export function showCaptions(hls: Pick<Hls, "subtitleTrack" | "subtitleDisplay" | "subtitleTracks">, on: boolean): void {
-  hls.subtitleDisplay = on;
-  hls.subtitleTrack = on && hls.subtitleTracks.length > 0 ? 0 : -1;
 }

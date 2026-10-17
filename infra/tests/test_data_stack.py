@@ -73,6 +73,11 @@ def test_ingest_bucket_emits_eventbridge_events_and_tiers_mezzanines(data: Templ
         "Status": "Enabled",
         "Transitions": [{"StorageClass": "INTELLIGENT_TIERING", "TransitionInDays": 0}],
     } in (props["LifecycleConfiguration"]["Rules"])
+    # Mezzanines are kept: the pipeline writes no intermediate files to the ingest bucket.
+    assert {r["Id"] for r in props["LifecycleConfiguration"]["Rules"]} == {
+        "abort-incomplete-uploads",
+        "mezzanines-intelligent-tiering",
+    }
     data.resource_count_is("Custom::S3BucketNotifications", 0)
 
 
@@ -112,9 +117,8 @@ def test_cloudfront_reads_media_but_never_content_manifests(data: Template) -> N
         "ArnLike": {"AWS:SourceArn": "arn:aws:cloudfront::123456789012:distribution/*"},
     }
     assert (deny["Effect"], deny["Action"], deny.get("Condition")) == ("Deny", "s3:GetObject", None)
-    for arn, suffix in zip(deny["Resource"], ["/assets/*.m3u8", "/assets/*.mpd"], strict=True):
-        [bucket_arn, key] = arn["Fn::Join"][1]
-        assert (bucket_arn["Fn::GetAtt"][0][:12], key) == ("StorageMedia", suffix)
+    [bucket_arn, key] = deny["Resource"]["Fn::Join"][1]
+    assert (bucket_arn["Fn::GetAtt"][0][:12], key) == ("StorageMedia", "/assets/*.m3u8")
 
 
 def test_channel_assembly_reads_assets_of_the_deployments_source_location_only(data: Template) -> None:

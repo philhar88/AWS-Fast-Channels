@@ -18,13 +18,11 @@ EVENT = {
     "kind": "slate",
     "vod_source": NAME,
     "output_prefix": PREFIX,
-    "profiles": ["hls", "hls-avc", "dash-avc"],
+    "profiles": ["hls"],
     "correlation_id": "kit-1-filler",
 }
 PACKAGES = [
     {"Path": f"/{PREFIX}main.m3u8", "SourceGroup": "hls", "Type": "HLS"},
-    {"Path": f"/{PREFIX}main_avc.m3u8", "SourceGroup": "hls-avc", "Type": "HLS"},
-    {"Path": f"/{PREFIX}main_avc.mpd", "SourceGroup": "dash-avc", "Type": "DASH"},
 ]
 TAGS = {
     "fast:app": "fast",
@@ -82,11 +80,7 @@ def test_creates_a_new_vod_source(stubs: Any, lambda_context: Any) -> None:
         "vod_source": NAME,
         "vod_source_arn": ARN,
         "source_location": "fast-origin",
-        "packages": {
-            "hls": f"/{PREFIX}main.m3u8",
-            "hls-avc": f"/{PREFIX}main_avc.m3u8",
-            "dash-avc": f"/{PREFIX}main_avc.mpd",
-        },
+        "packages": {"hls": f"/{PREFIX}main.m3u8"},
         "alerts": ["NOT_PROCESSED"],
     }
 

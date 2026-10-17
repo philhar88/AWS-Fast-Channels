@@ -21,13 +21,13 @@ TOPOLOGIES = {
     "media-only": ({"agent.enabled": False}, "eu-central-1"),
     "external-ads-custom-domain-two-ladders": (
         {
-            "ladders.builtin": ["standard", "uhd"],
+            "ladders.builtin": ["standard", "mobile"],
             "ads": {"mode": "external_vast", "url": "https://ads.example.com/vast?sid=[session.uuid]"},
             "delivery.content_domain": "media.example.com",
             "delivery.certificate_arn": "arn:aws:acm:us-east-1:123456789012:certificate/0f1e2d3c",
             "channels.iac": [
-                {"name": "fast-demo", "outputs": ["hls-avc", "dash-avc"]},
-                {"name": "fast-uhd", "ladder": "uhd", "outputs": ["hls-hevc"], "autopilot_cron": "rate(6 hours)"},
+                {"name": "fast-demo", "outputs": ["hls"]},
+                {"name": "fast-mobile", "ladder": "mobile", "autopilot_cron": "rate(6 hours)"},
             ],
         },
         "us-east-1",
@@ -35,6 +35,7 @@ TOPOLOGIES = {
 }
 
 
+@pytest.mark.usefixtures("second_ladder")
 @pytest.mark.parametrize(("overrides", "region"), TOPOLOGIES.values(), ids=TOPOLOGIES.keys())
 def test_no_unacknowledged_findings(
     fresh_deployment: Callable[..., Any], tmp_path: Path, overrides: dict[str, Any], region: str

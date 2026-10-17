@@ -27,7 +27,7 @@ INGEST = "ingest-bucket"
 MACHINE = "arn:aws:states:us-east-1:123456789012:stateMachine:fast-ingest"
 NOW = "2026-10-16T12:00:00Z"
 STANDARD = Ladder.builtin("standard")
-UHD = Ladder.builtin("uhd")
+LITE = "lite@5306b91dd0"  # another ladder version of the asset
 CTX = ToolContext(tool="library___ingest", correlation_id="session-1")
 SOURCE = f"s3://{INGEST}/mezzanine/big_buck_bunny.mov"
 STARTED = datetime(2026, 10, 16, 12, 0, 1, tzinfo=UTC)
@@ -84,14 +84,6 @@ def asset(**changes: Any) -> store.Asset:
         "content_id": "bbb",
         "duration_ms": 596_462,
         "break_offsets_ms": [6006, 12012, 18018],
-        "captions": [
-            {
-                "language": "en",
-                "origin": "generated",
-                "uri": "s3://ingest/captions/bbb/en.ttml",
-                "engine": "elemental-inference",
-            }
-        ],
         "vod_source": "fast-bbb-1a2b3c",
         "correlation_id": "session-0-bbb-1a2b3c",
         "updated_at": NOW,
@@ -141,7 +133,6 @@ def test_find_assets_returns_compact_rows(ddb: Stubber) -> None:
         "content_id": "bbb",
         "duration_ms": 596_462,
         "break_offset_count": 3,
-        "captioned": ["en"],
         "vod_source": "fast-bbb-1a2b3c",
         "updated_at": NOW,
     }
@@ -150,19 +141,18 @@ def test_find_assets_returns_compact_rows(ddb: Stubber) -> None:
 
 
 def test_get_asset_prefers_the_default_ladder(ddb: Stubber) -> None:
-    newer_uhd = asset(ladder_version=UHD.version, updated_at="2026-10-17T00:00:00Z")
-    versions(ddb, "bbb-1a2b3c", [newer_uhd, asset()])
+    newer_lite = asset(ladder_version=LITE, updated_at="2026-10-17T00:00:00Z")
+    versions(ddb, "bbb-1a2b3c", [newer_lite, asset()])
     detail = library.get_asset(library.GetAssetInput(asset_id="bbb-1a2b3c"), CTX)
     assert detail.ladder_version == STANDARD.version
     assert detail.break_offsets_ms == [6006, 12012, 18018]
     assert detail.correlation_id == "session-0-bbb-1a2b3c"
-    assert detail.other_ladder_versions == [UHD.version]
-    assert [(c.language, c.origin, c.engine) for c in detail.captions] == [("en", "generated", "elemental-inference")]
+    assert detail.other_ladder_versions == [LITE]
 
 
 def test_get_asset_falls_back_to_the_latest_encode(ddb: Stubber) -> None:
     old, new = (
-        asset(ladder_version=UHD.version),
+        asset(ladder_version=LITE),
         asset(ladder_version="x@0000000000", updated_at="2027-01-01T00:00:00Z"),
     )
     versions(ddb, "bbb-1a2b3c", [old, new])
@@ -170,8 +160,8 @@ def test_get_asset_falls_back_to_the_latest_encode(ddb: Stubber) -> None:
 
 
 def test_get_asset_with_an_explicit_ladder(ddb: Stubber) -> None:
-    versions(ddb, "bbb-1a2b3c", [asset(), asset(ladder_version=UHD.version)])
-    request = library.GetAssetInput(asset_id="bbb-1a2b3c", ladder_version=UHD.version)
+    versions(ddb, "bbb-1a2b3c", [asset(), asset(ladder_version=LITE)])
+    request = library.GetAssetInput(asset_id="bbb-1a2b3c", ladder_version=LITE)
     assert library.get_asset(request, CTX).other_ladder_versions == [STANDARD.version]
 
 
@@ -183,7 +173,7 @@ def test_get_asset_errors(ddb: Stubber) -> None:
 
     versions(ddb, "bbb-1a2b3c", [asset()])
     with pytest.raises(ToolError) as raised:
-        library.get_asset(library.GetAssetInput(asset_id="bbb-1a2b3c", ladder_version=UHD.version), CTX)
+        library.get_asset(library.GetAssetInput(asset_id="bbb-1a2b3c", ladder_version=LITE), CTX)
     assert raised.value.code == "NOT_FOUND" and STANDARD.version in raised.value.hint
 
 
@@ -225,7 +215,6 @@ def test_ingest_starts_the_pipeline_named_after_the_session(ddb: Stubber, s3: St
         "execution_name": name,
         "execution_arn": f"arn:aws:states:us-east-1:123456789012:execution:fast-ingest:{name}",
         "started_at": "2026-10-16T12:00:01.000Z",
-        "pricing_tier": "PROFESSIONAL",
         "cost_per_minute_usd": encode_cost_per_minute(STANDARD),
         "estimated_cost_usd": encode_cost(STANDARD, 596_462),
     }

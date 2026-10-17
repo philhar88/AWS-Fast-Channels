@@ -1,53 +1,90 @@
-"""compile_job_settings reproduces the verified golden job (mediaconvert.md §9.4) except for listed v3 changes."""
+"""compile_job_settings: one Apple HLS group of muxed MPEG-TS variants on the Basic tier, and the per-job overrides.
 
-import json
-from collections.abc import Set as AbstractSet
+hls-ts/: what the compiled STANDARD template wrote for a 40 s clip and a 15-GOP slate (mediastreamvalidator: PASS).
+"""
+
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from syrupy.extensions.json import JSONSnapshotExtension
 
-from fast_channels.core.captions import CaptionFile, CaptionKind, CaptionPlan, CaptionSource, CaptionTrack
-from fast_channels.core.esam import build_esam
-from fast_channels.core.ladder import Ladder, VideoCodec
+from fast_channels.core.ladder import Ladder
+from fast_channels.core.manifests import media_segment_durations, parse_multivariant, segment_boundaries_ms
 from fast_channels.core.mediaconvert import (
+    AUDIO_SELECTOR,
+    GROUP_TYPE,
     GeneratorInput,
-    additional_manifests,
+    JobOverrides,
     build_job_overrides,
-    caption_scan_settings,
     compile_job_settings,
-    count_cues,
     job_template_props,
     output_prefix,
 )
-from fast_channels.core.profiles import applicable, selected_outputs
+from fast_channels.core.profiles import profile
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
-DATA = Path(__file__).parent / "data"
-
-GOLDEN: dict[str, Any] = json.loads((DATA / "golden-job.json").read_text())["Settings"]
-GOLDEN_GROUP = GOLDEN["OutputGroups"][0]
-GOLDEN_OUTPUTS = {o["NameModifier"]: o for o in GOLDEN_GROUP["Outputs"]}
-RUNG_VALUES = {"QvbrSettings", "MaxBitrate", "HrdBufferSize", "CodecProfile", "BitDepth"}
+CAPTURE = Path(__file__).parent / "data/hls-ts"
 FRAME_RATE = {
     "FramerateControl": "SPECIFIED",
     "FramerateNumerator": 30000,
     "FramerateDenominator": 1001,
     "FramerateConversionAlgorithm": "DUPLICATE_DROP",
 }
+AAC_LC = {
+    "AudioSourceName": AUDIO_SELECTOR,
+    "LanguageCodeControl": "USE_CONFIGURED",
+    "CustomLanguageCode": "en",
+    "CodecSettings": {
+        "Codec": "AAC",
+        "AacSettings": {
+            "CodecProfile": "LC",
+            "RateControlMode": "CBR",
+            "Bitrate": 128_000,
+            "CodingMode": "CODING_MODE_2_0",
+            "SampleRate": 48000,
+            "Specification": "MPEG4",
+        },
+    },
+}
+PROFESSIONAL_TIER: frozenset[str] = frozenset(
+    {
+        "Esam",
+        "AccelerationSettings",
+        "AudioNormalizationSettings",
+        "CaptionDescriptions",
+        "CaptionSelectors",
+        "CaptionLanguageMappings",
+        "AdditionalManifests",
+        "AdMarkers",
+        "H265Settings",
+        "Av1Settings",
+        "NoiseReducer",
+        "DolbyVision",
+        "Hdr10Plus",
+        "ImageInserter",
+        "MotionImageInserter",
+        "PartitionedVideoProcessing",
+    }
+)
+"""Settings that would move a job off the Basic tier (or bring back removed features: ESAM, captions, I-frames)."""
 
 
-def shared(
-    compiled: dict[str, Any], golden: dict[str, Any], *, varies: AbstractSet[str] = frozenset()
-) -> dict[str, Any]:
-    """Assert every golden field is reproduced (except ``varies``); return the fields v3 adds."""
-    for key, value in golden.items():
-        if key not in varies:
-            assert compiled.get(key) == value, key
-    return {k: v for k, v in compiled.items() if k not in golden}
+def _keys(node: Any) -> Iterator[tuple[str, Any]]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key, value
+            yield from _keys(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _keys(value)
+
+
+def _values(document: dict[str, Any], name: str) -> set[Any]:
+    return {v for k, v in _keys(document) if k == name}
 
 
 @pytest.fixture(scope="module")
@@ -55,216 +92,225 @@ def settings(standard: Ladder) -> dict[str, Any]:
     return compile_job_settings(standard)
 
 
-def _output(settings: dict[str, Any], name: str) -> dict[str, Any]:
-    return next(o for o in settings["OutputGroups"][0]["Outputs"] if o["NameModifier"] == name)
+def _outputs(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    (group,) = settings["OutputGroups"]
+    outputs: list[dict[str, Any]] = group["Outputs"]
+    return outputs
+
+
+def _overrides(ladder: Ladder, **changes: Any) -> JobOverrides:
+    arguments: dict[str, Any] = {
+        "ladder": ladder,
+        "media_bucket": "media",
+        "asset_id": "sintel-1a2b3c",
+        "source_uri": "s3://in/sintel.mp4",
+        "generator": None,
+        "correlation_id": "c-1",
+        "app": "fast",
+    }
+    return build_job_overrides(**arguments | changes)
 
 
 def test_job_level_settings(settings: dict[str, Any]) -> None:
-    assert shared(settings, GOLDEN, varies={"Inputs", "Esam", "OutputGroups"}) == {}
-    assert "Inputs" not in settings and "Esam" not in settings  # per job, sent as overrides
+    assert set(settings) == {"TimecodeConfig", "FollowSource", "OutputGroups"}  # Inputs are per job overrides
+    assert (settings["TimecodeConfig"], settings["FollowSource"]) == ({"Source": "ZEROBASED"}, 1)
 
 
-def test_cmaf_group(settings: dict[str, Any], standard: Ladder) -> None:
-    group = settings["OutputGroups"][0]
-    assert shared(group, GOLDEN_GROUP, varies={"OutputGroupSettings", "Outputs"}) == {}
-    cmaf, golden = group["OutputGroupSettings"]["CmafGroupSettings"], GOLDEN_GROUP["OutputGroupSettings"]
-    assert group["OutputGroupSettings"]["Type"] == golden["Type"]
-    changes = {"Destination", "MpdManifestBandwidthType", "AdditionalManifests"}
-    assert shared(cmaf, golden["CmafGroupSettings"], varies=changes) == {}
-    assert "Destination" not in cmaf  # set per asset by the job overrides
-    assert cmaf["MpdManifestBandwidthType"] == "MAX"  # SPEC-FINAL §3: deterministic DASH @bandwidth
-    assert cmaf["AdditionalManifests"] == additional_manifests(standard)
+def test_one_apple_hls_group(settings: dict[str, Any]) -> None:
+    (group,) = settings["OutputGroups"]
+    assert (group["Name"], group["CustomName"]) == ("Apple HLS", "hls")
+    assert group["OutputGroupSettings"]["Type"] == GROUP_TYPE == "HLS_GROUP_SETTINGS"
+    assert set(group["OutputGroupSettings"]) == {"Type", "HlsGroupSettings"}
+    hls = group["OutputGroupSettings"]["HlsGroupSettings"]
+    assert {k: hls[k] for k in ("SegmentControl", "SegmentLength", "SegmentLengthControl", "MinSegmentLength")} == {
+        "SegmentControl": "SEGMENTED_FILES",
+        "SegmentLength": 6,
+        "SegmentLengthControl": "GOP_MULTIPLE",  # closed 2 s GOPs: every segment is exactly 3 GOPs (6.006 s)
+        "MinSegmentLength": 0,
+    }
+    assert hls["CaptionLanguageSetting"] == "NONE"  # writes CLOSED-CAPTIONS=NONE on every variant
+    assert hls["TargetDurationCompatibilityMode"] == "SPEC_COMPLIANT"  # TARGETDURATION:6 for 6.006 s segments
+    assert hls["ManifestDurationFormat"] == "FLOATING_POINT"
+    assert (hls["CodecSpecification"], hls["StreamInfResolution"]) == ("RFC_6381", "INCLUDE")
+    assert (hls["DirectoryStructure"], hls["OutputSelection"]) == ("SINGLE_DIRECTORY", "MANIFESTS_AND_SEGMENTS")
+    assert (hls["ProgramDateTime"], hls["TimedMetadataId3Frame"]) == ("EXCLUDE", "NONE")
+    assert hls["ManifestCompression"] == "NONE"
+    assert "Destination" not in hls  # set per asset by the job overrides
 
 
-def test_additional_manifests_cover_every_applicable_profile(standard: Ladder) -> None:
-    manifests = {m["ManifestNameModifier"]: m["SelectedOutputs"] for m in additional_manifests(standard)}
-    assert list(manifests) == ["_avc", "_hevc", "_av1", "_sd", "_hd"]
-    for p in applicable(standard):
-        if p.manifest_suffix:
-            assert manifests[p.manifest_suffix] == selected_outputs(standard, p)
+def test_outputs_are_muxed_ts_variants_in_multivariant_order(settings: dict[str, Any], standard: Ladder) -> None:
+    outputs = _outputs(settings)
+    assert [o["NameModifier"] for o in outputs] == ["_avc-720p", "_avc-1080p", "_avc-360p"]
+    for output in outputs:
+        assert set(output) == {
+            "NameModifier",
+            "ContainerSettings",
+            "OutputSettings",
+            "VideoDescription",
+            "AudioDescriptions",
+        }
+        container = output["ContainerSettings"]
+        assert container["Container"] == "M3U8" and set(container) == {"Container", "M3u8Settings"}
+        m3u8 = container["M3u8Settings"]
+        assert (m3u8["Scte35Source"], m3u8["TimedMetadata"], m3u8["NielsenId3"]) == ("NONE", "NONE", "NONE")
+        assert m3u8["AudioDuration"] == "MATCH_VIDEO_DURATION"  # Channel Assembly needs equal-length tracks
+        assert (m3u8["PmtPid"], m3u8["VideoPid"], m3u8["AudioPids"]) == (480, 481, [482])
+        assert output["OutputSettings"] == {"HlsSettings": {"IFrameOnlyManifest": "EXCLUDE"}}  # no audio groups
+        assert output["AudioDescriptions"] == [AAC_LC]  # one muxed AAC-LC track per variant
+
+
+def test_the_capture_is_what_the_template_writes(standard: Ladder) -> None:
+    """The real encode's playlists follow from the group settings: names, order, CODECS and segment cadence."""
+    multivariant = (CAPTURE / "content/main.m3u8").read_text()
+    assert [v.uri for v in parse_multivariant(multivariant)] == [f"main{r.name_modifier}.m3u8" for r in standard.video]
+    assert all(line.endswith(",CLOSED-CAPTIONS=NONE") for line in multivariant.splitlines() if "STREAM-INF" in line)
+    assert "#EXT-X-I-FRAME-STREAM-INF" not in multivariant and "#EXT-X-MEDIA:" not in multivariant
+    playlist = (CAPTURE / "content/main_avc-720p.m3u8").read_text()
+    assert "#EXT-X-TARGETDURATION:6" in playlist and "main_avc-720p_00001.ts" in playlist
+    assert set(media_segment_durations(playlist)[:-1]) == {standard.grid.segment_ms / 1000}
 
 
 @pytest.mark.parametrize(
-    ("codec", "golden_name", "settings_key"),
+    ("rung", "size", "qvbr", "max_bps", "hrd_bps"),
     [
-        (VideoCodec.AVC, "_avc_1080p", "H264Settings"),
-        (VideoCodec.HEVC, "_hevc_1080p", "H265Settings"),
-        (VideoCodec.AV1, "_av1_1080p", "Av1Settings"),
+        ("_avc-720p", (1280, 720), 7, 3_400_000, 6_800_000),
+        ("_avc-1080p", (1920, 1080), 8, 6_000_000, 12_000_000),
+        ("_avc-360p", (640, 360), 6, 800_000, 800_000),  # HRD = MaxBitrate at <= 432p
     ],
 )
-def test_video_outputs(
-    settings: dict[str, Any], standard: Ladder, codec: VideoCodec, golden_name: str, settings_key: str
+def test_video_settings(
+    settings: dict[str, Any], rung: str, size: tuple[int, int], qvbr: int, max_bps: int, hrd_bps: int
 ) -> None:
-    golden = GOLDEN_OUTPUTS[golden_name]
-    rendition = next(r for r in standard.video if r.codec is codec and r.height == 1080)
-    output = _output(settings, rendition.name_modifier)
-    assert shared(output, golden, varies={"NameModifier", "ContainerSettings", "VideoDescription"}) == {}
-    cmfc = output["ContainerSettings"]["CmfcSettings"]
-    assert output["ContainerSettings"]["Container"] == "CMFC"
-    assert cmfc == {"AudioRenditionSets": rendition.audio_group, "IFrameOnlyManifest": "EXCLUDE"}
-    description = output["VideoDescription"]
-    added = shared(description, golden["VideoDescription"], varies={"CodecSettings"})
-    assert added == {
-        "VideoPreprocessors": {"Deinterlacer": {"Algorithm": "INTERPOLATE", "Mode": "DEINTERLACE", "Control": "NORMAL"}}
+    description = next(o for o in _outputs(settings) if o["NameModifier"] == rung)["VideoDescription"]
+    assert (description["Width"], description["Height"]) == size
+    assert description["VideoPreprocessors"] == {
+        "Deinterlacer": {"Algorithm": "INTERPOLATE", "Mode": "DEINTERLACE", "Control": "NORMAL"}
     }
-    codec_settings = description["CodecSettings"][settings_key]
-    golden_codec = golden["VideoDescription"]["CodecSettings"][settings_key]
-    assert description["CodecSettings"]["Codec"] == golden["VideoDescription"]["CodecSettings"]["Codec"]
-    added = shared(codec_settings, golden_codec, varies=RUNG_VALUES | {"FramerateControl"})
-    assert {k: codec_settings[k] for k in FRAME_RATE} == FRAME_RATE
-    assert set(added) == set(FRAME_RATE) - {"FramerateControl"}
-    assert codec_settings["QvbrSettings"] == {"QvbrQualityLevel": rendition.qvbr}
-    assert codec_settings["MaxBitrate"] == rendition.max_kbps * 1000
+    assert set(description["CodecSettings"]) == {"Codec", "H264Settings"}
+    assert description["CodecSettings"]["Codec"] == "H_264"
+    h264 = description["CodecSettings"]["H264Settings"]
+    assert {k: h264[k] for k in FRAME_RATE} == FRAME_RATE
+    assert (h264["GopSize"], h264["GopSizeUnits"], h264["GopClosedCadence"]) == (60, "FRAMES", 1)
+    assert (h264["RateControlMode"], h264["QvbrSettings"]) == ("QVBR", {"QvbrQualityLevel": qvbr})
+    assert (h264["MaxBitrate"], h264["HrdBufferSize"]) == (max_bps, hrd_bps)
+    assert (h264["CodecProfile"], h264["CodecLevel"]) == ("HIGH", "AUTO")
+    assert h264["QualityTuningLevel"] == "SINGLE_PASS_HQ"  # multi-pass is Professional tier
 
 
-def test_rung_specific_values(settings: dict[str, Any]) -> None:
-    hevc = _output(settings, "_hevc-1080p")["VideoDescription"]["CodecSettings"]["H265Settings"]
-    assert (hevc["CodecProfile"], hevc["WriteMp4PackagingType"], hevc["HrdBufferSize"]) == (
-        "MAIN_MAIN",
-        "HVC1",
-        11_000_000,
+def test_settings_stay_on_the_basic_tier(standard: Ladder, settings: dict[str, Any]) -> None:
+    props = job_template_props(standard, name="fast-standard", queue_arn="arn:queue", category="fast")
+    file = _overrides(standard, cue_points_ms=[20000, 40000])
+    slate = _overrides(
+        standard,
+        source_uri=None,
+        generator=GeneratorInput(image_s3_uri="s3://kit/slate.png", duration_gops=15, label="slate-15"),
     )
-    floor = _output(settings, "_avc-234p")["VideoDescription"]["CodecSettings"]["H264Settings"]
-    assert floor["HrdBufferSize"] == floor["MaxBitrate"] == 120_000
-    av1 = _output(settings, "_av1-360p")["VideoDescription"]["CodecSettings"]["Av1Settings"]
-    assert (av1["BitDepth"], av1["GopSize"], av1["FilmGrainSynthesis"]) == ("BIT_10", 60, "DISABLED")
-    assert "HrdBufferSize" not in av1
+    for document in (settings, props, file.settings, slate.settings):
+        assert not PROFESSIONAL_TIER & {k for k, _ in _keys(document)}
+        assert _values(document, "QualityTuningLevel") <= {"SINGLE_PASS_HQ"}
+        assert _values(document, "Codec") <= {"H_264", "AAC"}
+        assert _values(document, "IFrameOnlyManifest") <= {"EXCLUDE"}
 
 
-def test_audio_outputs(settings: dict[str, Any], standard: Ladder) -> None:
-    golden = GOLDEN_OUTPUTS["_aac-lc-128k"]
-    output = _output(settings, "_aac-lc-128")
-    golden_cmfc = golden["ContainerSettings"]["CmfcSettings"]
-    assert shared(output["ContainerSettings"]["CmfcSettings"], golden_cmfc, varies={"AudioGroupId"}) == {}
-    (description,), (golden_description,) = output["AudioDescriptions"], golden["AudioDescriptions"]
-    added = shared(description, golden_description, varies={"LanguageCode", "StreamName", "CodecSettings"})
-    assert added == {
-        "CustomLanguageCode": "en",
-        "AudioNormalizationSettings": {
-            "Algorithm": "ITU_BS_1770_3",
-            "AlgorithmControl": "CORRECT_AUDIO",
-            "TargetLkfs": -24.0,
-            "PeakCalculation": "NONE",
-            "LoudnessLogging": "DONT_LOG",
-        },
-    }
-    assert "LanguageCode" not in description and description["StreamName"] == "English"
-    aac, golden_aac = description["CodecSettings"]["AacSettings"], golden_description["CodecSettings"]["AacSettings"]
-    assert shared(aac, golden_aac) == {}
-    profiles = {
-        o["NameModifier"]: o["AudioDescriptions"][0]["CodecSettings"]["AacSettings"]["CodecProfile"]
-        for o in settings["OutputGroups"][0]["Outputs"]
-        if "AudioDescriptions" in o
-    }
-    assert profiles == {"_aac-lc-128": "LC", "_aac-he1-64": "HEV1", "_aac-he2-32": "HEV2"}
+def test_rendition_options_reach_the_template(standard: Ladder) -> None:
+    main = standard.model_copy(update={"video": (standard.video[0].model_copy(update={"profile": "MAIN"}),)})
+    (output,) = _outputs(compile_job_settings(main))
+    assert output["VideoDescription"]["CodecSettings"]["H264Settings"]["CodecProfile"] == "MAIN"
+    louder = Ladder.model_validate(standard.model_dump() | {"audio": {"kbps": 192}})
+    assert _values(compile_job_settings(louder), "Bitrate") == {192_000}  # the AAC bitrate of every variant
 
 
-def test_output_order_is_multivariant_order(settings: dict[str, Any], standard: Ladder) -> None:
-    names = [o["NameModifier"] for o in settings["OutputGroups"][0]["Outputs"]]
-    assert names == [
-        *(r.name_modifier for r in standard.video),
-        *(a.name_modifier for a in standard.audio),
-        *(c.name_modifier for c in standard.captions),
-    ]
-    assert names[0] == "_avc-720p-a"
-
-
-@pytest.mark.parametrize("name", ["standard", "uhd"])
-def test_video_preprocessing_allows_accelerated_transcoding(name: str) -> None:
-    # Inverse telecine (ADAPTIVE or INVERSE_TELECINE) makes MediaConvert run PREFERRED jobs NOT_ACCELERATED.
-    outputs = compile_job_settings(Ladder.builtin(name))["OutputGroups"][0]["Outputs"]
-    modes = {
-        o["VideoDescription"]["VideoPreprocessors"]["Deinterlacer"]["Mode"] for o in outputs if "VideoDescription" in o
-    }
-    assert modes == {"DEINTERLACE"}
+def test_the_grid_follows_the_ladder(standard: Ladder) -> None:
+    pal = Ladder.model_validate(standard.model_dump() | {"frame_rate": "25", "segment_seconds": 4})
+    settings = compile_job_settings(pal)
+    assert settings["OutputGroups"][0]["OutputGroupSettings"]["HlsGroupSettings"]["SegmentLength"] == 4
+    h264 = _outputs(settings)[0]["VideoDescription"]["CodecSettings"]["H264Settings"]
+    assert (h264["GopSize"], h264["FramerateNumerator"], h264["FramerateDenominator"]) == (50, 25, 1)
 
 
 def test_standard_settings_snapshot(settings: dict[str, Any], snapshot: SnapshotAssertion) -> None:
     assert settings == snapshot.use_extension(JSONSnapshotExtension)
 
 
-def test_options_change_the_template(standard: Ladder, uhd: Ladder) -> None:
-    options = standard.options.model_copy(update={"iframe_playlists": True, "loudness_lkfs": None, "film_grain": True})
-    outputs = compile_job_settings(standard.model_copy(update={"options": options}))["OutputGroups"][0]["Outputs"]
-    assert outputs[0]["ContainerSettings"]["CmfcSettings"]["IFrameOnlyManifest"] == "INCLUDE"
-    assert (
-        "AudioNormalizationSettings"
-        not in _output({"OutputGroups": [{"Outputs": outputs}]}, "_aac-he2-32")["AudioDescriptions"][0]
-    )
-    av1 = next(o for o in outputs if o["NameModifier"] == "_av1-1080p")
-    assert av1["VideoDescription"]["CodecSettings"]["Av1Settings"]["FilmGrainSynthesis"] == "ENABLED"
-    uhd_hevc = _output(compile_job_settings(uhd), "_hevc-2160p-b")["VideoDescription"]["CodecSettings"]
-    assert uhd_hevc["H265Settings"]["CodecProfile"] == "MAIN10_MAIN"
-
-
 def test_job_template_props(standard: Ladder) -> None:
     props = job_template_props(standard, name="fast-standard", queue_arn="arn:queue", category="fast")
-    assert props["AccelerationSettings"] == {"Mode": "PREFERRED"} and props["Queue"] == "arn:queue"
+    assert set(props) == {
+        "Name",
+        "Description",
+        "Category",
+        "Queue",
+        "Priority",
+        "StatusUpdateInterval",
+        "Settings",
+        "Tags",
+    }  # no AccelerationSettings: accelerated transcoding is Professional tier
+    assert (props["Name"], props["Category"], props["Queue"]) == ("fast-standard", "fast", "arn:queue")
     assert props["Settings"] == compile_job_settings(standard)
     assert props["Tags"] == {"fast:app": "fast", "fast:ladder": standard.version}
-    assert props["Description"].startswith(standard.version)
+    assert props["Description"] == f"{standard.version}: {standard.description}"
     bare = standard.model_copy(update={"description": ""})
     assert job_template_props(bare, name="n", queue_arn="q", category="c")["Description"] == standard.version
 
 
-def test_file_overrides_match_the_golden_input(standard: Ladder) -> None:
-    o = build_job_overrides(
-        ladder=standard,
-        media_bucket="media",
-        asset_id="bbb-1a2b3c",
-        source_uri="s3://in/bbb.mp4",
-        generator=None,
-        correlation_id="c-1",
-        app="fast",
-    )
-    (source,) = o.settings["Inputs"]
-    empty = {"Captions en": {"SourceSettings": {"SourceType": "NULL_SOURCE"}}}  # no caption plan: empty tracks
-    assert source == GOLDEN["Inputs"][0] | {"FileInput": "s3://in/bbb.mp4", "CaptionSelectors": empty}
-    group = o.settings["OutputGroups"][0]["OutputGroupSettings"]
-    destination = f"s3://media/assets/bbb-1a2b3c/{standard.version.replace('@', '_')}/main"
-    assert group == {"Type": "CMAF_GROUP_SETTINGS", "CmafGroupSettings": {"Destination": destination}}
-    assert o.destination_prefix == output_prefix("bbb-1a2b3c", standard.version)
+def test_file_overrides(standard: Ladder, settings: dict[str, Any]) -> None:
+    o = _overrides(standard)
+    assert set(JobOverrides.model_fields) == {
+        "settings",
+        "user_metadata",
+        "destination_prefix",
+        "snapped_cue_points_ms",
+    }
+    assert set(o.settings) == {"Inputs", "OutputGroups"}
+    assert o.settings["Inputs"] == [
+        {
+            "FileInput": "s3://in/sintel.mp4",
+            "TimecodeSource": "ZEROBASED",
+            "VideoSelector": {"ColorSpace": "FOLLOW", "Rotate": "AUTO"},
+            "AudioSelectors": {AUDIO_SELECTOR: {"DefaultSelection": "DEFAULT"}},
+        }
+    ]
+    prefix = f"assets/sintel-1a2b3c/{standard.version.replace('@', '_')}/"
+    assert o.destination_prefix == prefix == output_prefix("sintel-1a2b3c", standard.version)
+    assert o.settings["OutputGroups"] == [
+        {"OutputGroupSettings": {"Type": GROUP_TYPE, "HlsGroupSettings": {"Destination": f"s3://media/{prefix}main"}}}
+    ]
+    # CreateJob deep-merges the override into the template's only group: same type, same settings key.
+    template_group = settings["OutputGroups"][0]["OutputGroupSettings"]
+    override_group = o.settings["OutputGroups"][0]["OutputGroupSettings"]
+    assert override_group.keys() == template_group.keys() and override_group["Type"] == template_group["Type"]
+    # The multivariant lands where the hls package configuration points.
+    assert f"{prefix}main.m3u8" == profile("hls").manifest_key(prefix)
     assert o.user_metadata == {
         "app": "fast",
-        "asset_id": "bbb-1a2b3c",
+        "asset_id": "sintel-1a2b3c",
         "ladder": standard.version,
         "correlation_id": "c-1",
     }
-    assert (o.acceleration, o.snapped_cue_points_ms, "Esam" in o.settings) == (None, [], False)
+    assert o.snapped_cue_points_ms == []
 
 
-def test_cue_points_snap_and_esam_only_when_needed(standard: Ladder) -> None:
-    def overrides(cues: list[int]) -> Any:
-        return build_job_overrides(
-            ladder=standard,
-            media_bucket="m",
-            asset_id="a",
-            source_uri="s3://in/a.mp4",
-            generator=None,
-            cue_points_ms=cues,
-            correlation_id="c",
-            app="fast",
-        )
+def test_cue_points_snap_to_the_segment_grid(standard: Ladder) -> None:
+    def snapped(cues: list[int]) -> list[int]:
+        o = _overrides(standard, cue_points_ms=cues)
+        assert "Esam" not in o.settings  # never ESAM: it is Professional tier
+        return o.snapped_cue_points_ms
 
-    on_grid = overrides([0, 6000, 12010])  # natural 6.006 s segment boundaries: no ESAM, no Pro-tier features
-    assert on_grid.snapped_cue_points_ms == [6006, 12012] and "Esam" not in on_grid.settings
-    off_grid = overrides([20000, 40000, 40001])
-    assert off_grid.snapped_cue_points_ms == [20020, 40040]
-    assert off_grid.settings["Esam"] == build_esam([20020, 40040])
+    assert snapped([0, 6000, 12010]) == [6006, 12012]  # 0 is not a break
+    assert snapped([20000, 40000, 40001]) == [18018, 42042]  # deduplicated
+    assert snapped([40000, 20000]) == [18018, 42042]  # sorted
+    assert snapped([3003]) == []  # nearest boundary is the start
+    cues = [5000, 20000, 33000, 100_000, 254_254]
+    assert all(abs(s - c) <= 3003 for s, c in zip(snapped(cues), cues, strict=True))
+    # Snapped cue points are boundaries of every variant of a real encode, so Channel Assembly can break there.
+    variants = [(CAPTURE / f"content/main{r.name_modifier}.m3u8").read_text() for r in standard.video]
+    assert set(snapped([5000, 20000, 33000])) <= set(segment_boundaries_ms(*variants))
 
 
 def test_generator_overrides(standard: Ladder) -> None:
     generator = GeneratorInput(image_s3_uri="s3://kit/slate.png", duration_gops=15, label="slate-15")
-    o = build_job_overrides(
-        ladder=standard,
-        media_bucket="m",
-        asset_id="slate-15",
-        source_uri=None,
-        generator=generator,
-        correlation_id="c",
-        app="fast",
-    )
+    o = _overrides(standard, asset_id="slate-15", source_uri=None, generator=generator)
     (source,) = o.settings["Inputs"]
+    assert set(source) == {"VideoGenerator", "TimecodeSource", "AudioSelectors"}
     assert source["VideoGenerator"] == {
         "Duration": 30030,
         "ImageInput": "s3://kit/slate.png",
@@ -275,106 +321,21 @@ def test_generator_overrides(standard: Ladder) -> None:
         "Channels": 2,
         "SampleRate": 48000,
     }
-    assert o.acceleration == "DISABLED"  # VideoGenerator inputs never accelerate (mediaconvert.md §7.2)
+    # The captured 15-GOP slate is exactly that long, in whole segments on every variant.
+    for r in standard.video:
+        durations = media_segment_durations((CAPTURE / f"slate/main{r.name_modifier}.m3u8").read_text())
+        assert round(sum(durations) * 1000) == 30030 and len(durations) == 5
     assert o.user_metadata["label"] == "slate-15"
+    assert o.snapped_cue_points_ms == []
 
 
 def test_override_errors(standard: Ladder) -> None:
     generator = GeneratorInput(image_s3_uri="s3://kit/slate.png", duration_gops=1, label="s")
     with pytest.raises(ValueError, match="exactly one"):
-        build_job_overrides(
-            ladder=standard,
-            media_bucket="m",
-            asset_id="a",
-            source_uri="s3://x/y.mp4",
-            generator=generator,
-            correlation_id="c",
-            app="fast",
-        )
+        _overrides(standard, generator=generator)
+    with pytest.raises(ValueError, match="exactly one"):
+        _overrides(standard, source_uri=None)
     with pytest.raises(ValueError, match="no cue points"):
-        build_job_overrides(
-            ladder=standard,
-            media_bucket="m",
-            asset_id="a",
-            source_uri=None,
-            generator=generator,
-            cue_points_ms=[2002],
-            correlation_id="c",
-            app="fast",
-        )
-
-
-def test_caption_outputs_are_imsc_tracks_in_every_manifest(settings: dict[str, Any], standard: Ladder) -> None:
-    assert _output(settings, "_cc-en") == {
-        "NameModifier": "_cc-en",
-        "ContainerSettings": {"Container": "CMFC"},
-        "CaptionDescriptions": [
-            {
-                "CaptionSelectorName": "Captions en",
-                "CustomLanguageCode": "en",
-                "LanguageDescription": "English",
-                "DestinationSettings": {
-                    "DestinationType": "IMSC",
-                    "ImscDestinationSettings": {"Accessibility": "ENABLED", "StylePassthrough": "ENABLED"},
-                },
-            }
-        ],
-    }
-    # MediaConvert writes SUBTITLES into every variant of every manifest, so every manifest lists the tracks.
-    assert all(m["SelectedOutputs"][-1] == "_cc-en" for m in additional_manifests(standard))
-    subtitles = standard.with_captions([CaptionTrack(language="es", label="Spanish", kind=CaptionKind.SUBTITLES)])
-    description = _output(compile_job_settings(subtitles), "_cc-es")["CaptionDescriptions"][0]
-    assert description["DestinationSettings"]["ImscDestinationSettings"]["Accessibility"] == "DISABLED"
-
-
-def test_jobs_define_every_caption_selector(standard: Ladder) -> None:
-    plan = CaptionPlan(
-        sources=(CaptionSource.provided(CaptionFile(uri="s3://in/bbb.en.srt", language="en"), language="en"),)
-    )
-    common = {"ladder": standard, "media_bucket": "media", "asset_id": "a", "correlation_id": "c", "app": "fast"}
-    file = build_job_overrides(**common, source_uri="s3://in/bbb.mp4", generator=None, captions=plan)
-    assert file.settings["Inputs"][0]["CaptionSelectors"] == {
-        "Captions en": {
-            "SourceSettings": {"SourceType": "SRT", "FileSourceSettings": {"SourceFile": "s3://in/bbb.en.srt"}}
-        }
-    }
-    still = build_job_overrides(
-        **common,
-        source_uri=None,
-        generator=GeneratorInput(image_s3_uri="s3://b/s.png", duration_gops=15, label="filler"),
-    )
-    assert still.settings["Inputs"][0]["CaptionSelectors"] == {
-        "Captions en": {"SourceSettings": {"SourceType": "NULL_SOURCE"}}
-    }
-    bare = build_job_overrides(
-        **common | {"ladder": standard.with_captions(())}, source_uri="s3://in/bbb.mp4", generator=None
-    )
-    assert "CaptionSelectors" not in bare.settings["Inputs"][0]
-
-
-def test_caption_scan_reads_embedded_captions_as_ttml() -> None:
-    settings = caption_scan_settings(source_uri="s3://in/bbb.mxf", destination="s3://in/work/a/c/scan")
-    (source,) = settings["Inputs"]
-    assert source["FileInput"] == "s3://in/bbb.mxf" and source["TimecodeSource"] == "ZEROBASED"
-    embedded = {"SourceType": "EMBEDDED", "EmbeddedSourceSettings": {"Source608ChannelNumber": 1}}
-    assert source["CaptionSelectors"] == {"Captions scan": {"SourceSettings": embedded}}
-    assert "AudioSelectors" not in source
-    (group,) = settings["OutputGroups"]
-    assert group["OutputGroupSettings"] == {
-        "Type": "FILE_GROUP_SETTINGS",
-        "FileGroupSettings": {"Destination": "s3://in/work/a/c/scan"},
-    }
-    video, captions = group["Outputs"]
-    # A caption output needs a video output in its group (an audio output does not count): a tiny picture.
-    assert (video["NameModifier"], video["ContainerSettings"]["Container"]) == ("_scan", "MP4")
-    assert (video["VideoDescription"]["Width"], video["VideoDescription"]["Height"]) == (256, 144)
-    assert "AudioDescriptions" not in video
-    assert captions["CaptionDescriptions"][0]["DestinationSettings"] == {"DestinationType": "TTML"}
-    assert (captions["NameModifier"], captions["Extension"]) == ("_captions", "ttml")
-
-
-def test_count_cues() -> None:
-    empty = '<tt><head><styling><style xml:id="s"/></styling></head><body><div/></body></tt>'
-    assert count_cues(empty) == 0
-    assert count_cues('<tt><body><div><p begin="1s">Hello</p><p begin="2s">There</p></div></body></tt>') == 2
-    assert count_cues("<tt:tt><tt:body><tt:div><tt:p>x</tt:p></tt:div></tt:body></tt:tt>") == 1
+        _overrides(standard, source_uri=None, generator=generator, cue_points_ms=[2002])
+    with pytest.raises(TypeError):
+        _overrides(standard, captions=None)  # caption plans are gone

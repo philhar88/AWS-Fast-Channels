@@ -50,9 +50,6 @@ class EncodingLadder(Construct):
             queue=props["Queue"],
             priority=props["Priority"],
             status_update_interval=props["StatusUpdateInterval"],
-            acceleration_settings=mediaconvert.CfnJobTemplate.AccelerationSettingsProperty(
-                mode=props["AccelerationSettings"]["Mode"]
-            ),
             settings_json=cfn_settings(props["Settings"]),
             tags={**props["Tags"], TAG_OWNER: Owner.IAC.value},
         )
@@ -63,9 +60,10 @@ def cfn_settings(settings: Any) -> Any:
     expects in ``SettingsJson``.
 
     The handler binds ``SettingsJson`` to the Java SDK v2 builders, whose bean names lower-case a leading acronym
-    after its first letter: ``CmfcSettings.IFrameOnlyManifest`` is rejected as unrecognized and must be
-    ``IframeOnlyManifest`` (observed in a deployment; CreateJobTemplate takes the API names). It is the only such
-    member in the compiled ladders; capitals inside a name (``GopBReference``) keep their spelling.
+    after its first letter: ``IFrameOnlyManifest`` is rejected as unrecognized and must be ``IframeOnlyManifest``
+    (observed in a deployment for ``CmfcSettings``; CreateJobTemplate takes the API names). It is the only such
+    member in the compiled ladders (``OutputSettings.HlsSettings.IFrameOnlyManifest``); a capital after a digit or
+    inside a name (``M3u8Settings``, ``Scte35Source``, ``GopBReference``) keeps its spelling.
     """
     match settings:
         case dict():

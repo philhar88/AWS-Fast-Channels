@@ -6,8 +6,8 @@ requires-python = ">=3.14"
 dependencies = [
     "fast-channels-core",
     "aws-lambda-powertools[parser]>=3.36,<4",
-    # The Lambda runtime's SDK lags: its Elemental Inference model has no smart subtitles (observed 2026-10).
-    "boto3>=1.43.114",
+    # Bundled, so the functions do not depend on the SDK version of the Lambda runtime (Lambda best practices).
+    "boto3>=1.42",
     "httpx>=0.28,<1",
 ]
 

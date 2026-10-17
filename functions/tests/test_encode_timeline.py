@@ -1,45 +1,43 @@
 from pathlib import Path
 from typing import Final
 
+from fast_channels.core.ladder import Ladder
 from fast_channels.functions import encode_timeline
 from fast_channels.functions.ingest.finalize import Encode, break_offsets
 
-REPO: Final = Path(__file__).resolve().parents[2]
-SAMPLES: Final = REPO / "core/tests/data/standard-job/src25i"  # a real STANDARD encode: 10 s, ESAM split at 4004 ms
+SAMPLES: Final = Path(__file__).parent / "ingest/data/content"  # a real STANDARD TS encode: 40.073 s
 
 
 def playlist(*durations: str) -> str:
-    segments = "".join(f"#EXTINF:{d},\nseg{n}.cmfv\n" for n, d in enumerate(durations))
+    segments = "".join(f"#EXTINF:{d},\nseg{n}.ts\n" for n, d in enumerate(durations))
     return f"#EXTM3U\n#EXT-X-TARGETDURATION:6\n{segments}#EXT-X-ENDLIST\n"
 
 
 MULTIVARIANT: Final = """#EXTM3U
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="en",LANGUAGE="en",URI="audio_en.m3u8"
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="fr",LANGUAGE="fr",URI="audio_fr.m3u8"
-#EXT-X-STREAM-INF:BANDWIDTH=3000000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=1280x720,AUDIO="aac"
+#EXT-X-STREAM-INF:BANDWIDTH=3878000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=1280x720
 avc_720.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=900000,CODECS="avc1.64001e,mp4a.40.2",RESOLUTION=640x360,AUDIO="aac"
+#EXT-X-STREAM-INF:BANDWIDTH=6728000,CODECS="avc1.640028,mp4a.40.2",RESOLUTION=1920x1080
+avc_1080.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1008000,CODECS="avc1.64001e,mp4a.40.2",RESOLUTION=640x360
 avc_360.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="hvc1.1.6.L93.B0,mp4a.40.2",RESOLUTION=1280x720,AUDIO="aac"
-hevc_720.m3u8
 """
 
 
-def test_one_playlist_per_video_codec_and_every_audio_rendition() -> None:
-    assert encode_timeline.timeline_uris(MULTIVARIANT) == [
-        "avc_720.m3u8",
-        "hevc_720.m3u8",
-        "audio_en.m3u8",
-        "audio_fr.m3u8",  # a second rendition of the same group still counts
-    ]
+def test_every_variant_counts_reference_first() -> None:
+    assert encode_timeline.timeline_uris(MULTIVARIANT) == ["avc_720.m3u8", "avc_1080.m3u8", "avc_360.m3u8"]
 
 
-def test_breaks_go_only_where_every_rendition_has_a_boundary() -> None:
+def test_a_variant_listed_twice_is_read_once() -> None:
+    twice = MULTIVARIANT + '#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.64001e,mp4a.40.2"\navc_360.m3u8\n'
+
+    assert encode_timeline.timeline_uris(twice) == ["avc_720.m3u8", "avc_1080.m3u8", "avc_360.m3u8"]
+
+
+def test_breaks_go_only_where_every_variant_has_a_boundary() -> None:
     playlists = {
         "avc_720.m3u8": playlist("6.006", "6.006", "6.006", "6.006"),
-        "hevc_720.m3u8": playlist("6.006", "6.006", "6.006", "6.006"),
-        "audio_en.m3u8": playlist("6.037", "6.016", "6.016", "5.951"),
-        "audio_fr.m3u8": playlist("12.053", "6.016", "5.951"),  # segmented differently: no boundary at 6 s
+        "avc_1080.m3u8": playlist("6.006", "6.006", "6.006", "6.006"),
+        "avc_360.m3u8": playlist("12.012", "6.006", "6.006"),  # segmented differently: no boundary at 6 s
     }
 
     result = encode_timeline.timeline(MULTIVARIANT, playlists.__getitem__)
@@ -51,14 +49,14 @@ def test_duration_is_the_exact_sum_of_the_reference_playlist() -> None:
     assert encode_timeline.duration_ms(playlist(*["6.006"] * 1000)) == 6_006_000  # a float sum drifts
 
 
-def test_the_pipeline_and_the_register_tool_read_the_same_tracks() -> None:
+def test_the_pipeline_and_the_register_tool_read_the_same_variants() -> None:
     # finalize.break_offsets (pipeline) and origins (register_vod_source) both go through encode_timeline.
     main = (SAMPLES / "main.m3u8").read_text()
     media = {path.name: path.read_text() for path in SAMPLES.glob("main_*.m3u8")}
-    encode = Encode(ladder=None, prefix="", multivariants={"hls": main}, media=media)  # type: ignore[arg-type]
+    encode = Encode(ladder=Ladder.builtin("standard"), prefix="", main=main, media=media)
 
     shared = encode_timeline.timeline(main, media.__getitem__)
 
-    assert break_offsets(encode, []) == shared.boundaries_ms
-    first_per_codec = ["main_avc-720p-a.m3u8", "main_hevc-1080p.m3u8", "main_av1-1080p.m3u8"]
-    assert encode_timeline.timeline_uris(main)[:3] == first_per_codec
+    assert break_offsets(encode, []) == shared.boundaries_ms == [6006, 12012, 18018, 24024, 30030, 36036]
+    assert shared.duration_ms == 40_073
+    assert encode_timeline.timeline_uris(main) == ["main_avc-720p.m3u8", "main_avc-1080p.m3u8", "main_avc-360p.m3u8"]

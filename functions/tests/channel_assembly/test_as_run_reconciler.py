@@ -81,7 +81,7 @@ def test_the_first_start_event_marks_the_program_aired_once(
             as_run("VodProgramStart"),
             as_run("AdBreakStart"),
             "not json",
-            as_run("VodProgramStart", source_group="dash-avc"),
+            as_run("VodProgramStart"),  # redelivered
         ),
         context,
     )

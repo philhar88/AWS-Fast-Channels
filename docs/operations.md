@@ -23,7 +23,7 @@ index and objects are deep-merged:
 ```bash
 npx cdk deploy '**' -c fast-channels.agent.admin_email=ops@example.com
 npx cdk deploy '**' -c fast-channels.channels.iac.0.tier=STANDARD
-npx cdk synth  '**' -c 'fast-channels.channels.iac=[{"name": "{prefix}-news", "outputs": ["hls", "hls-avc"]}]'
+npx cdk synth  '**' -c 'fast-channels.channels.iac=[{"name": "{prefix}-news", "outputs": ["hls"]}]'
 ```
 
 An invalid configuration fails synth with one line per problem and its path. The tables below are generated from the
@@ -36,7 +36,7 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `removal` | `destroy` or `retain` | `"destroy"` | `destroy` (demo: delete data with the stacks) or `retain` (production: keep data, enable deletion and termination protection). |
 | `ladders.builtin` | list of str | `["standard"]` | Built-in ladders (`ladders/<name>.toml`), each deployed as a MediaConvert job template. Slate and house-ad kits are encoded at deploy time for the default ladder and every ladder an IaC channel uses. |
 | `ladders.default` | str | `"standard"` | Ladder used when a request names none (ingest, agent proposals); one of `builtin`. |
-| `channel_assembly.package_profiles` | list of str | `["hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc"]` | Rendition profiles registered as package configurations on every VOD source and slate (at most 5, the default per-source quota). Every channel's `outputs` must be a subset. |
+| `channel_assembly.package_profiles` | list of str | `["hls"]` | Rendition profiles registered as package configurations on every VOD source and slate (at most 5, the default per-source quota). Every channel's `outputs` must be a subset. |
 | `channels.iac` | list of object | `[]` | Channels owned by CloudFormation (`owner = iac`), deployed with their playback configurations. |
 | `channels.max_runtime_hours` | float or null | `4` | Hours after which a channel started by a tool is stopped automatically; `null` disables auto-stop. |
 | `channels.max_agent_channels` | int | `3` | Maximum number of channels the agent may create (`<prefix>-agent-*`). |
@@ -44,7 +44,7 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `delivery.certificate_arn` | str or null | `null` | ACM certificate in us-east-1 covering `content_domain` (CloudFront only accepts us-east-1 certificates). |
 | `delivery.price_class` | `PriceClass_All` or `PriceClass_200` or `PriceClass_100` | `"PriceClass_All"` | CloudFront price class. |
 | `delivery.cdns` | list of object | `[]` | Additional CDNs that chain to CloudFront; used to list alternative playback URLs. |
-| `ads.mode` | `preconditioned` or `external_vast` | `"preconditioned"` | `preconditioned`: House ads encoded on each channel's ladder and served as a static VAST pod: MediaTailor never transcodes. `external_vast`: A third-party ad decision server; MediaTailor transcodes its creatives (single-codec outputs only). |
+| `ads.mode` | `preconditioned` or `external_vast` | `"preconditioned"` | `preconditioned`: House ads encoded on each channel's ladder and served as a static VAST pod: MediaTailor never transcodes. `external_vast`: A third-party ad decision server; MediaTailor transcodes its creatives. |
 | `ads.url` | str | with `external_vast` | ADS URL; may contain documented MediaTailor dynamic variables such as `[session.uuid]`. |
 | `agent.enabled` | bool | `true` | Deploy the operator plane (Cognito, agent tools, Gateway, AgentCore Runtime and Memory, console). |
 | `agent.model` | str | `"{geo}.anthropic.claude-haiku-5-5"` | Default Bedrock model id or inference profile of the scheduler agent; one of `allowed_models`. `{geo}` stands for the deployment region's geography: `us` (US regions and ca-central-1), `eu` (Europe), `au` (ap-southeast-2) or `global` (elsewhere). |
@@ -56,11 +56,6 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `observability.log_retention_days` | int | `7` | Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs). |
 | `observability.mediatailor_log_percent` | int | `100` | Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production). |
 | `observability.capture_prompts` | bool or null | `null` | Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation. Default: only when `transaction_search` is not `off`, because the online evaluations score that content. |
-| `captions.enabled` | bool | `true` | Encode the caption tracks the built-in ladders define (`[[captions]]` in `ladders/<name>.toml`, IMSC1 text), with each asset's captions from its provided files, else from the source, else generated. `false` deploys the ladders without caption tracks (their caption-less versions). |
-| `captions.required` | bool | `false` | Refuse to encode an asset whose spoken-language caption track would be empty (regulated distribution). |
-| `captions.engine` | `elemental-inference` or `none` | `"elemental-inference"` | Generates the spoken language's captions when an asset has none: `elemental-inference` (AWS Elemental Inference smart subtitles) or `none` (the track stays empty, or the asset is refused when captions are required). |
-| `captions.max_feeds` | int | `2` | Elemental Inference feeds the captioner uses at once (one per 10-minute chunk of a title). The account's `Active feeds per account` quota (2 by default, adjustable) is shared with every other use of the service. |
-| `captions.dictionary_id` | str or null | `null` | Elemental Inference custom dictionary (names, brands, jargon) every captioner feed uses. |
 | `notifications.email` | str or null | `null` | Email subscribed to alarms and asset/ladder failure events. |
 
 `channels.iac[]`:
@@ -69,7 +64,7 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 |---|---|---|---|
 | `name` | str | required | Channel Assembly channel name. Must start with `<prefix>-`; `<prefix>-agent-` is reserved for channels the agent creates. `{prefix}` is replaced with the deployment prefix (the default is `{prefix}-demo`). |
 | `ladder` | str | `"standard"` | Built-in ladder of every program, slate and house ad on this channel (one of `ladders.builtin`). |
-| `outputs` | list of str | `["hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc"]` | Rendition profiles published as channel outputs (subset of `channel_assembly.package_profiles`). |
+| `outputs` | list of str | `["hls"]` | Rendition profiles published as channel outputs (subset of `channel_assembly.package_profiles`). |
 | `tier` | `BASIC` or `STANDARD` | `"BASIC"` | Channel tier; billed per running hour, and channels are never started automatically. |
 | `autopilot_cron` | str or null | `null` | EventBridge Scheduler expression for the autopilot that keeps the schedule 24 h ahead, e.g. `cron(0 */6 * * ? *)`. Omit to schedule only by chat. |
 | `brief` | object or null | `null` | Programming brief (ratings, genres, dayparts, break policy) enforced by the schedule planner. |
@@ -158,10 +153,10 @@ Notes:
   `ladders.builtin` get their job template only.
 - `delivery.cdns` adds per-CDN playback URLs to `channels___get_channel` and the console; it does not change
   what MediaTailor or Channel Assembly write ([multi-CDN](delivery-and-multi-cdn.md#multi-cdn-in-v30)).
-- Cross-field validation: channel outputs ⊆ `package_profiles` and select at least one rendition of the channel's
-  ladder; `external_vast` requires single-codec outputs and a URL with documented ADS variables only; the region must
-  offer MediaTailor Channel Assembly and MediaConvert (and AgentCore when `agent.enabled`); geographic inference
-  profiles must be callable from the region; `log_retention_days` must be a CloudWatch retention value.
+- Cross-field validation: channel outputs ⊆ `package_profiles`; `external_vast` requires a URL with documented ADS
+  variables only; the region must offer MediaTailor Channel Assembly and MediaConvert (and AgentCore when
+  `agent.enabled`); geographic inference profiles must be callable from the region; `log_retention_days` must be a
+  CloudWatch retention value.
 - `{geo}` in model ids resolves at synth time: `us.` in US regions and ca-central-1, `eu.` in Europe, `au.` in
   ap-southeast-2, `global.` elsewhere (APAC regions have no `apac.` profile of the 5.5 models), so no region needs a
   model override.
@@ -282,7 +277,7 @@ Defaults per account and region; request increases in Service Quotas before you 
 
 | Service | Quota | Default | Notes |
 |---|---|---|---|
-| Channel Assembly | Channel manifest requests | 50 TPS per channel, 400 per account | Caps SSAI audiences at roughly 150–300 concurrent viewers per channel; see [capacity](delivery-and-multi-cdn.md#capacity) |
+| Channel Assembly | Channel manifest requests | 50 TPS per channel, 400 per account | Caps SSAI audiences at roughly 300 concurrent viewers per channel; see [capacity](delivery-and-multi-cdn.md#capacity) |
 | Channel Assembly | Programs per channel; outputs per channel; package configurations per source | 400; 5; 5 | See [channel-assembly.md](channel-assembly.md#quotas-and-rate-limits) |
 | Channel Assembly | Channels per account; VOD sources per source location | 100; 1,000 | |
 | MediaConvert | Concurrent jobs of the deployment's on-demand queue | 20 (`IngestPipeline(concurrent_jobs=…)`) | Further uploads queue |
@@ -300,15 +295,13 @@ us-east-1 list prices, rounded. Your bill is authoritative.
 
 | Item | Price | Notes |
 |---|---|---|
-| Encoding, `standard` ladder | about $0.56 per content minute ($33.60 per hour) | [encoding.md](encoding.md#cost) |
-| Encoding, `uhd` ladder | about $1.36 per content minute | |
-| Ladder kit | about $3.56 (`standard`), $8.63 (`uhd`) | Once per ladder version |
-| Captions | caption outputs free; a caption scan about $0.012 per content minute; generated captions about $0.18 per content minute (Elemental Inference $0.15 plus its proxy) | The scan only runs without provided captions, generation only without captions in the source ([captions.md](captions.md#cost)) |
-| Sample content (`make seed`) | about $22 | About 39 minutes of open movies on `standard`; the script prints the estimate and asks first |
+| Encoding, `standard` ladder | about $0.0375 per content minute ($2.25 per hour), MediaConvert Basic tier | [encoding.md](encoding.md#cost) |
+| Ladder kit | about $0.25 (`standard`) | Once per ladder version |
+| Sample content (`make seed`) | about $1.50 | About 39 minutes of open movies on `standard`; the script prints the estimate and asks first |
 | Channel Assembly | $0.10 per running channel-hour (BASIC), $0.35 (STANDARD) | Billed only while `RUNNING`, per minute; auto-stop after 4 hours by default |
 | Ad insertion | $0.25 per 1,000 ads (VOD rate) or $0.50 per 1,000 ads (live rate) | Which rate applies to Channel Assembly sources is not confirmed; budget for the live rate |
 | CloudFront | Data transfer out and requests at CloudFront rates | One viewer-hour at about 3 Mbit/s is about 1.35 GB |
-| S3 | Standard storage | At most about 20 GB per content hour on `standard` (sum of every rendition's cap; QVBR usually lands well below) |
+| S3 | Standard storage | At most about 5 GB per content hour on `standard` (sum of every variant's cap; QVBR usually lands well below) |
 | AgentCore Runtime | $0.0895 per vCPU-hour and $0.00945 per GB-hour, per second | Only while a session is active; CPU is not billed during I/O wait; sessions idle out after 10 minutes |
 | AgentCore Gateway and Policy | $0.005 per 1,000 tool invocations; $0.025 per 1,000 authorisations | |
 | AgentCore Memory | Short-term events by GB ingested and stored; $0.75 per 1,000 preference records per month | Small for operator chat |
@@ -324,7 +317,7 @@ channels costs a few dollars a month. A 24/7 BASIC channel adds about $73 a mont
 
 | Layer | Control |
 |---|---|
-| Storage | All buckets private (Block Public Access), SSE-S3, bucket-owner enforced, TLS-only policies, server access logs. Content manifests (`assets/*.m3u8`, `assets/*.mpd`) are denied to CloudFront, which stops casual direct playback of an asset from the CDN. It does not make ads mandatory: content segments are readable at predictable names (`assets/<asset>/<ladder>/main_<rendition>_<n>.cmfv`, and every SSAI playlist shows the prefix), so anyone can rebuild an ad-free playlist. Where that matters, protect `/assets/*` with CloudFront signed cookies or URLs, or a token check at the edge |
+| Storage | All buckets private (Block Public Access), SSE-S3, bucket-owner enforced, TLS-only policies, server access logs. Content manifests (`assets/*.m3u8`) are denied to CloudFront, which stops casual direct playback of an asset from the CDN. It does not make ads mandatory: content segments are readable at predictable names (`assets/<asset>/<ladder>/main_<rendition>_<nnnnn>.ts`, and every SSAI playlist shows the prefix), so anyone can rebuild an ad-free playlist. Where that matters, protect `/assets/*` with CloudFront signed cookies or URLs, or a token check at the edge |
 | Channel Assembly | Reads the media bucket with SigV4 only as the deployment's own source location, `sourceLocation/<prefix>-media` in the account. Channel policies admit only the channel's own playback configuration; anonymous requests get 403 |
 | MediaConvert | The role trusts MediaConvert only for jobs on the deployment's queue (`aws:SourceArn` equals the queue ARN) and reads only the ingest bucket |
 | Delivery | HTTPS only, TLS 1.2+ to origins, OAC to S3. MediaTailor has no CloudFront origin access control type, so its origins are public endpoints |
@@ -394,12 +387,6 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | `library___ingest` returns `CONFLICT` (`ExecutionAlreadyExists`) | The same asset was re-ingested in the same agent session | Use another asset id, or a new conversation |
 | Ingest `FAILED` at Finalize (`InvalidOutputsError`) | A manifest is missing or its signature differs from the ladder | Inspect the job in MediaConvert; re-ingest |
 | Colour-space warnings 230001/230005 | Untagged source | Harmless |
-| `Asset Failed` with `IngestRefusedError … captions are required` | `captions.required` and the spoken-language track would be empty: no file, none in the source, and no generated captions (no engine, an unsupported language, or a captioner failure) | Provide a caption file, or check `CaptionGenerationFailed` and the captioner's execution (`/aws/vendedlogs/states/<prefix>-captioner`); `UnsupportedLanguageError` means smart subtitles has no such language |
-| `IngestRefusedError … caption file … must be in the ingest bucket` | An `s3://` caption file in another bucket | Copy it into the ingest bucket, or serve it over https |
-| A provided SCC file gives an empty track | Its timecodes start after the content (authored against a start timecode the source lacks) | Set `offset_ms` on the file (for example `-3600000` for `01:00:00;00`) |
-| Captions show `<font>` or `<b>` text | SRT markup, which MediaConvert does not interpret | Provide WebVTT or TTML instead |
-| Captions play until the first ad break or programme change, then stop (hls.js players, the console's included) | hls.js 1.7.3 bugs: a subtitle fragment that fails to parse, arrives before the video's timestamps of its discontinuity, or follows an SGAI interstitial stalls subtitle loading for the session | None in this repo; the stream is unaffected. Reload the player, or use another player until hls.js fixes them ([captions.md](captions.md#through-channel-assembly-ad-insertion-and-players)) |
-| `InvalidOutputsError … cannot be re-cut on the video's segments` | A caption segment Finalize cannot read (not one IMSC1 sample per segment, or timing other than `begin`/`end` on `<p>`) | Inspect the job's caption outputs; re-ingest |
 
 ### Schedules and playback
 
@@ -416,7 +403,7 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | Filler plays instead of programs | No program at that time, or a block started in the past | `schedule___get_schedule` shows the gaps; plan from now + 10 minutes |
 | SSAI 504 for a few minutes after a channel change | Channel policy propagation | Wait |
 | First ad break shows only slate | MediaTailor imports a new creative (`NEW_CREATIVE`) | Expected for the first break of each creative |
-| SGAI does not show ads | Player without HLS Interstitials, or a blocked asset-list request to `interstitials.mediatailor…` | See [ad-insertion.md](ad-insertion.md#monitoring-and-troubleshooting) |
+| SGAI does not show ads | Player without HLS Interstitials, a blocked asset-list request to `interstitials.mediatailor…`, or hls.js 1.7.3 (the console included) stalling at the break with muxed audio | See [ad-insertion.md](ad-insertion.md#monitoring-and-troubleshooting) |
 
 ### Agent and console
 

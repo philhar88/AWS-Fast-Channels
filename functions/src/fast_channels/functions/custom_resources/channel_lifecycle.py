@@ -128,7 +128,7 @@ def endpoint(event: CloudFormationCustomResourceEvent) -> dict[str, Any]:
     if event.request_type == "Delete":
         return {"PhysicalResourceId": event.physical_resource_id}
     outputs = aws.client("mediatailor").describe_channel(ChannelName=channel)["Outputs"]
-    # PlaybackUrl = <base>/<ManifestName>.m3u8|.mpd; the host is shared by every channel of the account and region.
+    # PlaybackUrl = <base>/<ManifestName>.m3u8; the host is shared by every channel of the account and region.
     bases = {output["PlaybackUrl"].rpartition("/")[0] + "/" for output in outputs}
     if len(bases) != 1:
         raise RuntimeError(f"channel {channel} outputs do not share one base URL: {sorted(bases)}")
