@@ -84,7 +84,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 | `delivery.ROUTES` | `docs/path-contract.json` | `uv run pytest infra/tests/test_delivery.py --snapshot-update` |
 | Tool registry | Tool table in `docs/agent.md` | The snippet in [docs/agent.md](docs/agent.md#tool-reference) |
 | `FastChannelsConfig` | Configuration reference in `docs/operations.md` | The snippet under the tables in [docs/operations.md](docs/operations.md#configuration-reference) |
-| `ladders/*.toml` | Ladder tables in `docs/encoding.md`, job template snapshot | `uv run pytest core/tests --snapshot-update` |
+| `ladders/*.toml` | The `standard` table, TOML example and multivariant in `docs/encoding.md`, job template snapshot | `uv run pytest core/tests --snapshot-update` |
 | `scripts/render_architecture.py` | `docs/images/architecture.png` | `uv run --group docs python scripts/render_architecture.py` (needs Graphviz) |
 | `scripts/render_brand_assets.py` | `assets/brand/*.png` | `uv run python scripts/render_brand_assets.py` (changes every kit fingerprint) |
 
@@ -96,7 +96,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 - **Model conformance**: `make eval MODEL=<bedrock model id>` before proposing a model for `agent.allowed_models`.
 - **End-to-end tests** (`tests/e2e`, marker `e2e`) run against a deployed stage: the stack-output contract; an
   upload with a sidecar through MediaConvert to a VOD source; the default ladder's kit as MediaTailor reads it;
-  programs published through the tools, then SSAI, SGAI and DASH sessions watching the breaks air with ads from the
+  programs published through the tools, then SSAI and SGAI sessions watching the breaks air with ads from the
   second break on; the agent over AG-UI with the autopilot's token; and stopping the channel (also done at teardown,
   whatever failed). One run id is the correlation id of everything, so `scripts/trace.py <run id>` shows the run.
   Run them with `uv run pytest tests/e2e -m e2e --prefix <prefix>` against a fresh stage (about 40 minutes; see

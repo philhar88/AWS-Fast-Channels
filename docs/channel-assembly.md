@@ -34,29 +34,25 @@ which is why the pipeline's Register step and the origins tools have `s3:GetObje
 ## VOD sources and source groups
 
 Every content asset and slate becomes one VOD source, named `<asset_id>-<ladder key>` (for example
-`my-movie-3f2a1c-standard_86bf8088e0`), with one HTTP package configuration per entry of
+`my-movie-3f2a1c-standard_843ed1d05a`), with one HTTP package configuration per entry of
 `channel_assembly.package_profiles`:
 
 | Source group | Type | Path (relative to the source location) |
 |---|---|---|
 | `hls` | HLS | `/assets/<asset>/<ladder>/main.m3u8` |
-| `hls-avc` | HLS | `/assets/<asset>/<ladder>/main_avc.m3u8` |
-| `hls-hevc` | HLS | `/assets/<asset>/<ladder>/main_hevc.m3u8` |
-| `hls-av1` | HLS | `/assets/<asset>/<ladder>/main_av1.m3u8` |
-| `dash-avc` | DASH | `/assets/<asset>/<ladder>/main_avc.mpd` |
 
-A channel output reads the source group of the same name. Channel Assembly requires every program, filler slate and
-ad slate of a channel to serve every output's source group with identical renditions, subtitle renditions included,
-which the shared ladder guarantees ([encoding.md](encoding.md#rendition-profiles)). It has no caption settings of its
-own: it passes the ladder's IMSC tracks through, renamed by position (`sub_1.m3u8`), and a source whose tracks differ
-silently loses its ad breaks ([captions.md](captions.md#why-imsc1-and-why-caption-tracks-belong-to-the-ladder)). Registration runs one VOD source at a time (the API
-allows 1 TPS) and then checks the source's alerts. Ads are not registered: MediaTailor reads them from the VAST pod.
+The VOD sources are MPEG-TS: every variant carries H.264 video with AAC audio muxed into the same segments, so there
+are no audio or subtitle renditions to match. A channel output reads the source group of the same name. Channel
+Assembly requires every program, filler slate and ad slate of a channel to serve every output's source group with
+identical renditions, which the shared ladder guarantees ([encoding.md](encoding.md#the-hls-rendition-profile)).
+Registration runs one VOD source at a time (the API allows 1 TPS) and then checks the source's alerts. Ads are not
+registered: MediaTailor reads them from the VAST pod.
 
 Channel Assembly caches a VOD source's playlists
 ([manifest caching](https://docs.aws.amazon.com/mediatailor/latest/ug/channel-assembly-manifest-caching.html)). If
 you rewrite the manifests of a registered source in place, call `UpdateVodSource` (re-running Register does), or
-channels keep airing the old playlists: in a test, Tears of Steel still aired with its old caption playlist more
-than two hours after the rewrite in S3.
+channels keep airing the old playlists: in a test, a rewritten playlist still aired more than two hours after the
+rewrite in S3.
 
 ## Channels
 
@@ -69,7 +65,7 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
   "iac": [{
     "name": "{prefix}-demo",
     "ladder": "standard",
-    "outputs": ["hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc"],
+    "outputs": ["hls"],
     "tier": "BASIC",
     "autopilot_cron": null,
     "brief": null
@@ -123,7 +119,8 @@ console's Start button) starts it and creates a one-time EventBridge Scheduler s
 | Break slates | 15, 30, 45, 60 GOPs (30.03, 60.06, 90.09, 120.12 s) | Each ad break names one; **the break lasts exactly as long as its slate** |
 
 When MediaTailor fills an avail only partly, or not at all, viewers see the rest of the break slate. All slates come
-from the ladder's [kit](encoding.md#ladder-kits) and are encoded on the channel's ladder, with empty caption tracks.
+from the ladder's [kit](encoding.md#ladder-kits) and are encoded on the channel's ladder; every slate is a whole number
+of 6.006 s segments.
 
 ## Programs and ad breaks
 
@@ -132,9 +129,10 @@ Programs are runtime data: the deployment creates none. The agent plans and publ
 **Planning** (`schedule___plan`) is pure arithmetic in `core.timeline.plan_block`:
 
 - Program names are deterministic: `<yyyymmddThhmmss>-<asset_id>` of the planned UTC start (at most 64 characters).
-- An ad break is placed at one of the asset's valid offsets ([encoding.md](encoding.md#cue-points-and-the-esam-rule))
-  nearest to the brief's cadence. A break *inserts* its slate: a 10-minute program with two 60 s breaks airs for 12
-  minutes. The cadence runs across program boundaries within a block.
+- An ad break is placed at one of the asset's valid offsets, its segment boundaries or its editorial cue points
+  snapped to them ([encoding.md](encoding.md#cue-points-and-the-segment-grid)), nearest to the brief's cadence. A
+  break *inserts* its slate: a 10-minute program with two 60 s breaks airs for 12 minutes. The cadence runs across
+  program boundaries within a block.
 - Break policy (in the channel brief):
 
   | Field | Default | Meaning |
@@ -236,7 +234,7 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   without bound; the guide shows the last 6 hours.
 
 ```json
-{"channel": "fast-demo", "generated_at": "2026-10-16T12:00:00Z", "ladder_version": "standard@86bf8088e0",
+{"channel": "fast-demo", "generated_at": "2026-10-16T12:00:00Z", "ladder_version": "standard@843ed1d05a",
  "programs": [{"name": "20261016T120000-sintel-3f2a1c", "title": "Sintel", "content_id": "sintel",
    "asset_id": "sintel-3f2a1c", "start": "2026-10-16T12:00:00Z", "end": "2026-10-16T12:15:48Z",
    "rating": "TV-14", "genres": ["animation", "fantasy", "adventure"],
@@ -251,9 +249,9 @@ is set to the last deploying stack's `observability.log_retention_days`, and del
 
 `origins___list_alerts` returns a channel's, VOD source's or source location's alerts, most severe first.
 `SCHEDULING_ERROR` alerts break playback and must be fixed. `SEGMENT_DURATION_MISMATCH` and `BANDWIDTH_MISMATCH` are
-expected with ESAM-split content and nominal BANDWIDTH and are hidden unless `include_noise` is set; they would
-otherwise bury real alerts (Channel Assembly stops at about 50 per program). `schedule___publish` and
-`channels___start_channel` return the filtered alerts too.
+informational (the multivariant advertises the ladder's nominal BANDWIDTH, not the measured one) and are hidden unless
+`include_noise` is set; they would otherwise bury real alerts (Channel Assembly stops at about 50 per program).
+`schedule___publish` and `channels___start_channel` return the filtered alerts too.
 
 ## Quotas and rate limits
 
@@ -287,13 +285,15 @@ Content that is already encoded can be scheduled without a re-encode, as long as
    (`CreateVodSource` checks the caller). The agent never edits bucket policies; it shows the statements verbatim. The
    media bucket and bucket names containing dots are refused.
 2. **`origins___register_vod_source`**. Reads each HLS multivariant of the given packages and requires its signature
-   (codec, resolution, frame rate and audio group of every variant, in order) to equal the ladder's; otherwise it
-   returns `LADDER_MISMATCH` naming the first difference. It computes the duration and the common segment boundaries,
-   creates (or adopts) the VOD source `<prefix>-agent-<asset>-<fingerprint>` and adds a library asset (`owner` agent)
-   that can be scheduled like any other.
+   (video codec family, resolution, frame rate and audio codec of every variant, in order) to equal the ladder's;
+   otherwise it returns `LADDER_MISMATCH` naming the first difference. It computes the duration and the common
+   segment boundaries, creates (or adopts) the VOD source `<prefix>-agent-<asset>-<fingerprint>` and adds a library
+   asset (`owner` agent) that can be scheduled like any other.
 3. **`origins___update_package_configurations`** (approval). Replaces the source groups of a VOD source (at most
-   five), for example to add `hls-sd` before a channel gets that output.
+   five), for example to add a profile before a channel gets that output.
 
 Requirements: SSE-S3 objects, relative child URIs in the multivariant playlists, and a 1:1 match with the channel's
-ladder, including audio groups. DASH manifests are only checked for being an MPD. Agent source locations and their
-VOD sources are deleted by the reaper when the stack is deleted.
+ladder: AVC variants with AAC-LC muxed into every segment, in the ladder's order, and no audio or subtitle renditions.
+The check compares playlist attributes only, so encode with the ladder's MediaConvert settings
+([encoding.md](encoding.md#mediaconvert-settings)) where you can. Agent source locations and their VOD sources are
+deleted by the reaper when the stack is deleted.

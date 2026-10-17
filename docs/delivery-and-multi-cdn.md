@@ -1,6 +1,6 @@
 # Delivery and multi-CDN
 
-One Amazon CloudFront distribution delivers everything viewers fetch: CMAF segments and ad media from the private
+One Amazon CloudFront distribution delivers everything viewers fetch: MPEG-TS segments and ad media from the private
 media bucket through origin access control (OAC), and MediaTailor's SSAI and SGAI manifests. One routing table in the
 code drives both the CloudFront behaviours and a CDN-neutral *path contract* that other CDNs can copy.
 
@@ -24,19 +24,18 @@ before any S3 glob.
 | 1 | `/tm/*` | mediatailor-segments | Managed-CachingOptimizedForUncompressedObjects | none (cache key only) | media | no | read | Ad segments MediaTailor transcoded (external VAST creatives) |
 | 2 | `/preconditioned-ads/*` | mediatailor-segments | Managed-CachingOptimizedForUncompressedObjects | none (cache key only) | media | no | read | Preconditioned ad playlists MediaTailor re-hosts for SGAI asset lists |
 | 3 | `/v1/i-media/*` | mediatailor-manifests | UseOriginCacheControlHeaders-QueryStrings | none (cache key only) | media | yes | read | SGAI media playlists: identical across sessions, cached for the origin's max-age (1 s) |
-| 4 | `/v1/dash/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-AllViewerAndCloudFrontHeaders-2022-06 | preflight | yes | read | SSAI DASH manifests (per session, gzip) |
-| 5 | `/v1/manifest/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-AllViewerAndCloudFrontHeaders-2022-06 | preflight | yes | read | SSAI HLS media playlists (per session, gzip) |
-| 6 | `/v1/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-Elemental-MediaTailor-PersonalizedManifests | preflight | yes | all | Session start (/v1/master, POST /v1/session), tracking, beacon redirects, interstitial asset lists |
-| 7 | `*` (default) | media | Managed-CachingOptimizedForUncompressedObjects | Managed-CORS-S3Origin | media | no | read | CMAF content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); content manifests under /assets are denied by the bucket policy |
+| 4 | `/v1/manifest/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-AllViewerAndCloudFrontHeaders-2022-06 | preflight | yes | read | SSAI HLS media playlists (per session, gzip) |
+| 5 | `/v1/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-Elemental-MediaTailor-PersonalizedManifests | preflight | yes | all | Session start (/v1/master, POST /v1/session), tracking, beacon redirects, interstitial asset lists |
+| 6 | `*` (default) | media | Managed-CachingOptimizedForUncompressedObjects | Managed-CORS-S3Origin | media | no | read | MPEG-TS content and preconditioned ad segments, VAST pods and beacons (/ads), EPG feeds (/epg); content manifests under /assets are denied by the bucket policy |
 
 "read" is `GET`, `HEAD`, `OPTIONS`; "all" adds the methods MediaTailor's explicit session start (`POST`) needs. Every
 route was confirmed live through the `cache-behavior-path-pattern` field of the access logs, including gzip on
-`/v1/dash/*` and `/v1/manifest/*` and cache hits on `/v1/i-media/*`.
+`/v1/manifest/*` and cache hits on `/v1/i-media/*`.
 
 Rules behind the table:
 
 - **Never forward the viewer `Host` to S3 or Channel Assembly.** The default route forwards only the CORS headers;
-  route 6 uses MediaTailor's managed policy, which forwards `User-Agent` and `X-Forwarded-For` (ad targeting) and all
+  route 5 uses MediaTailor's managed policy, which forwards `User-Agent` and `X-Forwarded-For` (ad targeting) and all
   query strings (ADS variables, `aws.*` session options), but not `Host`.
 - **Never cache** `/v1/master`, `/v1/session` or `/v1/segment` responses: they create sessions or expire.
 - **Content segments are immutable**: a new encode is a new key under a new ladder version (the pipeline refuses to
@@ -54,11 +53,11 @@ Rules behind the table:
 | `mediatailor-manifests` | `manifests.mediatailor.<region>.amazonaws.com` | Public MediaTailor endpoint; HTTPS only, TLS 1.2, 10 s read timeout, 3 connection attempts |
 | `mediatailor-segments` | `segments.mediatailor.<region>.amazonaws.com` | Same |
 
-The Data stack's bucket policy admits CloudFront distributions of this account and **denies them `assets/*.m3u8` and
-`assets/*.mpd`**: content manifests are for Channel Assembly only, so an asset cannot simply be played from the CDN by
+The Data stack's bucket policy admits CloudFront distributions of this account and **denies them `assets/*.m3u8`**:
+content manifests are for Channel Assembly only, so an asset cannot simply be played from the CDN by
 its VOD manifest (verified: 403). Segments, ad manifests under `ads/`, VAST pods and EPG feeds stay readable. This
 stops casual direct playback, not a determined viewer: content segments have predictable names
-(`assets/<asset>/<ladder>/main_<rendition>_<n>.cmfv`, and every SSAI playlist shows the prefix), so an ad-free
+(`assets/<asset>/<ladder>/main_<rendition>_<nnnnn>.ts`, and every SSAI playlist shows the prefix), so an ad-free
 playlist can be rebuilt. If that matters, protect `/assets/*` with CloudFront signed cookies or URLs, or a token check
 at the edge.
 
@@ -74,12 +73,12 @@ require it.
 
 Two response headers policies:
 
-- **`media`** (custom, routes 1–3 and 7): `Access-Control-Allow-Origin: *` *overriding* the origin's value,
+- **`media`** (custom, routes 1–3 and 6): `Access-Control-Allow-Origin: *` *overriding* the origin's value,
   `Access-Control-Allow-Headers: *` (CMCD header mode preflights), `Timing-Allow-Origin: *` and `Server-Timing` on
   every response. MediaTailor echoes the request's `Origin` with credentials, which a shared cache must never replay
   to other sites, hence the override on cached MediaTailor routes. `Server-Timing` carries `cdn-rid`, the same value as
   the `x-edge-request-id` log field, so a player can quote the request id of a failed segment.
-- **`preflight`** (managed CORS-with-preflight-and-security-headers, routes 4–6): uncached MediaTailor responses keep
+- **`preflight`** (managed CORS-with-preflight-and-security-headers, routes 4–5): uncached MediaTailor responses keep
   their own CORS headers.
 
 ## Access logs
@@ -124,7 +123,7 @@ CloudFront's. It becomes:
 Players therefore only ever receive URLs that are relative or on the content domain (plus the MediaTailor exceptions
 below), and moving that domain's DNS to another CDN moves all segment traffic without touching MediaTailor. The ladder
 kits' fingerprint includes the content host, so changing `content_domain` re-encodes every kit on the next deploy
-(minutes, a few dollars per ladder) and gives the house ads new creative ids.
+(minutes, about $0.25 per ladder) and gives the house ads new creative ids.
 
 ## Multi-CDN in v3.0
 
@@ -132,7 +131,7 @@ What works:
 
 - **Segments on several CDNs** by DNS or traffic steering of `delivery.content_domain`, with each CDN configured from
   the path contract and chaining to CloudFront for the `media` origin.
-- **Manifests through another CDN**: a CDN that proxies the MediaTailor routes (rules 3–6) to the MediaTailor origins
+- **Manifests through another CDN**: a CDN that proxies the MediaTailor routes (rules 3–5) to the MediaTailor origins
   or to CloudFront serves the same sessions. List such CDNs in `delivery.cdns` (`name`, `manifest_base`,
   `content_base`): `channels___get_channel` then returns the playback URLs of every output through each of them
   (`cdn_playback`, the deployment's own distribution first as `cloudfront`), and the console's Channels view lists
@@ -165,8 +164,6 @@ Limits:
   `/v1/*` route, but MediaTailor does not write CDN-relative asset-list URLs and has no setting for it.
 - **SGAI server-side beacon segments** go to the playback configuration's own endpoint, then 301 to the CDN (not used
   with preconditioned ads, which report client-side).
-- **DASH ad-period segments** (server-side beacons) use an absolute `BaseURL` on
-  `manifests.mediatailor.<region>.amazonaws.com/v1/dashsegment/…`, then 301 to the CDN.
 
 ## Capacity
 
@@ -176,9 +173,10 @@ in the end-to-end tests Channel Assembly's `RequestCount` was 0.86 times SSAI's 
 
 | | Per SSAI viewer | Channel quota (50 TPS = 3,000 per minute) | Account quota (400 TPS) |
 |---|---|---|---|
-| Requests | 10–20 per minute (video and one or two audio media playlists every 6 s target duration, plus the multivariant) | about **150–300 concurrent SSAI viewers** | about 1,200–2,400 across all channels |
+| Requests | About 10 per minute (one media playlist, with the audio muxed in, every 6 s target duration, plus the multivariant at the start) | about **300 concurrent SSAI viewers** | about 2,400 across all channels |
 
-These figures are extrapolated from measured ratios, not load-tested. To serve more:
+These figures are extrapolated from measured ratios (with the CMAF ladder of the first v3.0.0 tag, which had separate
+audio playlists), not load-tested. To serve more:
 
 1. **Raise the quota before launch.** Request an increase of the MediaTailor "Channel manifest requests" quotas in
    Service Quotas. The `<channel>-manifest-requests` alarm fires when a channel stays at 80 % of 50 TPS
@@ -187,4 +185,4 @@ These figures are extrapolated from measured ratios, not load-tested. To serve m
 2. **Prefer SGAI for capable players.** SGAI media playlists are the same for every session and CloudFront caches them,
    so Channel Assembly load should be bounded per variant and per edge location rather than per viewer. This is
    expected from the protocol but has not been measured at scale.
-3. **Fewer playlists per viewer**: fewer audio groups per output, or longer segments in a custom ladder.
+3. **Fewer playlist reloads per viewer**: longer segments in a custom ladder.

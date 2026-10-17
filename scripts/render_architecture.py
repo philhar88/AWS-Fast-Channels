@@ -13,7 +13,7 @@ from diagrams.aws.devtools import XRay
 from diagrams.aws.general import Users
 from diagrams.aws.integration import Eventbridge, EventbridgeScheduler, StepFunctions
 from diagrams.aws.management import Cloudwatch
-from diagrams.aws.media import ElementalMediaconvert, ElementalMediatailor, MediaServices
+from diagrams.aws.media import ElementalMediaconvert, ElementalMediatailor
 from diagrams.aws.ml import Bedrock
 from diagrams.aws.network import CloudFront
 from diagrams.aws.security import Cognito
@@ -55,11 +55,8 @@ def main() -> None:
         with Cluster("Ingest & encoding"):
             ingest_bucket = S3("Ingest bucket")
             pipeline = StepFunctions("Ingest pipeline\n(probe → encode →\nfinalize → register)")
-            mediaconvert = ElementalMediaconvert(
-                "MediaConvert\none CMAF encode\nAV1 + HEVC + AVC + AAC\n+ IMSC1 captions"
-            )
-            inference = MediaServices("Elemental Inference\nsmart subtitles\n(missing captions)")
-            media_bucket = S3("Media bucket\n(segments, rendition\nprofile manifests)")
+            mediaconvert = ElementalMediaconvert("MediaConvert\none HLS encode\nMPEG-TS: AVC + AAC muxed\n(Basic tier)")
+            media_bucket = S3("Media bucket\n(HLS playlists,\nTS segments)")
             library = Dynamodb("Media library\n(assets, ladders,\nchannels, EPG)")
 
         with Cluster("Linear channels"):
@@ -83,9 +80,8 @@ def main() -> None:
             traces = XRay("X-Ray /\nTransaction Search")
 
         content_owner >> Edge(label="mezzanine + metadata", **MEDIA) >> ingest_bucket >> Edge(**MEDIA) >> pipeline
-        pipeline >> Edge(**MEDIA) >> mediaconvert >> Edge(label="CMAF", **MEDIA) >> media_bucket
+        pipeline >> Edge(**MEDIA) >> mediaconvert >> Edge(label="HLS", **MEDIA) >> media_bucket
         pipeline >> Edge(label="assets", **MEDIA) >> library
-        pipeline >> Edge(label="no captions", **MEDIA) >> inference
         media_bucket >> Edge(label="manifests (SigV4)", **MEDIA) >> channel_assembly
         channel_assembly >> Edge(label="SigV4-only\nchannel policy", **MEDIA) >> ad_insertion
         ad_insertion >> Edge(label="personalised\nmanifests", **MEDIA) >> cdn
