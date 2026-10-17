@@ -949,7 +949,7 @@ def test_token_prefixes_are_cut_to_their_path_by_cloudformation(plane: Plane) ->
     config = json.dumps(plane.template.to_json())
 
     assert '"/hls.m3u8?aws.insertionMode=GUIDED\\""' in config
-    assert config.count('{"Fn::Select": [6, {"Fn::Split": ["/"') >= 3
+    assert config.count('{"Fn::Select": [6, {"Fn::Split": ["/"') >= 2  # the SSAI and SGAI URLs of the hls output
 
 
 def test_missing_console_build_fails_when_bundling(tmp_path: Path) -> None:

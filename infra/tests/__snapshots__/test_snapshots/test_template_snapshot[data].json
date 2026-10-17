@@ -452,12 +452,6 @@
                   "TransitionInDays": 0
                 }
               ]
-            },
-            {
-              "ExpirationInDays": 7,
-              "Id": "expire-work",
-              "Prefix": "work/",
-              "Status": "Enabled"
             }
           ]
         },
@@ -1198,36 +1192,20 @@
               "Principal": {
                 "Service": "cloudfront.amazonaws.com"
               },
-              "Resource": [
-                {
-                  "Fn::Join": [
-                    "",
-                    [
-                      {
-                        "Fn::GetAtt": [
-                          "StorageMedia9333CB25",
-                          "Arn"
-                        ]
-                      },
-                      "/assets/*.m3u8"
-                    ]
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageMedia9333CB25",
+                        "Arn"
+                      ]
+                    },
+                    "/assets/*.m3u8"
                   ]
-                },
-                {
-                  "Fn::Join": [
-                    "",
-                    [
-                      {
-                        "Fn::GetAtt": [
-                          "StorageMedia9333CB25",
-                          "Arn"
-                        ]
-                      },
-                      "/assets/*.mpd"
-                    ]
-                  ]
-                }
-              ],
+                ]
+              },
               "Sid": "CloudFrontDenyContentManifests"
             },
             {

@@ -103,6 +103,17 @@ def test_ladder_record_round_trips_definition_and_kit() -> None:
     assert restored.ladder_id == "standard"
 
 
+def test_a_definition_from_an_older_ladder_model_reads_as_none() -> None:
+    item = store.LadderRecord(ladder_version="studio@0123456789", status="READY", ladder=STANDARD).to_item()
+    item["ladder"]["video"][0]["codec"] = "hevc"  # a rung of the multi-codec CMAF model
+    item["ladder"]["captions"] = [{"language": "en", "label": "English", "kind": "captions"}]
+
+    restored = store.LadderRecord.from_item(item)
+
+    assert restored.ladder is None and restored.status == "READY"
+    assert store.definition(restored) is None
+
+
 def test_channel_and_program_keys() -> None:
     channel = store.ChannelRecord(name="fast-demo", ladder_version=STANDARD.version, outputs=["hls"], owner="iac")
     assert channel.key() == {"pk": "CHANNEL#fast-demo", "sk": "META"}

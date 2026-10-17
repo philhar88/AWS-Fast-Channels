@@ -21,7 +21,7 @@ from functools import reduce
 from typing import TYPE_CHECKING, Any, Self
 
 from boto3.dynamodb.conditions import Attr, ConditionBase, Key
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidatorFunctionWrapHandler, field_validator
 
 from fast_channels.core.ingest import AssetKind  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.ladder import Ladder
@@ -225,6 +225,17 @@ class LadderRecord(Record):
     owner: Owner = Owner.IAC
     correlation_id: str | None = None
     error: str | None = None
+
+    @field_validator("ladder", mode="wrap")
+    @classmethod
+    def _readable(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Ladder | None:
+        """A definition stored by an older ladder model (codecs, audio groups, captions) reads as None, so the record
+        stays listable as a version without a definition."""
+        try:
+            ladder: Ladder | None = handler(value)
+        except ValidationError:
+            return None
+        return ladder
 
     @property
     def ladder_id(self) -> str:
