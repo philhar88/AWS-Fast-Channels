@@ -1,21 +1,20 @@
 """Scheduling through the tools, then the channel on air through the CDN (SPEC §6 and §11).
 
 The schedule and channels tools are invoked as AgentCore Gateway invokes them. Three programs with one break each
-are published to start in a few minutes and the channel is started; one SSAI and one SGAI session then watch the
-breaks air. MediaTailor imports a new creative at its first sight and fills that break with the slate, so ads are
-asserted from the second break on.
-
-The SGAI checks are server-side: the interstitial DATERANGE, its filled asset list and the ad playlists. Whether a
-player enters the interstitial is not covered (hls.js 1.7.3 stalls entering an append-in-place interstitial when
-the AAC audio is muxed, docs/ad-insertion.md).
+are published to start in a few minutes and the channel is started; an SSAI session then watches the breaks air in
+every variant. Each break is at the test pattern's frame-snapped cue point, where ESAM split the encode. MediaTailor
+imports a new creative at its first sight and fills that break with the slate, so ads are asserted from the second
+break on.
 """
 
-from typing import TYPE_CHECKING, Any
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlsplit
 
 import pytest
 from _stack import Plane, Stage
-from harness import PROGRAMS, Channel, Observation
+from harness import CUE_POINT_MS, CUE_TOLERANCE_MS, PROGRAMS, Channel, Observation
+from playback import spans
 
 from fast_channels.core.manifests import expected_signature, ladder_signature
 
@@ -26,6 +25,8 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.e2e
 
 SCHEDULING_ERROR = "SCHEDULING_ERROR"
+PDT_TOLERANCE: Final = timedelta(milliseconds=1)
+"""``EXT-X-PROGRAM-DATE-TIME``, ``START-DATE`` and EXTINF are all written in whole milliseconds."""
 
 
 def test_plan_is_publishable(plan: dict[str, Any]) -> None:
@@ -65,22 +66,32 @@ def test_ssai_ads_from_the_second_break(observation: Observation) -> None:
     assert observation.ssai and not unfilled, f"no stitched ads in {unfilled}: {observation.report()}"
 
 
-def test_sgai_interstitial_when_the_break_airs(observation: Observation) -> None:
-    assert observation.interstitials, f"no HLS Interstitial DATERANGE: {observation.report()}"
-    assert all("X-ASSET-LIST" in daterange for daterange in observation.interstitials.values())
-
-
-def test_sgai_asset_lists_carry_ads(observation: Observation) -> None:
-    assert observation.sgai_filled, f"every asset list was empty: {observation.report()}"
-    assert set(observation.ad_playlists.values()) == {200}, observation.ad_playlists
-
-
-def test_sgai_ads_match_the_ladder(observation: Observation, ladder: Ladder) -> None:
-    """The preconditioned house ads were encoded on the channel's ladder: an interstitial's multivariant, as
-    MediaTailor re-hosts it, lists the content's variants."""
-    assert observation.ad_multivariants, f"no SGAI ad multivariant: {observation.report()}"
-    for uri, text in observation.ad_multivariants.items():
-        assert sorted(ladder_signature(text)) == sorted(expected_signature(ladder)), uri
+def test_breaks_start_at_the_frame_snapped_cue_point(
+    observation: Observation, ingested: Asset, ladder: Ladder, variant_playlists: dict[str, str]
+) -> None:
+    """Channel Assembly leaves each program for its break exactly at the frame-snapped cue point, in every variant:
+    the break's ad marker (SCTE-35 ``EXT-X-DATERANGE``) follows the pattern's segment that ends at the cue in the
+    encode (the ESAM split), its ``START-DATE`` is that segment's end and the start of the break's first segment
+    (program date-times), for at least the two breaks the session watched."""
+    cue = ladder.grid.snap_to_frame(CUE_POINT_MS)
+    ends_ms = {span.name: span.ends_ms for text in variant_playlists.values() for span in spans(text)}
+    problems: list[str] = []
+    for variant in observation.ssai:
+        found = observation.splices.get(variant, {}).values()
+        cuts = [(s, s.before) for s in found if s.before is not None and s.before.asset_id == ingested.asset_id]
+        if len(cuts) < 2:
+            problems.append(f"{variant}: {len(cuts)} breaks out of the test pattern seen")
+        for cut, before in cuts:
+            at = f"{variant} break {cut.id} at {cut.starts:%H:%M:%S.%f}"
+            offset = ends_ms.get(before.name)
+            if offset is None or abs(offset - cue) > CUE_TOLERANCE_MS:
+                problems.append(f"{at}: after {before.name}, which ends at {offset} ms of the encode, not {cue} ms")
+            if before.ends is None or abs(before.ends - cut.starts) > PDT_TOLERANCE:
+                problems.append(f"{at}: the segment before it ends at {before.ends}")
+            first = cut.after.starts if cut.after else None
+            if first is None or abs(first - cut.starts) > PDT_TOLERANCE:
+                problems.append(f"{at}: the break's first segment starts at {first}")
+    assert observation.ssai and not problems, (problems, observation.report())
 
 
 def test_no_scheduling_errors(stage: Stage, channel: Channel, ingested: Asset, observation: Observation) -> None:

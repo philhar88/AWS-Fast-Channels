@@ -1,5 +1,5 @@
 """The default ladder's kit, provisioned at deploy time (SPEC §5.2): filler and break slates as VOD sources, house
-ads as SGAI-ready creatives and the static VAST pod, all readable through the CDN as MediaTailor reads them."""
+ads as preconditioned creatives and the static VAST pod, all readable through the CDN as MediaTailor reads them."""
 
 from typing import TYPE_CHECKING
 
@@ -8,6 +8,7 @@ from _stack import Plane, Stage
 from playback import media_segments, renditions, vast_ads, vast_durations, vast_media_files
 
 from fast_channels.core.manifests import expected_signature, ladder_signature
+from fast_channels.core.naming import ladder_path
 from fast_channels.core.specs import vast_key
 from fast_channels.core.timeline import BREAK_SLATE_GOPS, HOUSE_AD_GOPS
 from fast_channels.functions.tools.library_store import LadderRecord, LadderStatus, ladder_key
@@ -47,9 +48,9 @@ def test_default_ladder_kit_ready(stage: Stage, kit_ladder: LadderRecord) -> Non
 
 def test_vast_pod_and_creatives_readable_via_cdn(stage: Stage, player: Player, kit_ladder: LadderRecord) -> None:
     """The pod cycles through the house ads until it covers the longest break slate, each with one streaming HLS
-    file: a multivariant with the ladder's variants (preconditioned ads must match the content's), whose media
-    playlists use absolute ``.ts`` segment URIs on the CDN (SGAI players resolve asset URIs against MediaTailor,
-    e2e.md §5.4)."""
+    file: the creative's playlists under ``ads/<ladder>/<creative id>/`` (the CDN serves no ``assets/*.m3u8``), a
+    multivariant with the ladder's variants (preconditioned ads must match the content's) whose media playlists
+    point at the house ad's own ``.ts`` segments with absolute URIs on the CDN."""
     content = stage.output(Plane.MEDIA, "ContentBaseUrl").rstrip("/")
     vast = player.get(f"{content}/{kit_ladder.kit.vast_key}")
     assert "xml" in vast.headers.get("content-type", ""), vast.headers
@@ -61,12 +62,15 @@ def test_vast_pod_and_creatives_readable_via_cdn(stage: Stage, player: Player, k
     assert sum(vast_durations(vast.text)) >= longest_break_s, vast_durations(vast.text)
     files = vast_media_files(vast.text)
     assert [f.mime_type for f in files] == [HLS] * len(pod), files
+    ads = f"{content}/ads/{ladder_path(kit_ladder.ladder_version)}"
+    assert all(f.uri.startswith(f"{ads}/{creative}/") for creative, f in zip(pod, files, strict=True)), files
     for media_file in {f.uri: f for f in files}.values():
         multivariant = player.get(media_file.uri)
         assert ladder_signature(multivariant.text) == expected_signature(ladder), media_file
         first = next(iter(renditions(multivariant.text, str(multivariant.url)).values()))
         segments = media_segments(player.get(first).text, first)
-        absolute_ts = all(s.uri.startswith(content) and s.uri.endswith(".ts") for s in segments)
+        # Relative URIs would resolve under ads/; absolute ones point into the house ad's encode under assets/.
+        absolute_ts = all(s.uri.startswith(content) and s.asset_id and s.uri.endswith(".ts") for s in segments)
         assert segments and absolute_ts, (first, segments[:2])
         assert player.get(segments[0].uri).content, segments[0]
     assert player.get(f"{content}/ads/b.gif").headers.get("content-type") == "image/gif"

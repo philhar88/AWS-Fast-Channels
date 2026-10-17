@@ -1,29 +1,28 @@
-"""What a viewer gets: readers for the HLS, HLS-Interstitials and VAST documents the stage serves.
+"""What a viewer gets: readers for the HLS and VAST documents the stage serves.
 
 Pure functions over text (unit-tested against samples in ``data/``). They classify, they do not fetch:
 :mod:`harness` does the HTTP. URL shapes are the verified ones of e2e.md §4-5: SSAI stitches ad segments as
-MediaTailor beacon redirects (``…/v1/segment/…``), and SGAI decorates the break's DATERANGE with
-``CLASS="com.apple.hls.interstitial"`` and an asset list. Every variant is MPEG-TS with its AAC audio muxed, so
-there are no audio or subtitle renditions to follow and no ``EXT-X-MAP``.
+MediaTailor beacon redirects (``…/v1/segment/…``), and every break starts at the ``EXT-X-DATERANGE`` (SCTE-35 out)
+that Channel Assembly writes. Every variant is MPEG-TS with its AAC audio muxed, so there are no audio or subtitle
+renditions to follow and no ``EXT-X-MAP``.
 """
 
-import json
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
+from pathlib import PurePosixPath
 from typing import Any, Final
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from fast_channels.core.manifests import attributes, parse_multivariant
 
-INTERSTITIAL_CLASS: Final = "com.apple.hls.interstitial"
-AD_SEGMENT_MARKERS: Final = ("/segment/", "/tm/", "/ads/", "/preconditioned-ads/")
+AD_SEGMENT_MARKERS: Final = ("/segment/", "/tm/", "/ads/")
 """URI parts of stitched ad segments: beacon redirects, transcoded ads and our preconditioned creatives."""
 _ASSET_PATH = re.compile(r"/assets/([a-z0-9][a-z0-9-]*)/")
 VAST: Final = "{http://www.iab.com/VAST}"
-_VARIABLE = re.compile(r"\{\$([A-Za-z0-9_-]+)\}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +33,11 @@ class Segment:
     duration: float
     starts: datetime | None
     """Program date-time of its first frame (``EXT-X-PROGRAM-DATE-TIME``, carried forward by durations)."""
+
+    @property
+    def name(self) -> str:
+        """The last part of its URI path (``main_avc-720p_00006.ts``): the same in the encode and on the air."""
+        return PurePosixPath(urlsplit(self.uri).path).name
 
     @property
     def is_ad(self) -> bool:
@@ -57,6 +61,43 @@ class Segment:
     @property
     def ends(self) -> datetime | None:
         return None if self.starts is None else self.starts + timedelta(seconds=self.duration)
+
+
+@dataclass(frozen=True, slots=True)
+class Span:
+    """A segment of a VOD media playlist on its content timeline, in ms: cumulative EXTINFs rounded to the ms, as
+    ``core.manifests.segment_boundaries_ms`` (and so the break offsets) count them."""
+
+    uri: str
+    starts_ms: int
+    ends_ms: int
+
+    @property
+    def name(self) -> str:
+        """The last part of its URI path, as :attr:`Segment.name`."""
+        return PurePosixPath(urlsplit(self.uri).path).name
+
+    @property
+    def duration_ms(self) -> int:
+        return self.ends_ms - self.starts_ms
+
+
+@dataclass(frozen=True, slots=True)
+class Splice:
+    """Where a live media playlist leaves for a break: Channel Assembly's ad marker (an ``EXT-X-DATERANGE`` with
+    ``SCTE35-OUT``) and the segments on either side of it."""
+
+    id: str
+    starts: datetime
+    """The marker's ``START-DATE``."""
+    before: Segment | None
+    """The last segment before the marker (None when the playlist starts at it)."""
+    after: Segment | None
+    """The first segment of the break (None when the playlist ends at the marker)."""
+
+    @property
+    def complete(self) -> bool:
+        return self.before is not None and self.after is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,20 +132,60 @@ def renditions(multivariant: str, base_url: str) -> dict[str, str]:
 
 def media_segments(text: str, base_url: str) -> list[Segment]:
     """The segments of a media playlist in order, URIs absolute."""
-    segments: list[Segment] = []
+    return [segment for segment, _ in _segments_and_markers(text, base_url) if segment is not None]
+
+
+def splices(text: str, base_url: str) -> list[Splice]:
+    """The ad markers of a live media playlist (``EXT-X-DATERANGE`` with ``SCTE35-OUT``) in order, each with the
+    segments around it."""
+    found: list[Splice] = []
+    previous: Segment | None = None
+    for segment, markers in _segments_and_markers(text, base_url):
+        found += [Splice(m["ID"], datetime.fromisoformat(m["START-DATE"]), previous, segment) for m in markers]
+        previous = segment
+    return found
+
+
+def _segments_and_markers(text: str, base_url: str) -> Iterator[tuple[Segment | None, list[dict[str, str]]]]:
+    """Each segment with the SCTE-35 out markers just before it, then ``(None, markers)`` for markers after the
+    last segment."""
     moment: datetime | None = None
     duration: float | None = None
+    markers: list[dict[str, str]] = []
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
             moment = datetime.fromisoformat(line.partition(":")[2])
+        elif line.startswith("#EXT-X-DATERANGE:"):
+            marker = attributes(line)
+            if "SCTE35-OUT" in marker and {"ID", "START-DATE"} <= marker.keys():
+                markers.append(marker)
         elif line.startswith("#EXTINF:"):
             duration = float(line[8:].split(",", 1)[0])
         elif line and not line.startswith("#") and duration is not None:
-            segments.append(Segment(urljoin(base_url, line), duration, moment))
+            yield Segment(urljoin(base_url, line), duration, moment), markers
             moment = None if moment is None else moment + timedelta(seconds=duration)
-            duration = None
-    return segments
+            duration, markers = None, []
+    if markers:
+        yield None, markers
+
+
+def spans(text: str) -> list[Span]:
+    """The segments of a VOD media playlist on its content timeline (URIs as written)."""
+    found: list[Span] = []
+    elapsed = Decimal(0)
+    starts = 0
+    duration: Decimal | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("#EXTINF:"):
+            duration = Decimal(line[8:].split(",", 1)[0])
+        elif line and not line.startswith("#") and duration is not None:
+            elapsed += duration
+            ends = round(elapsed * 1000)
+            found.append(Span(line, starts, ends))
+            starts, duration = ends, None
+    return found
 
 
 def ad_seconds(
@@ -134,31 +215,6 @@ def break_windows(programs: Iterable[Mapping[str, Any]]) -> list[Window]:
             windows.append(Window(begins, begins + timedelta(milliseconds=brk["duration_ms"])))
             inserted += brk["duration_ms"]
     return sorted(windows, key=lambda window: window.starts)
-
-
-def defines(multivariant: str) -> dict[str, str]:
-    """``EXT-X-DEFINE`` variables (``awsSessionData``, ``awsSessionId``, ...) of a playlist."""
-    values = (attributes(line) for line in multivariant.splitlines() if line.startswith("#EXT-X-DEFINE:"))
-    return {value["NAME"]: value.get("VALUE", "") for value in values if "NAME" in value}
-
-
-def substitute(text: str, variables: Mapping[str, str]) -> str:
-    """Replace ``{$name}`` references with their values (unknown names stay)."""
-    return _VARIABLE.sub(lambda m: variables.get(m[1], m[0]), text)
-
-
-def interstitials(text: str) -> dict[str, dict[str, str]]:
-    """HLS Interstitial DATERANGEs of a media playlist by ID (``X-ASSET-LIST``, ``START-DATE``, ``DURATION``...)."""
-    ranges = (attributes(line) for line in text.splitlines() if line.startswith("#EXT-X-DATERANGE:"))
-    return {r["ID"]: r for r in ranges if r.get("CLASS") == INTERSTITIAL_CLASS and "ID" in r}
-
-
-def asset_list(text: str) -> list[dict[str, Any]]:
-    """``ASSETS`` of an HLS Interstitials asset list (each with ``URI`` and ``DURATION``)."""
-    document = json.loads(text)
-    if not isinstance(document, dict) or not isinstance(assets := document.get("ASSETS"), list):
-        raise ValueError(f"not an asset list: {text[:200]}")
-    return assets
 
 
 def vast_media_files(text: str) -> list[MediaFile]:
