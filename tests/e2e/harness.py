@@ -17,7 +17,6 @@ from urllib.parse import urljoin
 import agui
 import httpx
 from playback import (
-    Mpd,
     Segment,
     Window,
     ad_seconds,
@@ -25,7 +24,6 @@ from playback import (
     defines,
     interstitials,
     media_segments,
-    parse_mpd,
     renditions,
     substitute,
 )
@@ -38,8 +36,9 @@ ASSET_ID: Final = f"{CONTENT_ID}-{datetime.now(UTC):%Y%m%d%H%M%S}"
 """A new asset per run: the pipeline refuses to re-encode a READY asset in place (its VOD source serves that media)."""
 PATTERN_SECONDS: Final = 70
 CUE_POINT_MS: Final = 32_000
-"""Snaps to GOP 16 (32032 ms at 29.97 fps), between segment boundaries: the encode takes the ESAM path, and Finalize
-re-cuts its caption track on the video's segments (docs/captions.md)."""
+"""Off the segment grid on purpose: it snaps to the boundary after segment 5, 30030 ms at 29.97 fps
+(``Grid.snap_to_segment``). The Basic tier has no ESAM to cut a segment at the cue point itself, so the segment grid
+(6006 ms) is the only set of boundaries every variant shares."""
 PROGRAMS: Final = 3
 LEAD: Final = timedelta(minutes=2, seconds=30)
 """From planning to the first program: publishing and starting the channel fit in it."""
@@ -48,14 +47,6 @@ BREAK_POLICY: Final = {"cadence_minutes": 0.5, "min_gap_minutes": 0.25, "max_bre
 that one ad fills exactly would hide pod-fill problems such as LEFTOVER_AVAIL_EXCEEDED_THRESHOLD). The first break
 of new creatives airs its slate while MediaTailor imports them (NEW_CREATIVE), so ad fill is asserted from the
 second break on."""
-
-SPOKEN_ASSET_ID: Final = f"{CONTENT_ID}-spoken-{datetime.now(UTC):%Y%m%d%H%M%S}"
-SPOKEN_SECONDS: Final = 24
-SPEECH: Final = (
-    "Welcome to the FAST Channels end to end test. These closed captions were generated from the program audio, "
-    "because the source did not provide any."
-)
-"""What the speaking test pattern says (Amazon Polly); the generated captions must transcribe it."""
 
 USER_AGENT: Final = "fast-channels-e2e/3.0"
 POLL_SECONDS: Final = 4.0
@@ -114,18 +105,17 @@ class Channel:
     ladder_version: str
     outputs: tuple[str, ...]
     playback: Mapping[str, Mapping[str, str]]
-    """Viewer URLs per output: ``ssai`` and ``sgai`` for HLS outputs, ``dash`` for DASH outputs."""
+    """Viewer URLs per output: ``ssai`` and ``sgai`` (HLS Interstitials)."""
 
     @classmethod
     def of(cls, entry: Mapping[str, Any]) -> Channel:
         return cls(entry["name"], entry["ladderVersion"], tuple(entry["outputs"]), entry["playback"])
 
     def url(self, mode: str, output: str = "hls") -> str:
-        """The ``mode`` (ssai, sgai, dash) URL of ``output``, else of the first output that has one."""
-        candidates = [self.playback.get(output, {}), *self.playback.values()]
-        if urls := [urls[mode] for urls in candidates if mode in urls]:
-            return urls[0]
-        raise AssertionError(f"channel {self.name} has no {mode} playback URL: {dict(self.playback)}")
+        """The ``mode`` (``ssai`` or ``sgai``) viewer URL of ``output``."""
+        if url := self.playback.get(output, {}).get(mode):
+            return url
+        raise AssertionError(f"channel {self.name} has no {mode} playback URL for {output}: {dict(self.playback)}")
 
 
 # --- tools ---------------------------------------------------------------------------------------------------------
@@ -217,58 +207,47 @@ class Player:
 
 @dataclass
 class Observation:
-    """What one SSAI, one SGAI (HLS Interstitials) and one DASH session saw while the scheduled breaks aired."""
+    """What one SSAI and one SGAI (HLS Interstitials) session saw while the scheduled breaks aired."""
 
     breaks: list[Window]
     house_ads: frozenset[str] = frozenset()
     """Asset ids of the ladder kit's house ads (their segments are ad segments, see ``Segment.is_ad_of``)."""
     ssai_multivariant: str = ""
     ssai: dict[str, dict[str, Segment]] = field(default_factory=dict)
-    """Every distinct segment per rendition (``avc``, ``hevc``, ``av1``, ``audio:<group>``), by URI."""
+    """Every distinct segment per variant (keyed like ``playback.renditions``: ``1280x720``, ...), by URI."""
     interstitials: dict[str, dict[str, str]] = field(default_factory=dict)
     assets: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     """Asset list per interstitial id (fetched once, when the DATERANGE first appears)."""
     ad_playlists: dict[str, int] = field(default_factory=dict)
-    """HTTP status of the first asset of each filled asset list (the SGAI ad media playlist on the CDN)."""
+    """HTTP status of the first asset of each filled asset list (the SGAI ad playlist on the CDN)."""
     ad_multivariants: dict[str, str] = field(default_factory=dict)
-    """The first asset of each filled asset list, as MediaTailor re-hosts it (its renditions, captions included)."""
-    mpds: list[Mpd] = field(default_factory=list)
+    """The first asset of each filled asset list, as MediaTailor re-hosts it (its variants)."""
     errors: list[str] = field(default_factory=list)
 
-    def ssai_ad_seconds(self, rendition: str) -> list[float]:
-        """Seconds of ad segments a rendition showed in each break."""
-        segments = self.ssai.get(rendition, {}).values()
+    def ssai_ad_seconds(self, variant: str) -> list[float]:
+        """Seconds of ad segments a variant showed in each break."""
+        segments = self.ssai.get(variant, {}).values()
         return [ad_seconds(segments, window, house_ads=self.house_ads) for window in self.breaks]
 
-    def ssai_filled(self, rendition: str) -> bool:
+    def ssai_filled(self, variant: str) -> bool:
         """Ads in a break after the first: the first break of a new creative airs its slate (NEW_CREATIVE)."""
-        return any(seconds > 0 for seconds in self.ssai_ad_seconds(rendition)[1:])
+        return any(seconds > 0 for seconds in self.ssai_ad_seconds(variant)[1:])
 
     @property
     def sgai_filled(self) -> bool:
         return any(self.assets.values())
 
     @property
-    def dash_ad_periods(self) -> set[str]:
-        return {period for mpd in self.mpds for period in mpd.ad_periods}
-
-    @property
     def complete(self) -> bool:
-        return (
-            bool(self.ssai)
-            and all(self.ssai_filled(rendition) for rendition in self.ssai)
-            and self.sgai_filled
-            and bool(self.dash_ad_periods)
-        )
+        return bool(self.ssai) and all(self.ssai_filled(variant) for variant in self.ssai) and self.sgai_filled
 
     def report(self) -> str:
-        """Per-break ad seconds of every SSAI rendition, SGAI asset counts, DASH ad periods and errors."""
-        ssai = "; ".join(f"{r} {self.ssai_ad_seconds(r)}" for r in self.ssai)  # subtitles: blank WebVTT in ads
+        """Per-break ad seconds of every SSAI variant, SGAI asset counts and errors."""
+        ssai = "; ".join(f"{v} {self.ssai_ad_seconds(v)}" for v in self.ssai)
         sgai = {interstitial: len(assets) for interstitial, assets in self.assets.items()}
         return (
             f"breaks at {[f'{w.starts:%H:%M:%S}' for w in self.breaks]}; SSAI ad seconds per break: {ssai}; "
-            f"SGAI interstitials {sorted(self.interstitials)} with assets {sgai}; "
-            f"DASH ad periods {sorted(self.dash_ad_periods)}; errors {self.errors[:5]}"
+            f"SGAI interstitials {sorted(self.interstitials)} with assets {sgai}; errors {self.errors[:5]}"
         )
 
 
@@ -277,14 +256,14 @@ def watch(
     *,
     ssai_url: str,
     sgai_url: str,
-    dash_url: str,
     breaks: list[Window],
     ends: datetime,
     house_ads: Collection[str] = (),
 ) -> Observation:
-    """Play one session of each kind until every break was seen filled, or until ``ends``.
+    """Play one session of each kind until every break was seen filled, or until ``ends``: every SSAI variant, and
+    the first SGAI variant (its interstitials are the same in every variant).
 
-    Errors are recorded, not raised, so one bad response does not hide what the other sessions saw.
+    Errors are recorded, not raised, so one bad response does not hide what the other session saw.
     """
     seen = Observation(breaks, frozenset(house_ads))
     ssai = player.get(ssai_url)
@@ -293,19 +272,16 @@ def watch(
     sgai = player.get(sgai_url)
     sgai_media = next(iter(renditions(sgai.text, str(sgai.url)).values()))
     variables = defines(sgai.text)
-    dash = str(player.get(dash_url).url)  # the session's MPD URL, after MediaTailor's redirect
     while True:
-        for rendition, url in ssai_media.items():
+        for variant, url in ssai_media.items():
             if (text := _text(player, url, seen)) is not None:
-                seen.ssai.setdefault(rendition, {}).update((s.uri, s) for s in media_segments(text, url))
+                seen.ssai.setdefault(variant, {}).update((s.uri, s) for s in media_segments(text, url))
         if (text := _text(player, sgai_media, seen)) is not None:
             for daterange, attributes in interstitials(text).items():
                 if daterange not in seen.interstitials:
                     seen.interstitials[daterange] = attributes
                     assets = urljoin(sgai_media, substitute(attributes.get("X-ASSET-LIST", ""), variables))
                     _fetch_assets(player, seen, daterange, assets)
-        if (text := _text(player, dash, seen)) is not None:
-            seen.mpds.append(parse_mpd(text, dash))
         if seen.complete or datetime.now(UTC) >= ends:
             return seen
         time.sleep(POLL_SECONDS)
@@ -373,28 +349,6 @@ def ask_agent(http: httpx.Client, *, invoke_url: str, token: str, prompt: str) -
 # --- synthetic source ----------------------------------------------------------------------------------------------
 
 
-CAPTION_SECONDS: Final = 5
-"""One provided caption cue every 5 s of the test pattern (``render_captions``)."""
-
-
-def caption_text(n: int) -> str:
-    return f"Test pattern caption {n}"
-
-
-def render_captions(path: Path, *, seconds: int) -> Path:
-    """A WebVTT file for the test pattern: cue ``n`` (``caption_text(n)``) from ``n x 5`` s, 4 s long."""
-    cues = (
-        f"{_vtt_time(start)} --> {_vtt_time(start + 4)}\n{caption_text(n)}"
-        for n, start in enumerate(range(0, seconds - 4, CAPTION_SECONDS), start=1)
-    )
-    path.write_text("WEBVTT\n\n" + "\n\n".join(cues) + "\n")
-    return path
-
-
-def _vtt_time(seconds: int) -> str:
-    return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}.000"
-
-
 def render_test_pattern(path: Path, *, seconds: int, fps: int = 30) -> Path:
     """``seconds`` of a 1080p ffmpeg ``testsrc2`` pattern with a 1 kHz stereo tone: H.264 High (2 s GOP) and AAC
     in MP4, a stand-in for a broadcaster's mezzanine."""
@@ -408,25 +362,6 @@ def render_test_pattern(path: Path, *, seconds: int, fps: int = 30) -> Path:
         "-g", str(2 * fps), "-keyint_min", str(2 * fps), "-sc_threshold", "0",
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
         "-shortest", "-movflags", "+faststart", str(path),
-    ]  # fmt: skip
-    subprocess.run(command, check=True)
-    return path
-
-
-def render_speech(path: Path, speech: Path, *, seconds: int, fps: int = 30) -> Path:
-    """The test pattern with ``speech`` (an audio file, e.g. from Amazon Polly) as its sound after 2 s of silence:
-    a source whose spoken language has no captions, for the captioner."""
-    if (ffmpeg := shutil.which("ffmpeg")) is None:
-        raise AssertionError("ffmpeg is required to render the e2e test pattern (e.g. apt-get install ffmpeg)")
-    command = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", f"testsrc2=size=1920x1080:rate={fps}:duration={seconds}",
-        "-i", str(speech),
-        "-filter_complex", f"[1:a]adelay=2000|2000,apad,atrim=0:{seconds}[a]", "-map", "0:v", "-map", "[a]",
-        "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-        "-g", str(2 * fps), "-keyint_min", str(2 * fps), "-sc_threshold", "0",
-        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
-        "-t", str(seconds), "-movflags", "+faststart", str(path),
     ]  # fmt: skip
     subprocess.run(command, check=True)
     return path

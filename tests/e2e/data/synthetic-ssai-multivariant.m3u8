@@ -1,0 +1,9 @@
+#EXTM3U
+# Synthetic sample, not a wire capture: the SSAI multivariant shape of the research run (2026-10-16) with the muxed TS variants of core/tests/data/hls-ts/content at ladder-nominal bandwidths. Replace with a capture from a TS stage.
+#EXT-X-VERSION:3
+#EXT-X-STREAM-INF:CODECS="avc1.64001f,mp4a.40.2",AVERAGE-BANDWIDTH=3528000,RESOLUTION=1280x720,VIDEO-RANGE=SDR,FRAME-RATE=29.97,BANDWIDTH=3868000
+../../../manifest/1bab6b4238868b752a9e9daae3e2a4911f2a2fc9/fastv3-exp-e2e-ssai/49f0c250-9e3c-4997-a723-3cd95eff9d42/0.m3u8
+#EXT-X-STREAM-INF:CODECS="avc1.640028,mp4a.40.2",AVERAGE-BANDWIDTH=6128000,RESOLUTION=1920x1080,VIDEO-RANGE=SDR,FRAME-RATE=29.97,BANDWIDTH=6728000
+../../../manifest/1bab6b4238868b752a9e9daae3e2a4911f2a2fc9/fastv3-exp-e2e-ssai/49f0c250-9e3c-4997-a723-3cd95eff9d42/1.m3u8
+#EXT-X-STREAM-INF:CODECS="avc1.64001e,mp4a.40.2",AVERAGE-BANDWIDTH=928000,RESOLUTION=640x360,VIDEO-RANGE=SDR,FRAME-RATE=29.97,BANDWIDTH=1008000
+../../../manifest/1bab6b4238868b752a9e9daae3e2a4911f2a2fc9/fastv3-exp-e2e-ssai/49f0c250-9e3c-4997-a723-3cd95eff9d42/2.m3u8
