@@ -74,6 +74,9 @@ def test_ingest_request() -> None:
             IngestRequest.model_validate({"ladder_version": LV} | bad)
     with pytest.raises(ValidationError):
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version="standard")
+    with pytest.raises(ValidationError, match="Extra inputs"):  # no caption files or caption mode any more
+        IngestRequest.model_validate({"source_uri": "s3://i/a.mp4", "ladder_version": LV, "captions": {"mode": "auto"}})
+    assert "segment grid" in (IngestRequest.model_fields["cue_points_ms"].description or "")
     with pytest.raises(ValidationError):
         GeneratorInput(image_s3_uri="s3://kit/slate.jpg", duration_gops=1, label="x")
 
@@ -96,6 +99,7 @@ def test_events() -> None:
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version=LV),
     ]
     assert {type(d) for d in details} == set(DETAIL_TYPES)
+    assert "captions" not in AssetReady.model_fields
     entry = put_events_entry(details[0], prefix="fast", event_bus="fast-channels")
     assert entry == {
         "Source": "fast-channels.fast",

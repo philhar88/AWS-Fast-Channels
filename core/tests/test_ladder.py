@@ -5,37 +5,57 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from fast_channels.core.captions import CaptionTrack
 from fast_channels.core.ladder import (
+    AAC_LC_KBPS,
     BUILTIN_DIR,
     LADDERS_DIR_ENV,
-    AudioRendition,
+    Audio,
     Ladder,
     LadderOps,
+    LadderOptions,
     LadderProposal,
-    VideoCodec,
     VideoRendition,
     propose,
 )
 
 REPO = Path(__file__).resolve().parents[2]
+STANDARD_VERSION = "standard@843ed1d05a"
+"""Changing it re-provisions every kit and re-encodes every asset: update it only with a deliberate ladder change."""
 
 
-def test_builtin_ladders_match_ladders_md(standard: Ladder, uhd: Ladder) -> None:
-    assert [r.name for r in standard.video][:2] == ["avc-720p-a", "avc-1080p-b"]
-    assert {c: sum(r.codec is c for r in standard.video) for c in VideoCodec} == {"avc": 8, "hevc": 4, "av1": 4}
-    assert [a.group_id for a in standard.audio] == ["aac-lc-128", "aac-he1-64", "aac-he2-32"]
-    assert standard.max_height == 1080 and standard.codecs == set(VideoCodec)
-    assert {c: sum(r.codec is c for r in uhd.video) for c in VideoCodec} == {"avc": 8, "hevc": 7, "av1": 7}
-    assert len(uhd.audio) == 4 and uhd.max_height == 2160
-    assert all(r.bit_depth == 10 and r.codec_profile == "MAIN10_MAIN" for r in uhd.video if r.codec is VideoCodec.HEVC)
-    assert all(r.bit_depth == 10 for r in standard.video if r.codec is VideoCodec.AV1)
-    assert standard.grid.gop_frames == 60 and standard.grid.segment_ms == 6006
+def _with(ladder: Ladder, **changes: Any) -> dict[str, Any]:
+    return ladder.model_dump(mode="json") | changes
+
+
+def _rung(ladder: Ladder, rung: str, **changes: Any) -> dict[str, Any]:
+    return next(r for r in ladder.video if r.name == rung).model_dump(mode="json") | changes
+
+
+def _rungs(ladder: Ladder) -> list[dict[str, Any]]:
+    return [r.model_dump(mode="json") for r in ladder.video]
+
+
+def test_standard_is_three_avc_rungs_with_muxed_aac(standard: Ladder) -> None:
+    sizes = [(r.name, r.width, r.height, r.qvbr, r.max_kbps, r.hrd_kbps) for r in standard.video]
+    assert sizes == [
+        ("avc-720p", 1280, 720, 7, 3400, None),  # multivariant order: players start on the 720p rung
+        ("avc-1080p", 1920, 1080, 8, 6000, None),
+        ("avc-360p", 640, 360, 6, 800, 800),
+    ]
+    assert {r.profile for r in standard.video} == {"HIGH"}
+    assert standard.audio == Audio(kbps=128)
+    assert standard.options == LadderOptions(allow_frame_rate_conversion=False)
+    assert standard.max_height == 1080
+    assert str(standard.frame_rate) == "30000/1001"
+    assert (standard.grid.gop_frames, standard.grid.gop_ms, standard.grid.segment_ms) == (60, 2002, 6006)
+    assert [r.name_modifier for r in standard.video] == ["_avc-720p", "_avc-1080p", "_avc-360p"]
 
 
 def test_root_ladders_directory_is_the_package_data() -> None:
     assert (REPO / "ladders").resolve() == BUILTIN_DIR.resolve()
-    assert sorted(p.name for p in BUILTIN_DIR.glob("*.toml")) == ["standard.toml", "uhd.toml"]
+    assert sorted(p.name for p in BUILTIN_DIR.glob("*.toml")) == ["standard.toml"]
+    with pytest.raises(FileNotFoundError):
+        Ladder.builtin("uhd")
 
 
 def test_builtin_reads_the_environment_override(
@@ -48,85 +68,89 @@ def test_builtin_reads_the_environment_override(
         Ladder.builtin("../etc/passwd")
 
 
-def test_version_is_a_fingerprint_of_encode_settings(standard: Ladder) -> None:
+def test_the_standard_fingerprint_is_stable(standard: Ladder) -> None:
+    assert standard.version == STANDARD_VERSION
     assert re.fullmatch(r"standard@[0-9a-f]{10}", standard.version)
-    assert standard.model_copy(update={"description": "renamed"}).fingerprint == standard.fingerprint
-    shifted = standard.model_dump() | {"video": [r.model_dump() | {"qvbr": 5} for r in standard.video]}
-    assert Ladder.model_validate(shifted).fingerprint != standard.fingerprint
+    assert Ladder.model_validate(standard.model_dump(mode="json")).version == STANDARD_VERSION
+    assert Ladder.model_validate(_with(standard, gop_seconds=2, segment_seconds=6)).version == STANDARD_VERSION
+    assert Ladder.model_validate(_with(standard, frame_rate="29.97")).version == STANDARD_VERSION
+    renamed = standard.model_copy(update={"id": "house", "description": "renamed"})
+    assert renamed.fingerprint == standard.fingerprint and renamed.version == f"house@{standard.fingerprint}"
 
 
-def test_serialisation_round_trips(standard: Ladder, uhd: Ladder, tmp_path: Path) -> None:
-    for ladder in (standard, uhd):
-        assert Ladder.model_validate(ladder.model_dump(mode="json")) == ladder
-        path = tmp_path / f"{ladder.id}.toml"
-        path.write_text(ladder.to_toml())
-        assert Ladder.load(path) == ladder
-    assert 'frame_rate = "30000/1001"' in standard.to_toml()
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param(lambda lad: {"video": [r | {"qvbr": 5} for r in _rungs(lad)]}, id="qvbr"),
+        pytest.param(lambda lad: {"video": [_rung(lad, "avc-720p", max_kbps=3500), *_rungs(lad)[1:]]}, id="bitrate"),
+        pytest.param(lambda lad: {"video": [r | {"profile": "MAIN"} for r in _rungs(lad)]}, id="profile"),
+        pytest.param(lambda lad: {"video": _rungs(lad)[::-1]}, id="variant-order"),
+        pytest.param(lambda lad: {"video": _rungs(lad)[:2]}, id="rung-dropped"),
+        pytest.param(lambda lad: {"audio": {"kbps": 96}}, id="audio"),
+        pytest.param(lambda lad: {"frame_rate": "25"}, id="frame-rate"),
+        pytest.param(lambda lad: {"segment_seconds": 4}, id="segments"),
+        pytest.param(lambda lad: {"options": {"allow_frame_rate_conversion": True}}, id="options"),
+    ],
+)
+def test_the_fingerprint_changes_with_the_encode(standard: Ladder, changes: Any) -> None:
+    assert Ladder.model_validate(_with(standard, **changes(standard))).fingerprint != standard.fingerprint
 
 
-def test_nominal_bandwidth_and_tier(standard: Ladder) -> None:
-    cellular = next(r for r in standard.video if r.name == "avc-234p")
-    assert standard.nominal_bandwidth(cellular) == (132_000 + 32_000, 120_000 + 32_000)  # <= 192 kbit/s
-    assert standard.audio_for(cellular).group_id == "aac-he2-32"
-    assert standard.pricing_tier() == "PROFESSIONAL"
+def test_serialisation_round_trips(standard: Ladder, tmp_path: Path) -> None:
+    assert Ladder.model_validate(standard.model_dump(mode="json")) == standard
+    assert Ladder.model_validate_json(standard.model_dump_json()) == standard
+    path = tmp_path / "standard.toml"
+    path.write_text(standard.to_toml())
+    assert Ladder.load(path) == standard
+    text = standard.to_toml()
+    assert 'frame_rate = "30000/1001"' in text and "[audio]\nkbps = 128\n" in text
+    assert "hrd_kbps = 800" in text and text.count("hrd_kbps") == 1  # None is left out
 
 
-def _with(ladder: Ladder, **changes: Any) -> dict[str, Any]:
-    return ladder.model_dump(mode="json") | changes
-
-
-def _rung(ladder: Ladder, rung: str, **changes: Any) -> dict[str, Any]:
-    return next(r for r in ladder.video if r.name == rung).model_dump(mode="json") | changes
+def test_nominal_bandwidth_is_peak_video_plus_audio(standard: Ladder) -> None:
+    nominal = {r.name: standard.nominal_bandwidth(r) for r in standard.video}
+    assert nominal == {
+        "avc-720p": (3_740_000 + 128_000, 3_400_000 + 128_000),
+        "avc-1080p": (6_600_000 + 128_000, 6_000_000 + 128_000),
+        "avc-360p": (880_000 + 128_000, 800_000 + 128_000),
+    }
+    louder = Ladder.model_validate(_with(standard, audio={"kbps": 192}))
+    assert louder.nominal_bandwidth(louder.video[0]) == (3_740_000 + 192_000, 3_400_000 + 192_000)
 
 
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (
-            lambda lad: {"video": [_rung(lad, "avc-720p-a"), *[r.model_dump() for r in lad.video]]},
-            "duplicate rendition",
-        ),
-        (lambda lad: {"video": [_rung(lad, "avc-720p-a", audio_group="aac-xx")]}, "unknown audio groups"),
-        (lambda lad: {"video": [_rung(lad, "avc-720p-a"), _rung(lad, "avc-234p")]}, "not used by any video"),
+        (lambda lad: {"video": [_rung(lad, "avc-720p"), *_rungs(lad)]}, r"duplicate rendition names \['avc-720p'\]"),
+        (lambda lad: {"video": []}, "at least 1 item"),
         (lambda lad: {"segment_seconds": 5}, "multiple of gop_seconds"),
         (lambda lad: {"gop_seconds": 1.5, "segment_seconds": 4.5}, "whole seconds"),
+        (lambda lad: {"segment_seconds": 6.006}, "whole seconds"),
         (lambda lad: {"frame_rate": "120"}, "exceeds 60 fps"),
         (lambda lad: {"frame_rate": "12.5", "gop_seconds": 1, "segment_seconds": 6}, "whole number of frames"),
         (
             lambda lad: {
-                "options": {"film_grain": True},
-                "video": [r.model_dump() for r in lad.video if r.codec != "av1"],
+                "video": [_rung(lad, "avc-360p", hrd_kbps=None) if r["height"] == 360 else r for r in _rungs(lad)]
             },
-            "film_grain",
-        ),
-        (lambda lad: {"video": [r.model_dump() for r in reversed(lad.video)]}, "lowest AVC 720p"),
-        (lambda lad: {"video": [r.model_dump() for r in lad.video if r.name != "hevc-360p"]}, "hls.js"),
-        (
-            lambda lad: {
-                "video": [
-                    _rung(lad, "avc-360p", hrd_kbps=None) if r.name == "avc-360p" else r.model_dump() for r in lad.video
-                ]
-            },
-            "hrd_kbps must equal",
+            "avc-360p: hrd_kbps must equal max_kbps at <= 432p",
         ),
         (
             lambda lad: {
-                "video": [
-                    *[r.model_dump() for r in lad.video],
-                    _rung(lad, "av1-1080p", name="av1-4k", width=4096, height=2304),
-                ]
+                "video": [*_rungs(lad), _rung(lad, "avc-360p", name="avc-432p", width=768, height=432, hrd_kbps=1)]
             },
-            "4096x2160",
+            "avc-432p: hrd_kbps must equal",
         ),
         (
-            lambda lad: {
-                "video": [
-                    *[r.model_dump() for r in lad.video],  # 4096x2176@60 is exactly at the 5.1 limits
-                    _rung(lad, "hevc-1080p", name="hevc-4k", width=4096, height=2304),
-                ]
-            },
-            "HEVC level 5.1",
+            lambda lad: {"video": [*_rungs(lad), _rung(lad, "avc-1080p", name="avc-4k", width=3840, height=2160)]},
+            "1080",
         ),
+        (lambda lad: {"video": [*_rungs(lad), _rung(lad, "avc-1080p", name="avc-wide", width=2048)]}, "1920"),
+        (lambda lad: {"audio": {"kbps": 127}}, "127 kbit/s is not an AAC-LC stereo bitrate"),
+        (lambda lad: {"audio": [{"group_id": "aac-lc-128", "kbps": 128}]}, "audio"),  # no audio rendition groups
+        (lambda lad: {"captions": [{"language": "en", "label": "English"}]}, "captions"),
+        (lambda lad: {"options": {"iframe_playlists": True}}, "iframe_playlists"),
+        (lambda lad: {"options": {"loudness_lkfs": -24.0}}, "loudness_lkfs"),
+        (lambda lad: {"options": {"acceleration": "PREFERRED"}}, "acceleration"),
     ],
 )
 def test_ladder_rules(standard: Ladder, mutate: Any, message: str) -> None:
@@ -134,87 +158,96 @@ def test_ladder_rules(standard: Ladder, mutate: Any, message: str) -> None:
         Ladder.model_validate(_with(standard, **mutate(standard)))
 
 
-def test_rendition_rules() -> None:
-    base = {"name": "x", "width": 640, "height": 360, "qvbr": 6, "max_kbps": 300, "audio_group": "a"}
-    with pytest.raises(ValidationError, match="does not support 10-bit"):
-        VideoRendition.model_validate(base | {"codec": "avc", "bit_depth": 10})
-    with pytest.raises(ValidationError, match="profile MAIN_MAIN is invalid"):
-        VideoRendition.model_validate(base | {"codec": "hevc", "bit_depth": 10, "profile": "MAIN_MAIN"})
-    with pytest.raises(ValidationError, match="no HRD"):
-        VideoRendition.model_validate(base | {"codec": "av1", "hrd_kbps": 300})
-    assert VideoRendition.model_validate(base | {"codec": "av1"}).codec_profile is None
-    assert VideoRendition.model_validate(base | {"codec": "avc", "profile": "MAIN"}).codec_profile == "MAIN"
-    with pytest.raises(ValidationError, match="not a valid he1"):
-        AudioRendition(group_id="aac-he1-96", profile="he1", kbps=96)  # type: ignore[arg-type]
+def test_hrd_is_only_required_up_to_432p(standard: Ladder) -> None:
+    sd = _rung(standard, "avc-360p", name="avc-480p", width=854, height=480, max_kbps=1500, hrd_kbps=None)
+    assert Ladder.model_validate(_with(standard, video=[*_rungs(standard), sd])).video[-1].hrd_kbps is None
 
 
-def test_propose_drop_codec(standard: Ladder) -> None:
-    proposal = propose(standard, LadderOps(codecs=[VideoCodec.AVC, VideoCodec.HEVC], new_id="no-av1"))
-    assert proposal.errors == [] and proposal.ladder is not None
-    assert proposal.ladder.version.startswith("no-av1@")
-    assert proposal.removed == ["av1-1080p", "av1-360p", "av1-540p", "av1-720p"]
-    assert proposal.added == [] and proposal.changed == []
-    assert proposal.cost_per_minute_usd == pytest.approx(0.56 - 0.252, abs=1e-3)
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"width": 3840, "height": 2160}, "less than or equal to 1920"),
+        ({"height": 1088}, "less than or equal to 1080"),
+        ({"width": 641}, "multiple of 2"),
+        ({"height": 64}, "greater than or equal to 96"),
+        ({"qvbr": 11}, "less than or equal to 10"),
+        ({"profile": "MAIN10"}, "'HIGH' or 'MAIN'"),
+        ({"name": "AVC 720p"}, "pattern"),
+        ({"codec": "hevc"}, "Extra inputs are not permitted"),  # AVC only
+        ({"audio_group": "aac-lc-128"}, "Extra inputs are not permitted"),  # audio is muxed
+        ({"bit_depth": 10}, "Extra inputs are not permitted"),  # 8-bit only
+    ],
+)
+def test_rendition_rules(changes: dict[str, Any], message: str) -> None:
+    base = {"name": "avc-1080p", "width": 1920, "height": 1080, "qvbr": 8, "max_kbps": 6000}
+    assert VideoRendition.model_validate(base).profile == "HIGH"
+    with pytest.raises(ValidationError, match=message):
+        VideoRendition.model_validate(base | changes)
+
+
+def test_audio_is_aac_lc_stereo() -> None:
+    assert Audio().kbps == 128
+    assert [Audio(kbps=k).kbps for k in sorted(AAC_LC_KBPS)] == [64, 80, 96, 112, 128, 160, 192, 224, 256, 288, 320]
+    for kbps in (32, 48, 127, 384):  # HE-AAC rates and anything MediaConvert rejects for AAC-LC 2.0
+        with pytest.raises(ValidationError, match="not an AAC-LC stereo bitrate"):
+            Audio(kbps=kbps)
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        Audio.model_validate({"kbps": 64, "profile": "he1"})
+
+
+def test_propose_drops_a_rung(standard: Ladder) -> None:
+    proposal = propose(standard, LadderOps(drop_rungs=["avc-1080p"], new_id="sd-hd"))
+    assert proposal.errors == [] and proposal.warnings == [] and proposal.ladder is not None
+    assert proposal.ladder.version.startswith("sd-hd@") and proposal.ladder.version != standard.version
+    assert [r.name for r in proposal.ladder.video] == ["avc-720p", "avc-360p"]
+    assert (proposal.removed, proposal.added, proposal.changed) == (["avc-1080p"], [], [])
+    assert proposal.cost_per_minute_usd == pytest.approx(0.0375 - 0.015)
     assert proposal.base_version == standard.version
     assert LadderProposal.model_validate(proposal.model_dump(mode="json")) == proposal
 
 
 def test_propose_quality_shift_and_height_filters(standard: Ladder) -> None:
-    proposal = propose(standard, LadderOps(quality_shift=2, max_height=720, min_height=200))
-    assert proposal.ladder is not None
-    assert proposal.ladder.max_height == 720
-    assert proposal.removed == ["av1-1080p", "avc-1080p-a", "avc-1080p-b", "hevc-1080p"]
-    assert "avc-720p-a" in proposal.changed
-    assert proposal.warnings == []
-    clamped = propose(standard, LadderOps(quality_shift=2))
-    assert "avc-1080p-b: QVBR clamped to 10" in clamped.warnings
+    proposal = propose(standard, LadderOps(quality_shift=2, max_height=720))
+    assert proposal.ladder is not None and proposal.ladder.max_height == 720
+    assert [(r.name, r.qvbr) for r in proposal.ladder.video] == [("avc-720p", 9), ("avc-360p", 8)]
+    assert (proposal.removed, proposal.changed, proposal.warnings) == (["avc-1080p"], ["avc-720p", "avc-360p"], [])
+    hd = propose(standard, LadderOps(min_height=720))
+    assert hd.removed == ["avc-360p"] and hd.ladder is not None and hd.ladder.max_height == 1080
+
+
+def test_propose_clamps_qvbr(standard: Ladder) -> None:
+    sharper = propose(standard, LadderOps(quality_shift=2)).ladder
+    assert sharper is not None
+    clamped = propose(sharper, LadderOps(quality_shift=2))
+    assert clamped.warnings == ["avc-720p: QVBR clamped to 10", "avc-1080p: QVBR clamped to 10"]
+    assert clamped.changed == ["avc-720p", "avc-360p"]  # avc-1080p was already at 10
+    assert clamped.ladder is not None and [r.qvbr for r in clamped.ladder.video] == [10, 10, 10]
 
 
 def test_propose_reports_invalid_candidates(standard: Ladder) -> None:
-    no_avc = propose(standard, LadderOps(codecs=[VideoCodec.HEVC]))
-    assert no_avc.ladder is None
-    assert any("AVC 720p" in e for e in no_avc.errors)
-    assert no_avc.cost_per_minute_usd > 0
-    assert "aac-he2-32" in no_avc.removed  # audio no remaining rung uses is pruned
-    no_floor = propose(standard, LadderOps(min_height=300))  # the 234p rung is AVC's only one <= 500 kbit/s
-    assert no_floor.errors == ["lowest avc variant is 724000 bit/s; hls.js needs one <= 500000"]
     nothing = propose(standard, LadderOps(max_height=100))
-    assert (nothing.errors, nothing.cost_per_minute_usd) == (["no video renditions left"], 0.0)
-    same = propose(standard, LadderOps(drop_rungs=["avc-9999p"]))
-    assert same.warnings == ["unknown rung avc-9999p", "no change: the proposal equals the base ladder"]
-
-
-def test_caption_tracks_are_part_of_the_version(standard: Ladder) -> None:
-    bare = standard.with_captions(())
-    assert bare.version == "standard@86bf8088e0"  # ladders without captions keep their pre-caption version
-    assert standard.captions == (CaptionTrack(language="en", label="English"),)
-    assert standard.version != bare.version
-    assert standard.with_captions(standard.captions) == standard
-    renamed = standard.with_captions([CaptionTrack(language="en", label="English CC")])
-    assert renamed.version != standard.version  # the label is the HLS NAME Channel Assembly matches
-
-
-def test_caption_tracks_are_one_per_language(standard: Ladder) -> None:
-    with pytest.raises(ValidationError, match=r"more than one caption track for \['en'\]"):
-        standard.with_captions([CaptionTrack(language="en", label="A"), CaptionTrack(language="en-GB", label="B")])
-
-
-def test_captions_round_trip_through_toml(standard: Ladder, tmp_path: Path) -> None:
-    ladder = standard.with_captions(
-        [CaptionTrack(language="en", label="English"), CaptionTrack(language="es", label="Spanish", kind="subtitles")]
+    assert (nothing.ladder, nothing.errors, nothing.cost_per_minute_usd) == (None, ["no video renditions left"], 0.0)
+    assert nothing.removed == ["avc-1080p", "avc-360p", "avc-720p"]
+    same = propose(standard, LadderOps(drop_rungs=["avc-2160p"]))
+    assert same.ladder == standard
+    assert same.warnings == ["unknown rung avc-2160p", "no change: the proposal equals the base ladder"]
+    # A base that skipped validation (model_construct) is rejected but still costed.
+    unchecked = Ladder.model_construct(
+        **(dict(standard) | {"video": (*standard.video, standard.video[0].model_copy(update={"height": 432}))})
     )
-    path = tmp_path / "captioned.toml"
-    path.write_text(ladder.to_toml())
-    assert "[[captions]]" in path.read_text()
-    assert Ladder.load(path) == ladder
+    rejected = propose(unchecked, LadderOps())
+    assert rejected.ladder is None
+    assert rejected.errors == [
+        "duplicate rendition names ['avc-720p']",
+        "avc-720p: hrd_kbps must equal max_kbps at <= 432p",
+    ]
+    assert rejected.cost_per_minute_usd == pytest.approx(0.0375 + 0.0075)
 
 
-def test_proposals_can_replace_the_caption_tracks(standard: Ladder) -> None:
-    spanish = CaptionTrack(language="es", label="Spanish")
-    proposal = propose(standard, LadderOps(captions=[*standard.captions, spanish]))
-    assert proposal.ladder is not None and proposal.ladder.captions == (*standard.captions, spanish)
-    assert proposal.added == ["cc-es"]
-    removed = propose(standard, LadderOps(captions=[]))
-    assert removed.ladder is not None and removed.ladder.version == standard.with_captions(()).version
-    assert removed.removed == ["cc-en"]
-    assert propose(standard, LadderOps()).ladder == standard  # omitted: keep the base's tracks
+def test_ladder_ops_have_no_codec_or_caption_operations() -> None:
+    assert set(LadderOps.model_fields) == {"max_height", "min_height", "quality_shift", "drop_rungs", "new_id"}
+    for removed in ("codecs", "captions"):
+        with pytest.raises(ValidationError, match="Extra inputs"):
+            LadderOps.model_validate({removed: []})
+    with pytest.raises(ValidationError):
+        LadderOps(quality_shift=3)

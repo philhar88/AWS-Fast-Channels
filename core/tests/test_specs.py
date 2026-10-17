@@ -12,42 +12,33 @@ from fast_channels.core.timeline import Plan, PlanInputAsset, ProgrammingBrief, 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
 
-CHANNEL_ARN = "arn:aws:mediatailor:us-east-1:111122223333:channel/fast-demo"
-CONFIG_ARN = "arn:aws:mediatailor:us-east-1:111122223333:playbackConfiguration/fast-demo"
+CHANNEL_ARN = "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-demo"
+CONFIG_ARN = "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fast-demo"
 CDN = "https://d111111abcdef8.cloudfront.net"
 VAST_NS = {"v": "http://www.iab.com/VAST"}
 
 
-def test_channel_outputs() -> None:
+def test_channel_outputs_are_hls_only() -> None:
     outputs = specs.channel_outputs([profile(n) for n in DEFAULT_PACKAGE_PROFILES])
-    assert outputs[0] == {
-        "ManifestName": "hls",
-        "SourceGroup": "hls",
-        "HlsPlaylistSettings": {"ManifestWindowSeconds": 60, "AdMarkupType": ["DATERANGE"]},
-    }
-    assert outputs[-1] == {
-        "ManifestName": "dash-avc",
-        "SourceGroup": "dash-avc",
-        "DashPlaylistSettings": {
-            "ManifestWindowSeconds": 60,
-            "MinBufferTimeSeconds": 12,
-            "MinUpdatePeriodSeconds": 6,
-            "SuggestedPresentationDelaySeconds": 18,
-        },
-    }
+    assert outputs == [
+        {
+            "ManifestName": "hls",
+            "SourceGroup": "hls",
+            "HlsPlaylistSettings": {"ManifestWindowSeconds": 60, "AdMarkupType": ["DATERANGE"]},  # SGAI needs DATERANGE
+        }
+    ]
     outputs[0]["HlsPlaylistSettings"]["AdMarkupType"].append("x")  # callers get independent copies
     assert specs.channel_outputs([profile("hls")])[0]["HlsPlaylistSettings"]["AdMarkupType"] == ["DATERANGE"]
+    assert specs.channel_outputs([]) == []
 
 
 def test_http_package_configurations() -> None:
-    configs = specs.http_package_configurations(
-        "assets/bbb-1a2b3c/standard_0123abcd45/", [profile("hls"), profile("hls-av1"), profile("dash-avc")]
-    )
-    assert configs == [
-        {"Path": "/assets/bbb-1a2b3c/standard_0123abcd45/main.m3u8", "SourceGroup": "hls", "Type": "HLS"},
-        {"Path": "/assets/bbb-1a2b3c/standard_0123abcd45/main_av1.m3u8", "SourceGroup": "hls-av1", "Type": "HLS"},
-        {"Path": "/assets/bbb-1a2b3c/standard_0123abcd45/main_avc.mpd", "SourceGroup": "dash-avc", "Type": "DASH"},
-    ]
+    expected = [{"Path": "/assets/bbb-1a2b3c/standard_0123abcd45/main.m3u8", "SourceGroup": "hls", "Type": "HLS"}]
+    for prefix in ("assets/bbb-1a2b3c/standard_0123abcd45/", "/assets/bbb-1a2b3c/standard_0123abcd45"):
+        assert specs.http_package_configurations(prefix, [profile("hls")]) == expected
+    # The package configuration's SourceGroup is the channel output's: CA serves that manifest on the output.
+    (output,) = specs.channel_outputs([profile("hls")])
+    assert output["SourceGroup"] == expected[0]["SourceGroup"]
 
 
 @pytest.fixture
@@ -140,13 +131,13 @@ def test_program_requests_anchor_the_block_and_chain_its_programs(plan: Plan) ->
 
 def test_channel_policy_is_sigv4_only() -> None:
     policy = specs.channel_policy(
-        channel_arn=CHANNEL_ARN, playback_configuration_arn=CONFIG_ARN, account="111122223333"
+        channel_arn=CHANNEL_ARN, playback_configuration_arn=CONFIG_ARN, account="123456789012"
     )
     (statement,) = policy["Statement"]
     assert statement["Principal"] == {"Service": "mediatailor.amazonaws.com"}
     assert (statement["Action"], statement["Resource"]) == ("mediatailor:GetManifest", CHANNEL_ARN)
     assert statement["Condition"] == {
-        "StringEquals": {"aws:SourceAccount": "111122223333"},
+        "StringEquals": {"aws:SourceAccount": "123456789012"},
         "ArnLike": {"aws:SourceArn": CONFIG_ARN},
     }
 
@@ -166,7 +157,7 @@ def config() -> dict[str, object]:
 def test_playback_configuration(config: dict[str, object]) -> None:
     assert config["InsertionMode"] == "PLAYER_SELECT"
     assert config["AdConditioningConfiguration"] == {"StreamingMediaFileConditioning": "NONE"}
-    assert config["DashConfiguration"] == {"MpdLocation": "DISABLED", "OriginManifestType": "MULTI_PERIOD"}
+    assert "DashConfiguration" not in config and "HlsConfiguration" not in config
     assert config["CdnConfiguration"] == {"AdSegmentUrlPrefix": CDN, "ContentSegmentUrlPrefix": CDN}
     assert config["AdsPersonalizationTimeouts"] == {
         "AdsRequestTimeoutMilliseconds": 2000,
@@ -228,11 +219,8 @@ def test_vast_pod() -> None:
             creative_id="house-30-standard_0123abcd45-a1b2c3",
             duration_ms=30030,
             hls_uri=f"{CDN}/ads/x/house-30/main.m3u8?a=1&b=2",
-            dash_uri=f"{CDN}/ads/x/main_avc.mpd",
         ),
-        specs.Creative(
-            creative_id="house-14", duration_ms=3_725_014, hls_uri="h", dash_uri="d", width=1280, height=720
-        ),
+        specs.Creative(creative_id="house-14", duration_ms=3_725_014, hls_uri="h", width=1280, height=720),
     ]
     xml = specs.vast_pod(creatives=creatives, content_base_url=CDN)
     assert "?a=1&b=2]]>" in xml  # '&' stays raw inside CDATA
@@ -245,11 +233,14 @@ def test_vast_pod() -> None:
     assert linear.findtext("v:Duration", namespaces=VAST_NS) == "00:00:30.030"
     assert ads[1].findtext(".//v:Duration", namespaces=VAST_NS) == "01:02:05.014"
     files = linear.findall("v:MediaFiles/v:MediaFile", VAST_NS)
-    assert [(f.get("delivery"), f.get("type")) for f in files] == [
-        ("streaming", "application/x-mpegURL"),
-        ("streaming", "application/dash+xml"),
+    assert [(f.get("delivery"), f.get("type"), f.get("width"), f.get("height")) for f in files] == [
+        ("streaming", "application/x-mpegURL", "1920", "1080"),  # HLS only: no DASH MediaFile
     ]
-    assert "progressive" not in xml and "Mezzanine" not in xml
+    assert files[0].text == f"{CDN}/ads/x/house-30/main.m3u8?a=1&b=2"
+    sd = ads[1].find(".//v:MediaFile", VAST_NS)
+    assert sd is not None and (sd.get("width"), sd.get("height")) == ("1280", "720")
+    assert "progressive" not in xml and "Mezzanine" not in xml and "dash" not in xml
+    assert set(specs.Creative.model_fields) == {"creative_id", "duration_ms", "hls_uri", "width", "height"}
     events = [t.get("event") for t in linear.findall("v:TrackingEvents/v:Tracking", VAST_NS)]
     assert events == list(specs.QUARTILE_EVENTS)
     impression = ads[0].findtext(".//v:Impression", namespaces=VAST_NS)
@@ -258,27 +249,23 @@ def test_vast_pod() -> None:
 
 
 def test_playback_urls() -> None:
-    urls = specs.playback_urls(
-        cdn_base=f"{CDN}/",
-        outputs=["hls", "hls-avc", "dash-avc"],
-        playback_prefix_hls="https://abc.mediatailor.us-east-1.amazonaws.com/v1/master/h/fast-demo/",
-        playback_prefix_dash="https://abc.mediatailor.us-east-1.amazonaws.com/v1/dash/h/fast-demo/",
-    )
+    prefix = "https://abc.mediatailor.us-east-1.amazonaws.com/v1/master/h/fast-demo/"
+    urls = specs.playback_urls(cdn_base=f"{CDN}/", outputs=["hls"], playback_prefix_hls=prefix)
     assert urls == {
         "hls": {
             "ssai": f"{CDN}/v1/master/h/fast-demo/hls.m3u8",
             "sgai": f"{CDN}/v1/master/h/fast-demo/hls.m3u8?aws.insertionMode=GUIDED",
         },
-        "hls-avc": {
-            "ssai": f"{CDN}/v1/master/h/fast-demo/hls-avc.m3u8",
-            "sgai": f"{CDN}/v1/master/h/fast-demo/hls-avc.m3u8?aws.insertionMode=GUIDED",
-        },
-        "dash-avc": {"dash": f"{CDN}/v1/dash/h/fast-demo/dash-avc.mpd"},
     }
+    assert specs.playback_urls(cdn_base=CDN, outputs=[], playback_prefix_hls=prefix) == {}
+    with pytest.raises(TypeError):
+        specs.playback_urls(  # type: ignore[call-arg]
+            cdn_base=CDN, outputs=["hls"], playback_prefix_hls=prefix, playback_prefix_dash=prefix
+        )
 
 
 def test_vast_pod_repeats_creatives_to_cover_the_longest_break() -> None:
-    ads = [specs.Creative(creative_id=f"house-{n}", duration_ms=30030, hls_uri="h", dash_uri="d") for n in (1, 2)]
+    ads = [specs.Creative(creative_id=f"house-{n}", duration_ms=30030, hls_uri="h") for n in (1, 2)]
     root = ET.fromstring(specs.vast_pod(creatives=ads, content_base_url=CDN, fill_ms=120120))
     pod = root.findall("v:Ad", VAST_NS)
     assert [a.get("sequence") for a in pod] == ["1", "2", "3", "4"]

@@ -1,65 +1,40 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError
 
-from fast_channels.core.profiles import (
-    CATALOGUE,
-    DEFAULT_PACKAGE_PROFILES,
-    ManifestFormat,
-    applicable,
-    profile,
-    selected_outputs,
-)
+from fast_channels.core import profiles
+from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, applicable, profile
 
 if TYPE_CHECKING:
     from fast_channels.core.ladder import Ladder
 
+CAPTURE = Path(__file__).parent / "data/hls-ts"
 
-def test_catalogue() -> None:
-    assert [p.name for p in CATALOGUE] == [
-        "hls",
-        "hls-avc",
-        "hls-hevc",
-        "hls-av1",
-        "hls-sd",
-        "hls-hd",
-        "hls-uhd",
-        "dash-avc",
-        "dash-hevc",
-        "dash-av1",
-    ]
-    assert DEFAULT_PACKAGE_PROFILES == ("hls", "hls-avc", "hls-hevc", "hls-av1", "dash-avc")
+
+def test_one_hls_profile() -> None:
+    assert [p.name for p in CATALOGUE] == ["hls"]
+    assert DEFAULT_PACKAGE_PROFILES == ("hls",)
     assert all(profile(name).name == name for name in DEFAULT_PACKAGE_PROFILES)
-    with pytest.raises(ValueError, match="unknown rendition profile"):
-        profile("dash")  # the combined MPD mixes codecs in one AdaptationSet and is never exposed
+    for removed in ("hls-avc", "hls-hevc", "hls-uhd", "dash-avc"):  # no codec subsets and no DASH
+        with pytest.raises(ValueError, match=r"unknown rendition profile .*; known: \['hls'\]"):
+            profile(removed)
+    assert not hasattr(profiles, "ManifestFormat")
 
 
-def test_manifest_keys() -> None:
+def test_manifest_key_is_the_group_manifest() -> None:
     assert profile("hls").manifest_key("assets/a/lv/") == "assets/a/lv/main.m3u8"
-    assert profile("hls-avc").manifest_key("assets/a/lv") == "assets/a/lv/main_avc.m3u8"
-    assert profile("dash-avc").manifest_key("assets/a/lv") == "assets/a/lv/main_avc.mpd"
-    assert profile("hls-uhd").manifest_suffix == "_uhd"
-    assert profile("dash-av1").format is ManifestFormat.DASH
+    assert profile("hls").manifest_key("assets/a/lv") == "assets/a/lv/main.m3u8"
+    # A real encode writes exactly that multivariant next to its media playlists.
+    for asset in ("content", "slate"):
+        assert (CAPTURE / profile("hls").manifest_key(asset)).is_file()
 
 
-def test_profiles_sharing_a_manifest_select_the_same_renditions(uhd: Ladder) -> None:
-    for a in CATALOGUE:
-        for b in CATALOGUE:
-            if a.manifest_suffix == b.manifest_suffix:
-                assert selected_outputs(uhd, a) == selected_outputs(uhd, b)
+def test_every_ladder_writes_the_hls_profile(standard: Ladder) -> None:
+    assert applicable(standard) == [profile("hls")]
 
 
-def test_applicable_and_selection(standard: Ladder, uhd: Ladder) -> None:
-    assert "hls-uhd" not in [p.name for p in applicable(standard)]
-    assert [p.name for p in applicable(uhd)] == [p.name for p in CATALOGUE]
-    assert selected_outputs(standard, profile("hls-hevc")) == [
-        "_hevc-1080p",
-        "_hevc-720p",
-        "_hevc-540p",
-        "_hevc-360p",
-        "_aac-lc-128",
-        "_aac-he1-64",
-        "_cc-en",  # every profile carries every caption track
-    ]
-    sd = selected_outputs(standard, profile("hls-sd"))
-    assert "_avc-234p" in sd and "_avc-720p-a" not in sd and "_aac-he2-32" in sd
+def test_profiles_are_immutable() -> None:
+    with pytest.raises(ValidationError):
+        profile("hls").name = "dash"  # type: ignore[misc]

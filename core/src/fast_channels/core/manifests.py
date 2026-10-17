@@ -194,6 +194,6 @@ def check_hls(multivariant: str) -> list[str]:
     lines = multivariant.splitlines()
     if not lines or lines[0].strip() != "#EXTM3U":
         return ["playlist does not start with #EXTM3U"]
-    if not parse_multivariant(multivariant):
+    if next(_stream_infs(multivariant), None) is None:  # not parse_multivariant: it needs BANDWIDTH on every variant
         return ["no EXT-X-STREAM-INF variants"]
     return list(_variant_findings(multivariant))
