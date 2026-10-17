@@ -130,7 +130,9 @@ end-to-end traceability. v2 deployments are not upgraded in place; see
   CloudFront routes, and the console's SGAI player. Playback URLs (the `Channels` output, `channels___get_channel`,
   `core.specs.playback_urls`) are one SSAI URL per output instead of `{ssai, sgai}`. Preconditioned house ads stay:
   their manifest copies under `ads/` are the VAST `MediaFile`s, and MediaTailor stitches their segments through
-  `/v1/segment` redirects.
+  `/v1/segment` redirects. CloudFront follows MediaTailor's production configuration: one uncached `/v1/*` route
+  (it replaces `/v1/manifest/*` and `/v1/*`) forwards every viewer header, including the `Accept-Encoding`,
+  `User-Agent`, `Host` and `X-Forwarded-For` that MediaTailor requires from a CDN.
 - **Frame-accurate cue points with ESAM** ([ADR-0017](docs/adr/0017-ssai-only-frame-accurate-cues-with-esam.md)).
   Cue points snap to the nearest frame (about ±17 ms at 29.97 fps) instead of the first tag's 2 s GOP grid. As in the
   first tag, a point between segment boundaries adds ESAM to that title's job only (`SccXml`, `ResponseSignalPreroll`

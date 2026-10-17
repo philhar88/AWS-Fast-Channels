@@ -32,23 +32,18 @@ DOCUMENTED_CONTRACT = REPO_ROOT / "docs" / "path-contract.json"
 DOCUMENTED_HOSTS = {"region": "<region>", "media_host": "<distribution>.cloudfront.net"}
 CERTIFICATE = f"arn:aws:acm:us-east-1:{ACCOUNT}:certificate/abc"
 
-# SPEC-FINAL §5.4 / e2e.md §2.3, in precedence order: path -> (origin, cache, origin request, headers policy). SSAI
-# only: no SGAI routes (/v1/i-media/*, /preconditioned-ads/*).
+# MediaTailor's production CloudFront configuration, in precedence order: path -> (origin, cache, origin request,
+# headers policy). SSAI only: no SGAI routes (/v1/i-media/*, /preconditioned-ads/*). /v1/* forwards every viewer
+# header (AllViewerAndCloudFrontHeaders-2022-06): MediaTailor requires Accept-Encoding, User-Agent, Host and
+# X-Forwarded-For.
 CUSTOM = "custom"
 EXPECTED_BEHAVIOURS = [
     ("/tm/*", "mediatailor-segments", "b2884449-e4de-46a7-ac36-70bc7f1ddd6d", None, CUSTOM),
     (
-        "/v1/manifest/*",
-        "mediatailor-manifests",
-        "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-        "33f36d7e-f396-46d9-90e0-52428a34d9dc",
-        "eaab4381-ed33-4a86-88ca-d9558dc6cd63",
-    ),
-    (
         "/v1/*",
         "mediatailor-manifests",
         "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-        "775133bc-15f2-49f9-abea-afb2e0bf67d2",
+        "33f36d7e-f396-46d9-90e0-52428a34d9dc",
         "eaab4381-ed33-4a86-88ca-d9558dc6cd63",
     ),
     ("*", "media", "b2884449-e4de-46a7-ac36-70bc7f1ddd6d", "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf", CUSTOM),
@@ -113,7 +108,7 @@ def test_behaviour_methods_compression_and_viewer_protocol(template: Template) -
     config = distribution_config(template)
     behaviours = {b["PathPattern"]: b for b in config["CacheBehaviors"]} | {"*": config["DefaultCacheBehavior"]}
 
-    assert {path for path, b in behaviours.items() if b["Compress"]} == {"/v1/manifest/*", "/v1/*"}
+    assert {path for path, b in behaviours.items() if b["Compress"]} == {"/v1/*"}
     assert behaviours["/v1/*"]["AllowedMethods"] == ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"]
     assert behaviours["/v1/*"]["CachedMethods"] == ["GET", "HEAD"]
     assert all(b["AllowedMethods"] == READ == b["CachedMethods"] for p, b in behaviours.items() if p != "/v1/*")
@@ -255,16 +250,20 @@ def test_path_contract_mirrors_the_routes() -> None:
         "mediatailor-manifests": "manifests.mediatailor.eu-west-1.amazonaws.com",
         "mediatailor-segments": "segments.mediatailor.eu-west-1.amazonaws.com",
     }
-    personalised = contract["rules"][2]
+    personalised = contract["rules"][1]
     assert personalised["path"] == "/v1/*"
     assert personalised["methods"] == ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"]
-    assert personalised["forward"]["headers"] == [
-        "origin",
-        "access-control-request-headers",
-        "access-control-request-method",
-        "user-agent",
-        "x-forwarded-for",
-    ]
+    # Every viewer header: MediaTailor requires Accept-Encoding, User-Agent, Host and X-Forwarded-For.
+    assert personalised["forward"] == {
+        "headers": ["*"],
+        "query_strings": "all",
+        "cookies": "all",
+        "cloudfront_policy": {
+            "id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+            "name": "Managed-AllViewerAndCloudFrontHeaders-2022-06",
+        },
+    }
+    assert personalised["cache"]["cloudfront_policy"]["name"] == "Managed-CachingDisabled"
     assert "forward" not in contract["rules"][0]  # only the cache key reaches the origin
     assert not {"/v1/i-media/*", "/preconditioned-ads/*"} & {rule["path"] for rule in contract["rules"]}  # SGAI
     assert contract["rules"][-1]["cache"]["key"] == {"query_strings": "none", "headers": [], "cookies": "none"}

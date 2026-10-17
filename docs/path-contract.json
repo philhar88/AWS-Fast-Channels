@@ -42,47 +42,9 @@
       "cors": "media"
     },
     {
-      "path": "/v1/manifest/*",
-      "origin": "mediatailor-manifests",
-      "purpose": "SSAI HLS media playlists (per session, gzip)",
-      "methods": [
-        "GET",
-        "HEAD",
-        "OPTIONS"
-      ],
-      "compress": true,
-      "cache": {
-        "min_ttl": 0,
-        "default_ttl": 0,
-        "max_ttl": 0,
-        "key": {
-          "query_strings": "none",
-          "headers": [],
-          "cookies": "none"
-        },
-        "compression": false,
-        "cloudfront_policy": {
-          "id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
-          "name": "Managed-CachingDisabled"
-        }
-      },
-      "forward": {
-        "headers": [
-          "*"
-        ],
-        "query_strings": "all",
-        "cookies": "all",
-        "cloudfront_policy": {
-          "id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
-          "name": "Managed-AllViewerAndCloudFrontHeaders-2022-06"
-        }
-      },
-      "cors": "preflight"
-    },
-    {
       "path": "/v1/*",
       "origin": "mediatailor-manifests",
-      "purpose": "Session start (/v1/master, POST /v1/session), tracking, ad segment redirects (/v1/segment)",
+      "purpose": "SSAI sessions: multivariant (/v1/master), media playlists (/v1/manifest, gzip), POST /v1/session, tracking, ad segment redirects (/v1/segment)",
       "methods": [
         "GET",
         "HEAD",
@@ -110,17 +72,13 @@
       },
       "forward": {
         "headers": [
-          "origin",
-          "access-control-request-headers",
-          "access-control-request-method",
-          "user-agent",
-          "x-forwarded-for"
+          "*"
         ],
         "query_strings": "all",
-        "cookies": "none",
+        "cookies": "all",
         "cloudfront_policy": {
-          "id": "775133bc-15f2-49f9-abea-afb2e0bf67d2",
-          "name": "Managed-Elemental-MediaTailor-PersonalizedManifests"
+          "id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+          "name": "Managed-AllViewerAndCloudFrontHeaders-2022-06"
         }
       },
       "cors": "preflight"
