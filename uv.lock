@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -815,7 +815,7 @@ docs = [
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3", specifier = ">=1.42" },
-    { name = "boto3-stubs", extras = ["bedrock-agentcore", "bedrock-agentcore-control", "cloudformation", "cognito-idp", "dynamodb", "events", "logs", "mediaconvert", "mediatailor", "s3", "scheduler", "ssm", "stepfunctions"], specifier = ">=1.42" },
+    { name = "boto3-stubs", extras = ["bedrock-agentcore", "bedrock-agentcore-control", "cloudformation", "cognito-idp", "dynamodb", "events", "logs", "mediaconvert", "mediatailor", "s3", "scheduler", "ssm", "stepfunctions"], specifier = ">=1.43.114" },
     { name = "mypy", specifier = ">=1.18" },
     { name = "pillow", specifier = ">=12" },
     { name = "pytest", specifier = ">=8.4" },
