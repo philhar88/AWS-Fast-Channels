@@ -16,10 +16,10 @@
     "screenshots": "SCREENSHOTS=1 playwright test"
   },
   "dependencies": {
-    "@cloudscape-design/chat-components": "^1.0.179",
+    "@cloudscape-design/chat-components": "^1.0.182",
     "@cloudscape-design/collection-hooks": "^1.0.110",
-    "@cloudscape-design/components": "^3.0.1401",
-    "@cloudscape-design/design-tokens": "^3.0.114",
+    "@cloudscape-design/components": "^3.0.1404",
+    "@cloudscape-design/design-tokens": "^3.0.116",
     "@cloudscape-design/global-styles": "^1.0.71",
     "hls.js": "1.7.3",
     "oidc-client-ts": "^3.5.0",
