@@ -12,8 +12,11 @@ GLOBAL_MODELS = {
     "agent.model": "global.anthropic.claude-haiku-5-5",
     "agent.allowed_models": ["global.anthropic.claude-haiku-5-5"],
 }
+FASTM: dict[str, Any] = json.loads((Path(__file__).resolve().parents[2] / "stages" / "fastm.json").read_text())
+"""The ``fastm`` stage: every module on (its top-level keys deep-merge into cdk.json's block, as with ``STAGE=``)."""
 TOPOLOGIES = {
     "default": ({}, "us-east-1"),
+    "stage-fastm": (FASTM, "us-east-1"),
     "production-everything": (
         {"removal": "retain", "observability.transaction_search": "enable", **GLOBAL_MODELS},
         "eu-west-1",

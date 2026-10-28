@@ -1,6 +1,12 @@
+import importlib.util
+import io
 import json
+import shlex
+import sys
 from collections.abc import Callable
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -10,12 +16,13 @@ from aws_cdk import aws_ssm as ssm
 from aws_cdk.assertions import Template
 
 from fast_channels.infra.app import build
-from fast_channels.infra.config import ConfigError, FastChannelsConfig
+from fast_channels.infra.config import ConfigError, FastChannelsConfig, ModulesConfig
 from fast_channels.infra.stage import FastChannelsStage, stage_id
 
 type GetDeployment = Callable[..., Any]
 
-CDK_JSON = Path(__file__).resolve().parents[2] / "cdk.json"
+REPO = Path(__file__).resolve().parents[2]
+CDK_JSON = REPO / "cdk.json"
 
 # A single global profile: one model id whatever the deployment region.
 GLOBAL_MODELS = {
@@ -219,6 +226,122 @@ def test_stage_resolves_a_configuration_validated_without_a_region() -> None:
     [runtime] = Template.from_stack(stage.operator).find_resources("AWS::BedrockAgentCore::Runtime").values()
 
     assert runtime["Properties"]["EnvironmentVariables"]["DEFAULT_MODEL_ID"] == "eu.anthropic.claude-haiku-5-5"
+
+
+def _stage_args() -> ModuleType:
+    """``scripts/stage_args.py``, which ``make <target> STAGE=<name>`` runs."""
+    spec = importlib.util.spec_from_file_location("fast_script_stage_args", REPO / "scripts" / "stage_args.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+stage_args = _stage_args()
+STAGES = sorted(path.stem for path in (REPO / "stages").glob("*.json"))
+
+
+def stage_overrides(name: str, *argv: str) -> dict[str, str]:
+    """``deployment()`` overrides from what ``stage_args.py context <name>`` prints: the CLI's strings."""
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert stage_args.main(["context", name, *argv]) == 0
+    words = shlex.split(out.getvalue())
+    assert words[::2] == ["-c"] * (len(words) // 2)
+    return dict(word.removeprefix("fast-channels.").split("=", 1) for word in words[1::2])
+
+
+def shipped_with(overrides: dict[str, str]) -> FastChannelsConfig:
+    """cdk.json's configuration with ``-c fast-channels.<key>=<value>`` overrides, validated for us-east-1."""
+    flags = json.loads(CDK_JSON.read_text())["context"]
+    app = App(context={**flags, **{f"fast-channels.{key}": value for key, value in overrides.items()}})
+    return FastChannelsConfig.from_context(app.node, region="us-east-1")
+
+
+def test_shipped_stages() -> None:
+    assert STAGES == stage_args.stage_names() == ["fastci", "fastm"]
+    assert f"^{stage_args.PREFIX.pattern}$" == FastChannelsConfig.model_json_schema()["properties"]["prefix"]["pattern"]
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> None:
+    config = shipped_with(stage_overrides(name))
+
+    assert config.prefix == name
+    assert all(config.modules.enabled(module) for module in ModulesConfig.model_fields)
+    assert config.modules.release.channels == (f"{name}-demo",)
+    assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
+    assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day
+
+
+def test_stage_prefix_resolution(capsys: pytest.CaptureFixture[str]) -> None:
+    assert stage_args.main(["prefix", "fastm"]) == 0
+    assert stage_args.main(["prefix", "fastm", "--prefix", "fastx"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == ["fastm", "fastx"]
+
+
+def test_a_stage_under_another_prefix_expands_it() -> None:
+    config = shipped_with(stage_overrides("fastci", "--prefix", "fastci-pr7"))
+
+    assert (config.prefix, config.channels.iac[0].name) == ("fastci-pr7", "fastci-pr7-demo")
+    assert config.modules.release.channels == ("fastci-pr7-demo",)
+
+
+@pytest.mark.parametrize(
+    ("files", "argv", "expected"),
+    [
+        ({}, ["context", "fastz"], "unknown stage 'fastz': the stages are fastci, fastm"),
+        ({}, ["context", "../cdk"], "unknown stage '../cdk'"),
+        ({}, ["context", "fastm", "--prefix", "Fast_M"], "--prefix must match"),
+        ({"bad": "[1, 2]"}, ["prefix", "bad"], "must hold a JSON object (a partial fast-channels block)"),
+        ({"bad": "{"}, ["prefix", "bad"], "is not JSON"),
+        ({"bad": '{"prefix": "bad", "modulez": {}}'}, ["prefix", "bad"], "['modulez'] are not fast-channels fields"),
+        ({"bad": '{"modules": {}}'}, ["prefix", "bad"], "prefix must be a deployment prefix matching"),
+        ({"bad": '{"prefix": "fast_m"}'}, ["context", "bad"], "got 'fast_m'"),
+    ],
+)
+def test_unusable_stages_fail_before_any_command_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    files: dict[str, str],
+    argv: list[str],
+    expected: str,
+) -> None:
+    for path in (REPO / "stages").glob("*.json"):
+        (tmp_path / path.name).write_text(path.read_text())
+    for name, text in files.items():
+        (tmp_path / f"{name}.json").write_text(text)
+    monkeypatch.setattr(stage_args, "STAGES", tmp_path)
+
+    assert stage_args.main(argv) == 1
+    captured = capsys.readouterr()
+    assert (captured.out, expected in captured.err) == ("", True), captured.err
+
+
+def test_fastm_synthesizes_exactly_v3_while_its_modules_have_no_code(
+    deployment: GetDeployment, normalized: Any
+) -> None:
+    """Enabling a module changes nothing until its code is merged; a module's pull request replaces this comparison
+    with snapshots of what the module adds."""
+    fastm = deployment(stage_overrides("fastm"))
+    v3 = deployment({"prefix": "fastm"})  # the shipped configuration under the stage's prefix, every module off
+
+    assert FastChannelsConfig.from_context(fastm.app.node).modules != ModulesConfig()
+    assert FastChannelsConfig.from_context(v3.app.node).modules == ModulesConfig()
+    assert (
+        names(fastm)
+        == names(v3)
+        == {
+            "Data": "FastChannels-fastm-Data",
+            "Media": "FastChannels-fastm-Media",
+            "Operator": "FastChannels-fastm-Operator",
+        }
+    )
+    for modules_on, modules_off in zip(fastm.stacks, v3.stacks, strict=True):
+        assert normalized(fastm.template(modules_on)) == normalized(v3.template(modules_off)), modules_on.stack_name
 
 
 def test_stage_checks_the_region_of_a_configuration_built_in_code() -> None:

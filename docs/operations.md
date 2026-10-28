@@ -28,7 +28,13 @@ npx cdk synth  '**' -c 'fast-channels.channels.iac=[{"name": "{prefix}-news", "o
 
 An invalid configuration fails synth with one line per problem and its path. The tables below are generated from the
 model's field documentation and list the model's defaults. The shipped `cdk.json` sets every field explicitly with
-those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default prefix).
+those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default prefix). A
+[stage file](#stages) holds the overrides of one named deployment.
+
+The `modules` section holds optional modules for ad monetization, which are being built on the
+`feature/agentic-monetization` branch. Every module is off by default, and with every module off the stacks are
+exactly v3.0.0's, which snapshot tests of every template check (`infra/tests/test_snapshots.py`). A module's
+settings are validated from the start, but enabling a module changes nothing until its code is merged.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -44,7 +50,7 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `delivery.certificate_arn` | str or null | `null` | ACM certificate in us-east-1 covering `content_domain` (CloudFront only accepts us-east-1 certificates). |
 | `delivery.price_class` | `PriceClass_All` or `PriceClass_200` or `PriceClass_100` | `"PriceClass_All"` | CloudFront price class. |
 | `delivery.cdns` | list of object | `[]` | Additional CDNs that chain to CloudFront; used to list alternative playback URLs. |
-| `ads.mode` | `preconditioned` or `external_vast` | `"preconditioned"` | `preconditioned`: House ads encoded on each channel's ladder and served as a static VAST pod: MediaTailor never transcodes. `external_vast`: A third-party ad decision server; MediaTailor transcodes its creatives. |
+| `ads.mode` | `preconditioned` or `external_vast` | `"preconditioned"` | `preconditioned`: House ads encoded on each channel's ladder and served as a static VAST pod: MediaTailor never transcodes. `external_vast`: A third-party ad decision server; MediaTailor transcodes its creatives to the channel's variants. |
 | `ads.url` | str | with `external_vast` | ADS URL; may contain documented MediaTailor dynamic variables such as `[session.uuid]`. |
 | `agent.enabled` | bool | `true` | Deploy the operator plane (Cognito, agent tools, Gateway, AgentCore Runtime and Memory, console). |
 | `agent.model` | str | `"{geo}.anthropic.claude-haiku-5-5"` | Default Bedrock model id or inference profile of the scheduler agent; one of `allowed_models`. `{geo}` stands for the deployment region's geography: `us` (US regions and ca-central-1), `eu` (Europe), `au` (ap-southeast-2) or `global` (elsewhere). |
@@ -57,6 +63,40 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `observability.mediatailor_log_percent` | int | `100` | Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production). |
 | `observability.capture_prompts` | bool or null | `null` | Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation. Default: only when `transaction_search` is not `off`, because the online evaluations score that content. |
 | `notifications.email` | str or null | `null` | Email subscribed to alarms and asset/ladder failure events. |
+| `modules.ops.enabled` | bool | `false` | Deploy the ops module: a per-stage data lake (S3, Glue, Athena), a hash-chained ledger of changes and money events, account quota alarms and detectors, runbooks and a probe canary. |
+| `modules.ops.lake_retention_days` | int | `30` | Days after which lake objects expire. |
+| `modules.ops.ledger_lock` | `off` or `governance` or `compliance` | `"governance"` | Object Lock mode of the ledger archive. `compliance` locks records even against the account root until their retention ends, so it needs `removal: retain`; use it only in production, after a retention review. |
+| `modules.ops.ledger_retention_days` | int | `30` | Object Lock retention of each ledger record; until it ends, `make destroy` cannot delete the archive (1 on development stages). |
+| `modules.ops.canary` | bool | `true` | Run a synthetic playback canary on the probe playback configuration of each running channel. |
+| `modules.models.enabled` | bool | `false` | Deploy the per-task model registry: one validated entry per LLM task, each with its own IAM role, application inference profile and spend cap. Entries choose only among `agent.allowed_models`. |
+| `modules.models.tasks` | map of str to object | `{"scheduler.plan": {"model": "{geo}.anthropic.claude-haiku-5-5", "route": "bedrock", "effort": {"chat": "low", "plan": "medium"}, "thinking": "adaptive", "max_tokens": 16000, "data_class": "operational", "daily_cap_usd": null, "eval": null}}` | Registry entries by task name (dot-separated lowercase words); `scheduler.plan` is the scheduler agent. |
+| `modules.models.budgets_action` | bool | `false` | Add an AWS Budgets action per task role that denies the role's model invocations when its budget is spent. |
+| `modules.demand.enabled` | bool | `false` | Deploy programmatic demand: the Guidance for Deploying a Prebid Server on AWS as its own app at a pinned tag, with the repository's overlays and Prebid Server module, the guidance's bidder simulator in demo mode, census-gated scaling and an origin rule that admits only this stage's MediaTailor requests. |
+| `modules.demand.mode` | `own_book` or `demo` | `"demo"` | `own_book`: own-book bids only (no simulator); `demo`: the own book plus the guidance's bidder simulator, every number labelled simulated. |
+| `modules.demand.guidance_tag` | str | `"v1.4.0"` | Tag of the guidance, pinned with its commit and the hash of every file the overlays patch. |
+| `modules.demand.pbs_version` | `3.43.0` or `4.4.0` | `"3.43.0"` | Prebid Server (Java) release of the image. |
+| `modules.demand.simulator` | `guidance_stack` or `lambda` | `"guidance_stack"` | `guidance_stack`: the guidance's simulator stack (its own VPC with two NAT gateways); `lambda`: the same handler as a Lambda target behind an internal load balancer in the Prebid Server VPC, which needs no VPC of its own. |
+| `modules.demand.tasks.min` | int | `2` | Prebid Server tasks while any channel runs (the tier minimum); 0 while none does. |
+| `modules.demand.tasks.max` | int | `4` | Most Prebid Server tasks (the ECS service maximum). |
+| `modules.demand.server_instances` | int | `2` | Prebid Server `server.http.server-instances`: one event loop per task vCPU. |
+| `modules.demand.dayparts` | list of object | `[]` | Scheduled task minimums ahead of busy dayparts; target tracking covers the time between them. |
+| `modules.demand.rate_limit_per_ip` | int | `20000` | Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any MediaTailor egress address's rate). |
+| `modules.pds.enabled` | bool | `false` | Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per break. |
+| `modules.pds.policy_timeout_ms` | int | `50` | Timeout of the module's `/policy` call; on expiry the break is served from the own book alone. |
+| `modules.pds.policy_group_timeout_ms` | int | `80` | Timeout of the hook group that holds the `/policy` call (at least `policy_timeout_ms`). |
+| `modules.pds.select_timeout_ms` | int | `100` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. |
+| `modules.pds.select_group_timeout_ms` | int | `150` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
+| `modules.pds.provisioned_concurrency` | int | `2` | Provisioned concurrency per function while any channel runs; 0 while none does. |
+| `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode. |
+| `modules.release.enabled` | bool | `false` | Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and is rolled back unattended on an alarm. |
+| `modules.release.channels` | list of str | `[]` | IaC channels to monetize (names from `channels.iac`; `{prefix}` is replaced as there). Turning the module on widens each channel's policy once: do it while the channels are stopped. |
+| `modules.release.strategy` | `demo` or `standard` or `large` | `"demo"` | `demo` (a simulated audience: 10% steps over 30 minutes), `standard` (up to 20,000 concurrent viewers: 10% steps over 3 hours) or `large` (exponential steps over 4 hours). |
+| `modules.release.lab_channel` | bool | `true` | Create the stopped lab channel `<prefix>-lab`, started only to smoke-test a release while the monetized channel is stopped. |
+| `modules.release.probe_sibling` | bool | `true` | Create a house-only probe playback configuration per channel, for canaries and smoke tests. |
+| `modules.release.secret_rotation_days` | int | `90` | Days between rotations of the origin secret that MediaTailor sends to the demand origin. |
+| `modules.crawl.enabled` | bool | `false` | Deploy show-level content metadata: a catalog context object per title, a cached PRE_ADS lookup by UPID and the OpenRTB `app.content` fields in each ad request, with a holdout that measures the uplift. |
+| `modules.crawl.pre_ads` | bool | `true` | Map the cached PRE_ADS lookup on the monetized playback configurations. |
+| `modules.crawl.holdout_percent` | int | `20` | Share of session-breaks that get no enrichment, the uplift measurement's control arm. |
 
 `channels.iac[]`:
 
@@ -77,6 +117,40 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `manifest_base` | str | required | Base URL this CDN serves MediaTailor manifests under (chains to CloudFront). |
 | `content_base` | str | required | Base URL this CDN serves content segments under. |
 
+`modules.models.tasks.<task>`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `model` | str | required | Bedrock model id or inference profile; one of `agent.allowed_models`, with `{geo}` as there. |
+| `route` | `bedrock` | `"bedrock"` | `bedrock`: the Converse API with the task's own role and application inference profile. |
+| `effort` | `low` or `medium` or `high` or `max` or object | `{"chat": "low", "plan": "medium"}` | Reasoning effort: one level, or one per mode (`chat`, `plan`) for the scheduler agent. |
+| `thinking` | `adaptive` or `disabled` | `"adaptive"` | Extended thinking; fixed per task, because changing it per call rewrites the prompt cache. |
+| `max_tokens` | int | `16000` | Output token budget per model call. |
+| `data_class` | `operational` or `viewer` | `"operational"` | `viewer` if the task's prompts carry viewer data; swapping such a task's model needs human approval. |
+| `daily_cap_usd` | float or null | `null` | Daily model spend at which the task's token counter refuses further calls (about ten times expected use); `null` sets no cap. |
+| `eval` | str or null | `null` | Key of the passing evaluation record that qualifies `model` for this task. |
+
+`modules.demand.dayparts[]`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `cron` | str | required | Application Auto Scaling `cron(minutes hours day-of-month month day-of-week year)` expression (UTC); fire it at least 10 minutes before the daypart's first break. |
+| `min` | int | required | Task minimum from then on (between `tasks.min` and `tasks.max`). |
+
+`modules.pds.demo_lines[]`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `id` | str | required | Line id, unique among `demo_lines`. |
+| `advertiser` | str | required | Advertiser name (decision records and reports). |
+| `adomain` | str | required | Advertiser domain (OpenRTB `adomain`); pods never repeat one. |
+| `cat` | list of str | `[]` | IAB categories of the line's ads (OpenRTB `cat`). |
+| `creatives` | list of str | required | Creative ids (`crid`) of the demo creatives the line serves. |
+| `cpm` | decimal | required | Price per 1,000 impressions, US dollars (simulated). |
+| `budget` | decimal | required | Total budget, US dollars (simulated); the line stops once reservations reach it. |
+| `caps.per_session` | int or null | `null` | Most impressions of the line per playback session; `null`: uncapped. |
+| `tier0` | bool | `false` | A guaranteed line: placed first in a pod, ahead of any bid. |
+
 <details>
 <summary>Regenerate the tables after changing a field's documentation</summary>
 
@@ -88,10 +162,17 @@ from enum import Enum
 from types import NoneType, UnionType
 from typing import Annotated, Literal, get_args, get_origin
 
-from pydantic import BaseModel
-from pydantic_core import PydanticUndefined
+from pydantic import BaseModel, TypeAdapter
+from pydantic_core import to_jsonable_python
 
-from fast_channels.infra.config import CdnEndpoint, ChannelConfig, FastChannelsConfig
+from fast_channels.infra.config import (
+    CdnEndpoint,
+    ChannelConfig,
+    DemandDaypart,
+    DemoLine,
+    FastChannelsConfig,
+    ModelTask,
+)
 
 
 def text(doc):
@@ -104,14 +185,20 @@ def kind(t):
         return " or ".join(kind(a) for a in get_args(t) if a is not NoneType) + null
     if get_origin(t) is tuple:
         return f"list of {kind(get_args(t)[0])}"
+    if get_origin(t) is dict:
+        return f"map of {kind(get_args(t)[0])} to {kind(get_args(t)[1])}"
     if issubclass(t, Enum):
         return " or ".join(f"`{m.value}`" for m in t)
-    return "object" if issubclass(t, BaseModel) else t.__name__
+    return "object" if issubclass(t, BaseModel) else t.__name__.lower()
 
 
-def default(value):
-    value = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
-    return "required" if value is PydanticUndefined else f"`{json.dumps(value)}`"
+def default(field):
+    if field.is_required():
+        return "required"
+    value = field.get_default(call_default_factory=True)
+    if field.default_factory:  # a factory may return raw values, validated like a value from cdk.json
+        value = TypeAdapter(field.annotation).validate_python(value)
+    return f"`{json.dumps(to_jsonable_python(value))}`"
 
 
 def rows(model, path=""):
@@ -121,7 +208,7 @@ def rows(model, path=""):
             variants = {get_args(v.model_fields["mode"].annotation)[0].value: v for v in get_args(get_args(t)[0])}
             modes = " or ".join(f"`{mode}`" for mode in variants)
             docs = " ".join(f"`{mode}`: {text(v.__doc__)}" for mode, v in variants.items())
-            yield f"| `{key}.mode` | {modes} | {default(field.default.mode.value)} | {docs} |"
+            yield f"| `{key}.mode` | {modes} | `{json.dumps(field.default.mode.value)}` | {docs} |"
             for mode, v in variants.items():
                 for sub, f in v.model_fields.items():
                     if get_origin(f.annotation) is not Literal:
@@ -129,10 +216,18 @@ def rows(model, path=""):
         elif isinstance(t, type) and issubclass(t, BaseModel) and not field.description:  # a section: its fields
             yield from rows(t, f"{key}.")
         else:
-            yield f"| `{key}` | {kind(t)} | {default(field.default)} | {text(field.description)} |"
+            yield f"| `{key}` | {kind(t)} | {default(field)} | {text(field.description)} |"
 
 
-for title, model in [("", FastChannelsConfig), ("channels.iac[]", ChannelConfig), ("delivery.cdns[]", CdnEndpoint)]:
+tables = [
+    ("", FastChannelsConfig),
+    ("channels.iac[]", ChannelConfig),
+    ("delivery.cdns[]", CdnEndpoint),
+    ("modules.models.tasks.<task>", ModelTask),
+    ("modules.demand.dayparts[]", DemandDaypart),
+    ("modules.pds.demo_lines[]", DemoLine),
+]
+for title, model in tables:
     heading = [f"`{title}`:", ""] if title else []
     print(*heading, "| Key | Type | Default | Description |", "|---|---|---|---|", *rows(model), "", sep="\n")
 EOF
@@ -157,6 +252,15 @@ Notes:
   variables only; the region must offer MediaTailor Channel Assembly and MediaConvert (and AgentCore when
   `agent.enabled`); geographic inference profiles must be callable from the region; `log_retention_days` must be a
   CloudWatch retention value.
+- Module rules: an enabled `demand` needs `ops`; `pds` needs `ops` and `demand`; `release` needs `ops`, `demand`
+  and `pds`; `crawl` needs `pds` and `release`. `release.channels` ⊆ the IaC channel names (after `{prefix}` is
+  replaced). With `release` on and `lab_channel` true, no IaC channel may be called `<prefix>-lab`. With `ops` on,
+  `ledger_lock: compliance` needs `removal: retain`. With `models` on, every task's model is one of
+  `agent.allowed_models` and callable from the region. Within a module: `demand.tasks.min` ≤ `tasks.max`, with each
+  daypart's `min` between them; each PDS hook group timeout at least its call's timeout; unique demo line ids and
+  release channels. Unknown keys are refused at every level.
+- Model-registry task names contain dots, which a dotted override path would split: override a task with an object,
+  which is deep-merged, e.g. `-c 'fast-channels.modules.models.tasks={"scheduler.plan": {"max_tokens": 8000}}'`.
 - `{geo}` in model ids resolves at synth time: `us.` in US regions and ca-central-1, `eu.` in Europe, `au.` in
   ap-southeast-2, `global.` elsewhere (APAC regions have no `apac.` profile of the 5.5 models), so no region needs a
   model override.
@@ -184,6 +288,26 @@ overrides go to the CDK CLI directly, for example
 
 `make synth` and `make diff` show what would change. Every synth runs cdk-nag (AWS Solutions and Serverless packs) and
 fails on unacknowledged findings.
+
+### Stages
+
+A stage is a named deployment whose overrides live in a file, `stages/<name>.json`: a partial `fast-channels` block
+that names its `prefix` and states only what differs from `cdk.json`. Each top-level key is passed as
+`-c fast-channels.<key>=<JSON>` and deep-merged into `cdk.json`'s block, so `{"modules": {"ops": {"enabled": true}}}`
+turns one module on and keeps the rest of `cdk.json`. `STAGE=<name>` selects a stage for `make synth`, `diff`,
+`deploy` and `destroy` (as CDK context) and for `make seed` and `trace` (its prefix):
+
+```bash
+make synth STAGE=fastm                       # cdk-nag included
+make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Operator
+make seed STAGE=fastm SEED_ARGS="--wait --yes"
+make destroy STAGE=fastm
+make deploy STAGE=fastci PREFIX=fastci-pr7   # the same stage under another prefix
+uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage becomes
+```
+
+A missing or malformed stage file stops `make` before any command runs. The repository ships two stages for the
+modules' development: `fastm` and `fastci` (the end-to-end tests' default prefix), each with every module on.
 
 ### Updates
 

@@ -76,6 +76,70 @@
       },
       "notifications": {
         "email": null
+      },
+      "modules": {
+        "ops": {
+          "enabled": false,
+          "lake_retention_days": 30,
+          "ledger_lock": "governance",
+          "ledger_retention_days": 30,
+          "canary": true
+        },
+        "models": {
+          "enabled": false,
+          "tasks": {
+            "scheduler.plan": {
+              "model": "{geo}.anthropic.claude-haiku-5-5",
+              "route": "bedrock",
+              "effort": {
+                "chat": "low",
+                "plan": "medium"
+              },
+              "thinking": "adaptive",
+              "max_tokens": 16000,
+              "data_class": "operational",
+              "daily_cap_usd": null,
+              "eval": null
+            }
+          },
+          "budgets_action": false
+        },
+        "demand": {
+          "enabled": false,
+          "mode": "demo",
+          "guidance_tag": "v1.4.0",
+          "pbs_version": "3.43.0",
+          "simulator": "guidance_stack",
+          "tasks": {
+            "min": 2,
+            "max": 4
+          },
+          "server_instances": 2,
+          "dayparts": [],
+          "rate_limit_per_ip": 20000
+        },
+        "pds": {
+          "enabled": false,
+          "policy_timeout_ms": 50,
+          "policy_group_timeout_ms": 80,
+          "select_timeout_ms": 100,
+          "select_group_timeout_ms": 150,
+          "provisioned_concurrency": 2,
+          "demo_lines": []
+        },
+        "release": {
+          "enabled": false,
+          "channels": [],
+          "strategy": "demo",
+          "lab_channel": true,
+          "probe_sibling": true,
+          "secret_rotation_days": 90
+        },
+        "crawl": {
+          "enabled": false,
+          "pre_ads": true,
+          "holdout_percent": 20
+        }
       }
     },
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,

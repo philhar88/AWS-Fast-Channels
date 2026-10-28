@@ -130,8 +130,9 @@ program guide.
    hour and stops automatically after four hours. The Channels view plays the channel in an SSAI player, with its ad
    events.
 
-`make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`); see
-[docs/operations.md](docs/operations.md) for configuration and day-two operations.
+`make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`), and `make deploy STAGE=<name>`
+the one a [stage file](docs/operations.md#stages) describes; see [docs/operations.md](docs/operations.md) for
+configuration and day-two operations.
 
 ## Cost
 
