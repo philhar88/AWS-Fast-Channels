@@ -5,6 +5,6 @@
   "license": "MIT",
   "engines": { "node": ">=22" },
   "devDependencies": {
-    "aws-cdk": "2.1145.0"
+    "aws-cdk": "2.1146.1"
   }
 }
