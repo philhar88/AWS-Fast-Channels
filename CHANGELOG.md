@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Modules configuration**: a `modules` section in the `fast-channels` block with one validated section per optional
+  monetization module (`ops`, `models`, `demand`, `pds`, `release`, `crawl`), every field spelled out in
+  `cdk.json` and every module off. Modules that build on others refuse to be enabled alone, and unknown keys are
+  refused. With every module off the deployment is exactly v3.0.0: snapshot tests now cover every template of the
+  shipped configuration. Enabling a module changes nothing until its code is merged.
+- **Stages**: `stages/<name>.json` holds a named deployment's overrides (a partial `fast-channels` block), and
+  `STAGE=<name>` applies it to `make synth`, `diff`, `deploy`, `destroy`, `seed` and `trace`
+  (`scripts/stage_args.py`). Two stages ship, `fastm` and `fastci`, each with every module on.
+
 ## [3.0.0] - 2026-10-16
 
 A rewrite of FAST Channels on AWS on the AWS CDK (Python), with agentic scheduling on Amazon Bedrock AgentCore, one

@@ -22,7 +22,7 @@ make help           # every target
 | `make test` | `pytest` (core, functions, agent, infra), console Vitest |
 | `make synth` | Console build, then `cdk synth` with cdk-nag; fails on unacknowledged findings |
 | `make check` | All of the above, what CI runs |
-| `make diff`, `make deploy`, `make destroy` | Against your account; `PREFIX=<name>` for a separate copy |
+| `make diff`, `make deploy`, `make destroy` | Against your account; `PREFIX=<name>` for a separate copy, `STAGE=<name>` for a [stage file](docs/operations.md#stages) |
 | `make seed`, `make trace ID=…`, `make eval MODEL=…`, `make model-access` | Operator scripts |
 
 The console also runs without AWS: `cd console && npm run dev:mock` (see [console/README.md](console/README.md)).

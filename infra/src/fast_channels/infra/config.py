@@ -11,6 +11,7 @@ Every attribute docstring below is the field's documentation (also exported in t
 
 import json
 import re
+from decimal import Decimal
 from enum import StrEnum
 from functools import cache
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
@@ -125,6 +126,7 @@ _RETENTION: Final = {
 }
 _HTTPS_URL: Final = r"^https://[^\s/]+(/\S*)?$"
 _EMAIL: Final = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+_DOMAIN: Final = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+$"
 
 
 class ConfigError(ValueError):
@@ -302,7 +304,7 @@ class CdnEndpoint(_Section):
 
 
 class DeliveryConfig(_Section):
-    content_domain: str | None = Field(default=None, pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+$")
+    content_domain: str | None = Field(default=None, pattern=_DOMAIN)
     """CDN-neutral hostname for content segments and preconditioned ads (e.g. ``media.example.com``). Requires
     ``certificate_arn``; defaults to the CloudFront domain."""
     certificate_arn: str | None = Field(default=None, pattern=r"^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate/\S+$")
@@ -427,6 +429,357 @@ class NotificationsConfig(_Section):
     """Email subscribed to alarms and asset/ladder failure events."""
 
 
+class LedgerLock(StrEnum):
+    """S3 Object Lock mode of the ledger archive."""
+
+    OFF = "off"
+    GOVERNANCE = "governance"
+    COMPLIANCE = "compliance"
+
+
+class _Module(_Section):
+    """An optional module: nothing of it is deployed unless ``enabled``."""
+
+    enabled: bool = False
+
+
+class OpsModule(_Module):
+    """The ops module (``modules.ops``)."""
+
+    enabled: bool = False
+    """Deploy the ops module: a per-stage data lake (S3, Glue, Athena), a hash-chained ledger of changes and money
+    events, account quota alarms and detectors, runbooks and a probe canary."""
+    lake_retention_days: int = Field(default=30, ge=1)
+    """Days after which lake objects expire."""
+    ledger_lock: LedgerLock = LedgerLock.GOVERNANCE
+    """Object Lock mode of the ledger archive. ``compliance`` locks records even against the account root until
+    their retention ends, so it needs ``removal: retain``; use it only in production, after a retention review."""
+    ledger_retention_days: int = Field(default=30, ge=1, le=36_500)
+    """Object Lock retention of each ledger record; until it ends, ``make destroy`` cannot delete the archive (1 on
+    development stages)."""
+    canary: bool = True
+    """Run a synthetic playback canary on the probe playback configuration of each running channel."""
+
+
+class Effort(StrEnum):
+    """Claude ``output_config.effort``."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    MAX = "max"
+
+
+class ModeEffort(_Section):
+    """Effort per mode of the scheduler agent."""
+
+    chat: Effort = Effort.LOW
+    """Effort of chat turns."""
+    plan: Effort = Effort.MEDIUM
+    """Effort of schedule building."""
+
+
+class ModelRoute(StrEnum):
+    """How a task reaches its model."""
+
+    BEDROCK = "bedrock"
+
+
+class Thinking(StrEnum):
+    """Extended thinking: ``adaptive`` omits the field (the model's default); ``disabled`` turns it off."""
+
+    ADAPTIVE = "adaptive"
+    DISABLED = "disabled"
+
+
+class DataClass(StrEnum):
+    """What a task's prompts may contain: ``viewer`` data, or only ``operational`` data."""
+
+    OPERATIONAL = "operational"
+    VIEWER = "viewer"
+
+
+class ModelTask(_Section):
+    """One task's model-registry entry, rendered to SSM ``/<prefix>/models/tasks/<task>``."""
+
+    model: str
+    """Bedrock model id or inference profile; one of ``agent.allowed_models``, with ``{geo}`` as there."""
+    route: ModelRoute = ModelRoute.BEDROCK
+    """``bedrock``: the Converse API with the task's own role and application inference profile."""
+    effort: Effort | ModeEffort = ModeEffort()
+    """Reasoning effort: one level, or one per mode (``chat``, ``plan``) for the scheduler agent."""
+    thinking: Thinking = Thinking.ADAPTIVE
+    """Extended thinking; fixed per task, because changing it per call rewrites the prompt cache."""
+    max_tokens: int = Field(default=16_000, ge=1, le=128_000)
+    """Output token budget per model call."""
+    data_class: DataClass = DataClass.OPERATIONAL
+    """``viewer`` if the task's prompts carry viewer data; swapping such a task's model needs human approval."""
+    daily_cap_usd: float | None = Field(default=None, gt=0)
+    """Daily model spend at which the task's token counter refuses further calls (about ten times expected use);
+    ``null`` sets no cap."""
+    eval: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
+    """Key of the passing evaluation record that qualifies ``model`` for this task."""
+
+    @field_validator("model", mode="after")
+    @classmethod
+    def _resolve_model(cls, model: str, info: ValidationInfo) -> str:
+        region = (info.context or {}).get("region")
+        return resolve_geo(model, region) if region else model
+
+
+class ModelsModule(_Module):
+    """The model-registry module (``modules.models``)."""
+
+    enabled: bool = False
+    """Deploy the per-task model registry: one validated entry per LLM task, each with its own IAM role, application
+    inference profile and spend cap. Entries choose only among ``agent.allowed_models``."""
+    tasks: dict[str, ModelTask] = Field(
+        # Validated like a value from cdk.json, so that {geo} resolves for the region.
+        default_factory=lambda: {"scheduler.plan": {"model": DEFAULT_MODEL}},
+        validate_default=True,
+    )
+    """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
+    budgets_action: bool = False
+    """Add an AWS Budgets action per task role that denies the role's model invocations when its budget is spent."""
+
+    @field_validator("tasks")
+    @classmethod
+    def _task_names(cls, tasks: dict[str, ModelTask]) -> dict[str, ModelTask]:
+        if bad := [name for name in tasks if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*", name)]:
+            raise ValueError(f"task names must be dot-separated lowercase words, got {bad}")
+        return tasks
+
+
+class DemandMode(StrEnum):
+    """Where bids come from: the own book alone, or the own book plus the bidder simulator."""
+
+    OWN_BOOK = "own_book"
+    DEMO = "demo"
+
+
+class PbsVersion(StrEnum):
+    """Prebid Server (Java) release the demand image is built from."""
+
+    V3_43_0 = "3.43.0"
+    V4_4_0 = "4.4.0"
+
+
+class Simulator(StrEnum):
+    """How the bidder simulator is deployed in demo mode."""
+
+    GUIDANCE_STACK = "guidance_stack"
+    LAMBDA = "lambda"
+
+
+class DemandTasks(_Section):
+    """Prebid Server task counts (ECS service capacity)."""
+
+    min: int = Field(default=2, ge=1)
+    """Prebid Server tasks while any channel runs (the tier minimum); 0 while none does."""
+    max: int = Field(default=4, ge=1)
+    """Most Prebid Server tasks (the ECS service maximum)."""
+
+
+class DemandDaypart(_Section):
+    """A scheduled raise of the Prebid Server task minimum ahead of a busy daypart."""
+
+    cron: str = Field(pattern=r"^cron\(\S+( \S+){5}\)$")
+    """Application Auto Scaling ``cron(minutes hours day-of-month month day-of-week year)`` expression (UTC); fire it
+    at least 10 minutes before the daypart's first break."""
+    min: int = Field(ge=1)
+    """Task minimum from then on (between ``tasks.min`` and ``tasks.max``)."""
+
+
+class DemandModule(_Module):
+    """The demand module (``modules.demand``)."""
+
+    enabled: bool = False
+    """Deploy programmatic demand: the Guidance for Deploying a Prebid Server on AWS as its own app at a pinned tag,
+    with the repository's overlays and Prebid Server module, the guidance's bidder simulator in demo mode,
+    census-gated scaling and an origin rule that admits only this stage's MediaTailor requests."""
+    mode: DemandMode = DemandMode.DEMO
+    """``own_book``: own-book bids only (no simulator); ``demo``: the own book plus the guidance's bidder simulator,
+    every number labelled simulated."""
+    guidance_tag: str = Field(default="v1.4.0", pattern=r"^v\d+\.\d+\.\d+$")
+    """Tag of the guidance, pinned with its commit and the hash of every file the overlays patch."""
+    pbs_version: PbsVersion = PbsVersion.V3_43_0
+    """Prebid Server (Java) release of the image."""
+    simulator: Simulator = Simulator.GUIDANCE_STACK
+    """``guidance_stack``: the guidance's simulator stack (its own VPC with two NAT gateways); ``lambda``: the same
+    handler as a Lambda target behind an internal load balancer in the Prebid Server VPC, which needs no VPC of its
+    own."""
+    tasks: DemandTasks = DemandTasks()
+    server_instances: int = Field(default=2, ge=1)
+    """Prebid Server ``server.http.server-instances``: one event loop per task vCPU."""
+    dayparts: tuple[DemandDaypart, ...] = ()
+    """Scheduled task minimums ahead of busy dayparts; target tracking covers the time between them."""
+    rate_limit_per_ip: int = Field(default=20_000, ge=10, le=2_000_000_000)
+    """Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any
+    MediaTailor egress address's rate)."""
+
+    @model_validator(mode="after")
+    def _within_task_limits(self) -> Self:
+        if self.tasks.min > self.tasks.max:
+            raise ValueError(f"tasks.min ({self.tasks.min}) exceeds tasks.max ({self.tasks.max})")
+        if outside := [d.cron for d in self.dayparts if not self.tasks.min <= d.min <= self.tasks.max]:
+            raise ValueError(f"dayparts {outside}: min must lie between tasks.min and tasks.max")
+        return self
+
+
+class LineCaps(_Section):
+    """Frequency caps of a demo line."""
+
+    per_session: int | None = Field(default=None, ge=1)
+    """Most impressions of the line per playback session; ``null``: uncapped."""
+
+
+class DemoLine(_Section):
+    """A synthetic direct line, bid by the own book like a sold insertion order (demo mode)."""
+
+    id: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
+    """Line id, unique among ``demo_lines``."""
+    advertiser: str = Field(min_length=1, max_length=100)
+    """Advertiser name (decision records and reports)."""
+    adomain: str = Field(pattern=_DOMAIN)
+    """Advertiser domain (OpenRTB ``adomain``); pods never repeat one."""
+    cat: tuple[str, ...] = ()
+    """IAB categories of the line's ads (OpenRTB ``cat``)."""
+    creatives: tuple[str, ...] = Field(min_length=1)
+    """Creative ids (``crid``) of the demo creatives the line serves."""
+    cpm: Decimal = Field(gt=0)
+    """Price per 1,000 impressions, US dollars (simulated)."""
+    budget: Decimal = Field(gt=0)
+    """Total budget, US dollars (simulated); the line stops once reservations reach it."""
+    caps: LineCaps = LineCaps()
+    tier0: bool = False
+    """A guaranteed line: placed first in a pod, ahead of any bid."""
+
+
+class PdsModule(_Module):
+    """The Pod Decision Service module (``modules.pds``)."""
+
+    enabled: bool = False
+    """Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct
+    lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per
+    break."""
+    policy_timeout_ms: int = Field(default=50, gt=0)
+    """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone."""
+    policy_group_timeout_ms: int = Field(default=80, gt=0)
+    """Timeout of the hook group that holds the ``/policy`` call (at least ``policy_timeout_ms``)."""
+    select_timeout_ms: int = Field(default=100, gt=0)
+    """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids."""
+    select_group_timeout_ms: int = Field(default=150, gt=0)
+    """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
+    provisioned_concurrency: int = Field(default=2, ge=0)
+    """Provisioned concurrency per function while any channel runs; 0 while none does."""
+    demo_lines: tuple[DemoLine, ...] = ()
+    """Synthetic direct lines served by the own book in demo mode."""
+
+    @model_validator(mode="after")
+    def _groups_hold_their_calls(self) -> Self:
+        problems = [
+            f"{call}_group_timeout_ms ({group}) is shorter than {call}_timeout_ms ({timeout})"
+            for call, timeout, group in (
+                ("policy", self.policy_timeout_ms, self.policy_group_timeout_ms),
+                ("select", self.select_timeout_ms, self.select_group_timeout_ms),
+            )
+            if group < timeout
+        ]
+        if problems:
+            raise ValueError("\n".join(problems))
+        _unique(tuple(line.id for line in self.demo_lines))
+        return self
+
+
+class ReleaseStrategy(StrEnum):
+    """AppConfig deployment strategy of the release pointer, by audience size."""
+
+    DEMO = "demo"
+    STANDARD = "standard"
+    LARGE = "large"
+
+
+class ReleaseModule(_Module):
+    """The release module (``modules.release``)."""
+
+    enabled: bool = False
+    """Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor
+    Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and
+    is rolled back unattended on an alarm."""
+    channels: tuple[str, ...] = ()
+    """IaC channels to monetize (names from ``channels.iac``; ``{prefix}`` is replaced as there). Turning the module
+    on widens each channel's policy once: do it while the channels are stopped."""
+    strategy: ReleaseStrategy = ReleaseStrategy.DEMO
+    """``demo`` (a simulated audience: 10% steps over 30 minutes), ``standard`` (up to 20,000 concurrent viewers: 10%
+    steps over 3 hours) or ``large`` (exponential steps over 4 hours)."""
+    lab_channel: bool = True
+    """Create the stopped lab channel ``<prefix>-lab``, started only to smoke-test a release while the monetized
+    channel is stopped."""
+    probe_sibling: bool = True
+    """Create a house-only probe playback configuration per channel, for canaries and smoke tests."""
+    secret_rotation_days: int = Field(default=90, ge=1)
+    """Days between rotations of the origin secret that MediaTailor sends to the demand origin."""
+
+    @field_validator("channels")
+    @classmethod
+    def _unique_channels(cls, channels: tuple[str, ...]) -> tuple[str, ...]:
+        return _unique(channels)
+
+
+class CrawlModule(_Module):
+    """The content-metadata module (``modules.crawl``)."""
+
+    enabled: bool = False
+    """Deploy show-level content metadata: a catalog context object per title, a cached PRE_ADS lookup by UPID and
+    the OpenRTB ``app.content`` fields in each ad request, with a holdout that measures the uplift."""
+    pre_ads: bool = True
+    """Map the cached PRE_ADS lookup on the monetized playback configurations."""
+    holdout_percent: int = Field(default=20, ge=0, le=100)
+    """Share of session-breaks that get no enrichment, the uplift measurement's control arm."""
+
+
+_MODULE_NEEDS: Final = {
+    "demand": ("ops",),
+    "pds": ("ops", "demand"),
+    "release": ("ops", "demand", "pds"),
+    "crawl": ("pds", "release"),
+}
+"""Modules an enabled module builds on."""
+
+
+def _listed(names: list[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    return " and ".join([", ".join(names[:-1]), names[-1]] if len(names) > 1 else names)
+
+
+class ModulesConfig(_Section):
+    """Optional modules, each off by default; with every module off the deployment is exactly v3.0.0. Until a
+    module's code is merged, enabling it changes nothing."""
+
+    ops: OpsModule = OpsModule()
+    models: ModelsModule = ModelsModule()
+    demand: DemandModule = DemandModule()
+    pds: PdsModule = PdsModule()
+    release: ReleaseModule = ReleaseModule()
+    crawl: CrawlModule = CrawlModule()
+
+    def enabled(self, name: str) -> bool:
+        """Whether module ``name`` (a field of this section) is on."""
+        module: _Module = getattr(self, name)
+        return module.enabled
+
+    @model_validator(mode="after")
+    def _needs_met(self) -> Self:
+        problems = [
+            f"{name} needs {_listed(missing)}: enable {'them' if len(missing) > 1 else 'it'} or turn {name} off"
+            for name, needs in _MODULE_NEEDS.items()
+            if self.enabled(name) and (missing := [need for need in needs if not self.enabled(need)])
+        ]
+        if problems:
+            raise ValueError("\n".join(problems))
+        return self
+
+
 class FastChannelsConfig(_Section):
     """FAST Channels deployment configuration (cdk.json context ``fast-channels``)."""
 
@@ -444,6 +797,7 @@ class FastChannelsConfig(_Section):
     agent: AgentConfig = AgentConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
     notifications: NotificationsConfig = NotificationsConfig()
+    modules: ModulesConfig = ModulesConfig()
 
     @property
     def removal_policy(self) -> RemovalPolicy:
@@ -456,8 +810,10 @@ class FastChannelsConfig(_Section):
 
     @model_validator(mode="after")
     def _consistent(self, info: ValidationInfo) -> Self:
+        region: str | None = (info.context or {}).get("region")
         problems = [problem for channel in self.channels.iac for problem in self._channel_problems(channel)]
-        if region := (info.context or {}).get("region"):
+        problems += self._module_problems(region)
+        if region:
             problems += self._region_problems(region)
         if problems:
             raise ValueError("\n".join(problems))
@@ -473,19 +829,48 @@ class FastChannelsConfig(_Section):
             return [f"{where}: outputs {extra} are not in channel_assembly.package_profiles"]
         return []
 
+    def _module_problems(self, region: str | None) -> list[str]:
+        """Rules between a module and the rest of the configuration (rules among modules: :class:`ModulesConfig`).
+        Model ids are compared with ``{geo}`` resolved for ``region``: a section left at its defaults keeps it."""
+        modules, where = self.modules, f"{CONTEXT_KEY}.modules"
+        iac = [channel.name for channel in self.channels.iac]
+        problems = [
+            f"{where}.release.channels: {name!r} is not an IaC channel (channels.iac: {iac})"
+            for name in modules.release.channels
+            if name not in iac
+        ]
+        if modules.release.enabled and modules.release.lab_channel and (lab := f"{self.prefix}-lab") in iac:
+            problems.append(
+                f"{where}.release.lab_channel: {lab!r} is the release lab channel; rename the IaC channel or set "
+                "lab_channel=false"
+            )
+        if modules.ops.enabled and modules.ops.ledger_lock is LedgerLock.COMPLIANCE and self.removal is Removal.DESTROY:
+            problems.append(
+                f"{where}.ops.ledger_lock: compliance-mode records cannot be deleted before their retention ends, "
+                "which removal=destroy needs; use governance or removal=retain"
+            )
+        if modules.models.enabled:
+            allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
+            problems += [
+                f"{where}.models.tasks[{task}]: model {model!r} is not in agent.allowed_models {allowed}"
+                for task, entry in modules.models.tasks.items()
+                if (model := resolve_geo(entry.model, region) if region else entry.model) not in allowed
+            ]
+        return problems
+
     def _region_problems(self, region: str) -> list[str]:
         if region not in MEDIA_REGIONS:
             return [
                 f"region {region}: MediaTailor Channel Assembly and MediaConvert are not both available there; "
                 f"use one of {sorted(MEDIA_REGIONS)}"
             ]
-        if not self.agent.enabled:
-            return []
-        if region not in AGENTCORE_REGIONS:
+        if self.agent.enabled and region not in AGENTCORE_REGIONS:
             return [
                 f"region {region}: Amazon Bedrock AgentCore is not available; set agent.enabled=false or use "
                 f"one of {sorted(AGENTCORE_REGIONS)}"
             ]
+        if not (self.agent.enabled or self.modules.models.enabled):  # nothing invokes the allowed models
+            return []
         local = next((geo for geo, prefixes in _GEO_PROFILE_REGIONS.items() if region.startswith(prefixes)), "global")
         return [
             f"{CONTEXT_KEY}.agent.allowed_models: {model!r} is a {geo}. inference profile, which {region} cannot "
@@ -528,14 +913,21 @@ class FastChannelsConfig(_Section):
 
 
 def _expand_prefix(data: dict[str, Any]) -> None:
-    """Replace ``{prefix}`` in IaC channel names, so one default channel works for every deployment prefix."""
+    """Replace ``{prefix}`` in IaC channel names and in the channels the release module monetizes, so one default
+    channel works for every deployment prefix."""
     prefix = data.get("prefix")
-    channels = data.get("channels")
-    if not isinstance(prefix, str) or not isinstance(channels, dict):
+    if not isinstance(prefix, str):
         return
-    for channel in channels.get("iac") or ():
+    channels = data.get("channels")
+    for channel in (channels.get("iac") or ()) if isinstance(channels, dict) else ():
         if isinstance(channel, dict) and isinstance(channel.get("name"), str):
             channel["name"] = channel["name"].replace("{prefix}", prefix)
+    modules = data.get("modules")
+    release = modules.get("release") if isinstance(modules, dict) else None
+    if isinstance(release, dict) and isinstance(release.get("channels"), list):
+        release["channels"] = [
+            name.replace("{prefix}", prefix) if isinstance(name, str) else name for name in release["channels"]
+        ]
 
 
 def _decode(value: Any) -> Any:

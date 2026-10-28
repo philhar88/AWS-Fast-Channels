@@ -1,0 +1,41 @@
+{
+  "prefix": "fastm",
+  "observability": {
+    "mediatailor_log_percent": 100,
+    "log_retention_days": 7
+  },
+  "modules": {
+    "ops": {
+      "enabled": true,
+      "ledger_retention_days": 1
+    },
+    "models": {
+      "enabled": true
+    },
+    "demand": {
+      "enabled": true,
+      "mode": "demo",
+      "pbs_version": "3.43.0",
+      "simulator": "lambda",
+      "tasks": {
+        "min": 2,
+        "max": 4
+      }
+    },
+    "pds": {
+      "enabled": true
+    },
+    "release": {
+      "enabled": true,
+      "channels": [
+        "{prefix}-demo"
+      ],
+      "strategy": "demo"
+    },
+    "crawl": {
+      "enabled": true,
+      "pre_ads": true,
+      "holdout_percent": 20
+    }
+  }
+}
