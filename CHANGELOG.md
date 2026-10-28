@@ -145,6 +145,13 @@ end-to-end traceability. v2 deployments are not upgraded in place; see
 
 - VOD source names are at most 50 characters (Channel Assembly's limit; 64 was assumed), so assets with ids longer
   than about 29 characters no longer fail registration.
+- **Capacity guidance is now measured, not extrapolated**
+  ([delivery-and-multi-cdn.md](docs/delivery-and-multi-cdn.md#capacity)). MediaTailor SSAI reuses Channel Assembly
+  responses across sessions, and a load test of one channel up to 1,600 concurrent sessions leveled off near
+  9 requests per second. The docs had said "about 300 concurrent viewers per channel"; that is replaced by the quota that
+  actually binds, MediaTailor's Ad Insertion requests, at about 37,000 concurrent viewers per account at 70 % of default
+  quotas. Updated: ADR-0007 and ADR-0017 consequences, the operations quota table, and the ad-insertion and
+  Channel Assembly references.
 
 ### Known issues
 

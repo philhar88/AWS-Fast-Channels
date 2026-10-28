@@ -23,7 +23,7 @@ HLS: MPEG-TS segments with AVC video and AAC audio muxed into every variant ([en
 | Ad segments | `/v1/segment/…` URLs in the session's playlist; MediaTailor answers each with a 301 to the segment on the CDN |
 | Beacons | Server-side by MediaTailor (implicit sessions) |
 | Players | Any HLS player |
-| Channel Assembly load | About one origin request per session request ([capacity](delivery-and-multi-cdn.md#capacity)) |
+| Channel Assembly load | Shared across sessions: about 9 requests per second per channel at 1,600 viewers ([capacity](delivery-and-multi-cdn.md#capacity)) |
 
 Get the URLs from the Media stack's `Channels` output, from `channels___get_channel` (one SSAI URL per output), or
 from the console's Channels view, which plays the channel in an SSAI player.

@@ -51,7 +51,9 @@ is a Professional-tier feature, and MediaConvert bills every output of a job tha
   rate.
 - Each off-grid cue point replaces one segment with two shorter ones in every variant. Channel Assembly reports
   `SEGMENT_DURATION_MISMATCH` warnings for them, which the tools filter.
-- Every viewer is an SSAI session, so Channel Assembly's 50 manifest requests per second per channel bound the
-  audience (about 300 concurrent viewers) until the quota is raised; there are no cacheable SGAI playlists.
+- Every viewer is an SSAI session, and there are no cacheable SGAI playlists. MediaTailor reuses Channel Assembly
+  responses across sessions, so MediaTailor's Ad Insertion requests quota bounds the audience, not Channel Assembly's
+  per-channel quota: about 37,000 concurrent viewers per account at 70 % of default quotas. See
+  [capacity](../delivery-and-multi-cdn.md#capacity).
 - The hls.js caveat with muxed audio no longer applies. The AWS findings at Must level remain: Channel Assembly
   552026 and MediaTailor SSAI 536003.

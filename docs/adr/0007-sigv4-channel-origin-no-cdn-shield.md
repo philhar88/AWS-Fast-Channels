@@ -14,5 +14,8 @@ has an `origin_access_control_id` slot for MediaTailor OAC when it ships. An ala
 manifest requests per second per channel; scaling beyond that is a Service Quotas increase.
 
 ## Consequences
-SSAI requests reach Channel Assembly roughly 1:1. Large audiences need the quota raised before launch (documented in
-operations.md). A CDN-shielded mode can return as an opt-in once MediaTailor supports OAC.
+MediaTailor SSAI reuses Channel Assembly responses across sessions for up to the origin's `max-age`, so Channel Assembly
+sees far fewer requests than players make. In a load test of one channel up to 1,600 concurrent sessions, it leveled off
+near 9 requests per second. The per-channel quota therefore does not bound the audience. MediaTailor's account-wide Ad
+Insertion requests quota does (see [capacity](../delivery-and-multi-cdn.md#capacity)). A CDN shield would add little
+offload. A CDN-shielded mode can return as an opt-in once MediaTailor supports OAC.
