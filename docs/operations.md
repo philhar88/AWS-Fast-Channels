@@ -277,7 +277,8 @@ Defaults per account and region; request increases in Service Quotas before you 
 
 | Service | Quota | Default | Notes |
 |---|---|---|---|
-| Channel Assembly | Channel manifest requests | 50 TPS per channel, 400 per account | Caps SSAI audiences at roughly 300 concurrent viewers per channel; see [capacity](delivery-and-multi-cdn.md#capacity) |
+| MediaTailor | Ad Insertion requests: manifests, session initialization, tracking, `/v1/segment` redirects | 10,000 per second per account | Binds first, at about 37,000 concurrent SSAI viewers at 70 %; see [capacity](delivery-and-multi-cdn.md#capacity) |
+| Channel Assembly | Channel manifest requests | 50 TPS per channel, 400 per account | SSAI reuses responses across sessions: about 9 TPS per channel at 1,600 viewers. Binds only with many busy channels; see [capacity](delivery-and-multi-cdn.md#capacity) |
 | Channel Assembly | Programs per channel; outputs per channel; package configurations per source | 400; 5; 5 | See [channel-assembly.md](channel-assembly.md#quotas-and-rate-limits) |
 | Channel Assembly | Channels per account; VOD sources per source location | 100; 1,000 | |
 | MediaConvert | Concurrent jobs of the deployment's on-demand queue | 20 (`IngestPipeline(concurrent_jobs=…)`) | Further uploads queue |

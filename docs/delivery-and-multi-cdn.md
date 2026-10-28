@@ -164,19 +164,44 @@ Limits:
 
 ## Capacity
 
-Segment delivery scales with CloudFront. The limit to plan for is Channel Assembly's **50 manifest requests per second
-per channel** (400 per account), because MediaTailor SSAI fetches the channel manifest about once per player request:
-in the end-to-end tests Channel Assembly's `RequestCount` was 0.86 times SSAI's `Requests`.
+Segment delivery scales with CloudFront. The limit to plan for is MediaTailor's **Ad Insertion requests** quota, not
+Channel Assembly's manifest quota.
 
-| | Per SSAI viewer | Channel quota (50 TPS = 3,000 per minute) | Account quota (400 TPS) |
-|---|---|---|---|
-| Requests | About 10 per minute (one media playlist, with the audio muxed in, every 6 s target duration, plus the multivariant at the start) | about **300 concurrent SSAI viewers** | about 2,400 across all channels |
+**Channel Assembly load levels off.** MediaTailor SSAI reuses Channel Assembly responses across sessions for up to the
+origin's `Cache-Control` `max-age`, which is about 2 s for media playlists and 60 s for the multivariant playlist.
 
-These figures are extrapolated from measured ratios (with the CMAF ladder of the first v3.0.0 tag, which had separate
-audio playlists), not load-tested. To serve more:
+The measured load:
 
-1. **Raise the quota before launch.** Request an increase of the MediaTailor "Channel manifest requests" quotas in
-   Service Quotas. The `<channel>-manifest-requests` alarm fires when a channel stays at 80 % of 50 TPS
-   (2,400 requests per minute) for three minutes; set `channel_manifest_tps_quota` on `MediaObservability` to your
-   new quota so the alarm follows it.
-2. **Fewer playlist reloads per viewer**: longer segments in a custom ladder.
+| Concurrent SSAI sessions | 5 | 25 | 50 | 100 | 200 | 400 | 800 | 1,600 |
+|---|---|---|---|---|---|---|---|---|
+| Channel Assembly requests per second | 0.8 | 2.6 | 3.9 | 5.0 | 5.9 | 6.9 | 7.9 | 8.0 |
+| Share of player manifest requests | 95 % | 63 % | 47 % | 30 % | 18 % | 11 % | 6 % | 3 % |
+
+How it was measured:
+- One BASIC channel with the `standard` ladder (3 variants), through CloudFront, on 2026-10-28.
+- Load levels off near 8.6 requests per second, about 2.9 per variant playlist. That is far below the 50 per channel.
+- Reuse was the same with one User-Agent for every session, with a unique User-Agent per session, and with players that
+  call MediaTailor directly.
+- The load came from one Region through one CloudFront edge location. A geographically spread audience has not been load
+  tested.
+
+**What binds.** Each SSAI viewer makes about 0.19 MediaTailor requests per second:
+- the media playlist every 6 s target duration;
+- one `/v1/segment` redirect per ad segment. At 8 ad minutes an hour, these are about 12 % of the total.
+
+MediaTailor's `Requests` metric counts both.
+
+| Quota (default) | Concurrent SSAI viewers at 100 % | At 70 % |
+|---|---|---|
+| MediaTailor Ad Insertion requests (10,000 per second per account) | about 53,000 | about **37,000** |
+| Channel Assembly manifest requests per channel (50 per second) | not reached in the test; at least 9,970 (conservative bound) | at least 6,980 |
+| Channel Assembly manifest requests per account (400 per second) | binds only with many busy channels: about 6,200 across 100 lightly watched channels | about 3,100 |
+
+Above 1,600 sessions per channel, only the conservative bound has been measured. To serve more:
+
+1. **Raise the Ad Insertion requests quota before launch.** For audiences above about 37,000, request an increase in
+   Service Quotas. The quota has no usage metric, so watch MediaTailor's `Requests` metric.
+2. **Keep the channel alarm.** The `<channel>-manifest-requests` alarm fires when a channel stays at 80 % of 50 TPS
+   (2,400 requests per minute) for three minutes. If you raise that quota, set `channel_manifest_tps_quota` on
+   `MediaObservability` to the new value so the alarm follows it.
+3. **Make fewer playlist reloads per viewer** by using longer segments in a custom ladder.
