@@ -268,7 +268,7 @@ Account defaults per region (adjustable through Service Quotas unless noted):
 | VOD sources per source location | 1,000 | Titles × ladder versions, plus 5 slates per kit |
 | Source locations | 100 | |
 | Segment delivery configurations per source location | 5 | |
-| Channel manifest requests | 50 TPS per channel, 400 TPS per account | SSAI audience size; see [capacity](delivery-and-multi-cdn.md#capacity) |
+| Channel manifest requests | 50 TPS per channel, 400 TPS per account | SSAI reuses responses across sessions, so these bind only with many busy channels; see [capacity](delivery-and-multi-cdn.md#capacity) |
 | Manifest size | 2 MB (fixed) | |
 
 API rates: 1 TPS for `CreateChannel`, `CreateSourceLocation`, `CreateVodSource`, `UpdateVodSource`,
