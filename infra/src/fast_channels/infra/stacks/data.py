@@ -7,11 +7,15 @@ from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 from fast_channels.core.naming import agentcore_name, source_location_name
+from fast_channels.core.pds.names import Parameter as PdsParameter
+from fast_channels.core.pds.names import parameter_name as pds_parameter
 from fast_channels.infra.config import FastChannelsConfig, Removal
 from fast_channels.infra.constructs.ops import LakeBucket, LedgerStorage
+from fast_channels.infra.constructs.pds import ConfigBucket, PdsTable
 from fast_channels.infra.constructs.storage import GSI1, MediaLibrary, MediaStorage, ReferenceCatalogTable
 from fast_channels.infra.exports import DataExports
 
@@ -32,8 +36,9 @@ MEMORY_PREFERENCE_NAMESPACE: Final = "/users/{actorId}/preferences/"
 
 class DataStack(Stack):
     """Ingest, media and logs buckets with their single bucket policies, the media library and reference catalog
-    tables, the agent's AgentCore Memory, and the ops module's lake bucket, ledger table and ledger archive
-    (``modules.ops.enabled``).
+    tables, the agent's AgentCore Memory, the ops module's lake bucket, ledger table and ledger archive
+    (``modules.ops.enabled``), and the Pod Decision Service's table and private config bucket (``modules.pds.enabled``;
+    its service is the Pds stack's).
 
     Memory lives here, not in the Operator stack, so an Operator rollback can never get stuck on a Memory that is
     still ``CREATING`` (agentcore.md §12, gotcha 5). With ``removal: retain`` everything is retained, tables get
@@ -81,6 +86,27 @@ class DataStack(Stack):
                 retention_days=ops.ledger_retention_days,
                 removal_policy=config.removal_policy,
             )
+        self.pds_table: PdsTable | None = None
+        self.pds_config: ConfigBucket | None = None
+        if config.modules.pds.enabled:
+            self.pds_table = PdsTable(self, "PdsTable", prefix=config.prefix, removal_policy=config.removal_policy)
+            self.pds_config = ConfigBucket(
+                self, "PdsConfig", logs_bucket=self.storage.logs_bucket, removal_policy=config.removal_policy
+            )
+            if self.lake is None:
+                raise ValueError("modules.pds needs modules.ops (the lake)")
+            # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
+            for parameter, value in (
+                (PdsParameter.CONFIG_BUCKET, self.pds_config.bucket.bucket_name),
+                (PdsParameter.LAKE_BUCKET, self.lake.bucket.bucket_name),
+            ):
+                ssm.StringParameter(
+                    self,
+                    f"Pds{parameter.name.title().replace('_', '')}Parameter",
+                    parameter_name=pds_parameter(config.prefix, parameter),
+                    string_value=value,
+                    description=f"FAST Channels ({config.prefix}): for the Pds stack",
+                )
         self.memory: agentcore.Memory | None = None
         if config.agent.enabled:
             self.memory = agentcore.Memory(
@@ -150,6 +176,9 @@ class DataStack(Stack):
         if self.ledger is not None:
             outputs["LedgerTableName"] = self.ledger.table.table_name
             outputs["LedgerArchiveBucketName"] = self.ledger.archive.bucket_name
+        if self.pds_table is not None and self.pds_config is not None:
+            outputs["PdsTableName"] = self.pds_table.table_name
+            outputs["PdsConfigBucketName"] = self.pds_config.bucket.bucket_name
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)
 

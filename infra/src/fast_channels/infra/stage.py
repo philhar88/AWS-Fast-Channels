@@ -25,6 +25,7 @@ from fast_channels.infra.stacks.media import MediaStack
 from fast_channels.infra.stacks.models import ModelsStack
 from fast_channels.infra.stacks.operator import OperatorStack
 from fast_channels.infra.stacks.ops import OpsStack
+from fast_channels.infra.stacks.pds import PdsStack
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -48,7 +49,8 @@ class FastChannelsStage(Stage):
     ``observability.transaction_search`` is ``enable``), DemandEdge (in us-east-1) and DemandBuild (if
     ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), Demand
     beside the guidance once ``scripts/prebid_guidance.py`` passes its network (context
-    ``fast-channels:demand-network``), and AsRun (the account's as-run router, only with ``as_run_router``).
+    ``fast-channels:demand-network``), Pds after it (if ``modules.pds.enabled``), and AsRun (the account's as-run
+    router, only with ``as_run_router``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -145,6 +147,7 @@ class FastChannelsStage(Stage):
         self.demand_edge: DemandEdgeStack | None = None
         self.demand_build: DemandBuildStack | None = None
         self.demand: DemandStack | None = None
+        self.pds: PdsStack | None = None
         if config.modules.demand.enabled:
             self._demand_stacks(config, env, stacks)
 
@@ -153,7 +156,8 @@ class FastChannelsStage(Stage):
             Tags.of(self).add(key, value)
 
     def _demand_stacks(self, config: FastChannelsConfig, env: Environment, stacks: dict[str, Any]) -> None:
-        """DemandEdge (in us-east-1), DemandBuild, and Demand once the deploy script passes the guidance's network."""
+        """DemandEdge (in us-east-1), DemandBuild, and Demand (then Pds) once the deploy script passes the guidance's
+        network."""
         self.demand_edge = DemandEdgeStack(
             self,
             "DemandEdge",
@@ -163,18 +167,16 @@ class FastChannelsStage(Stage):
             **stacks,
         )
         self.demand_build = DemandBuildStack(self, "DemandBuild", config=config, **stacks)
-        if (network := self.node.try_get_context(NETWORK_CONTEXT)) is not None:
-            self.demand = DemandStack(
-                self,
-                "Demand",
-                config=config,
-                network=(
-                    DemandNetwork.model_validate_json(network)
-                    if isinstance(network, str)
-                    else DemandNetwork.model_validate(network)
-                ),
-                **stacks,
-            )
+        if (raw := self.node.try_get_context(NETWORK_CONTEXT)) is None:
+            return
+        network = DemandNetwork.model_validate_json(raw) if isinstance(raw, str) else DemandNetwork.model_validate(raw)
+        self.demand = DemandStack(self, "Demand", config=config, network=network, **stacks)
+        if config.modules.pds.enabled:
+            self.pds = PdsStack(self, "Pds", config=config, network=network, zone=self.demand.dns.zone, **stacks)
+            self.pds.add_stack_dependency(self.data, "The PDS's table and config bucket are the Data stack's")
+            self.pds.add_stack_dependency(self.demand, "The PDS's record is in the Demand stack's private zone")
+            if self.ops is not None:
+                self.pds.add_stack_dependency(self.ops, "The decision records' tables are in the lake's database")
 
     def _as_run_router(self, config: FastChannelsConfig, tags: dict[str, str]) -> AsRunRouterStack:
         """The account's as-run router stack, after Media (whose custom resource creates the as-run log group)."""

@@ -163,6 +163,72 @@ def test_names_follow_the_prefix(stage: _demand.DemandStage) -> None:
     assert any(arg == 'fast-channels.prefix="fastcix"' for arg in context)
 
 
+def test_the_pds_stack_deploys_after_the_demand_stack(stage: _demand.DemandStage) -> None:
+    assert stage.pds_stack == "FastChannels-fastcix-Pds"
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Pds"]
+
+
+def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
+    return {
+        "StackName": name,
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+        "Outputs": [{"OutputKey": key, "OutputValue": value} for key, value in outputs.items()],
+    }
+
+
+def test_the_pds_needs_its_state_in_the_data_stack(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation = stub("cloudformation")
+    data = "FastChannels-fastcix-Data"
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(data, {})]}, {"StackName": data})
+    with pytest.raises(_demand.DemandError, match="make deploy"):
+        stage.check_pds_state()
+
+    outputs = {"PdsConfigBucketName": "b", "PdsTableName": "fastcix-pds"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(data, outputs)]}, {"StackName": data})
+    stage.check_pds_state()
+
+
+def test_a_pds_stack_the_module_no_longer_has_is_deleted(fastci: Any, stub: Any) -> None:
+    modules = fastci.modules.model_copy(update={"pds": fastci.modules.pds.model_copy(update={"enabled": False})})
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand"]
+    cloudformation = Stubber(stage.client("cloudformation"))
+    name = {"StackName": "FastChannels-fastcix-Pds"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
+    cloudformation.add_response("delete_stack", {}, name)
+    cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
+    with cloudformation:
+        stage.check_pds_state()
+    cloudformation.assert_no_pending_responses()
+
+
+def test_both_census_gates_start_with_the_last_count(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm, cloudformation, stepfunctions = stub("ssm"), stub("cloudformation"), stub("stepfunctions")
+    ssm.add_response(
+        "get_parameter",
+        {"Parameter": {"Name": "/fastcix/ops/running-channels", "Value": "1"}},
+        {"Name": "/fastcix/ops/running-channels"},
+    )
+    arns = {
+        "FastChannels-fastcix-Demand": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-census-gate",
+        "FastChannels-fastcix-Pds": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-pds-census-gate",
+    }
+    detail = json.dumps({"detail": {"running": 1, "previous": 1, "correlation_id": "deploy-demand"}})
+    for name, arn in arns.items():
+        cloudformation.add_response(
+            "describe_stacks", {"Stacks": [_stack(name, {"CensusGateArn": arn})]}, {"StackName": name}
+        )
+    for arn in arns.values():
+        stepfunctions.add_response(
+            "start_execution",
+            {"executionArn": f"{arn}:x", "startDate": datetime(2026, 10, 29, tzinfo=UTC)},
+            {"stateMachineArn": arn, "input": detail},
+        )
+
+    assert stage.start_census_gate() == f"{arns['FastChannels-fastcix-Demand']}:x"
+
+
 def test_guidance_parameters_are_keyed_by_the_renamed_stack(stage: _demand.DemandStage) -> None:
     assert stage.guidance_parameters("fastcix-pbs", {"SpotInstanceWeight": "0", "EnableLogAnalytics": "false"}) == [
         "--parameters",
