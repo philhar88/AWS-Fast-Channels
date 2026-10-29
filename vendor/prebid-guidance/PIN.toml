@@ -18,6 +18,23 @@ repository = "https://github.com/prebid/prebid-server-java"
 
 [pbs_java.commits]
 "3.43.0" = "ba7f97e33fe1dcc5e64f926bc8bea5d4d4252fc1"
+"4.4.0" = "de50af1076d9cf8375c4af4fa1adcfff96db2c7c"
+
+# Releases the guidance does not build (its docker-build-config.json names 3.43.0 and pins 3.x dependencies:
+# Vert.x 4, Spring Boot 3): the JDK major version (overlay O6's build argument) and the Maven options. A stage
+# selects one with modules.demand.pbs_version; the image build writes a docker-build-config.json for it.
+[pbs_java.builds."4.4.0"]
+jdk = "25"
+mvn_options = "-Dmaven.test.skip -Dcheckstyle.skip"
+
+# The JDKs scripts/pbs_module.py downloads (checksum-verified) when the one on PATH is another major version.
+[jdks."25".linux-x86_64]
+url = "https://corretto.aws/downloads/resources/25.0.5.0.10/amazon-corretto-25.0.5.0.10-linux-x64.tar.gz"
+sha256 = "1d89b4194f20ee513f4dd9fc2aadd038de3c713c37fd444d77566b3da7b0ee65"
+
+[jdks."25".linux-aarch64]
+url = "https://corretto.aws/downloads/resources/25.0.5.0.10/amazon-corretto-25.0.5.0.10-linux-aarch64.tar.gz"
+sha256 = "8dc8e5379959c0814e99785b53657c35800b74950fc9fa39738d26153b62ef6c"
 
 # Applied in this order. `files` are copied from this directory into the checkout (repository-relative source =
 # checkout-relative destination).
@@ -35,12 +52,17 @@ patch = "patches/O2-extra-waf-rule-group.patch"
 id = "O4"
 title = "The fast-ctv module compiled through the guidance's amt-bidder injection point"
 patch = "patches/O4-fast-ctv-module.patch"
-files = { "amt-bidder/copy-fast-ctv.sh" = "source/loadtest/amt-bidder/copy-fast-ctv.sh" }
+files = { "amt-bidder/copy-fast-ctv.sh" = "source/loadtest/amt-bidder/copy-fast-ctv.sh", "amt-bidder/pbs-4/AmtConfiguration.java" = "source/loadtest/amt-bidder/pbs-4/AmtConfiguration.java" }
 
 [[overlays]]
 id = "O5"
 title = "Bidder simulator creatives from configuration"
 patch = "patches/O5-simulator-creatives.patch"
+
+[[overlays]]
+id = "O6"
+title = "The JDK of the Prebid Server Java build is a build argument"
+patch = "patches/O6-pbs-java-version.patch"
 
 [[overlays]]
 id = "O7"
@@ -49,6 +71,7 @@ patch = "patches/O7-ecs-deployment.patch"
 
 # SHA-256 of every upstream file an overlay patches, at `commit`.
 [patched]
+"deployment/ecr/prebid-server/Dockerfile" = "d3249e96aac3bc925e43b058cc864bda202f4ade28ef9ae1b0b9d748ec8fdbb0"
 "source/infrastructure/app.py" = "6b5185ab7536bece02240e909fb3171c6b33b9177df088faaf8d85c65a5cb9b7"
 "source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py" = "63f0e245458251a7b74eddc49f1f762f79909e0ca0608863d8b78c47f1f10164"
 "source/infrastructure/prebid_server/cloudfront_entry_deployment.py" = "f3fc55b013db2fb4fd73ff86cb56863ebe5e046199601c976f93fe03bd37526b"
@@ -59,14 +82,15 @@ patch = "patches/O7-ecs-deployment.patch"
 "source/loadtest/amt-bidder/copy-bidder-files.sh" = "6a3b0f0d190c21d5821ce35619ff0714632cd544daff6419d617051600425c9b"
 "source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py" = "56142280deeb37c06141031e9bb3ba613acc2ebeb517d21e49337b9b23e1d51d"
 
-# SHA-256 of upstream files the overlays and the rendered configuration rely on without patching them: the image
-# build's injection point (Dockerfile), the configuration layering (bootstrap.sh copies current/ over default/), the
-# defaults that core/pbs_config.py repeats, and the deploy-time upload of the configuration directories.
+# SHA-256 of upstream files the overlays and the rendered configuration rely on without patching them: the
+# configuration layering (bootstrap.sh copies current/ over default/), the defaults that core/pbs_config.py repeats,
+# the build configuration the image build replaces for other releases, the amt adapter configuration that
+# amt-bidder/pbs-4/ ports to 4.x, and the deploy-time upload of the configuration directories.
 [relied_on]
-"deployment/ecr/prebid-server/Dockerfile" = "d3249e96aac3bc925e43b058cc864bda202f4ade28ef9ae1b0b9d748ec8fdbb0"
 "deployment/ecr/prebid-server/bootstrap.sh" = "e1471a62147312d8f89b57ce118020f6026fe002101702c843d5579eb24c7317"
 "deployment/ecr/prebid-server/default-config/entrypoint.sh" = "e9b0221b372d27ce95aaa9d38156521b746b19fb15a3b313bd539dda1fe12dcf"
 "deployment/ecr/prebid-server/default-config/prebid-config.yaml" = "5ec52a0f79bb955ae2cfe440b4fd0a304cfeea06116f3e968a49625ddcabea7e"
 "deployment/ecr/prebid-server/docker-build-config.json" = "80283a077f218d255ce9c0671cedd3f677cbe5bb5289322dad87b6aefc6d4255"
 "source/infrastructure/custom_resources/prebid_configs_lambda/upload_prebid_configs.py" = "b262eeced3f499668972da5f1c662e1f9dbac8f4f830319f8d44ff39d0c8bacf"
 "source/infrastructure/prebid_server/container_image_construct.py" = "4cc3e2ddef2c21eff8f394dc605f7bd0b0c07726fa3834c19b00df42dcccadad"
+"source/loadtest/amt-bidder/AmtConfiguration.java" = "a360fed0828ed33b5e487a355e3570e8859ce7266c04ebf7b2fb44b583a97f1c"

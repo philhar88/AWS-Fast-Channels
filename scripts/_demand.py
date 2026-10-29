@@ -60,6 +60,38 @@ CONFIG_ROOT: Final = Path("deployment/ecr/prebid-server")
 SIMULATOR_HANDLER: Final = Path("source/loadtest/bidder_simulator/lambdas/loadtest_bidder")
 """The guidance's bidder simulator handler (overlay O5 reads ``video_creatives.json`` beside it)."""
 SIMULATOR_SLOTS: Final = 4
+GUIDANCE_PARAMETERS: Final = frozenset(
+    {
+        "SpotInstanceWeight",
+        "ECSTaskMinCapacity",
+        "ECSTaskMaxCapacity",
+        "EnableLogAnalytics",
+        "ExtraWafRuleGroupArn",
+        "SimulatorVpcId",
+        "SimulatorAlbSgId",
+        "SimulatorRouteTableId1",
+        "SimulatorRouteTableId2",
+        "SimulatorEndpoint",
+        "EnableRtbFabric",
+    }
+)
+"""The guidance's CloudFormation parameters a deploy sets. Its stacks deploy with --no-previous-parameters, so each one
+the mode uses is passed on every deploy (the Simulator* ones only for the simulator modes that need them)."""
+GUIDANCE_DEFAULTS: Final = {
+    "ContainerImage": "the image: its default is the image the deploy synthesizes with (OVERRIDE_ECR_REGISTRY)",
+    "ContainerImageUri": "declared by the guidance v1.4.0 and read nowhere",
+    "InstallCloudFrontAndWAF": "Yes: MediaTailor reaches Prebid Server through the guidance's CloudFront and WAF",
+    "SSLCertificateARN": "empty: the ALB is reached only through CloudFront",
+    "RequestsPerTargetThreshold": "the guidance's request-count target tracking",
+    "EnableRtbRequesterGateway": "false: no RTB Fabric",
+    "bidResponseDelayPercentage": "0: the simulator answers without artificial delays",
+    "bidResponseTimeoutPercentage": "0: the simulator never times out on purpose",
+    "bidResponseDelayProbability": "0",
+    "bidResponseTimeoutProbability": "0",
+}
+"""The guidance's other parameters, left at their defaults on purpose."""
+GUIDANCE_JDK: Final = "21"
+"""The Corretto major version the guidance's Dockerfile installs by default (overlay O6's ``JDK`` argument)."""
 KMS_PENDING_DAYS: Final = 7
 EC2_DESCRIBE: Final = {
     "subnet": ("describe_subnets", "SubnetIds"),
@@ -414,14 +446,25 @@ class DemandStage:
 
     # ----- the image ---------------------------------------------------------------------------------------------
 
-    def build_context(self, out: Path) -> Path:
+    def build_context(self, out: Path, release: tuple[str, Any] | None = None) -> Path:
         """The guidance's Docker build context with its ``amt-bidder`` sources (overlays and module included), and
-        our build script, under ``out``."""
+        our build script, under ``out``; for a release the guidance does not build (``release``: its version and
+        ``PIN.toml [pbs_java.builds]`` entry), a ``docker-build-config.json`` for it."""
         shutil.rmtree(out, ignore_errors=True)
         shutil.copytree(self.checkout / CONFIG_ROOT, out / "context")
         shutil.rmtree(out / "context" / "amt-bidder")
         shutil.copytree(self.checkout / "source" / "loadtest" / "amt-bidder", out / "context" / "amt-bidder")
         shutil.copy2(VENDOR / "build-image.sh", out / "build-image.sh")
+        if release is not None:
+            version, spec = release
+            config_file = out / "context" / "docker-build-config.json"
+            config = json.loads(config_file.read_text())
+            config = {
+                "GIT_TAG_VERSION": version,
+                "GIT_REPO_URL": config["GIT_REPO_URL"],
+                "MVN_CLI_OPTIONS": spec.mvn_options,
+            }
+            config_file.write_text(json.dumps(config, indent=2) + "\n")
         return out
 
     def build_image(self, pin: Any) -> str:
@@ -430,10 +473,15 @@ class DemandStage:
         outputs = self.stack_outputs(self.build_stack)
         repository_uri, project = outputs["ImageRepositoryUri"], outputs["ImageBuildProject"]
         config = json.loads((self.checkout / CONFIG_ROOT / "docker-build-config.json").read_text())
-        version = config["GIT_TAG_VERSION"]
+        version, jdk = config["GIT_TAG_VERSION"], GUIDANCE_JDK
+        release: tuple[str, Any] | None = None
+        if (wanted := self.config.modules.demand.pbs_version.value) != version:
+            if (spec := pin.pbs_java_builds.get(wanted)) is None:
+                raise DemandError(f"PIN.toml [pbs_java.builds] has no build of Prebid Server Java {wanted}")
+            version, jdk, release = wanted, spec.jdk, (wanted, spec)
         if version not in pin.pbs_java_commits:
             raise DemandError(f"PIN.toml [pbs_java.commits] has no commit for Prebid Server Java {version}")
-        context = self.build_context(BUILD / f"{self.prefix}-image")
+        context = self.build_context(BUILD / f"{self.prefix}-image", release)
         tag = f"{version}-{context_digest(context)}"
         image = f"{repository_uri}:{tag}"
         ecr = self.client("ecr")
@@ -457,6 +505,7 @@ class DemandStage:
                 {"name": "PBS_JAVA_REPOSITORY", "value": config["GIT_REPO_URL"], "type": "PLAINTEXT"},
                 {"name": "PBS_JAVA_TAG", "value": version, "type": "PLAINTEXT"},
                 {"name": "PBS_JAVA_COMMIT", "value": pin.pbs_java_commits[version], "type": "PLAINTEXT"},
+                {"name": "PBS_JDK", "value": jdk, "type": "PLAINTEXT"},
             ],
         )["build"]
         log(f"building {image} ({build['id']})")
@@ -475,6 +524,8 @@ class DemandStage:
     # ----- the guidance --------------------------------------------------------------------------------------------
 
     def guidance_parameters(self, stack: str, values: Mapping[str, str]) -> list[str]:
+        if unknown := sorted(set(values) - GUIDANCE_PARAMETERS):
+            raise DemandError(f"not in GUIDANCE_PARAMETERS (a redeploy would reset them): {unknown}")
         """``--parameters <stack name>:<key>=<value>``: CDK keys stack parameters by the stack's name."""
         return [arg for key, value in values.items() for arg in ("--parameters", f"{stack}:{key}={value}")]
 
@@ -488,6 +539,10 @@ class DemandStage:
             f"{venv / 'bin' / 'python'} app.py",
             "--require-approval",
             "never",
+            # The guidance takes its image as the default of a CloudFormation parameter (ContainerImage); cdk deploy
+            # would keep a parameter's previous value, so a redeploy with a new image left the old one running. Every
+            # parameter we set is passed on each deploy (deploy_guidance), the others keep their defaults.
+            "--no-previous-parameters",
             "-c",
             f"stackPrefix={self.prefix}",
             "-c",
@@ -562,6 +617,7 @@ class DemandStage:
             "SpotInstanceWeight": "0",
             "ECSTaskMinCapacity": str(demand.tasks.min),
             "ECSTaskMaxCapacity": str(demand.tasks.max),
+            # Its reporter logs every request header, the ticket and the origin secret too (tests/pbs)
             "EnableLogAnalytics": "false",
             "ExtraWafRuleGroupArn": rule_group,
             **self.simulator_endpoint(image),

@@ -14,7 +14,7 @@ import java.util.Objects;
  * {@code {enr}}, for example {@code https://cdn.example/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}}. Each
  * value is URL-encoded.
  */
-public class TrackerTemplate {
+public final class TrackerTemplate {
 
     public static final String IMPRESSION = "impression";
 

@@ -102,6 +102,13 @@ class PbsSettings(BaseModel):
     policy_group_timeout_ms: int = Field(default=80, gt=0)
     select_timeout_ms: int = Field(default=150, gt=0)
     select_group_timeout_ms: int = Field(default=200, gt=0)
+    pbs_version: str = Field(default="3.43.0", pattern=r"^\d+\.\d+\.\d+$")
+    """Prebid Server Java release the configuration is for (``modules.demand.pbs_version``): 4.x needs two settings
+    3.x does not have."""
+
+    @property
+    def pbs_major(self) -> int:
+        return int(self.pbs_version.split(".", 1)[0])
 
     @field_validator("publisher_domain")
     @classmethod
@@ -247,7 +254,14 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
             "generic": {
                 "aliases": {
                     # An alias's ortb-version binds to the enum by name; "2.6" stops Prebid Server at startup.
-                    OWN_BOOK: {"enabled": True, "endpoint": f"{pds}/ownbook/openrtb", "ortb-version": "ORTB_2_6"},
+                    OWN_BOOK: {
+                        "enabled": True,
+                        "endpoint": f"{pds}/ownbook/openrtb",
+                        "ortb-version": "ORTB_2_6",
+                        # 4.x refuses to start without a vendor id on a configured generic alias (an NPE, P0-20
+                        # §4.13). The own book is the publisher itself: no IAB TCF vendor, so 0.
+                        **({"meta-info": {"vendor-id": 0}} if settings.pbs_major >= 4 else {}),
+                    },
                 },
             },
         },
@@ -290,6 +304,8 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
             "vendorlist": {
                 "v2": {"cache-dir": "/var/tmp/vendor2"},  # noqa: S108
                 "v3": {"cache-dir": "/var/tmp/vendor3"},  # noqa: S108
+                # Mandatory in 4.x (P0-20 §4.13): where the live vendor list is cached at startup.
+                **({"live": {"startup-cache-dir": "/var/tmp/vendor-live"}} if settings.pbs_major >= 4 else {}),  # noqa: S108
             },
         },
         "admin-endpoints": {"logging-changelevel": {"enabled": False}},

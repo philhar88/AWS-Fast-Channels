@@ -63,11 +63,29 @@ CONTENT: Final = {
     "ext": {"genres": ["652", "325"], "gtax": 9, "realtime": 0, "firstbroadcast": 0},
 }
 """The ``app_content`` a positive policy answer patches in: OpenRTB 2.5 fields natively, the 2.6 ones in ``ext``."""
-POSITIVE: Final = {"FULL1": "FULL", "PSEUDO1": "PSEUDONYMOUS", "CTX1": "CONTEXTUAL", "": "CONTEXTUAL", "late1": "FULL"}
+NATIVE_CONTENT: Final = {
+    "id": "tears-of-steel",
+    "genres": ["652", "325"],
+    "gtax": 9,
+    "realtime": 0,
+    "firstbroadcast": 1793210000,
+    "data": [{"id": "fast-catalog", "name": "fast-catalog", "cids": ["tears-of-steel"]}],
+}
+"""The ``app_content`` of ticket ``NATIVE1``: the OpenRTB 2.6 content fields as first-class fields, which Prebid Server
+Java models from 4.x (P0-20 §4.13)."""
+POSITIVE: Final = {
+    "FULL1": "FULL",
+    "PSEUDO1": "PSEUDONYMOUS",
+    "CTX1": "CONTEXTUAL",
+    "": "CONTEXTUAL",
+    "late1": "FULL",
+    "NATIVE1": "FULL",
+}
 """Tickets the policy answers positively, with third-party bidders (an empty ticket: the Phase-1 contextual case)."""
 POLICY_TICKETS: Final = {
     **{ticket: f"positive {mode}" for ticket, mode in POSITIVE.items()},
     "late1": "positive FULL after 25 ms: in time for the module, past a 5 ms group timeout",
+    "NATIVE1": "positive FULL whose app_content carries the OpenRTB 2.6 fields natively",
     "SAFE1": "SAFE, no bidders",
     "SAFEbad1": "SAFE that wrongly names bidders (the module must add none)",
     "KIDS1": "KIDS, no bidders",
@@ -137,7 +155,7 @@ def policy_answer(request: PolicyRequest) -> tuple[int, str, float]:
             bidders=named,
             regs=Regs(coppa=1 if mode is Mode.KIDS else 0),
             device=Device(ip=IPv4Address("198.51.100.7"), devicetype=DeviceType.CONNECTED_TV),
-            app_content=CONTENT,
+            app_content=NATIVE_CONTENT if ticket == "NATIVE1" else CONTENT,
             fpd=Fpd(bidders=[OWN_BOOK]),
         )
         return json.dumps(response.model_dump(mode="json") | {"v": version})

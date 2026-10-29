@@ -28,6 +28,13 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   - ships simulator creatives (5, 15 and 30 s progressive MP4s with one advertiser domain) that cannot fill a CTV pod;
   - runs one Vert.x event loop per 2-vCPU task (every auction ran on one thread);
   - lets a forced deployment, its documented way to load a new configuration, run at 50% of the desired tasks.
+- Prebid Server Java 3.43.0, the guidance's release, has no model for the OpenRTB 2.6 content fields `genres`, `gtax`,
+  `realtime`, `firstbroadcast` and `data[].cids`, and drops them without a warning before any hook or bidder sees
+  them. Release 4.4.0 (October 2026) models them. It needs Java 25 (Spring Boot 4, Vert.x 5), and two settings 3.43.0
+  does not have: `gdpr.vendorlist.live.startup-cache-dir`, and `meta-info.vendor-id` on every configured `generic`
+  alias (without it, startup fails with a `NullPointerException`).
+- The guidance's log analytics reporter (`EnableLogAnalytics`) logs every request's headers verbatim, the playback
+  ticket and the origin secret included.
 
 ## Decision
 - **The guidance is deployed as its own CDK app**, not composed into this repository's app (exception A to
@@ -42,6 +49,7 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   | O2 | Stack parameter `ExtraWafRuleGroupArn`: a customer rule group referenced first by the guidance's web ACL |
   | O4 | The fast-ctv module compiled through the guidance's `amt-bidder` injection point |
   | O5 | Bidder simulator creatives from configuration (30.03 s HLS creatives preconditioned on the ladder) |
+  | O6 | The JDK of the Prebid Server Java build is a build argument (Corretto 21 as shipped, 25 for 4.x) |
   | O7 | The Prebid Server service deploys at 100% minimum healthy and 200% maximum |
 
   `scripts/prebid_guidance.py` checks the pinned commit out, refuses it if the tag moved, a pinned file changed or a
@@ -52,8 +60,16 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   execution policy (`vendor/prebid-guidance/bootstrap-policy.json`) allows the guidance's services, S3, Lambda and IAM
   roles only on the guidance's names, managed-policy attachment only for the two Lambda execution policies it uses,
   and KMS without data access. Inline role policies stay unconstrained; that is the residual risk.
-- **The image** is the guidance's unmodified Dockerfile with the overlays and the module, built by an x86 CodeBuild
-  project of the stage and tagged by the content of its build context.
+- **The image** is the guidance's Dockerfile with the overlays and the module, built by an x86 CodeBuild project of
+  the stage and tagged by the content of its build context.
+- **The Prebid Server Java release is a stage setting**, `modules.demand.pbs_version`: `3.43.0` (the guidance's) or
+  `4.4.0`. For a release the guidance does not build, `PIN.toml` names its commit, JDK and Maven options; the image
+  build gives the Dockerfile that release's `docker-build-config.json` and the JDK (O6), and O4 replaces the
+  guidance's `amt` adapter configuration with a 4.x port. The rendered configuration adds 4.x's two required
+  settings; the own book, a configuration-level alias, has vendor id 0 (it is the publisher, not an IAB TCF vendor).
+  CI builds and tests the module and the contract on both releases. Rolling back is `pbs_version: 3.43.0` and a
+  redeploy.
+- **The guidance's log analytics stays off** (`EnableLogAnalytics=false`) while its reporter logs request headers.
 - **MediaTailor POSTs to the guidance's CloudFront.** A WAF rule group of ours, referenced first, blocks
   `/openrtb2/*` without the stage's origin secret (one of two values, for rotation).
 - **The body-template rule.** The body carries only constants and MediaTailor's own variables (`session.uuid`,
@@ -90,6 +106,8 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   architecture-specific), plus our module in Java.
 - A stage with demand costs about $120–150 a month idle while deployed (NAT gateways, ALB, WAF, the Valkey cache
   minimum). Destroying it leaves the guidance's KMS keys pending deletion for 7 days.
+- On 3.43.0 the OpenRTB 2.6 content fields reach bidders only in `app.content.ext`; on 4.4.0 they are first-class.
+  The Pod Decision Service chooses the carriage by the stage's `pbs_version`.
 - A break off the 30.03 s grid, or with a missing duration (MediaTailor sends 300 s), names a stored request that does
   not exist. Prebid Server answers 400, and the Channel Assembly slate plays.
 - When AWS publishes the guidance as a construct library, the overlays become construct properties and the app can

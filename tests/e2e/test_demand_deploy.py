@@ -119,6 +119,31 @@ def test_the_image_tag_is_the_contexts_content(tmp_path: Path) -> None:
     assert _demand.context_digest(tmp_path) != first
 
 
+def test_a_release_the_guidance_does_not_build_gets_its_own_build_config(
+    stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(_demand, "BUILD", tmp_path)
+    config = stage.checkout / _demand.CONFIG_ROOT / "docker-build-config.json"
+    (stage.checkout / _demand.CONFIG_ROOT / "amt-bidder").mkdir(parents=True)
+    (stage.checkout / "source/loadtest/amt-bidder").mkdir(parents=True)
+    shipped = {"GIT_TAG_VERSION": "3.43.0", "GIT_REPO_URL": "https://github.com/prebid/prebid-server-java"}
+    config.write_text(json.dumps(shipped | {"MVN_CLI_OPTIONS": "-Dmaven.test.skip"}))
+
+    as_shipped = stage.build_context(tmp_path / "out")
+    assert json.loads((as_shipped / "context/docker-build-config.json").read_text())["GIT_TAG_VERSION"] == "3.43.0"
+    shipped_digest = _demand.context_digest(as_shipped)
+
+    spec = prebid_guidance.PbsBuild(jdk="25", mvn_options="-Dmaven.test.skip -Dcheckstyle.skip")
+    context = stage.build_context(tmp_path / "out", ("4.4.0", spec))
+    assert json.loads((context / "context/docker-build-config.json").read_text()) == {
+        "GIT_TAG_VERSION": "4.4.0",
+        "GIT_REPO_URL": "https://github.com/prebid/prebid-server-java",
+        "MVN_CLI_OPTIONS": "-Dmaven.test.skip -Dcheckstyle.skip",
+    }
+    assert json.loads(config.read_text())["GIT_TAG_VERSION"] == "3.43.0", "the checkout is unchanged"
+    assert _demand.context_digest(context) != shipped_digest, "another image tag"
+
+
 def test_running_tasks_without_a_warm_up_are_warmed(stage: _demand.DemandStage, stub: Any) -> None:
     ssm, ecs, codebuild = stub("ssm"), stub("ecs"), stub("codebuild")
     cluster = "arn:aws:ecs:us-east-1:123456789012:cluster/c"
@@ -313,6 +338,24 @@ def test_guidance_parameters_are_keyed_by_the_renamed_stack(stage: _demand.Deman
         "--parameters",
         "fastcix-pbs:EnableLogAnalytics=false",
     ]
+
+
+def test_a_parameter_not_in_the_registry_is_refused(stage: _demand.DemandStage) -> None:
+    with pytest.raises(_demand.DemandError, match="not in GUIDANCE_PARAMETERS"):
+        stage.guidance_parameters("fastcix-pbs", {"RequestsPerTargetThreshold": "100"})
+
+
+def test_a_redeploy_takes_the_new_image_not_the_previous_parameter(
+    stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guidance's image is the default of its ContainerImage parameter: with previous parameter values reused, the
+    4.4.0 → 3.43.0 rollback redeployed the template and kept 4.4.0 running."""
+    monkeypatch.setattr(type(stage), "toolchain", lambda self: Path("/venv"))
+
+    command = [str(arg) for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
+
+    assert "--no-previous-parameters" in command
+    assert command[:3] == [str(_demand.CDK), "deploy", "prebid-server-deployment-on-aws"]
 
 
 def test_the_lambda_simulator_is_reached_through_the_private_zone(stage: _demand.DemandStage) -> None:
