@@ -141,6 +141,10 @@ All notable changes to this project are documented here. The format follows
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a
   change, so it refuses it on a running channel (or stops and restarts the channel with `restart_on_update`),
   because a policy change on a running channel is not session-safe. With the module off the policy is unchanged.
+- **Cached PRE_ADS content lookup** (`crawl` module, with `modules.crawl.pre_ads`): the release bundle maps a PRE_ADS
+  root executor (400 ms) on every general sibling. Its one cached `HTTP_REQUEST` (250 ms, 300 s keyed on the break's
+  SCTE-35 UPID) reads the title's catalog context object and sets the `x-fast-ctx` header to its `hdr`, capped at
+  1,000 characters. It reads no session or player value and fails open.
 - **Catalog context publisher** (`crawl` module): with `modules.crawl.enabled`, the stack `FastChannels-<prefix>-Crawl`
   keeps one context object per reference-catalog title in a catalog-context bucket of its own (`catalog/ctx/v1/`,
   served on a CloudFront route `/catalog/ctx/*` with `Cache-Control: max-age=300`). The bucket lets that distribution
