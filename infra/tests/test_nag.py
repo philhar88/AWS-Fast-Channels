@@ -22,6 +22,16 @@ TOPOLOGIES = {
         "eu-west-1",
     ),
     "media-only": ({"agent.enabled": False}, "eu-central-1"),
+    "models-with-budgets-elsewhere": (
+        {
+            **GLOBAL_MODELS,
+            "modules.models.enabled": True,
+            "modules.models.budgets_action": True,
+            "modules.models.tasks": {"scheduler.plan": {"model": "global.anthropic.claude-haiku-5-5"}},
+            "notifications.email": "ops@example.com",
+        },
+        "eu-west-1",
+    ),
     "external-ads-custom-domain-two-ladders": (
         {
             "ladders.builtin": ["standard", "mobile"],

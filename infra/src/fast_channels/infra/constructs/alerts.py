@@ -7,7 +7,7 @@ us-east-1 only (:data:`CLOUDFRONT_REGION`).
 
 from typing import TYPE_CHECKING, Final
 
-from aws_cdk import Duration
+from aws_cdk import ArnFormat, Duration, Stack
 from aws_cdk import aws_cloudfront as cf
 from aws_cdk import aws_cloudwatch as cw
 from aws_cdk import aws_cloudwatch_actions as cw_actions
@@ -18,7 +18,7 @@ from aws_cdk import aws_sqs as sqs
 from fast_channels.infra import nag
 
 if TYPE_CHECKING:
-    from constructs import Construct
+    from constructs import Construct, IConstruct
 
 CLOUDFRONT_REGION: Final = "us-east-1"
 """Region of CloudFront's metrics and log delivery sources."""
@@ -32,6 +32,14 @@ def alert_topic_name(prefix: str) -> str:
     """Name of the media plane's alert topic. The stacks of optional modules import the topic by this name, so
     enabling a module adds no output to the Media stack."""
     return f"{prefix}-alerts"
+
+
+def alert_topic_arn(scope: IConstruct, prefix: str) -> str:
+    """ARN of the media plane's alert topic, in ``scope``'s stack: callers address it by name, so their stack takes
+    no reference to the Media stack."""
+    return Stack.of(scope).format_arn(
+        service="sns", resource=alert_topic_name(prefix), arn_format=ArnFormat.NO_RESOURCE_NAME
+    )
 
 
 def alert_topic(scope: Construct, id: str, *, name: str, email: str | None) -> sns.Topic:

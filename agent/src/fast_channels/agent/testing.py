@@ -24,6 +24,7 @@ from fast_channels.agent.scheduler import Scheduler
 if TYPE_CHECKING:
     from strands.types.tools import ToolSpec, ToolUse
 
+    from fast_channels.agent.caps import SpendCounter
     from fast_channels.agent.identity import Caller
     from fast_channels.agent.model import ModelSpec
     from fast_channels.agent.protocol import Mode
@@ -155,8 +156,11 @@ class Harness:
         script: Sequence[Sequence[Block]],
         handlers: dict[str, Handler],
         session_id: str,
+        *,
+        counter: SpendCounter | None = None,
     ) -> Harness:
-        """Every run builds a model that consumes the shared ``script``, like one model across turns."""
+        """Every run builds a model that consumes the shared ``script``, like one model across turns; ``counter``
+        stands in for the spend counter."""
         gateway = FakeGateway(handlers)
         turns = [list(turn) for turn in script]
         models: list[tuple[Mode, ScriptedModel]] = []
@@ -168,7 +172,7 @@ class Harness:
         def sessions(session: str, _caller: Caller) -> FileSessionManager:
             return FileSessionManager(session_id=session, storage_dir=str(sessions_dir))
 
-        scheduler = Scheduler(settings, tools=gateway.open, model=model, sessions=sessions)
+        scheduler = Scheduler(settings, tools=gateway.open, model=model, sessions=sessions, counter=counter)
         return cls(scheduler=scheduler, gateway=gateway, models=models, session_id=session_id)
 
     async def run(

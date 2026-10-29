@@ -98,7 +98,7 @@
               "thinking": "adaptive",
               "max_tokens": 16000,
               "data_class": "operational",
-              "daily_cap_usd": null,
+              "daily_cap_usd": 5,
               "eval": null
             }
           },

@@ -58,7 +58,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "SSM parameter /<prefix>/models/tasks/<task> (String, JSON), one per LLM task; scheduler.plan is the scheduling agent's. The model must be one of the deployment's allowed models; readers refuse an entry that is invalid or names any other model.",
+  "description": "SSM parameter /<prefix>/models/tasks/<task> (String, JSON), one per LLM task; scheduler.plan is the scheduling agent's. The model must be one of the deployment's allowed models, and profile_arn the task's application inference profile; readers refuse an entry that is invalid, names any other model or names another profile.",
   "properties": {
     "model": {
       "description": "Bedrock model id or inference profile; one of ``agent.allowed_models``, with ``{geo}`` as there.",
@@ -131,10 +131,17 @@
       "default": null,
       "description": "Key of the passing evaluation record that qualifies ``model`` for this task.",
       "title": "Eval"
+    },
+    "profile_arn": {
+      "description": "The task's application inference profile, created by the deployment: the only model target its callers may\ninvoke.",
+      "pattern": "^arn:aws[a-z-]*:bedrock:[a-z0-9-]+:\\d{12}:application-inference-profile/[a-z0-9]+$",
+      "title": "Profile Arn",
+      "type": "string"
     }
   },
   "required": [
-    "model"
+    "model",
+    "profile_arn"
   ],
   "title": "FAST Channels model-registry entry",
   "type": "object",
@@ -149,8 +156,9 @@
       "thinking": "adaptive",
       "max_tokens": 16000,
       "data_class": "operational",
-      "daily_cap_usd": null,
-      "eval": null
+      "daily_cap_usd": 5.0,
+      "eval": null,
+      "profile_arn": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6"
     },
     {
       "model": "us.anthropic.claude-haiku-5-5",
@@ -160,7 +168,8 @@
       "max_tokens": 8000,
       "data_class": "viewer",
       "daily_cap_usd": 30.0,
-      "eval": null
+      "eval": null,
+      "profile_arn": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/f6e5d4c3b2a1"
     }
   ]
 }

@@ -1,4 +1,6 @@
 from collections.abc import Callable, Sequence
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -44,5 +46,17 @@ def harness(settings: Settings, tmp_path: Path) -> HarnessFactory:
 
     def build(*turns: Sequence[Block], handlers: dict[str, Handler] | None = None) -> Harness:
         return Harness.build(settings, tmp_path, turns, handlers or default_handlers(), SESSION_ID)
+
+    return build
+
+
+@pytest.fixture
+def capped_harness(settings: Settings, tmp_path: Path) -> HarnessFactory:
+    """``capped_harness(counter, turn, ...)``: :func:`harness` deployed with a $0.01 daily cap and ``counter`` as the
+    spend counter (``cap=None``: the counter table without a cap)."""
+
+    def build(counter: object, *turns: Sequence[Block], cap: Decimal | None = Decimal("0.01")) -> Harness:
+        deployed = replace(settings, daily_cap_usd=cap, model_counter_table="fast-models")
+        return Harness.build(deployed, tmp_path, turns, default_handlers(), SESSION_ID, counter=counter)  # type: ignore[arg-type]
 
     return build

@@ -2,7 +2,8 @@
 
 import json
 from collections.abc import Sequence
-from typing import Final
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final
 
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_bedrockagentcore as agentcore
@@ -16,10 +17,15 @@ from fast_channels.core.model_registry import task_parameter
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
 from fast_channels.infra.config import GEO_PLACEHOLDER
+from fast_channels.infra.constructs.models.caps import counter_table_name, grant_counting
+from fast_channels.infra.constructs.models.profiles import foundation_model, task_invoke_statements
 from fast_channels.infra.constructs.models.registry import READ_ACTIONS, entry_arn
 from fast_channels.infra.constructs.operator.agent_bundle import agent_artifact, agent_asset
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
 from fast_channels.infra.nag import acknowledge_references, file_asset_objects
+
+if TYPE_CHECKING:
+    from fast_channels.infra.exports import TaskProfile
 
 IDLE_TIMEOUT: Final = Duration.minutes(10)
 MAX_LIFETIME: Final = Duration.hours(2)
@@ -41,6 +47,20 @@ message capture (``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``) and red
 _PROFILE_PREFIXES: Final = frozenset({"global", "us", "eu", "apac", "ca", "jp", "au", "us-gov"})
 
 
+@dataclass(frozen=True, slots=True)
+class RegistryTask:
+    """The agent's task in the model registry, when the registry is deployed (``modules.models``)."""
+
+    name: str
+    """The task (``scheduler.plan``)."""
+    profile: TaskProfile
+    """Its model and application inference profile."""
+    daily_cap_usd: float | None
+    """Its daily spend cap (``null``: none)."""
+    alert_topic_arn: str | None
+    """Told once a day when the cap is reached (``None``: nobody)."""
+
+
 class SchedulerAgent(Construct):
     """The ``fast_channels.agent`` app as an AgentCore Runtime.
 
@@ -51,8 +71,9 @@ class SchedulerAgent(Construct):
       end after 2 h.
     - Model: a ``ModelSpec`` JSON SSM parameter (switchable without a redeploy) whose model must be in
       ``allowed_models``; the role may invoke exactly those models (3-statement pattern for ``global.`` profiles).
-      With ``model_task`` the agent reads that task's model-registry entry first and the ModelSpec only when the
-      entry is missing or invalid.
+      With ``model_task`` (the model registry) the agent reads that task's registry entry first and the ModelSpec
+      only when the entry is missing or invalid, invokes only the task's application inference profile (the role
+      may invoke that profile and its model only through it), and counts the task's daily spend against its cap.
     - Memory: read and write of the AgentCore Memory (events and preference records).
     - Code: the role reads its own code zip and no other object: the L2 grants read on the whole CDK assets bucket
       (every CDK app's code in the account), so a deny covers everything else.
@@ -75,8 +96,8 @@ class SchedulerAgent(Construct):
         log_retention, removal_policy: of the runtime log group.
         record_prompts: keep message content in the runtime's logs (``otel-rt-logs``) and spans (config
             ``observability.capture_prompts``); readable by anyone with ``logs:GetLogEvents`` on the group.
-        model_task: the agent's task in the model registry (``scheduler.plan``) when the registry is deployed
-            (``modules.models``): the role may read that entry, and ``MODEL_TASK_PARAMETER`` names it.
+        model_task: the agent's task in the model registry when the registry is deployed (``modules.models``);
+            ``model`` must then be the task's model and ``allowed_models`` exactly that model.
 
     Attributes:
         runtime: the Runtime; ``invoke_url`` is its HTTPS invocation endpoint (DEFAULT qualifier).
@@ -85,7 +106,8 @@ class SchedulerAgent(Construct):
         evaluation: the online evaluation configuration (``None`` without traces).
 
     Raises:
-        ValueError: ``model`` is not in ``allowed_models``, or a model id still holds ``{geo}``.
+        ValueError: ``model`` is not in ``allowed_models``, a model id still holds ``{geo}``, or ``model_task``'s
+            model is not ``model`` and ``allowed_models``.
     """
 
     def __init__(
@@ -106,13 +128,15 @@ class SchedulerAgent(Construct):
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         record_prompts: bool = False,
-        model_task: str | None = None,
+        model_task: RegistryTask | None = None,
     ) -> None:
         super().__init__(scope, id)
         if model not in allowed_models:
             raise ValueError(f"default model {model!r} is not in allowed_models")
         if unresolved := [m for m in allowed_models if GEO_PLACEHOLDER in m]:
             raise ValueError(f"{unresolved}: resolve {{geo}} for the region first (FastChannelsConfig.for_region)")
+        if model_task and (model_task.profile.model, tuple(allowed_models)) != (model, (model,)):
+            raise ValueError(f"with model task {model_task.name}, the model and allowed_models are its model only")
         self.model_spec = ssm.StringParameter(
             self,
             "ModelSpec",
@@ -126,7 +150,7 @@ class SchedulerAgent(Construct):
             "MEMORY_PREFERENCE_NAMESPACE": memory_preference_namespace,
             "CONFIRM_TOOLS": ",".join(confirm_tools),
             "MODEL_SPEC_PARAMETER": self.model_spec.parameter_name,
-            **({"MODEL_TASK_PARAMETER": task_parameter(prefix, model_task)} if model_task else {}),
+            **(_registry_environment(prefix, model_task) if model_task else {}),
             "DEFAULT_MODEL_ID": model,
             "ALLOWED_MODELS": ",".join(allowed_models),
             CAPTURE_PROMPTS: "true" if record_prompts else "false",
@@ -165,17 +189,27 @@ class SchedulerAgent(Construct):
         )
         stack = Stack.of(self)
         self._acknowledge_log_retention_provider(stack)
-        for statement in model_invoke_statements(
-            allowed_models, partition=stack.partition, region=stack.region, account=stack.account
-        ):
+        statements = (
+            task_invoke_statements(model_task.profile, partition=stack.partition)
+            if model_task
+            else model_invoke_statements(
+                allowed_models, partition=stack.partition, region=stack.region, account=stack.account
+            )
+        )
+        for statement in statements:
             self.runtime.add_to_role_policy(statement)
         self.model_spec.grant_read(self.runtime)
         if model_task:
             self.runtime.add_to_role_policy(
                 iam.PolicyStatement(
-                    actions=list(READ_ACTIONS), resources=[entry_arn(self, prefix=prefix, task=model_task)]
+                    actions=list(READ_ACTIONS), resources=[entry_arn(self, prefix=prefix, task=model_task.name)]
                 )
             )
+            grant_counting(self.runtime, self, prefix=prefix, task=model_task.name)
+            if model_task.alert_topic_arn is not None:
+                self.runtime.add_to_role_policy(
+                    iam.PolicyStatement(actions=["sns:Publish"], resources=[model_task.alert_topic_arn])
+                )
         memory.grant_read(self.runtime)
         memory.grant_write(self.runtime)
         self.evaluation: agentcore.OnlineEvaluationConfig | None = None
@@ -199,7 +233,14 @@ class SchedulerAgent(Construct):
                     ],
                 )
             )
-        acknowledge_references(self.runtime.role, _role_wildcards(stack, allowed_models, runtime_name, traces))
+        wildcards = _role_wildcards(stack, allowed_models, runtime_name, traces)
+        if model_task:
+            family = foundation_model(model_task.profile.model)
+            wildcards[nag.wildcard_resource(f"arn:{stack.partition}:bedrock:*::foundation-model/{family}")] = (
+                f"Application inference profile of model task {model_task.name}: routes to the Regions of the "
+                "profile it copies; allowed only through the task's profile (bedrock:InferenceProfileArn)"
+            )
+        acknowledge_references(self.runtime.role, wildcards)
         if self.evaluation is not None and self.evaluation.execution_role is not None:
             acknowledge_references(self.evaluation.execution_role, _evaluation_wildcards(stack, self.runtime))
         self._read_only(code)
@@ -249,6 +290,20 @@ class SchedulerAgent(Construct):
             f"https://bedrock-agentcore.{stack.region}.{stack.url_suffix}/runtimes/"
             f"{encoded_arn}{self.runtime.agent_runtime_id}/invocations?qualifier=DEFAULT"
         )
+
+
+def _registry_environment(prefix: str, task: RegistryTask) -> dict[str, str]:
+    """The agent's model-registry settings (``fast_channels.agent.settings``)."""
+    environment = {
+        "MODEL_TASK_PARAMETER": task_parameter(prefix, task.name),
+        "MODEL_PROFILE_ARN": task.profile.arn,
+        "MODEL_COUNTER_TABLE": counter_table_name(prefix),
+    }
+    if task.daily_cap_usd is not None:
+        environment["MODEL_DAILY_CAP_USD"] = str(task.daily_cap_usd)
+    if task.alert_topic_arn is not None:
+        environment["ALERT_TOPIC_ARN"] = task.alert_topic_arn
+    return environment
 
 
 def model_invoke_statements(

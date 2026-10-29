@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +136,8 @@ def test_bedrock_model_sends_no_effort_to_other_providers() -> None:
     assert model.config.get("additional_request_fields") is None
 
 
+PROFILE = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123def456"
+OTHER_PROFILE = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/zzz999"
 ENTRY: dict[str, Any] = {
     "model": SONNET,
     "route": "bedrock",
@@ -142,21 +145,33 @@ ENTRY: dict[str, Any] = {
     "thinking": "adaptive",
     "max_tokens": 8000,
     "data_class": "operational",
-    "daily_cap_usd": None,
+    "daily_cap_usd": 5.0,
     "eval": None,
+    "profile_arn": PROFILE,
 }
 
 
-def test_registry_entry_becomes_the_spec() -> None:
-    spec = parse_task_entry(json.dumps(ENTRY), allowed=frozenset({HAIKU, SONNET}))
+def registry_settings(**overrides: Any) -> Settings:
+    return settings(
+        model_task_parameter=TASK_PARAMETER,
+        model_spec_parameter="/fast/model",
+        model_profile_arn=PROFILE,
+        daily_cap_usd=Decimal(3),
+        **overrides,
+    )
 
-    assert spec == ModelSpec(model_id=SONNET, effort=Effort(chat="low", plan="high"), max_tokens=8000)
+
+def test_registry_entry_becomes_the_spec() -> None:
+    entry = parse_task_entry(json.dumps(ENTRY), allowed=frozenset({HAIKU, SONNET}), profile_arn=PROFILE)
+
+    assert entry.spec() == ModelSpec(model_id=SONNET, effort=Effort(chat="low", plan="high"), max_tokens=8000)
+    assert (entry.profile_arn, entry.daily_cap_usd) == (PROFILE, 5.0)
 
 
 def test_one_effort_level_applies_to_both_modes() -> None:
-    spec = parse_task_entry(
-        json.dumps({"model": HAIKU, "effort": "low", "thinking": "disabled"}), allowed=frozenset({HAIKU})
-    )
+    raw = json.dumps({"model": HAIKU, "effort": "low", "thinking": "disabled", "profile_arn": PROFILE})
+
+    spec = parse_task_entry(raw, allowed=frozenset({HAIKU}), profile_arn=PROFILE).spec()
 
     assert spec == ModelSpec(model_id=HAIKU, effort=Effort(chat="low", plan="low"), thinking="disabled")
 
@@ -166,6 +181,9 @@ def test_one_effort_level_applies_to_both_modes() -> None:
     [
         "not json",
         json.dumps({**ENTRY, "model": NOVA}),  # outside the allow-list
+        json.dumps({**ENTRY, "profile_arn": OTHER_PROFILE}),  # another task's profile
+        json.dumps({**ENTRY, "profile_arn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude"}),
+        json.dumps({key: value for key, value in ENTRY.items() if key != "profile_arn"}),
         json.dumps({**ENTRY, "route": "gateway"}),  # the gateway route is not built
         json.dumps({**ENTRY, "base_url": "https://evil.example"}),
         json.dumps({**ENTRY, "provider": "openai"}),
@@ -178,36 +196,53 @@ def test_one_effort_level_applies_to_both_modes() -> None:
 )
 def test_invalid_registry_entries_are_refused(raw: str) -> None:
     with pytest.raises(ValueError, match=r"registry entry|not in ALLOWED_MODELS"):
-        parse_task_entry(raw, allowed=frozenset({HAIKU, SONNET}))
+        parse_task_entry(raw, allowed=frozenset({HAIKU, SONNET}), profile_arn=PROFILE)
 
 
-def test_registry_entry_comes_first(ssm: Stubber) -> None:
+def test_an_entry_with_a_profile_needs_a_deployment_with_that_profile() -> None:
+    with pytest.raises(ValueError, match="not this deployment's None"):
+        parse_task_entry(json.dumps(ENTRY), allowed=frozenset({SONNET}), profile_arn=None)
+
+
+def test_registry_entry_comes_first_with_its_own_cap(ssm: Stubber) -> None:
     ssm.add_response("get_parameter", parameter(json.dumps(ENTRY), TASK_PARAMETER), {"Name": TASK_PARAMETER})
-    source = ModelSpecSource(settings(model_task_parameter=TASK_PARAMETER, model_spec_parameter="/fast/model"))
 
-    active = source.current()
+    active = ModelSpecSource(registry_settings()).current()
 
     assert (active.source, active.spec.model_id, active.spec.effort.plan) == (SpecSource.REGISTRY, SONNET, "high")
+    assert active.daily_cap_usd == Decimal("5.0")  # the entry's cap, not the deployed one
     ssm.assert_no_pending_responses()  # the ModelSpec is not read
+
+
+def test_an_entry_without_a_cap_sets_none(ssm: Stubber) -> None:
+    ssm.add_response("get_parameter", parameter(json.dumps({**ENTRY, "daily_cap_usd": None}), TASK_PARAMETER))
+
+    assert ModelSpecSource(registry_settings()).current().daily_cap_usd is None
+
+
+def _respond_with(document: dict[str, Any]) -> Callable[[Stubber], None]:
+    return lambda stub: stub.add_response("get_parameter", parameter(json.dumps(document)))
 
 
 @pytest.mark.parametrize(
     "respond",
     [
-        lambda stub: stub.add_response("get_parameter", parameter(json.dumps({**ENTRY, "model": NOVA}))),
+        _respond_with({**ENTRY, "model": NOVA}),
+        _respond_with({**ENTRY, "profile_arn": OTHER_PROFILE}),
         lambda stub: stub.add_response("get_parameter", parameter("{")),
         lambda stub: stub.add_client_error("get_parameter", "ParameterNotFound"),
         lambda stub: stub.add_client_error("get_parameter", "AccessDeniedException"),
     ],
 )
-def test_unusable_registry_entry_falls_back_to_the_model_spec(
+def test_unusable_registry_entry_falls_back_to_the_model_spec_and_the_deployed_cap(
     ssm: Stubber, respond: Callable[[Stubber], None], caplog: pytest.LogCaptureFixture
 ) -> None:
     respond(ssm)
     ssm.add_response("get_parameter", parameter(json.dumps({"model_id": HAIKU, "max_tokens": 4000})))
-    source = ModelSpecSource(settings(model_task_parameter=TASK_PARAMETER, model_spec_parameter="/fast/model"))
 
-    assert source.current() == ActiveSpec(ModelSpec(model_id=HAIKU, max_tokens=4000), SpecSource.MODEL_SPEC)
+    active = ModelSpecSource(registry_settings()).current()
+
+    assert active == ActiveSpec(ModelSpec(model_id=HAIKU, max_tokens=4000), SpecSource.MODEL_SPEC, Decimal(3))
     [warning] = [r for r in caplog.records if r.levelname == "WARNING"]
     assert (warning.source, warning.parameter) == ("registry", TASK_PARAMETER)  # type: ignore[attr-defined]
 
@@ -215,9 +250,10 @@ def test_unusable_registry_entry_falls_back_to_the_model_spec(
 def test_without_usable_sources_the_default_applies(ssm: Stubber) -> None:
     ssm.add_client_error("get_parameter", "ParameterNotFound")
     ssm.add_client_error("get_parameter", "ParameterNotFound")
-    source = ModelSpecSource(settings(model_task_parameter=TASK_PARAMETER, model_spec_parameter="/fast/model"))
 
-    assert source.current() == ActiveSpec(ModelSpec(model_id=HAIKU), SpecSource.DEFAULT)
+    assert ModelSpecSource(registry_settings()).current() == ActiveSpec(
+        ModelSpec(model_id=HAIKU), SpecSource.DEFAULT, Decimal(3)
+    )
 
 
 def test_registry_entry_without_a_model_spec_parameter(ssm: Stubber) -> None:
@@ -239,6 +275,17 @@ def test_bedrock_model_disables_thinking_only_when_the_spec_does() -> None:
         "thinking": {"type": "disabled"},
     }
     assert nova.config.get("additional_request_fields") is None
+
+
+def test_through_a_profile_the_model_keeps_its_own_defaults() -> None:
+    direct = bedrock_model(ModelSpec(model_id=HAIKU), Mode.PLAN, "us-east-1")
+    profiled = bedrock_model(ModelSpec(model_id=HAIKU), Mode.PLAN, "us-east-1", PROFILE)
+
+    assert profiled.config["model_id"] == PROFILE  # what Converse is sent
+    assert profiled.config["additional_request_fields"] == direct.config["additional_request_fields"]
+    assert profiled.context_window_limit == direct.context_window_limit == 1_000_000
+    assert profiled._cache_strategy == direct._cache_strategy == "anthropic"  # prompt caching stays on
+    assert profiled._should_include_tool_result_status() is direct._should_include_tool_result_status() is True
 
 
 def _structure(schema: Any, definitions: dict[str, Any]) -> Any:

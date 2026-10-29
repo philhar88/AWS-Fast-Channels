@@ -86,8 +86,9 @@ def model_registry_schema() -> dict[str, Any]:
     """JSON Schema of a model-registry entry, the SSM document ``/<prefix>/models/tasks/<task>`` that the agent and
     other model callers read; the examples are the shipped ``scheduler.plan`` entry (us-east-1) and a viewer-data
     task."""
+    profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/"
     examples = [
-        TaskEntry(model="us.anthropic.claude-haiku-5-5"),
+        TaskEntry(model="us.anthropic.claude-haiku-5-5", daily_cap_usd=5, profile_arn=f"{profile}a1b2c3d4e5f6"),
         TaskEntry.model_validate(
             {
                 "model": "us.anthropic.claude-haiku-5-5",
@@ -95,6 +96,7 @@ def model_registry_schema() -> dict[str, Any]:
                 "max_tokens": 8000,
                 "data_class": "viewer",
                 "daily_cap_usd": 30,
+                "profile_arn": f"{profile}f6e5d4c3b2a1",
             }
         ),
     ]
@@ -104,8 +106,9 @@ def model_registry_schema() -> dict[str, Any]:
         "title": "FAST Channels model-registry entry",
         "description": (
             "SSM parameter /<prefix>/models/tasks/<task> (String, JSON), one per LLM task; "
-            f"{SCHEDULER_TASK} is the scheduling agent's. The model must be one of the deployment's allowed models; "
-            "readers refuse an entry that is invalid or names any other model."
+            f"{SCHEDULER_TASK} is the scheduling agent's. The model must be one of the deployment's allowed models, "
+            "and profile_arn the task's application inference profile; readers refuse an entry that is invalid, "
+            "names any other model or names another profile."
         ),
         "examples": [entry.model_dump(mode="json") for entry in examples],
     }
