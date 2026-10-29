@@ -317,7 +317,7 @@ A module with merged code adds its own stack after the ones it builds on, and ma
 
 | Module | Adds | Changes |
 |---|---|---|
-| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, and the AppConfig application `<prefix>-fast` with environment `<prefix>` ([observability.md](observability.md#lake)) | Data: the lake bucket (output `LakeBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
+| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, and the AppConfig application `<prefix>-fast` with environment `<prefix>` ([observability.md](observability.md#lake), [ledger](observability.md#ledger)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
 
 ### Updates
 
@@ -349,13 +349,20 @@ and reports what is left; the next poll, or the next `make destroy`, resumes whe
 
 - With `removal: destroy` (default) buckets are emptied and deleted, tables and Memory deleted. The Ops stack goes
   before Media and Data: its lake copies' deliveries first, then the Glue tables, views and workgroup (with its query
-  history); the lake bucket (every version of every object) goes with the Data stack.
+  history); the lake bucket (every version of every object) and the ledger table go with the Data stack.
+- The ops module's ledger archive is **retained** whenever `modules.ops.ledger_lock` is `governance` or `compliance`
+  (its records are under S3 Object Lock, and a ledger outlives the stack that wrote it). After `make destroy`,
+  `uv run python scripts/ledger_verify.py purge --prefix <prefix>` lists it and `--apply` deletes the versions whose
+  retention has passed and then the bucket; in governance mode `--apply --bypass-governance` deletes it at once
+  (`s3:BypassGovernanceRetention` needed). Compliance-mode records cannot be deleted by anyone before their retention
+  ends, which is why `compliance` needs `removal: retain`. Development stages use `ledger_retention_days: 1`.
 - With `removal: retain` the stacks are termination protected and the Data stack's resources are retained; the
   reaper does nothing, so runtime resources stay too. To delete such a deployment, turn termination protection
   off, run `make destroy` (the Media stack stops at `DELETE_FAILED` while its source location still holds VOD
   sources), then `scripts/cleanup.py --apply` and `make destroy` again.
 - Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search), the account-shared
-  as-run log group `MediaTailor/Channel/AsRunLog`, MediaConvert job history and CDK bootstrap assets.
+  as-run log group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops
+  module, a locked ledger archive (above).
 - If the reaper fails on its first attempt (the error is shown in the stack events), run `make destroy` again; it
   resumes where it stopped.
 - When the reaper cannot finish (a VOD source locked by orphaned programs, an interrupted destroy, a stack deleted

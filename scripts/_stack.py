@@ -74,11 +74,17 @@ OUTPUT_KEYS: Final[dict[Plane, tuple[str, ...]]] = {
         "ToolFunctions",
     ),
 }
-"""Outputs every deployment has. Three more exist only with what they describe: ``MemoryId`` (Data) with the agent
-plane, ``LakeBucketName`` (Data) with the ops module, and ``AutopilotClientId`` (Operator) when an IaC channel has an
-``autopilot_cron``."""
+"""Outputs every deployment has. More exist only with what they describe: ``MemoryId`` (Data) with the agent plane,
+``LakeBucketName``, ``LedgerTableName`` and ``LedgerArchiveBucketName`` (Data) with the ops module, and
+``AutopilotClientId`` (Operator) when an IaC channel has an ``autopilot_cron``."""
 MODULE_OUTPUT_KEYS: Final[dict[Module, tuple[str, ...]]] = {
-    Module.OPS: ("LakeDatabase", "LakeWorkGroup", "AppConfigApplicationId", "AppConfigEnvironmentId"),
+    Module.OPS: (
+        "LakeDatabase",
+        "LakeWorkGroup",
+        "AppConfigApplicationId",
+        "AppConfigEnvironmentId",
+        "LedgerStreamName",
+    ),
 }
 """Outputs of each module stack."""
 

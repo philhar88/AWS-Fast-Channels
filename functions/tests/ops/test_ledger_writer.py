@@ -160,7 +160,7 @@ def test_append_puts_only_new_entries(fake: tuple[FakeLedger, FakeFirehose]) -> 
     first = ledger.append(entry("runbook/r13", 1))
 
     assert table.items[("runbook/r13", f"E#{first.record_id}")] == entry_item(first)
-    with pytest.raises(ledger.DuplicateEntry, match="already in the ledger"):
+    with pytest.raises(ledger.DuplicateEntryError, match="already in the ledger"):
         ledger.append(first)
 
 
@@ -222,13 +222,15 @@ def test_the_first_failure_ends_the_batch(fake: tuple[FakeLedger, FakeFirehose])
     items = [entry_item(entry("money/line-1", i)) for i in range(3)]
     table.fail_next_transaction = True
 
-    result = ledger_writer.handler(batch(*(stream_record(item, sequence=10 + i) for i, item in enumerate(items))), Context())
+    result = ledger_writer.handler(
+        batch(*(stream_record(item, sequence=10 + i) for i, item in enumerate(items))), Context()
+    )
 
     assert result == {"batchItemFailures": [{"itemIdentifier": "10"}]}
     assert firehose.lines == []
-    assert ledger_writer.handler(batch(*(stream_record(i, sequence=10 + n) for n, i in enumerate(items))), Context()) == {
-        "batchItemFailures": []
-    }
+    assert ledger_writer.handler(
+        batch(*(stream_record(i, sequence=10 + n) for n, i in enumerate(items))), Context()
+    ) == {"batchItemFailures": []}
     assert [r.seq for r in firehose.archive()] == [1, 2, 3]
 
 
@@ -249,7 +251,7 @@ def test_a_writer_that_lost_the_race_retries_after_the_new_head(fake: tuple[Fake
 
 
 def test_changed_and_invalid_entries_are_reported_not_chained(fake: tuple[FakeLedger, FakeFirehose]) -> None:
-    table, firehose = fake
+    _, firehose = fake
     item = entry_item(entry("runbook/r12", 0))
     invalid = {**item, "sk": "E#not-a-ulid"}
 
@@ -282,7 +284,9 @@ def test_random_interleavings_of_writers_redeliveries_and_failures_always_verify
         records = [stream_record(item, sequence=(sequence := sequence + 1)) for item in group]
         result = ledger_writer.handler(batch(*records), Context())
         if failures := result["batchItemFailures"]:
-            failed = next(i for i, r in enumerate(records) if r["dynamodb"]["SequenceNumber"] == failures[0]["itemIdentifier"])
+            failed = next(
+                i for i, r in enumerate(records) if r["dynamodb"]["SequenceNumber"] == failures[0]["itemIdentifier"]
+            )
             pending = group[failed:] + pending  # Lambda retries from the failed record
         if rng.random() < 0.3:
             ledger_writer.handler(batch(*records[:1]), Context())  # a stray redelivery

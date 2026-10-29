@@ -50,7 +50,7 @@ metrics = Metrics()
 _CONFLICTS: Final = frozenset({"TransactionCanceledException", "ConditionalCheckFailedException"})
 
 
-class ChainConflict(RuntimeError):
+class ChainConflictError(RuntimeError):
     """Another writer moved the chain's head first."""
 
 
@@ -74,7 +74,7 @@ def handler(event: DynamoDBStreamEvent, context: LambdaContext) -> dict[str, lis
                 case _:
                     changed += 1
                     _changed(record)
-        except (ChainConflict, ClientError) as error:
+        except (ChainConflictError, ClientError) as error:
             logger.warning("ledger record not archived; retrying from it", extra={"error": str(error)})
             failure = [{"itemIdentifier": str(sequence)}]
             break
@@ -88,14 +88,17 @@ def archive(record: DynamoDBRecord) -> ChainedRecord | None:
     """Link the record's new entry (unless it already is) and archive it; ``None`` for an item that is no entry.
 
     Raises:
-        ChainConflict: another writer moved the chain's head.
+        ChainConflictError: another writer moved the chain's head.
         botocore.exceptions.ClientError: DynamoDB or Firehose failed.
     """
     image: dict[str, Any] = (record.dynamodb.new_image if record.dynamodb else None) or {}
     try:
         entry = entry_from_item(image)
     except (ValueError, ValidationError) as error:
-        logger.error("not a valid ledger entry; skipped", extra={"pk": image.get("pk"), "sk": image.get("sk"), "error": str(error)})
+        logger.error(
+            "not a valid ledger entry; skipped",
+            extra={"pk": image.get("pk"), "sk": image.get("sk"), "error": str(error)},
+        )
         return None
     logger.set_correlation_id(entry.correlation_id)
     chained = linked(entry) or commit(entry)
@@ -124,14 +127,16 @@ def head(chain_id: str) -> ChainHead | None:
     found = item.get("Item")
     if not found:
         return None
-    return ChainHead(chain_id=chain_id, seq=int(found["seq"]), hash=str(found["hash"]), record_id=str(found["record_id"]))
+    return ChainHead(
+        chain_id=chain_id, seq=int(str(found["seq"])), hash=str(found["hash"]), record_id=str(found["record_id"])
+    )
 
 
 def commit(entry: LedgerEntry) -> ChainedRecord:
     """Link ``entry`` after its chain's head and store the new head with the linked record, atomically.
 
     Raises:
-        ChainConflict: the head moved since it was read, or the record was linked meanwhile.
+        ChainConflictError: the head moved since it was read, or the record was linked meanwhile.
     """
     previous = head(entry.chain_id)
     chained = link(entry, previous)
@@ -165,10 +170,14 @@ def commit(entry: LedgerEntry) -> ChainedRecord:
         "ConditionExpression": "attribute_not_exists(pk)",
     }
     try:
-        aws.table(name).meta.client.transact_write_items(TransactItems=[{"Put": head_put}, {"Put": link_put}])
+        # The table resource's client (de)serializes Python values, which its low-level type stubs do not show.
+        client: Any = aws.table(name).meta.client
+        client.transact_write_items(TransactItems=[{"Put": head_put}, {"Put": link_put}])
     except ClientError as error:
         if error.response.get("Error", {}).get("Code") in _CONFLICTS:
-            raise ChainConflict(f"chain {entry.chain_id} moved past seq {previous.seq if previous else 0}") from None
+            raise ChainConflictError(
+                f"chain {entry.chain_id} moved past seq {previous.seq if previous else 0}"
+            ) from None
         raise
     return chained
 

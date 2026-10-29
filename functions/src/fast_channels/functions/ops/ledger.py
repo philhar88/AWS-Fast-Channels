@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-class DuplicateEntry(RuntimeError):
+class DuplicateEntryError(RuntimeError):
     """An entry with this chain and record id is already in the ledger."""
 
 
@@ -55,7 +55,7 @@ def append(item: LedgerEntry, *, table: str | None = None) -> LedgerEntry:
     """Put ``item`` into the ledger table (``LEDGER_TABLE`` unless ``table`` is given), only if it is new.
 
     Raises:
-        DuplicateEntry: the entry's key exists (a retry of a call that succeeded; nothing is changed).
+        DuplicateEntryError: the entry's key exists (a retry of a call that succeeded; nothing is changed).
     """
     if table is None:
         settings().require("ledger_table")
@@ -64,6 +64,6 @@ def append(item: LedgerEntry, *, table: str | None = None) -> LedgerEntry:
         aws.table(table).put_item(Item=entry_item(item), ConditionExpression="attribute_not_exists(pk)")
     except ClientError as error:
         if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            raise DuplicateEntry(f"{item.chain_id}/{item.record_id} is already in the ledger") from None
+            raise DuplicateEntryError(f"{item.chain_id}/{item.record_id} is already in the ledger") from None
         raise
     return item
