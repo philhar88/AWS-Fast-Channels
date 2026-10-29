@@ -243,8 +243,11 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   the millisecond. The reconciler sets that break's `status` to `AIRED` and its `aired_at` on the `PROGRAM#` item.
   Every 15 minutes a sweep marks `UNAIRED` the breaks whose time ended more than 10 minutes ago without a start, and
   the breaks of `SKIPPED` programs: Channel Assembly logs nothing for a break it skips, for example after the
-  channel stopped. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as in the HLS
-  `DATERANGE` and the ad request, so guides and buyers can join on them.
+  channel stopped. Channel Assembly writes as-run events in batches, 13–50 s after they happen (observed), and a
+  break that started less than about a minute before a `StopChannel` can be missing from the log. In one test a
+  session saw ads in a break that the channel stopped 25 s into, and the log has no `AdBreakStart` for it. The sweep
+  then marks such a break `UNAIRED`. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as
+  in the HLS `DATERANGE` and the ad request, so guides and buyers can join on them.
 - Programs removed unaired when a channel starts late are `SKIPPED` ([Starting a channel late](#starting-a-channel-late)):
   listed with that status in the JSON feed, left out of the XMLTV feed.
 - `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow
