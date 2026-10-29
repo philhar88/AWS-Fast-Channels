@@ -80,6 +80,16 @@ class Settings:
     """The as-run reconciler marks breaks aired (ops module)."""
     epg_break_ids: bool = field(default_factory=lambda: _env("EPG_BREAK_IDS") == "true")
     """EPG feeds carry each break's SCTE-35 event id and UPID (ops module)."""
+    appconfig_application: str = field(default_factory=lambda: _env("APPCONFIG_APPLICATION"))
+    """The stage's AppConfig application (``<prefix>-fast``), which holds the ``flags`` profile (ops module)."""
+    appconfig_environment: str = field(default_factory=lambda: _env("APPCONFIG_ENVIRONMENT"))
+    """Its environment (``<prefix>``)."""
+    iac_channels: tuple[str, ...] = field(default_factory=lambda: _csv("IAC_CHANNELS"))
+    """The IaC channels' names (comma-separated ``IAC_CHANNELS``)."""
+    always_on: tuple[str, ...] = field(default_factory=lambda: _csv("ALWAYS_ON_CHANNELS"))
+    """Channels that runbook R12 may start when found stopped (the envelope's always-on list; none yet)."""
+    evergreen_block: str = field(default_factory=lambda: _env("EVERGREEN_BLOCK"))
+    """The pre-approved evergreen block that R13 and R15 would swap in (none yet)."""
 
     @property
     def app(self) -> str:

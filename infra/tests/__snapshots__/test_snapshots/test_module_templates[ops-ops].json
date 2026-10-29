@@ -342,6 +342,74 @@
       },
       "Type": "AWS::AppConfig::Environment"
     },
+    "AppConfigFlags2E5327C7": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "ApplicationId": {
+          "Ref": "AppConfigApplicationF162A144"
+        },
+        "ConfigurationProfileId": {
+          "Ref": "AppConfigFlagsConfigurationProfileA30571A1"
+        },
+        "Content": "{\"flags\": {\"agents\": {\"description\": \"Agents run (agents.enabled); off stops every agent.\", \"name\": \"agents\"}, \"commercial\": {\"description\": \"Agentic selling and deal desk (commercial).\", \"name\": \"commercial\"}, \"crawl\": {\"description\": \"Show-level metadata enrichment (crawl.enabled).\", \"name\": \"crawl\"}, \"demand\": {\"attributes\": {\"mode\": {\"constraints\": {\"enum\": [\"off\", \"own_book\", \"demo\", \"live\"], \"type\": \"string\"}, \"description\": \"demand.mode\"}}, \"description\": \"Programmatic demand; off means demand.mode off.\", \"name\": \"demand\"}, \"ops\": {\"attributes\": {\"act\": {\"constraints\": {\"required\": true, \"type\": \"boolean\"}, \"description\": \"Runbooks act (L2); off: every runbook runs its dry-run path.\"}, \"ca_alerts\": {\"constraints\": {\"required\": true, \"type\": \"boolean\"}, \"description\": \"R13 handles Channel Assembly alerts.\"}, \"freeze\": {\"constraints\": {\"required\": true, \"type\": \"boolean\"}, \"description\": \"R9 may freeze experiments and releases.\"}, \"restart\": {\"constraints\": {\"required\": true, \"type\": \"boolean\"}, \"description\": \"R12 may start an always-on channel.\"}, \"shed\": {\"constraints\": {\"required\": true, \"type\": \"boolean\"}, \"description\": \"R17 may shed optional work.\"}}, \"description\": \"Runbook kill switches (ops.*); act stays off until ADR-0023 is accepted.\", \"name\": \"ops\"}, \"recs\": {\"attributes\": {\"strategy\": {\"constraints\": {\"enum\": [\"popularity\", \"recommender\"], \"type\": \"string\"}, \"description\": \"recs.strategy\"}}, \"description\": \"Rail ranking (recs.strategy); popularity is the kill switch.\", \"name\": \"recs\"}, \"release\": {\"attributes\": {\"promote\": {\"constraints\": {\"required\": true, \"type\": \"boolean\"}, \"description\": \"release.promote\"}}, \"description\": \"Release Controller; promote off stops promotion (rollback is never off).\", \"name\": \"release\"}}, \"values\": {\"agents\": {\"enabled\": true}, \"commercial\": {\"enabled\": false}, \"crawl\": {\"enabled\": true}, \"demand\": {\"enabled\": false, \"mode\": \"off\"}, \"ops\": {\"act\": false, \"ca_alerts\": true, \"enabled\": true, \"freeze\": true, \"restart\": true, \"shed\": true}, \"recs\": {\"enabled\": true, \"strategy\": \"popularity\"}, \"release\": {\"enabled\": true, \"promote\": true}}, \"version\": \"1\"}",
+        "ContentType": "application/json",
+        "Description": "Kill switches of the agents, modules and runbooks (D§19.5)"
+      },
+      "Type": "AWS::AppConfig::HostedConfigurationVersion",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "AppConfigFlagsConfigurationProfileA30571A1": {
+      "Properties": {
+        "ApplicationId": {
+          "Ref": "AppConfigApplicationF162A144"
+        },
+        "DeletionProtectionCheck": "BYPASS",
+        "Description": "Kill switches of the agents, modules and runbooks (D§19.5)",
+        "LocationUri": "hosted",
+        "Name": "flags",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Type": "AWS.AppConfig.FeatureFlags"
+      },
+      "Type": "AWS::AppConfig::ConfigurationProfile"
+    },
+    "AppConfigFlagsDeployment115DC4D7A2475": {
+      "Properties": {
+        "ApplicationId": {
+          "Ref": "AppConfigApplicationF162A144"
+        },
+        "ConfigurationProfileId": {
+          "Ref": "AppConfigFlagsConfigurationProfileA30571A1"
+        },
+        "ConfigurationVersion": {
+          "Ref": "AppConfigFlags2E5327C7"
+        },
+        "DeploymentStrategyId": "AppConfig.AllAtOnce",
+        "Description": "Kill switches of the agents, modules and runbooks (D§19.5)",
+        "EnvironmentId": {
+          "Ref": "AppConfigEnvironmentD9747278"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::AppConfig::Deployment"
+    },
     "ConfigurationAlarmsFastDemoFunctionErrors36B2715B": {
       "Properties": {
         "AlarmActions": [
@@ -2558,6 +2626,582 @@
       },
       "Type": "AWS::IAM::Policy"
     },
+    "ProbeCanary702814F6": {
+      "Properties": {
+        "ArtifactS3Location": {
+          "Fn::Join": [
+            "",
+            [
+              "s3://",
+              {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputRefStorageLogs2A2D4D26D31A2B6D",
+                  "Region": "us-east-1",
+                  "StackName": "FastChannels-Data"
+                }
+              },
+              "/synthetics/fast"
+            ]
+          ]
+        },
+        "Code": {
+          "Handler": "fast_probe.handler",
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": [
+            "ProbeCanaryServiceRoleA451EB49",
+            "Arn"
+          ]
+        },
+        "FailureRetentionPeriod": 14,
+        "Name": "fast-probe",
+        "ProvisionedResourceCleanup": "AUTOMATIC",
+        "RunConfig": {
+          "EnvironmentVariables": {
+            "CENSUS_PARAMETER": "/fast/ops/running-channels",
+            "CHANNELS": {
+              "Fn::Join": [
+                "",
+                [
+                  "{\"fast-demo\":\"https://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputFnGetAttDeliveryDistribution45EACD51DomainNameD2F69309",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Media"
+                    }
+                  },
+                  "/",
+                  {
+                    "Fn::Join": [
+                      "/",
+                      [
+                        {
+                          "Fn::Select": [
+                            3,
+                            {
+                              "Fn::Split": [
+                                "/",
+                                {
+                                  "Fn::GetStackOutput": {
+                                    "OutputName": "PublishOutputFnGetAttChannelfastdemoAdInsertion29FB3AF0HlsConfigurationManifestEndpointPrefix50ABC3AA",
+                                    "Region": "us-east-1",
+                                    "StackName": "FastChannels-Media"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Fn::Select": [
+                            4,
+                            {
+                              "Fn::Split": [
+                                "/",
+                                {
+                                  "Fn::GetStackOutput": {
+                                    "OutputName": "PublishOutputFnGetAttChannelfastdemoAdInsertion29FB3AF0HlsConfigurationManifestEndpointPrefix50ABC3AA",
+                                    "Region": "us-east-1",
+                                    "StackName": "FastChannels-Media"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Fn::Select": [
+                            5,
+                            {
+                              "Fn::Split": [
+                                "/",
+                                {
+                                  "Fn::GetStackOutput": {
+                                    "OutputName": "PublishOutputFnGetAttChannelfastdemoAdInsertion29FB3AF0HlsConfigurationManifestEndpointPrefix50ABC3AA",
+                                    "Region": "us-east-1",
+                                    "StackName": "FastChannels-Media"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Fn::Select": [
+                            6,
+                            {
+                              "Fn::Split": [
+                                "/",
+                                {
+                                  "Fn::GetStackOutput": {
+                                    "OutputName": "PublishOutputFnGetAttChannelfastdemoAdInsertion29FB3AF0HlsConfigurationManifestEndpointPrefix50ABC3AA",
+                                    "Region": "us-east-1",
+                                    "StackName": "FastChannels-Media"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    ]
+                  },
+                  "/hls.m3u8\"}"
+                ]
+              ]
+            }
+          },
+          "TimeoutInSeconds": 60
+        },
+        "RuntimeVersion": "syn-python-selenium-7.0",
+        "Schedule": {
+          "DurationInSeconds": "0",
+          "Expression": "rate(5 minutes)"
+        },
+        "StartCanaryAfterCreation": false,
+        "SuccessRetentionPeriod": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Synthetics::Canary"
+    },
+    "ProbeCanaryServiceRoleA451EB49": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "s3:ListAllMyBuckets",
+                  "Effect": "Allow",
+                  "Resource": "*"
+                },
+                {
+                  "Action": "s3:GetBucketLocation",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputFnGetAttStorageLogs2A2D4D26Arn595046A4",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  }
+                },
+                {
+                  "Action": "s3:PutObject",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        {
+                          "Fn::GetStackOutput": {
+                            "OutputName": "PublishOutputFnGetAttStorageLogs2A2D4D26Arn595046A4",
+                            "Region": "us-east-1",
+                            "StackName": "FastChannels-Data"
+                          }
+                        },
+                        "/synthetics/fast/*"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "Action": "cloudwatch:PutMetricData",
+                  "Condition": {
+                    "StringEquals": {
+                      "cloudwatch:namespace": "CloudWatchSynthetics"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Resource": "*"
+                },
+                {
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/cwsyn-*"
+                }
+              ],
+              "Version": "2012-10-17"
+            },
+            "PolicyName": "canaryPolicy"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ProbeCanaryServiceRoleDefaultPolicyBCE7564D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "ssm:GetParameter",
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/fast/ops/running-channels"
+            },
+            {
+              "Action": "mediatailor:DescribeChannel",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ProbeCanaryServiceRoleDefaultPolicyBCE7564D",
+        "Roles": [
+          {
+            "Ref": "ProbeCanaryServiceRoleA451EB49"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ProbeOffAir279E6995": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "The probe failed 2 runs in a row on a running fast channel (runbook R12)",
+        "AlarmName": "fast-probe-off-air",
+        "ComparisonOperator": "LessThanThreshold",
+        "Dimensions": [
+          {
+            "Name": "CanaryName",
+            "Value": {
+              "Ref": "ProbeCanary702814F6"
+            }
+          }
+        ],
+        "EvaluationPeriods": 2,
+        "MetricName": "SuccessPercent",
+        "Namespace": "CloudWatchSynthetics",
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Period": 300,
+        "Statistic": "Minimum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 100,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ProbeOnCensus359A9812": {
+      "Properties": {
+        "Description": "Start the probe while a fast channel runs, stop it when none does",
+        "EventBusName": {
+          "Fn::GetStackOutput": {
+            "OutputName": "PublishOutputRefEventsBus45DE433979464063",
+            "Region": "us-east-1",
+            "StackName": "FastChannels-Media"
+          }
+        },
+        "EventPattern": {
+          "detail-type": [
+            "Census Changed"
+          ],
+          "source": [
+            "fast-channels.fast"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "ProbeSwitch69A37ABD"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "ProbeSwitchEventsRoleE9C723F9",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "ProbeSwitch69A37ABD": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ProbeSwitchRoleDefaultPolicy5A0ADAD3",
+        "ProbeSwitchRole25C51C7A"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Running?\",\"States\":{\"Running?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.detail.running > 0 %}\",\"Next\":\"StartCanary\"}],\"Default\":\"StopCanary\"},\"StopCanary\":{\"Next\":\"Done\",\"Catch\":[{\"ErrorEquals\":[\"Synthetics.ConflictException\"],\"Next\":\"Done\"}],\"Type\":\"Task\",\"Arguments\":{\"Name\":\"fast-probe\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::aws-sdk:synthetics:stopCanary\"},\"Done\":{\"Type\":\"Succeed\"},\"StartCanary\":{\"Next\":\"Done\",\"Catch\":[{\"ErrorEquals\":[\"Synthetics.ConflictException\"],\"Next\":\"Done\"}],\"Type\":\"Task\",\"Arguments\":{\"Name\":\"fast-probe\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::aws-sdk:synthetics:startCanary\"}},\"TimeoutSeconds\":120,\"Comment\":\"Start the probe canary while a channel runs, stop it when none does (Census Changed)\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "ProbeSwitchLogs835CAFAF",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "ProbeSwitchRole25C51C7A",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-probe-switch",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ProbeSwitchEventsRoleDefaultPolicy0004CF99": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ProbeSwitch69A37ABD"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ProbeSwitchEventsRoleDefaultPolicy0004CF99",
+        "Roles": [
+          {
+            "Ref": "ProbeSwitchEventsRoleE9C723F9"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ProbeSwitchEventsRoleE9C723F9": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ProbeSwitchLogs835CAFAF": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Probe-CD104F23-Switch",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ProbeSwitchRole25C51C7A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ProbeSwitchRoleDefaultPolicy5A0ADAD3": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "synthetics:startCanary",
+                "synthetics:stopCanary"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:synthetics:us-east-1:123456789012:canary:fast-probe"
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ProbeSwitchRoleDefaultPolicy5A0ADAD3",
+        "Roles": [
+          {
+            "Ref": "ProbeSwitchRole25C51C7A"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
     "QuotaAlarmsAdInsertionRequestsAlarmDD6C5AE5": {
       "Properties": {
         "AlarmActions": [
@@ -2653,6 +3297,2509 @@
         "TreatMissingData": "notBreaching"
       },
       "Type": "AWS::CloudWatch::Alarm"
+    },
+    "RunbooksHandler80750810": {
+      "DependsOn": [
+        "RunbooksHandlerRoleDefaultPolicy21562767",
+        "RunbooksHandlerRole525490BD"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Runbooks R7, R9, R12-R17: decide from the facts and ledger the decision (dry run)",
+        "Environment": {
+          "Variables": {
+            "APPCONFIG_APPLICATION": "fast-fast",
+            "APPCONFIG_ENVIRONMENT": "fast",
+            "CATALOG_TABLE": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefCatalog742F25FDA41764CC",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-Data"
+              }
+            },
+            "FAST_PREFIX": "fast",
+            "IAC_CHANNELS": "fast-demo",
+            "LEDGER_TABLE": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefLedgerTable9343E4AA1381E625",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-Data"
+              }
+            },
+            "LIBRARY_TABLE": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-Data"
+              }
+            },
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "ops.runbooks",
+            "SOURCE_LOCATION": "fast-media"
+          }
+        },
+        "Handler": "fast_channels.functions.ops.runbooks.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "RunbooksHandlerLogsB878A794"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "RunbooksHandlerRole525490BD",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 120,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "RunbooksHandlerLogsB878A794": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksHandlerRole525490BD": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksHandlerRoleDefaultPolicy21562767": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "RunbooksHandlerLogsB878A794",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "dynamodb:PutItem",
+                "dynamodb:Query"
+              ],
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "runbook/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputRefLedgerTable9343E4AA1381E625",
+                        "Region": "us-east-1",
+                        "StackName": "FastChannels-Data"
+                      }
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:Query",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "CHANNEL#fast-*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                        "Region": "us-east-1",
+                        "StackName": "FastChannels-Data"
+                      }
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:GetItem",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputRefCatalog742F25FDA41764CC",
+                        "Region": "us-east-1",
+                        "StackName": "FastChannels-Data"
+                      }
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "mediatailor:DescribeChannel",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-*"
+            },
+            {
+              "Action": "mediatailor:DescribeVodSource",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:vodSource/fast-*/*"
+            },
+            {
+              "Action": [
+                "appconfig:GetLatestConfiguration",
+                "appconfig:StartConfigurationSession"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:appconfig:us-east-1:123456789012:application/",
+                    {
+                      "Ref": "AppConfigApplicationF162A144"
+                    },
+                    "/environment/",
+                    {
+                      "Ref": "AppConfigEnvironmentD9747278"
+                    },
+                    "/configuration/",
+                    {
+                      "Ref": "AppConfigFlagsConfigurationProfileA30571A1"
+                    }
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksHandlerRoleDefaultPolicy21562767",
+        "Roles": [
+          {
+            "Ref": "RunbooksHandlerRole525490BD"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR12StateMachineAF6E4401": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR12StateMachineRoleDefaultPolicy5A19E015",
+        "RunbooksR12StateMachineRole617DDCE8"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r12\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R12 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR12StateMachineLogs0BEB22C2",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR12StateMachineRole617DDCE8",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r12",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR12StateMachineEventsRoleDefaultPolicyB512B2E8": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR12StateMachineAF6E4401"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR12StateMachineEventsRoleDefaultPolicyB512B2E8",
+        "Roles": [
+          {
+            "Ref": "RunbooksR12StateMachineEventsRoleE0B136F4"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR12StateMachineEventsRoleE0B136F4": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR12StateMachineLogs0BEB22C2": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R12-0726E63D-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR12StateMachineRole617DDCE8": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR12StateMachineRoleDefaultPolicy5A19E015": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR12StateMachineRoleDefaultPolicy5A19E015",
+        "Roles": [
+          {
+            "Ref": "RunbooksR12StateMachineRole617DDCE8"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR12Trigger6C028F98": {
+      "Properties": {
+        "Description": "Start runbook R12 when its alarms go to ALARM",
+        "EventPattern": {
+          "detail": {
+            "alarmName": [
+              "fast-probe-off-air"
+            ],
+            "state": {
+              "value": [
+                "ALARM"
+              ]
+            }
+          },
+          "detail-type": [
+            "CloudWatch Alarm State Change"
+          ],
+          "source": [
+            "aws.cloudwatch"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR12StateMachineAF6E4401"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR12StateMachineEventsRoleE0B136F4",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksR13StateMachineEC36C573": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR13StateMachineRoleDefaultPolicy42D1E63D",
+        "RunbooksR13StateMachineRole7E264465"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r13\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R13 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR13StateMachineLogsD46FB7A3",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR13StateMachineRole7E264465",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r13",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR13StateMachineEventsRole33D1D0D3": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR13StateMachineEventsRoleDefaultPolicyD0579CA9": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR13StateMachineEC36C573"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR13StateMachineEventsRoleDefaultPolicyD0579CA9",
+        "Roles": [
+          {
+            "Ref": "RunbooksR13StateMachineEventsRole33D1D0D3"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR13StateMachineLogsD46FB7A3": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R13-AE09BAF7-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR13StateMachineRole7E264465": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR13StateMachineRoleDefaultPolicy42D1E63D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR13StateMachineRoleDefaultPolicy42D1E63D",
+        "Roles": [
+          {
+            "Ref": "RunbooksR13StateMachineRole7E264465"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR13TriggerF15B6A4E": {
+      "Properties": {
+        "Description": "Start runbook R13 on Channel Alert",
+        "EventBusName": {
+          "Fn::GetStackOutput": {
+            "OutputName": "PublishOutputRefEventsBus45DE433979464063",
+            "Region": "us-east-1",
+            "StackName": "FastChannels-Media"
+          }
+        },
+        "EventPattern": {
+          "detail-type": [
+            "Channel Alert"
+          ],
+          "source": [
+            "fast-channels.fast"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR13StateMachineEC36C573"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR13StateMachineEventsRole33D1D0D3",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksR14StateMachine836C31A4": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR14StateMachineRoleDefaultPolicy05F6AB12",
+        "RunbooksR14StateMachineRole55691DD5"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r14\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R14 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR14StateMachineLogsCE67EF5C",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR14StateMachineRole55691DD5",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR14StateMachineEventsRole68223AB5": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR14StateMachineEventsRoleDefaultPolicyE695A782": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR14StateMachine836C31A4"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR14StateMachineEventsRoleDefaultPolicyE695A782",
+        "Roles": [
+          {
+            "Ref": "RunbooksR14StateMachineEventsRole68223AB5"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR14StateMachineLogsCE67EF5C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R14-133B89DA-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR14StateMachineRole55691DD5": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR14StateMachineRoleDefaultPolicy05F6AB12": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR14StateMachineRoleDefaultPolicy05F6AB12",
+        "Roles": [
+          {
+            "Ref": "RunbooksR14StateMachineRole55691DD5"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR14Trigger8132B611": {
+      "Properties": {
+        "Description": "Start runbook R14 on Asset Failed",
+        "EventBusName": {
+          "Fn::GetStackOutput": {
+            "OutputName": "PublishOutputRefEventsBus45DE433979464063",
+            "Region": "us-east-1",
+            "StackName": "FastChannels-Media"
+          }
+        },
+        "EventPattern": {
+          "detail-type": [
+            "Asset Failed"
+          ],
+          "source": [
+            "fast-channels.fast"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR14StateMachine836C31A4"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR14StateMachineEventsRole68223AB5",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksR15StateMachineEventsRole4A7CC8AA": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR15StateMachineEventsRoleDefaultPolicy11044A1D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR15StateMachineFF8A6C65"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR15StateMachineEventsRoleDefaultPolicy11044A1D",
+        "Roles": [
+          {
+            "Ref": "RunbooksR15StateMachineEventsRole4A7CC8AA"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR15StateMachineFF8A6C65": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR15StateMachineRoleDefaultPolicy89318196",
+        "RunbooksR15StateMachineRole35DA905F"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r15\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R15 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR15StateMachineLogsCA8A57B2",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR15StateMachineRole35DA905F",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r15",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR15StateMachineLogsCA8A57B2": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R15-37066103-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR15StateMachineRole35DA905F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR15StateMachineRoleDefaultPolicy89318196": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR15StateMachineRoleDefaultPolicy89318196",
+        "Roles": [
+          {
+            "Ref": "RunbooksR15StateMachineRole35DA905F"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR15TriggerB82D7918": {
+      "Properties": {
+        "Description": "Start runbook R15 on Schedule Published",
+        "EventBusName": {
+          "Fn::GetStackOutput": {
+            "OutputName": "PublishOutputRefEventsBus45DE433979464063",
+            "Region": "us-east-1",
+            "StackName": "FastChannels-Media"
+          }
+        },
+        "EventPattern": {
+          "detail-type": [
+            "Schedule Published"
+          ],
+          "source": [
+            "fast-channels.fast"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR15StateMachineFF8A6C65"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR15StateMachineEventsRole4A7CC8AA",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksR16StateMachine621F717B": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR16StateMachineRoleDefaultPolicy76C60991",
+        "RunbooksR16StateMachineRole35CECC93"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r16\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R16 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR16StateMachineLogs71BE62B9",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR16StateMachineRole35CECC93",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r16",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR16StateMachineLogs71BE62B9": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R16-75EF627C-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR16StateMachineRole35CECC93": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR16StateMachineRoleDefaultPolicy76C60991": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR16StateMachineRoleDefaultPolicy76C60991",
+        "Roles": [
+          {
+            "Ref": "RunbooksR16StateMachineRole35CECC93"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR17StateMachine8C6CCFAB": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR17StateMachineRoleDefaultPolicyCE7F11A4",
+        "RunbooksR17StateMachineRole3F1B4B12"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r17\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R17 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR17StateMachineLogsE8A042E0",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR17StateMachineRole3F1B4B12",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r17",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR17StateMachineEventsRole29308792": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR17StateMachineEventsRoleDefaultPolicy6F36A7D8": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR17StateMachine8C6CCFAB"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR17StateMachineEventsRoleDefaultPolicy6F36A7D8",
+        "Roles": [
+          {
+            "Ref": "RunbooksR17StateMachineEventsRole29308792"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR17StateMachineLogsE8A042E0": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R17-0D133D69-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR17StateMachineRole3F1B4B12": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR17StateMachineRoleDefaultPolicyCE7F11A4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR17StateMachineRoleDefaultPolicyCE7F11A4",
+        "Roles": [
+          {
+            "Ref": "RunbooksR17StateMachineRole3F1B4B12"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR17TriggerC7141152": {
+      "Properties": {
+        "Description": "Start runbook R17 when its alarms go to ALARM",
+        "EventPattern": {
+          "detail": {
+            "alarmName": [
+              "fast-cdn-5xx"
+            ],
+            "state": {
+              "value": [
+                "ALARM"
+              ]
+            }
+          },
+          "detail-type": [
+            "CloudWatch Alarm State Change"
+          ],
+          "source": [
+            "aws.cloudwatch"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR17StateMachine8C6CCFAB"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR17StateMachineEventsRole29308792",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksR7StateMachine75F3E926": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR7StateMachineRoleDefaultPolicyAF10948F",
+        "RunbooksR7StateMachineRole9564EC5C"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r7\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R7 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR7StateMachineLogs73B31E7B",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR7StateMachineRole9564EC5C",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r7",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR7StateMachineEventsRoleD27F829A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR7StateMachineEventsRoleDefaultPolicyF9F204DB": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR7StateMachine75F3E926"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR7StateMachineEventsRoleDefaultPolicyF9F204DB",
+        "Roles": [
+          {
+            "Ref": "RunbooksR7StateMachineEventsRoleD27F829A"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR7StateMachineLogs73B31E7B": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R7-56F34612-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR7StateMachineRole9564EC5C": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR7StateMachineRoleDefaultPolicyAF10948F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR7StateMachineRoleDefaultPolicyAF10948F",
+        "Roles": [
+          {
+            "Ref": "RunbooksR7StateMachineRole9564EC5C"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR7Trigger87E90E8E": {
+      "Properties": {
+        "Description": "Start runbook R7 when its alarms go to ALARM",
+        "EventPattern": {
+          "detail": {
+            "alarmName": [
+              "fast-account-ad-insertion-requests",
+              "fast-account-channel-assembly-requests"
+            ],
+            "state": {
+              "value": [
+                "ALARM"
+              ]
+            }
+          },
+          "detail-type": [
+            "CloudWatch Alarm State Change"
+          ],
+          "source": [
+            "aws.cloudwatch"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR7StateMachine75F3E926"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR7StateMachineEventsRoleD27F829A",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksR9StateMachine97443A40": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RunbooksR9StateMachineRoleDefaultPolicy5E8668C7",
+        "RunbooksR9StateMachineRole3E9A27C0"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Decide\",\"States\":{\"Decide\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "RunbooksHandler80750810",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"runbook\":\"r9\",\"trigger\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}},\"TimeoutSeconds\":300,\"Comment\":\"Runbook R9 (dry run until ADR-0023): decide and ledger the decision\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RunbooksR9StateMachineLogsF631463F",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RunbooksR9StateMachineRole3E9A27C0",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fast-runbook-r9",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR9StateMachineEventsRoleDefaultPolicyC2932418": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR9StateMachine97443A40"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR9StateMachineEventsRoleDefaultPolicyC2932418",
+        "Roles": [
+          {
+            "Ref": "RunbooksR9StateMachineEventsRoleF7AD1B7E"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR9StateMachineEventsRoleF7AD1B7E": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR9StateMachineLogsF631463F": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsOps-Runbooks-R9-838D0982-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RunbooksR9StateMachineRole3E9A27C0": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksR9StateMachineRoleDefaultPolicy5E8668C7": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "RunbooksHandler80750810",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "RunbooksHandler80750810",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksR9StateMachineRoleDefaultPolicy5E8668C7",
+        "Roles": [
+          {
+            "Ref": "RunbooksR9StateMachineRole3E9A27C0"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RunbooksR9Trigger21045A79": {
+      "Properties": {
+        "Description": "Start runbook R9 when its alarms go to ALARM",
+        "EventPattern": {
+          "detail": {
+            "alarmName": [
+              "fast-demo-getmanifest-errors"
+            ],
+            "state": {
+              "value": [
+                "ALARM"
+              ]
+            }
+          },
+          "detail-type": [
+            "CloudWatch Alarm State Change"
+          ],
+          "source": [
+            "aws.cloudwatch"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "RunbooksR9StateMachine97443A40"
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 4
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "RunbooksR9StateMachineEventsRoleF7AD1B7E",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "RunbooksRightsCheckFF7829D6": {
+      "Properties": {
+        "Description": "Runbook R16: rights of fast's programs that start within 6 hours",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Ref": "RunbooksR16StateMachine621F717B"
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 0
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "RunbooksRightsCheckRole60E4BA0A",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "RunbooksRightsCheckRole60E4BA0A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: start runbook R16",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RunbooksRightsCheckRoleDefaultPolicy6EC1B9C9": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RunbooksR16StateMachine621F717B"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RunbooksRightsCheckRoleDefaultPolicy6EC1B9C9",
+        "Roles": [
+          {
+            "Ref": "RunbooksRightsCheckRole60E4BA0A"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
     },
     "ZeroAdsAlarmB6328B9B": {
       "Properties": {

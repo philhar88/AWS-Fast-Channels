@@ -134,6 +134,7 @@ With the ops module the Ops stack adds, to the same topic and with missing data 
 | `<configuration>-presessioninithook-errors`, `-preadsrequesthook-errors`, `-function-errors`, `-getmanifest-errors` | Per IaC playback configuration: any such error in 5 minutes |
 | `<prefix>-zero-ads-sessions` | The hourly detector found sessions that saw at least three ad breaks (distinct ad markers) without any ad request: possible ad suppression by a direct caller. The detector's log names them; the lake's `v_zero_ads_sessions` lists them per day. Incomplete by design (short sessions are not found) |
 | `<prefix>-ledger-*` | The ledger ([below](#ledger)) |
+| `<prefix>-probe-off-air` | The probe canary failed two runs in a row on a running channel ([below](#runbooks-flags-and-the-probe)); starts runbook R12 |
 
 Every minute while the census counts a running channel, a poller reads Channel Assembly's alerts of the
 deployment's running channels and puts a `Channel Alert` event on the bus for each alert that changed in that
@@ -218,6 +219,63 @@ first version is chained), `<prefix>-ledger-entries-rejected` (an item that is n
 (the archive more than 10 minutes behind) and `<prefix>-ledger-dead-letters` (records the writer gave up on after
 the stream's 24 hours; redrive them). Records never hold a viewer id.
 
+## Runbooks, flags and the probe
+
+With the ops module each stage has eight runbooks (D§18.8), one allow-listed Step Functions state machine each,
+`<prefix>-runbook-<id>`. A trigger starts one; its function reads the kill switches, gathers the facts, decides and
+appends one [ledger](#ledger) entry to the chain `runbook/<id>`. Acting unattended is L2 autonomy, which needs
+ADR-0023, so for now every runbook runs its dry-run path: the entry (`action` `runbook.dry_run`, `correlation_id` =
+the execution name) records what the runbook would do and why. A runbook whose kill switch is off records
+`runbook.disabled`.
+
+| Runbook | Started by | Would |
+|---|---|---|
+| R7 | An account quota alarm (`<prefix>-account-*`) going to ALARM | Freeze expansion; draft a quota case that a human submits |
+| R9 | A configuration's `GetManifest.Errors` alarm going to ALARM | Freeze experiments and releases |
+| R12 | `<prefix>-probe-off-air` going to ALARM | Start an always-on channel found stopped; otherwise page SEV1 |
+| R13 | `Channel Alert` | Scheduling error: swap the program for the evergreen block; page on repeat within the hour |
+| R14 | `Asset Failed` | Retry the ingest once with the same settings; then quarantine the asset and notify the CMS |
+| R15 | `Schedule Published` | A published program whose VOD source is missing: replace it (≥2 h ahead the programming agent, inside 2 h the evergreen block) |
+| R16 | Every hour | A program starting within 6 h that ends after its rights window: the programming agent replaces it |
+| R17 | `<prefix>-cdn-5xx` going to ALARM (deployments in us-east-1, where CloudFront's metrics are) | Page; shed optional work |
+
+There is no evergreen block and no always-on list yet (they come with the autonomy envelope), so R12, R13 and R15
+page instead. Start a runbook by hand with its trigger as input, for example
+`aws stepfunctions start-execution --state-machine-arn <arn of <prefix>-runbook-r14> --input '{"detail": {...}}'`.
+
+**Kill switches** are AWS AppConfig feature flags: the profile `flags` of the application `<prefix>-fast`, deployed
+to the environment `<prefix>` (D§19.5; `core.flags`). Flag keys cannot hold dots, so the design's `ops.freeze` is the
+attribute `freeze` of the flag `ops`:
+
+| Flag | Attributes | Default |
+|---|---|---|
+| `agents` | — | on |
+| `commercial` | — | off |
+| `demand` | `mode`: `off`, `own_book`, `demo`, `live` | on with `modules.demand.mode` when demand is deployed, else off |
+| `crawl` | — | on |
+| `recs` | `strategy`: `popularity` (the kill switch), `recommender` | `popularity` |
+| `release` | `promote` | on |
+| `ops` | `act` (off until ADR-0023), `freeze` (R9), `restart` (R12), `ca_alerts` (R13), `shed` (R17) | every switch on, `act` off |
+
+A switch that is on lets its consumer run; a module that is not deployed reads none. The stack deploys these
+defaults; change a flag in the AppConfig console (a new version, deployed all at once). The next stack deployment
+deploys the defaults again only if they changed in the code. R7, R14, R15 and R16 have no flag: disable their rule or
+schedule.
+
+**The probe** is one CloudWatch Synthetics canary, `<prefix>-probe` (Python runtime), every 5 minutes. On
+`Census Changed` the state machine `<prefix>-probe-switch` starts it while a channel runs and stops it when none does,
+so it costs nothing while the channels are stopped. Each run plays every running IaC channel through the CDN as a
+viewer would:
+
+- the multivariant playlist resolves;
+- the media sequence advances between two polls a target duration and a half apart;
+- the newest segment resolves;
+- every `EXT-X-DATERANGE` has an `ID` and a valid `START-DATE`.
+
+A run with no running channel passes and logs `skipped`. Two failed runs in a row raise `<prefix>-probe-off-air`.
+Until playback tickets exist (M4) its sessions count as viewer sessions of the IaC playback configuration. Run
+artifacts are kept under `synthetics/<prefix>/` in the logs bucket (7 days for passed runs, 14 for failed ones).
+
 ## Metrics
 
 Namespace `FastChannels`. A CloudWatch metric is identified by all its dimensions, so alarms and queries must name
@@ -232,6 +290,7 @@ every one: Powertools adds `service`, the function's handler module, to each met
 | `BreaksAired`, `BreaksUnaired` | `service` = `as_run_reconciler` | As-run reconciler and its break sweep (ops module) |
 | `ChannelAlerts` | `service` = `ops.list_alerts` | Channel Assembly alerts poller (ops module) |
 | `ZeroAdsSessions` | `service` = `ops.zero_ads_sessions` | Zero-ad-sessions detector (ops module) |
+| `RunbookDecisions` | `service` = `ops.runbooks`, `runbook` | Runbooks R7, R9, R12-R17 (ops module) |
 | `AsRunEventsRouted` | `service` = `ops.as_run_router` | The account's as-run router (`observability.as_run`) |
 | `AutopilotSucceeded`, `AutopilotFailed`, `AutopilotPublishes` | `service` = `autopilot`, `channel` | Autopilot runs |
 | `ReapedChannels`, `ReapedPlaybackConfigurations`, `ReapedVodSources`, `ReapedSourceLocations`, `ReapedJobTemplates` | `service` = `custom_resources.reaper` | Runtime-resource reaper (stack deletion) |
