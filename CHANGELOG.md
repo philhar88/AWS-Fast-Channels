@@ -43,6 +43,14 @@ All notable changes to this project are documented here. The format follows
   origin-facing networks in a private config bucket; each `/policy` decision record goes to the lake (`pds_policy`).
   The Data stack holds the module's table `<prefix>-pds` and the config bucket; `deploy-demand` deploys the stack after
   the Demand stack and `destroy-demand` deletes it first.
+- **Own book, reservations and delivery** ([docs/pds.md](docs/pds.md#the-own-book), ADR-0022 accepted):
+  `POST /ownbook/openrtb` bids the default ladder's house ads at $0.01 (`ext.fast.house`) and the creatives of each
+  line with budget left (`modules.pds.demo_lines`, now set on `fastm` and `fastci`) at their CPM, a tier-0 line with
+  its deal id. Reservations take a line ad's price from one of four budget shards in one transaction with the session
+  cap, the reservation and its ledger money event, so liability never exceeds the budget. A subscription filter on the
+  stage's MediaTailor log group counts our tracker's `BEACON_FIRED` impressions once per `(sid, evid, crid)` and fills
+  once per `(sid, evid)`, delivers their reservations and sends `pds.delivery` records to the lake (`pds_delivery`); a
+  sweeper releases reservations without an impression after two hours. `/select` makes the reservations from M2-04.
 - **Monetization desired state** (`fast_channels.core.monetization`, for the release module; no stack uses it yet):
   MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
   PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the

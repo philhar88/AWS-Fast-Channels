@@ -90,7 +90,7 @@ it costs.
 | `modules.pds.select_timeout_ms` | int | `100` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. |
 | `modules.pds.select_group_timeout_ms` | int | `150` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
 | `modules.pds.provisioned_concurrency` | int | `2` | Provisioned concurrency per function while any channel runs; 0 while none does. |
-| `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode. |
+| `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's environment). Each line's budget is split over the own book's budget shards; a line stops serving once reservations hold all of it. |
 | `modules.release.enabled` | bool | `false` | Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and is rolled back unattended on an alarm. |
 | `modules.release.channels` | list of str | `[]` | IaC channels to monetize (names from `channels.iac`; `{prefix}` is replaced as there). Their channel policy also admits the sibling configurations `<channel>-p-?`. Adding a channel widens its policy once, and the deployment refuses that while the channel runs: stop it first. |
 | `modules.release.strategy` | `demo` or `standard` or `large` | `"demo"` | `demo` (a simulated audience: 10% steps over 30 minutes), `standard` (up to 20,000 concurrent viewers: 10% steps over 3 hours) or `large` (exponential steps over 4 hours). |
@@ -149,7 +149,7 @@ it costs.
 | `advertiser` | str | required | Advertiser name (decision records and reports). |
 | `adomain` | str | required | Advertiser domain (OpenRTB `adomain`); pods never repeat one. |
 | `cat` | list of str | `[]` | IAB categories of the line's ads (OpenRTB `cat`). |
-| `creatives` | list of str | required | Creative ids (`crid`) of the demo creatives the line serves. |
+| `creatives` | list of str | required | Creative ids (`crid`) of the direct demo creatives the line serves (`direct1`, `direct2`); a creative serves at most one line. |
 | `cpm` | decimal | required | Price per 1,000 impressions, US dollars (simulated). |
 | `budget` | decimal | required | Total budget, US dollars (simulated); the line stops once reservations reach it. |
 | `caps.per_session` | int or null | `null` | Most impressions of the line per playback session; `null`: uncapped. |

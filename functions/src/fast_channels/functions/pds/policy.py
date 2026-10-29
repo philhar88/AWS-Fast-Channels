@@ -10,7 +10,6 @@ into the lake.
 
 import os
 import time
-from functools import cache
 from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools import Logger, Metrics, single_metric
@@ -21,8 +20,7 @@ from pydantic import ValidationError
 from fast_channels.core.pds.models import PolicyRequest
 from fast_channels.core.pds.policy import decide
 from fast_channels.core.pds.records import policy_record
-from fast_channels.functions.pds.store import SnapshotStore
-from fast_channels.functions.settings import settings
+from fast_channels.functions.pds.store import snapshot_store
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -32,11 +30,8 @@ metrics = Metrics()
 app = ALBResolver()
 
 
-@cache
-def store() -> SnapshotStore:
-    """The function's snapshot store (one per execution environment)."""
-    settings().require("pds_config_bucket")
-    return SnapshotStore(settings().pds_config_bucket)
+store = snapshot_store
+"""The function's snapshot store (one per execution environment)."""
 
 
 def _json(status: int, body: str) -> Response[str]:

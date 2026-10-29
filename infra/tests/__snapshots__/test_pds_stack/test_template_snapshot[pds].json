@@ -13,9 +13,21 @@
         "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
       }
     },
+    "DeliveryFunction": {
+      "Description": "Counts our tracker's impressions",
+      "Value": {
+        "Ref": "DeliveryFunctionDB1DAB77"
+      }
+    },
     "Endpoint": {
       "Description": "The PDS's base URL in the Prebid Server VPC",
       "Value": "http://pds.fastm.fast.internal"
+    },
+    "OwnBookFunction": {
+      "Description": "POST /ownbook/openrtb",
+      "Value": {
+        "Ref": "OwnBookFunction8D395A29"
+      }
     },
     "PolicyFunction": {
       "Description": "POST /policy",
@@ -27,6 +39,12 @@
       "Description": "Publishes the snapshot",
       "Value": {
         "Ref": "PublisherFunction418C8B62"
+      }
+    },
+    "SweeperFunction": {
+      "Description": "Releases undelivered reservations",
+      "Value": {
+        "Ref": "SweeperFunctionCCDB2B02"
       }
     },
     "TableName": {
@@ -44,8 +62,16 @@
       "Default": "/fastm/pds/config-bucket",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
+    "SsmParameterValuefastmpdscontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/content-base-url",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
     "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
       "Default": "/fastm/pds/lake-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/media-bucket",
       "Type": "AWS::SSM::Parameter::Value<String>"
     }
   },
@@ -252,14 +278,28 @@
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"Release0\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"Provision1\"}, \"Release0\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
               {
                 "Fn::GetAtt": [
                   "PolicyFunction9D28D7E5",
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\"}, \"Retry\": [{\"ErrorEquals\": [\"Lambda.TooManyRequestsException\", \"Lambda.ServiceException\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"Lambda.ResourceNotFoundException\", \"Lambda.ProvisionedConcurrencyConfigNotFoundException\"], \"Next\": \"Released0\"}], \"End\": true}, \"Released0\": {\"Type\": \"Pass\", \"End\": true}}}"
+              "\", \"Qualifier\": \"live\"}, \"Retry\": [{\"ErrorEquals\": [\"Lambda.TooManyRequestsException\", \"Lambda.ServiceException\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"Lambda.ResourceNotFoundException\", \"Lambda.ProvisionedConcurrencyConfigNotFoundException\"], \"Next\": \"Released0\"}], \"Next\": \"Release1\"}, \"Released0\": {\"Type\": \"Pass\", \"Next\": \"Release1\"}, \"Provision1\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              {
+                "Fn::GetAtt": [
+                  "OwnBookFunction8D395A29",
+                  "Arn"
+                ]
+              },
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"Release1\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              {
+                "Fn::GetAtt": [
+                  "OwnBookFunction8D395A29",
+                  "Arn"
+                ]
+              },
+              "\", \"Qualifier\": \"live\"}, \"Retry\": [{\"ErrorEquals\": [\"Lambda.TooManyRequestsException\", \"Lambda.ServiceException\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"Lambda.ResourceNotFoundException\", \"Lambda.ProvisionedConcurrencyConfigNotFoundException\"], \"Next\": \"Released1\"}], \"End\": true}, \"Released1\": {\"Type\": \"Pass\", \"End\": true}}}"
             ]
           ]
         },
@@ -428,9 +468,14 @@
                 "lambda:PutProvisionedConcurrencyConfig"
               ],
               "Effect": "Allow",
-              "Resource": {
-                "Ref": "PolicyLive6AD5E16F"
-              }
+              "Resource": [
+                {
+                  "Ref": "OwnBookLive3FCE23DA"
+                },
+                {
+                  "Ref": "PolicyLive6AD5E16F"
+                }
+              ]
             },
             {
               "Action": "ssm:GetParameter",
@@ -574,6 +619,1042 @@
         ]
       },
       "Type": "AWS::SQS::QueuePolicy"
+    },
+    "DeliveryDeadLettersA8B3558F": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "DeliveryDeadLettersAlarm434D834B": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "Beacons from the MediaTailor log could not be counted after their retries: impressions and deliveries are missing (redrive the queue)",
+        "AlarmName": "fastm-pds-delivery-dead-letters",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "DeliveryDeadLettersA8B3558F",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "DeliveryDeadLettersPolicy75E66458": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeliveryDeadLettersA8B3558F",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Queues": [
+          {
+            "Ref": "DeliveryDeadLettersA8B3558F"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::QueuePolicy"
+    },
+    "DeliveryFunctionDB1DAB77": {
+      "DependsOn": [
+        "DeliveryFunctionRoleDefaultPolicy8CF9B682",
+        "DeliveryFunctionRoleEA8665D9"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "PDS: count our tracker's impressions (BEACON_FIRED) and deliver their reservations",
+        "Environment": {
+          "Variables": {
+            "CONTENT_BASE_URL": {
+              "Ref": "SsmParameterValuefastmpdscontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LEDGER_TABLE": "fastm-ledger",
+            "PDS_TABLE": "fastm-pds",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "pds.delivery"
+          }
+        },
+        "Handler": "fast_channels.functions.pds.delivery.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "DeliveryFunctionLogs9ED4CFD7"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "DeliveryFunctionRoleEA8665D9",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 60,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "DeliveryFunctionEventInvokeConfigBE9E3F5C": {
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "DeliveryDeadLettersA8B3558F",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "FunctionName": {
+          "Ref": "DeliveryFunctionDB1DAB77"
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST"
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig"
+    },
+    "DeliveryFunctionLogs9ED4CFD7": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "DeliveryFunctionRoleDefaultPolicy8CF9B682": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeliveryFunctionLogs9ED4CFD7",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeliveryDeadLettersA8B3558F",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "IMP#*",
+                    "FILL#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:UpdateItem"
+              ],
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "RES#*",
+                    "BUDGET#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "pds/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "DeliveryFunctionRoleDefaultPolicy8CF9B682",
+        "Roles": [
+          {
+            "Ref": "DeliveryFunctionRoleEA8665D9"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "DeliveryFunctionRoleEA8665D9": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "DeliveryImpressions121F9415": {
+      "DependsOn": [
+        "DeliveryImpressionsCanInvokeLambda53391E86"
+      ],
+      "Properties": {
+        "DestinationArn": {
+          "Fn::GetAtt": [
+            "DeliveryFunctionDB1DAB77",
+            "Arn"
+          ]
+        },
+        "FilterName": "fastm-pds-delivery",
+        "FilterPattern": "{ ($.eventType = \"BEACON_FIRED\") && ($.beaconInfo.trackingEvent = \"impression\") }",
+        "LogGroupName": "/aws/vendedlogs/mediatailor/fastm"
+      },
+      "Type": "AWS::Logs::SubscriptionFilter"
+    },
+    "DeliveryImpressionsCanInvokeLambda53391E86": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "DeliveryFunctionDB1DAB77",
+            "Arn"
+          ]
+        },
+        "Principal": "logs.amazonaws.com",
+        "SourceArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm:*"
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "DeliveryRecords6C652B53": {
+      "DependsOn": [
+        "DeliveryRecordsCloudWatchLogsCanPutRecordsDefaultPolicyBC103200"
+      ],
+      "Properties": {
+        "DestinationArn": {
+          "Fn::GetAtt": [
+            "DeliveryRecordsStream6403E6BD",
+            "Arn"
+          ]
+        },
+        "FilterName": "fastm-pds-delivery-records",
+        "FilterPattern": "{ $.record = \"pds.delivery\" }",
+        "LogGroupName": {
+          "Ref": "DeliveryFunctionLogs9ED4CFD7"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "DeliveryRecordsCloudWatchLogsCanPutRecordsE1587E64",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Logs::SubscriptionFilter"
+    },
+    "DeliveryRecordsCloudWatchLogsCanPutRecordsDefaultPolicyBC103200": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "firehose:PutRecord",
+                "firehose:PutRecordBatch"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeliveryRecordsStream6403E6BD",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "DeliveryRecordsCloudWatchLogsCanPutRecordsDefaultPolicyBC103200",
+        "Roles": [
+          {
+            "Ref": "DeliveryRecordsCloudWatchLogsCanPutRecordsE1587E64"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "DeliveryRecordsCloudWatchLogsCanPutRecordsE1587E64": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringLike": {
+                  "aws:SourceArn": "arn:aws:logs:us-east-1:123456789012:*"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "logs.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "DeliveryRecordsStream6403E6BD": {
+      "DependsOn": [
+        "DeliveryRecordsStreamRoleDefaultPolicy19D3185E"
+      ],
+      "Properties": {
+        "DeliveryStreamEncryptionConfigurationInput": {
+          "KeyType": "AWS_OWNED_CMK"
+        },
+        "DeliveryStreamName": "fastm-pds-delivery",
+        "DeliveryStreamType": "DirectPut",
+        "ExtendedS3DestinationConfiguration": {
+          "BucketARN": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:s3:::",
+                {
+                  "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                }
+              ]
+            ]
+          },
+          "BufferingHints": {
+            "IntervalInSeconds": 60,
+            "SizeInMBs": 5
+          },
+          "CloudWatchLoggingOptions": {
+            "Enabled": true,
+            "LogGroupName": {
+              "Ref": "DeliveryRecordsStreamLogsB97AE817"
+            },
+            "LogStreamName": {
+              "Ref": "DeliveryRecordsStreamLogsS3Destination56A8DB99"
+            }
+          },
+          "CompressionFormat": "GZIP",
+          "ErrorOutputPrefix": "pds/errors/delivery/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/",
+          "Prefix": "pds/delivery/!{timestamp:yyyy/MM/dd/HH}/",
+          "ProcessingConfiguration": {
+            "Enabled": true,
+            "Processors": [
+              {
+                "Parameters": [
+                  {
+                    "ParameterName": "CompressionFormat",
+                    "ParameterValue": "GZIP"
+                  }
+                ],
+                "Type": "Decompression"
+              },
+              {
+                "Parameters": [
+                  {
+                    "ParameterName": "DataMessageExtraction",
+                    "ParameterValue": "true"
+                  }
+                ],
+                "Type": "CloudWatchLogProcessing"
+              }
+            ]
+          },
+          "RoleARN": {
+            "Fn::GetAtt": [
+              "DeliveryRecordsStreamRole7FDBCDBA",
+              "Arn"
+            ]
+          }
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::KinesisFirehose::DeliveryStream"
+    },
+    "DeliveryRecordsStreamLogsB97AE817": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/firehose/fastm-pds-delivery",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "DeliveryRecordsStreamLogsS3Destination56A8DB99": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "DeliveryRecordsStreamLogsB97AE817"
+        }
+      },
+      "Type": "AWS::Logs::LogStream",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "DeliveryRecordsStreamRole7FDBCDBA": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "firehose.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "FAST Channels (fastm): deliver pds.delivery decision records to the lake",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "DeliveryRecordsStreamRoleDefaultPolicy19D3185E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:Abort*",
+                "s3:DeleteObject*",
+                "s3:GetBucket*",
+                "s3:GetObject*",
+                "s3:List*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeliveryRecordsStreamLogsB97AE817",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "DeliveryRecordsStreamRoleDefaultPolicy19D3185E",
+        "Roles": [
+          {
+            "Ref": "DeliveryRecordsStreamRole7FDBCDBA"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "DeliveryRecordsTableECC84390": {
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": "fastm_lake",
+        "TableInput": {
+          "Description": "The Pod Decision Service's pds.delivery decision records (core.pds.records)",
+          "Name": "pds_delivery",
+          "Parameters": {
+            "classification": "json",
+            "has_encrypted_data": true,
+            "projection.datehour.format": "yyyy/MM/dd/HH",
+            "projection.datehour.interval": "1",
+            "projection.datehour.interval.unit": "HOURS",
+            "projection.datehour.range": "NOW-30DAYS,NOW+1HOURS",
+            "projection.datehour.type": "date",
+            "projection.enabled": "true",
+            "storage.location.template": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/pds/delivery/${datehour}/"
+                ]
+              ]
+            }
+          },
+          "PartitionKeys": [
+            {
+              "Name": "datehour",
+              "Type": "string"
+            }
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "record",
+                "Type": "string"
+              },
+              {
+                "Name": "v",
+                "Type": "bigint"
+              },
+              {
+                "Name": "decision_id",
+                "Type": "string"
+              },
+              {
+                "Name": "sid",
+                "Type": "string"
+              },
+              {
+                "Name": "evid",
+                "Type": "string"
+              },
+              {
+                "Name": "crid",
+                "Type": "string"
+              },
+              {
+                "Name": "enr",
+                "Type": "bigint"
+              },
+              {
+                "Name": "pc",
+                "Type": "string"
+              },
+              {
+                "Name": "fired_at",
+                "Type": "string"
+              },
+              {
+                "Name": "status",
+                "Type": "bigint"
+              },
+              {
+                "Name": "impression",
+                "Type": "boolean"
+              },
+              {
+                "Name": "fill",
+                "Type": "boolean"
+              },
+              {
+                "Name": "credit",
+                "Type": "string"
+              },
+              {
+                "Name": "line",
+                "Type": "string"
+              },
+              {
+                "Name": "amount",
+                "Type": "string"
+              },
+              {
+                "Name": "timestamp",
+                "Type": "string"
+              },
+              {
+                "Name": "correlation_id",
+                "Type": "string"
+              },
+              {
+                "Name": "xray_trace_id",
+                "Type": "string"
+              },
+              {
+                "Name": "snapshot",
+                "Type": "string"
+              }
+            ],
+            "Compressed": false,
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/pds/delivery/"
+                ]
+              ]
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"
+            },
+            "StoredAsSubDirectories": false
+          },
+          "TableType": "EXTERNAL_TABLE"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "OwnBookFunction8D395A29": {
+      "DependsOn": [
+        "OwnBookFunctionRoleDefaultPolicyB598F110",
+        "OwnBookFunctionRole7DA71A20"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "PDS POST /ownbook/openrtb: the own book's bids (house ads and direct lines)",
+        "Environment": {
+          "Variables": {
+            "FAST_PREFIX": "fastm",
+            "PDS_CONFIG_BUCKET": {
+              "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "PDS_TABLE": "fastm-pds",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "pds.ownbook"
+          }
+        },
+        "Handler": "fast_channels.functions.pds.ownbook.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "OwnBookFunctionLogsB90A375D"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 1024,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "OwnBookFunctionRole7DA71A20",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 3,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "OwnBookFunctionCurrentVersionCD3D78F8acfa73e27c0d0777c9423ab8fcef02af": {
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true
+      },
+      "Properties": {
+        "FunctionName": {
+          "Ref": "OwnBookFunction8D395A29"
+        }
+      },
+      "Type": "AWS::Lambda::Version"
+    },
+    "OwnBookFunctionLogsB90A375D": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "OwnBookFunctionRole7DA71A20": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "OwnBookFunctionRoleDefaultPolicyB598F110": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "OwnBookFunctionLogsB90A375D",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/snapshot/current.json"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:BatchGetItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "BUDGET#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "OwnBookFunctionRoleDefaultPolicyB598F110",
+        "Roles": [
+          {
+            "Ref": "OwnBookFunctionRole7DA71A20"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "OwnBookLive3FCE23DA": {
+      "Properties": {
+        "Description": "Served",
+        "FunctionName": {
+          "Ref": "OwnBookFunction8D395A29"
+        },
+        "FunctionVersion": {
+          "Fn::GetAtt": [
+            "OwnBookFunctionCurrentVersionCD3D78F8acfa73e27c0d0777c9423ab8fcef02af",
+            "Version"
+          ]
+        },
+        "Name": "live"
+      },
+      "Type": "AWS::Lambda::Alias"
+    },
+    "OwnBookLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY5C93CB3F": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "OwnBookLive3FCE23DA"
+        },
+        "Principal": "elasticloadbalancing.amazonaws.com"
+      },
+      "Type": "AWS::Lambda::Permission"
     },
     "PolicyFunction9D28D7E5": {
       "DependsOn": [
@@ -1369,14 +2450,19 @@
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
           "S3Key": "<asset-hash>.zip"
         },
-        "Description": "PDS: publish the snapshot (demand allow-list, floor, CloudFront origin-facing networks)",
+        "Description": "PDS: publish the snapshot (demand, floor, CloudFront origin-facing networks, own book) and the lines' budgets",
         "Environment": {
           "Variables": {
             "FAST_PREFIX": "fastm",
+            "LEDGER_TABLE": "fastm-ledger",
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
             "PDS_CONFIG_BUCKET": {
               "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
-            "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\"}",
+            "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\",\"lines\":[]}",
+            "PDS_TABLE": "fastm-pds",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "pds.publisher"
           }
@@ -1420,7 +2506,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PublisherFunctionCurrentVersion0CCBEA066027eabc182ffcc730320dd6e75bf443": {
+    "PublisherFunctionCurrentVersion0CCBEA061519e7b8317a14346b80b37e65034deb": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -1547,18 +2633,44 @@
             {
               "Action": "s3:GetObject",
               "Effect": "Allow",
-              "Resource": {
-                "Fn::Join": [
-                  "",
-                  [
-                    "arn:aws:s3:::",
-                    {
-                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
-                    },
-                    "/snapshot/current.json"
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/snapshot/current.json"
+                    ]
                   ]
-                ]
-              }
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/ads/*/demo/creatives.json"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/ads/*/vast.xml"
+                    ]
+                  ]
+                }
+              ]
             },
             {
               "Action": "s3:PutObject",
@@ -1604,6 +2716,39 @@
                   ]
                 ]
               }
+            },
+            {
+              "Action": "ssm:GetParameter",
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/fastm/pds/ladder-version"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem"
+              ],
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "BUDGET#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "pds/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
             }
           ],
           "Version": "2012-10-17"
@@ -1683,7 +2828,7 @@
       "Properties": {
         "ExecuteOnHandlerChange": true,
         "HandlerArn": {
-          "Ref": "PublisherFunctionCurrentVersion0CCBEA066027eabc182ffcc730320dd6e75bf443"
+          "Ref": "PublisherFunctionCurrentVersion0CCBEA061519e7b8317a14346b80b37e65034deb"
         },
         "InvocationType": "RequestResponse",
         "ServiceToken": {
@@ -1871,6 +3016,55 @@
       },
       "Type": "AWS::ElasticLoadBalancingV2::Listener"
     },
+    "ServiceLoadBalancerHttpRouteOwnbookRuleFD3669BC": {
+      "Properties": {
+        "Actions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "ServiceTargetOwnbook8A9C27E5"
+            },
+            "Type": "forward"
+          }
+        ],
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "PathPatternConfig": {
+              "Values": [
+                "/ownbook/openrtb"
+              ]
+            }
+          },
+          {
+            "Field": "http-request-method",
+            "HttpRequestMethodConfig": {
+              "Values": [
+                "POST"
+              ]
+            }
+          }
+        ],
+        "ListenerArn": {
+          "Ref": "ServiceLoadBalancerHttp922C9E54"
+        },
+        "Priority": 20,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule"
+    },
     "ServiceLoadBalancerHttpRoutePolicyRuleF6E8C50E": {
       "Properties": {
         "Actions": [
@@ -2002,6 +3196,36 @@
       },
       "Type": "AWS::EC2::SecurityGroupIngress"
     },
+    "ServiceTargetOwnbook8A9C27E5": {
+      "DependsOn": [
+        "OwnBookLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY5C93CB3F"
+      ],
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TargetType": "lambda",
+        "Targets": [
+          {
+            "Id": {
+              "Ref": "OwnBookLive3FCE23DA"
+            }
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup"
+    },
     "ServiceTargetPolicyEDAE9969": {
       "DependsOn": [
         "PolicyLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY75460003"
@@ -2031,6 +3255,464 @@
         ]
       },
       "Type": "AWS::ElasticLoadBalancingV2::TargetGroup"
+    },
+    "SweeperDeadLettersAlarm54407246": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A PDS release sweep failed after its retries: unreserved budget stays held until a later run",
+        "AlarmName": "fastm-pds-sweeper-dead-letters",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "SweeperDeadLettersD01FDB2E",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SweeperDeadLettersD01FDB2E": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SweeperDeadLettersPolicy13F6F989": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SweeperDeadLettersD01FDB2E",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Queues": [
+          {
+            "Ref": "SweeperDeadLettersD01FDB2E"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::QueuePolicy"
+    },
+    "SweeperEvery15Minutes01B55B7E": {
+      "Properties": {
+        "Description": "PDS: release reservations with no impression after two hours",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "GroupName": "fastm-pds",
+        "ScheduleExpression": "rate(15 minutes)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "SweeperFunctionCCDB2B02",
+              "Arn"
+            ]
+          },
+          "DeadLetterConfig": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "SweeperDeadLettersD01FDB2E",
+                "Arn"
+              ]
+            }
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 900,
+            "MaximumRetryAttempts": 2
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "SweeperScheduleRole355FA113",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "SweeperFunctionCCDB2B02": {
+      "DependsOn": [
+        "SweeperFunctionRoleDefaultPolicyC98B2147",
+        "SweeperFunctionRole52EEB090"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "PDS: release reservations that saw no impression in two hours",
+        "Environment": {
+          "Variables": {
+            "FAST_PREFIX": "fastm",
+            "LEDGER_TABLE": "fastm-ledger",
+            "PDS_TABLE": "fastm-pds",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "pds.sweeper"
+          }
+        },
+        "Handler": "fast_channels.functions.pds.sweeper.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "SweeperFunctionLogs382DD526"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "SweeperFunctionRole52EEB090",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "SweeperFunctionEventInvokeConfig3E6228FC": {
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "SweeperDeadLettersD01FDB2E",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "FunctionName": {
+          "Ref": "SweeperFunctionCCDB2B02"
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST"
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig"
+    },
+    "SweeperFunctionLogs382DD526": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SweeperFunctionRole52EEB090": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SweeperFunctionRoleDefaultPolicyC98B2147": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SweeperFunctionLogs382DD526",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SweeperDeadLettersD01FDB2E",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:Query",
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds/index/pending"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:UpdateItem"
+              ],
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "RES#*",
+                    "BUDGET#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "pds/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SweeperFunctionRoleDefaultPolicyC98B2147",
+        "Roles": [
+          {
+            "Ref": "SweeperFunctionRole52EEB090"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "SweeperScheduleRole355FA113": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "PublisherGroup492B30FA",
+                      "Arn"
+                    ]
+                  }
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: run the PDS release sweeper and dead-letter failed runs",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SweeperScheduleRoleDefaultPolicy057C85E5": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SweeperFunctionCCDB2B02",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "SweeperFunctionCCDB2B02",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SweeperDeadLettersD01FDB2E",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SweeperScheduleRoleDefaultPolicy057C85E5",
+        "Roles": [
+          {
+            "Ref": "SweeperScheduleRole355FA113"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
     }
   },
   "Rules": {

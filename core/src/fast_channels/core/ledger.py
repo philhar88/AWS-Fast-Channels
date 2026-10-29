@@ -41,6 +41,11 @@ type Json = str | int | bool | list[Json] | dict[str, Json] | None
 """What a ledger detail may hold: no floats, whose text form differs between implementations."""
 
 
+def ledger_table(prefix: str) -> str:
+    """The stage's ledger table (the ops module's)."""
+    return f"{prefix}-ledger"
+
+
 class LedgerKind(StrEnum):
     """What a record is about."""
 

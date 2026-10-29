@@ -46,6 +46,7 @@ from fast_channels.core.pds.models import (
     Slot,
     StandaloneAd,
 )
+from fast_channels.core.timeline import whole_seconds
 
 MIN_AVAIL_MS: Final = 30_000
 """Avails shorter than this get an empty pod."""
@@ -171,13 +172,9 @@ def limit_ms(dur_ms: int, scheduled_ms: int | None) -> int:
     A live request carries the frame-exact duration (or, for a late join, the remainder), so a whole-second
     ``dur_ms`` equal to the schedule of record's rounded duration is a prefetch retrieval's.
     """
-    if scheduled_ms is not None and dur_ms != scheduled_ms and dur_ms == _seconds(scheduled_ms) * 1000:
+    if scheduled_ms is not None and dur_ms != scheduled_ms and dur_ms == whole_seconds(scheduled_ms) * 1000:
         return scheduled_ms
     return dur_ms
-
-
-def _seconds(ms: int) -> int:
-    return (ms + 500) // 1000  # half up, as MediaTailor rounds avail_duration_secs
 
 
 def _house(bid: Bid, context: PodContext) -> bool:
@@ -194,7 +191,7 @@ def _below_floor(bid: Bid, context: PodContext) -> bool:
 
 def _dur(bid: Bid) -> int:
     """The ad's duration in whole seconds: declared, else its VAST duration rounded."""
-    return bid.dur or _seconds(bid.vast_dur_ms or 0)
+    return bid.dur or whole_seconds(bid.vast_dur_ms or 0)
 
 
 def _adomains(bid: Bid) -> frozenset[str]:
@@ -209,7 +206,7 @@ def _ineligible(bid: Bid, slot: Slot, request: SelectRequest, context: PodContex
         (request.probe and not house, Outcome.PROBE),
         (bid.adm_kind is None, Outcome.INVALID_VAST),
         (not bid.vast_dur_ms, Outcome.NO_DURATION),
-        (bool(bid.dur) and _seconds(bid.vast_dur_ms or 0) != bid.dur, Outcome.DURATION_MISMATCH),
+        (bool(bid.dur) and whole_seconds(bid.vast_dur_ms or 0) != bid.dur, Outcome.DURATION_MISMATCH),
         (bool(slot.rqddurs) and _dur(bid) not in slot.rqddurs, Outcome.RQDDURS),
         (not bid.crid, Outcome.NO_CRID),
         (not house and not _adomains(bid), Outcome.NO_ADOMAIN),

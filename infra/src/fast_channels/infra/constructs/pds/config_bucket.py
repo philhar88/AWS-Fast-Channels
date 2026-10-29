@@ -2,7 +2,8 @@
 
 The bucket is never served by the CDN and never the ingest bucket: only the PDS's functions read it and only the
 publishers write it. The snapshot publisher (``fast_channels.functions.pds.publisher``) runs when the stack deploys
-(a CDK trigger, again whenever the function or its configuration changes) and every hour.
+(a CDK trigger, again whenever the function or its configuration changes) and every hour. It reads the default
+ladder's kit from the media bucket (only its VAST pod and demo index) and sets the own book's budget shards.
 """
 
 from typing import TYPE_CHECKING, Final
@@ -15,11 +16,14 @@ from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
 from constructs import Construct
 
-from fast_channels.core.pds.names import publisher_alarm
+from fast_channels.core.ledger import ledger_table
+from fast_channels.core.pds.names import Parameter, parameter_name, publisher_alarm, table_name
 from fast_channels.core.pds.snapshot import HISTORY_PREFIX, SNAPSHOT_KEY, SnapshotBase
 from fast_channels.infra import nag
+from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.alerts import dead_letter_alarm
 from fast_channels.infra.constructs.functions import FastFunction
+from fast_channels.infra.constructs.pds.delivery import allow_ledger, allow_table
 from fast_channels.infra.constructs.queues import dead_letter_queue
 
 if TYPE_CHECKING:
@@ -87,12 +91,14 @@ class SnapshotPublisher(Construct):
     Args:
         prefix: the stage's prefix.
         bucket: the config bucket.
+        media_bucket: the media bucket (the ladder kits).
         base: what the deployment configures in the snapshot.
         alert_topic: topic of the dead-letter alarm.
         log_retention, removal_policy: of the function's log group and the dead-letter queue.
 
     Attributes:
-        function: the publisher. schedule: the hourly run. dead_letters: failed scheduled runs.
+        function: the publisher. group: the PDS's schedule group. schedule: the hourly run. dead_letters: failed
+            scheduled runs.
     """
 
     def __init__(
@@ -102,6 +108,7 @@ class SnapshotPublisher(Construct):
         *,
         prefix: str,
         bucket: s3.IBucket,
+        media_bucket: s3.IBucket,
         base: SnapshotBase,
         alert_topic: sns.ITopic,
         log_retention: logs.RetentionDays,
@@ -113,11 +120,15 @@ class SnapshotPublisher(Construct):
             self,
             "Function",
             handler=HANDLER,
-            description="PDS: publish the snapshot (demand allow-list, floor, CloudFront origin-facing networks)",
+            description="PDS: publish the snapshot (demand, floor, CloudFront origin-facing networks, own book) "
+            "and the lines' budgets",
             environment={
                 "FAST_PREFIX": prefix,
                 "PDS_CONFIG_BUCKET": bucket.bucket_name,
                 "PDS_SNAPSHOT_BASE": base.model_dump_json(),
+                "MEDIA_BUCKET": media_bucket.bucket_name,
+                "PDS_TABLE": table_name(prefix),
+                "LEDGER_TABLE": ledger_table(prefix),
             },
             timeout=Duration.minutes(1),
             memory_size=256,
@@ -146,6 +157,17 @@ class SnapshotPublisher(Construct):
         # A GetObject of a missing key is a 404 only for a caller with ListBucket on the bucket (S3 evaluates no
         # s3:prefix for it), so the first publish can tell "none yet" from "denied". The bucket holds only snapshots.
         self.function.allow(["s3:ListBucket"], [bucket.bucket_arn])
+        self.function.allow(
+            ["s3:GetObject"],
+            [media_bucket.arn_for_objects("ads/*/vast.xml"), media_bucket.arn_for_objects("ads/*/demo/creatives.json")],
+            why="The own book's creatives: each ladder kit's VAST pod and demo index (ads/<ladder>/...)",
+        )
+        self.function.allow(
+            ["ssm:GetParameter"],
+            [arn(self, "ssm", "parameter", parameter_name(prefix, Parameter.LADDER_VERSION).lstrip("/"))],
+        )
+        allow_table(self.function, prefix, ["GetItem", "PutItem", "UpdateItem"], ["BUDGET#*"])
+        allow_ledger(self.function, prefix)
         self.trigger = triggers.Trigger(
             self,
             "OnDeploy",
@@ -154,7 +176,7 @@ class SnapshotPublisher(Construct):
             timeout=Duration.minutes(1),
             execute_on_handler_change=True,
         )
-        group = scheduler.ScheduleGroup(
+        self.group = group = scheduler.ScheduleGroup(
             self, "Group", schedule_group_name=f"{prefix}-pds", removal_policy=RemovalPolicy.DESTROY
         )
         role = iam.Role(

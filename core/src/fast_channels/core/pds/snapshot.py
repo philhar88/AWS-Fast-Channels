@@ -1,4 +1,5 @@
-"""The PDS snapshot: everything a ``/policy`` or ``/select`` decision reads besides the request and per-viewer state.
+"""The PDS snapshot: everything a ``/policy``, ``/select`` or own-book answer reads besides the request and the
+per-viewer and budget state.
 
 The snapshot publisher writes it to the PDS's private config bucket (never the CDN, never the ingest bucket) as
 ``snapshot/current.json``, with a copy under ``snapshot/history/<version>.json``. Each function loads it at cold start
@@ -12,10 +13,20 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from functools import cached_property
 from ipaddress import IPv4Network, IPv6Network, ip_network
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    PrivateAttr,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
+from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.policy import Demand
 from fast_channels.core.pds.xff import IpNetwork, origin_facing_networks
 
@@ -45,6 +56,7 @@ class SnapshotBase(BaseModel):
     )
     shed: frozenset[str] = Field(default=frozenset(), description="Bidders a runbook took out of the allow-list.")
     floor_cpm: Decimal = Field(default=Decimal(0), ge=0, description="Price floor for paid bids, CPM.")
+    lines: tuple[Line, ...] = Field(default=(), description="The own book's direct lines.")
 
     @field_serializer("shed")
     def _sorted(self, shed: frozenset[str]) -> list[str]:
@@ -62,6 +74,22 @@ class Snapshot(SnapshotBase):
         default=(), description="CloudFront's origin-facing networks (ip-ranges.json CLOUDFRONT_ORIGIN_FACING)."
     )
     ip_ranges: str | None = Field(default=None, description="``syncToken`` of the ip-ranges.json they came from.")
+    ladder_version: str | None = Field(default=None, description="The ladder of the own book's creatives.")
+    creatives: tuple[Creative, ...] = Field(default=(), description="The lines' creatives that the kit encoded.")
+    house: tuple[Creative, ...] = Field(default=(), description="The house ads of the ladder's kit.")
+    _book: Book = PrivateAttr(default_factory=Book)
+
+    @model_validator(mode="after")
+    def _own_book(self) -> Self:
+        self._book = Book(
+            ladder_version=self.ladder_version, lines=self.lines, creatives=self.creatives, house=self.house
+        )
+        return self
+
+    @property
+    def book(self) -> Book:
+        """The own book: the lines with their creatives, and the house ads."""
+        return self._book
 
     @field_validator("origin_facing")
     @classmethod
@@ -94,15 +122,28 @@ def from_ip_ranges(document: dict[str, Any] | None) -> tuple[tuple[str, ...], st
 
 
 def build(
-    base: SnapshotBase, *, origin_facing: tuple[str, ...] = (), ip_ranges: str | None = None, now: datetime
+    base: SnapshotBase,
+    *,
+    origin_facing: tuple[str, ...] = (),
+    ip_ranges: str | None = None,
+    own: Book | None = None,
+    now: datetime,
 ) -> Snapshot:
     """A snapshot of ``base`` with CloudFront's origin-facing networks (none: no viewer address until a later
-    publish) and the ``syncToken`` of the ip-ranges.json they came from.
+    publish), the ``syncToken`` of the ip-ranges.json they came from, and the own book's creatives and house ads
+    (``own``; its lines are ``base``'s).
 
     Its version ends with a digest of the content the functions act on: the sync token is left out, because AWS
     republishes ip-ranges.json for any service's change.
     """
-    content = {**base.model_dump(mode="json"), "origin_facing": sorted(str(ip_network(n)) for n in origin_facing)}
+    book = own or Book()
+    content = {
+        **base.model_dump(mode="json"),
+        "origin_facing": sorted(str(ip_network(n)) for n in origin_facing),
+        "ladder_version": book.ladder_version,
+        "creatives": [c.model_dump(mode="json") for c in book.creatives],
+        "house": [c.model_dump(mode="json") for c in book.house],
+    }
     digest = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
     return Snapshot.model_validate(
         {

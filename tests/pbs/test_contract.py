@@ -247,6 +247,22 @@ def test_a_break_without_an_event_id_asks_the_service_nothing(mocks: Mocks, pbs:
     assert all(title.startswith("house") for title in titles), "the house fallback"
 
 
+def test_the_own_book_keeps_every_bid_of_a_slot(mocks: Mocks, pbs: Pbs) -> None:
+    """Prebid Server keeps one bid per bidder and slot unless the stored request's ``multibid`` names the bidder: the
+    own book's house ads must reach the module beside its lines, as fillers, standalones and the house fallback."""
+    mocks.own_book_every_bid = True
+    started = time.time()
+    try:
+        response = pbs.auction("CTX1", seconds=60)
+    finally:
+        mocks.own_book_every_bid = False
+
+    [select] = mocks.calls_to("/select", started)
+    own = sorted((bid["impid"], bid["crid"]) for bid in select.body["bids"] if bid["bidder"] == "ownbook")
+    assert own == [(slot, crid) for slot in ("s1", "s2") for crid in ("direct1", "house1", "house2")]
+    assert response.status_code == 200
+
+
 def test_every_service_call_is_the_contract(mocks: Mocks, pbs: Pbs) -> None:
     """Runs last: every /policy and /select call of the session (and of these auctions) validated."""
     started = time.time()

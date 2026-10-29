@@ -5,8 +5,11 @@ from typing import TYPE_CHECKING, Any, Final
 from aws_cdk import CfnOutput, Duration, Stack
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.naming import source_location_name
+from fast_channels.core.pds.names import Parameter as PdsParameter
+from fast_channels.core.pds.names import parameter_name as pds_parameter
 from fast_channels.infra.config import AdsMode, AsRunMode, DemandMode, PriceClass
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.channel_assembly import (
@@ -211,6 +214,19 @@ class MediaStack(Stack):
             ),
             mediatailor_log_destination_arn=self.vended_logs.destination_arn,
         )
+        if config.modules.pds.enabled:
+            # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
+            for parameter, value in (
+                (PdsParameter.CONTENT_BASE_URL, content_base_url),
+                (PdsParameter.LADDER_VERSION, default_ladder_version),
+            ):
+                ssm.StringParameter(
+                    self,
+                    f"Pds{parameter.name.title().replace('_', '')}Parameter",
+                    parameter_name=pds_parameter(prefix, parameter),
+                    string_value=value,
+                    description=f"FAST Channels ({prefix}): for the Pds stack",
+                )
         self._outputs()
 
     def _channel(

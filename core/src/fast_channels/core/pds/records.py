@@ -1,4 +1,5 @@
-"""Decision records: one JSON line per ``/policy`` and per ``/select`` call, joined on ``decision_id``.
+"""Decision records: one JSON line per ``/policy`` and per ``/select`` call, and one per impression of our tracker,
+joined on ``decision_id``.
 
 The PDS logs them (Powertools JSON); a subscription delivers them to the lake. The select record keeps every bid at or
 above the floor with what became of it, which is what forgone-revenue accounting and off-policy evaluation need.
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from fast_channels.core.pds.delivery import Credit  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.pds.models import (
     SCHEMA_VERSION,
     DeviceType,
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
 
 POLICY_RECORD: Final = "pds.policy"
 SELECT_RECORD: Final = "pds.select"
+DELIVERY_RECORD: Final = "pds.delivery"
 
 
 class _Record(BaseModel):
@@ -162,3 +165,25 @@ def select_record(request: SelectRequest, decision: PodDecision, *, latency_ms: 
         bids=[bid for bid in bids if bid.ref not in decision.below_floor],
         below_floor=len(decision.below_floor),
     )
+
+
+class DeliveryRecord(BaseModel):
+    """One firing of our impression tracker, as the ADS log recorded it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record: Literal["pds.delivery"] = DELIVERY_RECORD
+    v: Literal[1] = SCHEMA_VERSION
+    decision_id: str
+    sid: str
+    evid: str
+    crid: str
+    enr: int
+    pc: str = Field(description="The playback configuration that fired it.")
+    fired_at: str = Field(description="When MediaTailor fired it (ISO 8601).")
+    status: int | None = Field(description="The tracker's HTTP status as MediaTailor got it.")
+    impression: bool = Field(description="The first firing for (sid, evid, crid): an impression.")
+    fill: bool = Field(description="The first impression of the break (sid, evid): a fill.")
+    credit: Credit
+    line: str | None = Field(description="The own-book line the ad was reserved for.")
+    amount: Money | None = Field(description="Its price (cpm / 1000), US dollars.")

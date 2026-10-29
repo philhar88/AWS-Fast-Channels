@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
+from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.policy import Demand
 from fast_channels.core.pds.snapshot import (
     EMPTY,
@@ -97,7 +98,46 @@ def test_resource_names() -> None:
     assert names.table_name("fastm") == "fastm-pds"
     assert names.census_gate("fastm") == "fastm-pds-census-gate"
     assert names.publisher_alarm("fastm") == "fastm-pds-publisher-dead-letters"
+    assert names.dead_letter_alarm("fastm", "delivery") == "fastm-pds-delivery-dead-letters"
+    assert names.parameter_name("fastm", names.Parameter.LADDER_VERSION) == "/fastm/pds/ladder-version"
     assert (names.decision_stream("fastm", "policy"), names.decision_table("policy")) == (
         "fastm-pds-policy",
         "pds_policy",
     )
+
+
+LINE = Line(
+    id="direct-1",
+    advertiser="Direct Advertiser 1",
+    adomain="direct1.example",
+    creatives=("direct1",),
+    cpm=Decimal(8),
+    budget=Decimal(100),
+    tier0=True,
+)
+DIRECT1 = Creative(
+    crid="direct1", creative_id="demo-direct1", hls_uri="https://cdn.example/ads/x/direct1.m3u8", duration_ms=30030
+)
+HOUSE1 = Creative(
+    crid="house1", creative_id="house-ad-1", hls_uri="https://cdn.example/ads/x/house1.m3u8", duration_ms=30030
+)
+
+
+def test_the_snapshot_carries_the_own_book() -> None:
+    base = BASE.model_copy(update={"lines": (LINE,)})
+    own = Book(ladder_version="standard@843ed1d05a", lines=(LINE,), creatives=(DIRECT1,), house=(HOUSE1,))
+    snapshot = build(base, origin_facing=NETWORKS, ip_ranges=SYNC, own=own, now=NOW)
+    loaded = Snapshot.model_validate_json(snapshot.model_dump_json())
+
+    assert loaded.book == own
+    assert loaded.book.tier0_deals == frozenset({"fast-direct-1"})
+    assert digest(loaded) != digest(build(base, origin_facing=NETWORKS, now=NOW)), "the creatives are content"
+    assert EMPTY.book == Book()
+    later = build(base, origin_facing=NETWORKS, own=own.model_copy(update={"lines": ()}), now=NOW)
+    assert later.book.lines == (LINE,), "the lines are the deployment's"
+
+
+def test_a_snapshot_whose_book_is_inconsistent_is_refused() -> None:
+    data = snapshot_at(NOW).model_dump(mode="json")
+    with pytest.raises(ValidationError, match="creative ids must be unique"):
+        Snapshot.model_validate({**data, "house": [HOUSE1.model_dump(), HOUSE1.model_dump()]})

@@ -100,6 +100,7 @@ def test_stored_request_is_one_pod_of_30_s_slots_for_the_own_book_only(seconds: 
     assert request["app"]["publisher"]["id"] == "fastm"
     assert request["app"]["content"] == {"livestream": 1, "context": 1, "cattax": 9}
     assert request["source"]["schain"]["nodes"] == [{"asi": "d111111abcdef8.cloudfront.net", "sid": "fastm", "hp": 1}]
+    assert request["ext"] == {"prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": 9}]}}, "house ads and lines"
 
 
 @pytest.mark.parametrize(("seconds", "positions"), [(30, [0]), (60, [1, -1]), (90, [1, 0, -1]), (120, [1, 0, 0, -1])])

@@ -171,8 +171,9 @@ def select(request: SelectRequest) -> str:
     return select_response(request, select_pod(request), tracker_base=TRACKER_BASE, enr=TRACKER_ENR).model_dump_json()
 
 
-def own_book(request: dict[str, Any]) -> dict[str, Any]:
-    """One house ad per slot, alternating two creatives."""
+def own_book(request: dict[str, Any], *, every_bid: bool = False) -> dict[str, Any]:
+    """One house ad per slot, alternating two creatives; with ``every_bid``, as the real own book bids: both house ads
+    and a direct line's creative in every slot."""
     bids = [
         {
             "id": f"house-{imp['id']}",
@@ -186,6 +187,33 @@ def own_book(request: dict[str, Any]) -> dict[str, Any]:
         }
         for n, imp in enumerate(request.get("imp", []))
     ]
+    if every_bid:
+        for n, imp in enumerate(request.get("imp", [])):
+            other = f"house{(n + 1) % 2 + 1}"
+            bids.append(
+                {
+                    "id": f"{other}-{imp['id']}",
+                    "impid": imp["id"],
+                    "price": 0.01,
+                    "crid": other,
+                    "dur": 30,
+                    "adm": vast(other),
+                    "ext": {"fast": {"house": True}},
+                }
+            )
+            bids.append(
+                {
+                    "id": f"direct1-{imp['id']}",
+                    "impid": imp["id"],
+                    "price": 8.0,
+                    "crid": "direct1",
+                    "adomain": ["direct1.example"],
+                    "dealid": "fast-direct-1",
+                    "dur": 30,
+                    "adm": vast("direct1"),
+                    "ext": {"fast": {"line": "direct-1"}},
+                }
+            )
     return {"id": request.get("id", ""), "cur": "USD", "seatbid": [{"seat": "ownbook", "bid": bids}]}
 
 
@@ -208,6 +236,8 @@ class Mocks:
     work: Path
     calls: list[Call] = field(default_factory=list)
     select_fails: bool = False
+    own_book_every_bid: bool = False
+    """The own book bids several ads per slot (:func:`own_book`)."""
     contract_errors: list[str] = field(default_factory=list)
     """Service calls the contract refuses (path and the validation error)."""
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -328,7 +358,7 @@ class Mocks:
                     return self._refused(path, error)
                 return (503, "{}", 0) if self.select_fails else (200, select(request), 0)
             case "/ownbook/openrtb":
-                return 200, json.dumps(own_book(body)), 0
+                return 200, json.dumps(own_book(body, every_bid=self.own_book_every_bid)), 0
             case "/amt":
                 assert self._simulator is not None
                 out = self._simulator.lambda_handler({"body": json.dumps(body), "headers": headers}, None)

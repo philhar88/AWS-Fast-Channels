@@ -99,6 +99,7 @@ class DataStack(Stack):
             for parameter, value in (
                 (PdsParameter.CONFIG_BUCKET, self.pds_config.bucket.bucket_name),
                 (PdsParameter.LAKE_BUCKET, self.lake.bucket.bucket_name),
+                (PdsParameter.MEDIA_BUCKET, self.storage.media_bucket.bucket_name),
             ):
                 ssm.StringParameter(
                     self,

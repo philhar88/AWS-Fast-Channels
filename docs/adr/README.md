@@ -27,7 +27,7 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0016](0016-plain-hls-ts-avc-aac-basic-tier.md) | Plain HLS MPEG-TS, AVC + AAC muxed, Basic tier | Accepted, amended by 0017 |
 | [0017](0017-ssai-only-frame-accurate-cues-with-esam.md) | SSAI only; frame-accurate ad cues with ESAM | Accepted |
 | [0020](0020-demand-through-the-prebid-server-guidance.md) | Programmatic demand through the AWS Prebid Server guidance | Proposed |
-| [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Proposed (ledger part) |
+| [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Accepted |
 | [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Proposed |
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |

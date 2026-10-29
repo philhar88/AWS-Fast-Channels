@@ -15,6 +15,16 @@
   "cur": [
     "USD"
   ],
+  "ext": {
+    "prebid": {
+      "multibid": [
+        {
+          "bidder": "ownbook",
+          "maxbids": 9
+        }
+      ]
+    }
+  },
   "id": "fast-pod-90s",
   "imp": [
     {

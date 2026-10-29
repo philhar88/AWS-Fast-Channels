@@ -177,15 +177,21 @@ def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def test_the_pds_needs_its_state_in_the_data_stack(stage: _demand.DemandStage, stub: Any) -> None:
-    cloudformation = stub("cloudformation")
-    data = "FastChannels-fastcix-Data"
-    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(data, {})]}, {"StackName": data})
-    with pytest.raises(_demand.DemandError, match="make deploy"):
+def test_the_pds_needs_the_parameters_of_the_data_and_media_stacks(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    names = [
+        f"/fastcix/pds/{p}"
+        for p in ("config-bucket", "lake-bucket", "media-bucket", "content-base-url", "ladder-version")
+    ]
+    ssm.add_response(
+        "get_parameters",
+        {"Parameters": [], "InvalidParameters": names[3:]},
+        {"Names": names},
+    )
+    with pytest.raises(_demand.DemandError, match=r"content-base-url.*make deploy"):
         stage.check_pds_state()
 
-    outputs = {"PdsConfigBucketName": "b", "PdsTableName": "fastcix-pds"}
-    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(data, outputs)]}, {"StackName": data})
+    ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
     stage.check_pds_state()
 
 
