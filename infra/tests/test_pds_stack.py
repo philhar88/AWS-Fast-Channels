@@ -288,7 +288,7 @@ def test_delivery_reads_the_impression_beacons_of_the_stages_mediatailor_log(dep
     assert keys == [
         ('"dynamodb:PutItem"', ["IMP#*", "FILL#*"]),
         ('"dynamodb:PutItem"', ["pds/*"]),
-        ('["dynamodb:GetItem", "dynamodb:UpdateItem"]', ["RES#*", "BUDGET#*"]),
+        ('["dynamodb:GetItem", "dynamodb:UpdateItem"]', ["RES#*", "BUDGET#*", "CAP#*"]),
     ]
     names = {a["AlarmName"] for a in resources(template, "AWS::CloudWatch::Alarm").values()}
     assert {"fastm-pds-delivery-dead-letters", "fastm-pds-sweeper-dead-letters"} <= names
@@ -429,7 +429,7 @@ def test_the_module_fallback_alarms_watch_prebid_servers_log(deployment: GetDepl
         f["MetricTransformations"][0]["MetricName"]: f for f in resources(template, "AWS::Logs::MetricFilter").values()
     }
 
-    assert set(filters) == {"Pods", "PolicyFallbacks", "SelectFallbacks"}
+    assert set(filters) == {"Pods", "PolicyFallbacks", "SelectFallbacks", "PodErrors"}
     assert {f["LogGroupName"] for f in filters.values()} == {"fastm-pbs-PrebidContainerLogGroup"}
     assert filters["Pods"]["FilterPattern"] == '"fast-ctv-pod" -"warmup"'
     assert filters["PolicyFallbacks"]["FilterPattern"] == '"fast-ctv-pod" -"warmup" "POLICY_"'
@@ -442,7 +442,9 @@ def test_the_module_fallback_alarms_watch_prebid_servers_log(deployment: GetDepl
     assert (policy["Threshold"], select["Threshold"]) == (1, 0.5)
     assert policy["ComparisonOperator"] == "GreaterThanThreshold"
     [expression] = [m["Expression"] for m in policy["Metrics"] if "Expression" in m]
-    assert expression == "IF(pods >= 100, 100 * FILL(fallbacks, 0) / pods, 0)"
+    assert expression == "IF(pods >= 20, 100 * (FILL(f0, 0)) / pods, IF(FILL(f0, 0) >= 5, 100, 0))"
+    [expression] = [m["Expression"] for m in select["Metrics"] if "Expression" in m]
+    assert "FILL(f0, 0) + FILL(f1, 0)" in expression, "house fallbacks and module errors"
 
     without = deployment(PDS, extra={NETWORK_CONTEXT: {**NETWORK, "container_log_group": None}})
     assert not resources(without.template(without.stage.pds), "AWS::Logs::MetricFilter")

@@ -5,40 +5,37 @@ ad) needs a reservation of its price before it may be answered, because the answ
 
 1. select the pod;
 2. reserve the line ads it holds that are not reserved yet (``reserve``: line -> crids, returns the crids refused:
-   no budget left, the session's cap reached, or the reservation failed);
-3. if any was refused, select again without that creative's bids, and reserve again.
+   no budget left, the session's cap reached, or the reservation failed). A refusal is the line's, so
+3. if any was refused, select again without that line's bids (those not reserved yet), and reserve again.
 
 After :data:`ATTEMPTS` rounds that still met refusals, the pod is selected once more without any line ad that is not
-reserved, so the answer never holds an unreserved line ad. A creative left out this way is recorded as
-``unreserved``. A reservation made for an ad that a later round dropped stays until the sweeper releases it: liability
-is over-reserved for two hours at most, never under.
+reserved, so the answer never holds an unreserved line ad. An own-book bid that is neither a house ad nor a creative
+of a line in the snapshot (the own book saw a newer snapshot, say) is left out from the start: it cannot be reserved.
+A reservation made for an ad that a later round dropped stays until the sweeper releases it: liability is
+over-reserved for two hours at most, never under.
 
 Standalones are reserved like winners: MediaTailor plays a standalone when the winner fails, so either can be the
 impression.
 """
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
 from fast_channels.core.pds.book import Book, Line
-from fast_channels.core.pds.pod import Outcome, PodContext, PodDecision, select_pod
-from fast_channels.core.timeline import whole_seconds
+from fast_channels.core.pds.pod import Outcome, PodContext, PodDecision, below_floor_bids, select_pod, tier0_bids
 
 if TYPE_CHECKING:
     from fast_channels.core.pds.models import SelectRequest
 
 ATTEMPTS: Final = 3
 """Rounds of selection and reservation before the line ads not reserved are left out."""
+PLACEMENT: Final = frozenset({Outcome.WON, Outcome.STANDALONE, Outcome.OUTBID, Outcome.SEPARATION, Outcome.NO_ROOM})
+"""Outcomes of an eligible bid: one left out for its reservation is recorded ``unreserved`` instead."""
 
 type Reserve = Callable[[Mapping[Line, tuple[str, ...]]], frozenset[str]]
 """Reserve each line's crids; returns the crids refused."""
-
-
-def scheduled_ms(dur_ms: int, breaks_ms: Iterable[int]) -> int | None:
-    """The schedule of record's break that ``dur_ms`` is the prefetch rounding of (60,000 for 60,060), or None."""
-    return next((ms for ms in breaks_ms if ms != dur_ms and whole_seconds(ms) * 1000 == dur_ms), None)
 
 
 def pod_context(book: Book, *, floor_cpm: Decimal = Decimal(0), scheduled: int | None = None) -> PodContext:
@@ -53,47 +50,57 @@ def _without(request: SelectRequest, refs: frozenset[str]) -> SelectRequest:
     return request.model_copy(update={"bids": [bid for bid in request.bids if bid.ref not in refs]})
 
 
-def _line_bids(request: SelectRequest, book: Book, own_book: frozenset[str]) -> dict[str, tuple[str, Line]]:
-    """Ref -> (crid, line) of the own book's line bids (a house ad is never a line's)."""
-    found: dict[str, tuple[str, Line]] = {}
-    for bid in request.bids:
-        if bid.bidder in own_book and not bid.house and bid.crid and (line := book.line_of(bid.crid)) is not None:
-            found[bid.ref] = (bid.crid, line)
-    return found
-
-
 def select(
-    request: SelectRequest, pod_context: PodContext, book: Book, *, reserve: Reserve
+    request: SelectRequest, rules: PodContext, book: Book, *, reserve: Reserve
 ) -> tuple[PodDecision, frozenset[str]]:
-    """The pod for ``request`` and the crids reserved for it (this call's and earlier calls' for the break)."""
-    lines = _line_bids(request, book, pod_context.own_book)
+    """The pod for ``request`` and the crids of its line ads, every one reserved (by this call or an earlier one)."""
+    sold = {bid.ref: bid for bid in request.bids if bid.bidder in rules.own_book and not bid.house}
+    lines = {ref: (bid.crid, line) for ref, bid in sold.items() if bid.crid and (line := book.line_of(bid.crid))}
+    unknown = frozenset(sold) - frozenset(lines)
     held: set[str] = set()
-    refused: set[str] = set()
-    for _ in range(ATTEMPTS):
-        excluded = frozenset(ref for ref, (crid, _) in lines.items() if crid in refused)
-        decision = select_pod(_without(request, excluded), pod_context)
+    refused: set[str] = set()  # line ids
+    excluded = unknown
+    baseline = decision = select_pod(_without(request, excluded), rules)
+    for attempt in range(ATTEMPTS):
+        if attempt:
+            decision = select_pod(_without(request, excluded), rules)
         wanted: dict[Line, list[str]] = {}
         for ad in (*decision.pod, *decision.standalones):
-            if ad.ref not in lines:
-                continue
-            crid, line = lines[ad.ref]
-            if crid not in held and crid not in wanted.get(line, []):
-                wanted.setdefault(line, []).append(crid)
+            if ad.ref in lines and (crid := lines[ad.ref][0]) not in held:
+                crids = wanted.setdefault(lines[ad.ref][1], [])
+                if crid not in crids:
+                    crids.append(crid)
         if not wanted:
-            return _finish(request, decision, excluded), frozenset(held)
+            break
         denied = reserve({line: tuple(crids) for line, crids in wanted.items()})
         held |= {crid for crids in wanted.values() for crid in crids} - denied
-        refused |= denied
+        refused |= {line.id for line, crids in wanted.items() if denied & set(crids)}
         if not denied:
-            return _finish(request, decision, excluded), frozenset(held)
-    excluded = frozenset(ref for ref, (crid, _) in lines.items() if crid not in held)
-    decision = select_pod(_without(request, excluded), pod_context)
-    return _finish(request, decision, excluded), frozenset(held)
+            break
+        excluded = unknown | {ref for ref, (crid, line) in lines.items() if line.id in refused and crid not in held}
+    else:
+        excluded = unknown | {ref for ref, (crid, _) in lines.items() if crid not in held}
+        decision = select_pod(_without(request, excluded), rules)
+    answered = {ad.crid for ad in (*decision.pod, *decision.standalones)}
+    return _finish(request, rules, decision, baseline, excluded), frozenset(held & answered)
 
 
-def _finish(request: SelectRequest, decision: PodDecision, excluded: frozenset[str]) -> PodDecision:
-    """``decision`` with an outcome for every bid of ``request``: the bids left out are ``unreserved``."""
+def _finish(
+    request: SelectRequest, rules: PodContext, decision: PodDecision, baseline: PodDecision, excluded: frozenset[str]
+) -> PodDecision:
+    """``decision`` with an outcome for every bid of ``request``: a bid left out keeps the first round's outcome if
+    it was not eligible anyway, else it is ``unreserved``; the tier-0 and below-floor bids are the request's."""
     if not excluded:
         return decision
-    outcomes = {**dict.fromkeys(excluded, Outcome.UNRESERVED), **decision.outcomes}
-    return replace(decision, outcomes={bid.ref: outcomes[bid.ref] for bid in request.bids})
+
+    def left_out(ref: str) -> Outcome:
+        first = baseline.outcomes.get(ref)
+        return first if first is not None and first not in PLACEMENT else Outcome.UNRESERVED
+
+    outcomes = {**{ref: left_out(ref) for ref in excluded}, **decision.outcomes}
+    return replace(
+        decision,
+        outcomes={bid.ref: outcomes[bid.ref] for bid in request.bids},
+        tier0=tier0_bids(request, rules),
+        below_floor=below_floor_bids(request, rules),
+    )

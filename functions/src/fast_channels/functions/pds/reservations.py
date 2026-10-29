@@ -258,6 +258,7 @@ def _reserve_actions(
                             "shard": _n(hold.shard),
                             "amount": _n(line.insertion),
                             "sid": _s(sid),
+                            "capped": {"BOOL": line.per_session is not None},
                             "reserved_at": _s(_iso(now)),
                             "pending": _s(PENDING),
                             "pending_at": _s(_iso(now)),
@@ -366,7 +367,8 @@ def _after_cancellation(
 def _transition(
     item: Mapping[str, Any], to: State, *, table: str, ledger_table: str, decision: str, crid: str, at: datetime
 ) -> list[dict[str, Any]]:
-    """The transaction that moves one reservation from its state to ``to``, with the shard and the ledger."""
+    """The transaction that moves one reservation from its state to ``to``, with the shard, the session's cap count
+    (a released ad gives its count back, a late impression takes it again) and the ledger."""
     was, line = item["state"]["S"], item["line"]["S"]
     shard, amount = int(item["shard"]["N"]), Decimal(item["amount"]["N"])
     stamp = {State.DELIVERED: "delivered_at", State.RELEASED: "released_at"}[to]
@@ -380,6 +382,18 @@ def _transition(
         State.RELEASED: {"UpdateExpression": "SET remaining = remaining + :amount"},
     }[to]
     action = Action.DELIVER if to is State.DELIVERED else Action.RELEASE
+    cap: list[dict[str, Any]] = []
+    if item.get("capped", {}).get("BOOL") and (to is State.RELEASED or late):
+        cap.append(
+            {
+                "Update": {
+                    "TableName": table,
+                    "Key": item_key(cap_key(item["sid"]["S"], line)),
+                    "UpdateExpression": "ADD n :count",
+                    "ExpressionAttributeValues": {":count": _n(-1 if to is State.RELEASED else 1)},
+                }
+            }
+        )
     return [
         {
             "Update": {
@@ -411,6 +425,7 @@ def _transition(
             amount=money(amount),
             **({"late": True} if late else {}),
         ),
+        *cap,
     ]
 
 

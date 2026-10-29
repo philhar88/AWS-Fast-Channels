@@ -239,7 +239,7 @@ def test_the_helpers_read_the_configuration() -> None:
     try:
         assert select.tracker_base() == f"{CDN}/ads/b.gif"
         assert select.budgets()._table == "fastm-pds"
-        assert select.dynamodb().meta.config.read_timeout == 1
+        assert select.dynamodb().meta.config.read_timeout == 0.1
     finally:
         select.budgets.cache_clear()
         select.dynamodb.cache_clear()
@@ -278,3 +278,25 @@ def test_a_one_dollar_line_stops_serving_once_its_budget_is_reserved(
     assert served[-10:] == [False] * 10, "the line stopped serving"
     unreserved = [r for r in records(caplog) if not r["reserved"]]
     assert len(unreserved) == 36
+
+
+def test_no_reservation_starts_late(stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(select, "RESERVE_BEFORE_S", -1.0)
+
+    answer = SelectResponse.model_validate_json(select.handler(alb(json.dumps(request())), Context())["body"])
+
+    assert stubbed == []
+    assert "ownbook-s1-direct1" not in [ad.ref for ad in answer.pod]
+
+
+def test_a_bad_tracker_base_fails_before_anything_is_reserved(
+    stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CONTENT_BASE_URL", "http://insecure.example")
+    settings.cache_clear()
+    select.tracker_base.cache_clear()
+
+    response = select.handler(alb(json.dumps(request())), Context())
+
+    assert response["statusCode"] == 500
+    assert stubbed == [], "no reservation for an answer that cannot be made"

@@ -680,11 +680,21 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
     assert network.container_log_group == "fastcix-pbs-PrebidContainerLogs"
 
 
-def test_a_task_without_a_log_group_gives_none(stage: _demand.DemandStage, stub: Any) -> None:
+def test_a_task_without_one_log_group_or_a_missing_service_gives_none(stage: _demand.DemandStage, stub: Any) -> None:
     ecs = stub("ecs")
-    ecs.add_response("describe_services", {"services": [{"taskDefinition": "td"}]})
-    ecs.add_response("describe_task_definition", {"taskDefinition": {"containerDefinitions": [{"name": "c"}]}})
 
+    def logging(name: str, group: str) -> dict[str, Any]:
+        return {"name": name, "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": group}}}
+
+    for containers, expected in (
+        ([{"name": "c"}], None),
+        ([logging("a", "g1"), logging("b", "g2")], None),
+        ([logging("only", "g3")], "g3"),
+    ):
+        ecs.add_response("describe_services", {"services": [{"taskDefinition": "td"}]})
+        ecs.add_response("describe_task_definition", {"taskDefinition": {"containerDefinitions": containers}})
+        assert stage.container_log_group("cluster", "service") == expected
+    ecs.add_response("describe_services", {"services": []})
     assert stage.container_log_group("cluster", "service") is None
 
 

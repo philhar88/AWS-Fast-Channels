@@ -10,8 +10,8 @@ import pytest
 
 from fast_channels.core.pds.book import Book, Line
 from fast_channels.core.pds.models import SelectRequest
-from fast_channels.core.pds.pod import Outcome, select_pod
-from fast_channels.core.pds.selection import ATTEMPTS, pod_context, scheduled_ms, select
+from fast_channels.core.pds.pod import Outcome, scheduled_ms, select_pod
+from fast_channels.core.pds.selection import ATTEMPTS, pod_context, select
 
 FIXTURES = Path(__file__).parents[3] / "contracts" / "fixtures" / "pds" / "select"
 DIRECT1 = Line(
@@ -164,3 +164,67 @@ def test_the_context_is_the_books() -> None:
 
     assert (rules.tier0_deals, rules.floor_cpm, rules.scheduled_ms) == (frozenset({"fast-direct-1"}), 2, 60060)
     assert rules.recent_crids == frozenset() and rules.kids_approved == frozenset()
+
+
+def test_an_own_book_ad_of_no_known_line_is_left_out() -> None:
+    request = fixture("demo-full-120s.json")
+    reservations = Reservations()
+
+    decision, reserved = select(request, RULES, Book(), reserve=reservations)
+
+    assert "ownbook-s1-direct1" not in refs(decision)
+    assert decision.outcomes["ownbook-s1-direct1"] is Outcome.UNRESERVED
+    assert reservations.asked == [] and reserved == frozenset()
+    assert "ownbook-s1-direct1" in decision.tier0, "the first round's tier-0 bids"
+
+
+def test_a_refused_line_is_left_out_whole() -> None:
+    line = DIRECT1.model_copy(update={"creatives": ("direct1", "direct1b")})
+    book = Book(lines=(line,))
+    request = fixture("demo-full-120s.json")
+    twin = next(b for b in request.bids if b.crid == "direct1").model_copy(
+        update={"ref": "ownbook-s1-direct1b", "crid": "direct1b", "adomain": ["direct1b.example"], "price": Decimal(7)}
+    )
+    request = request.model_copy(update={"bids": [*request.bids, twin]})
+    reservations = Reservations(refuse=frozenset({"direct1", "direct1b"}))
+
+    decision, reserved = select(request, pod_context(book), book, reserve=reservations)
+
+    assert len(reservations.asked) == 1, "one refusal takes the line out: no round for its other creative"
+    assert {decision.outcomes[r] for r in ("ownbook-s1-direct1", "ownbook-s1-direct1b")} == {Outcome.UNRESERVED}
+    assert reserved == frozenset()
+
+
+def test_only_answered_line_ads_are_reported_reserved() -> None:
+    other = Line(
+        id="direct-2",
+        advertiser="Direct Advertiser 2",
+        adomain="direct2.example",
+        creatives=("sim2",),
+        cpm=Decimal(1),
+        budget=Decimal(1),
+    )
+    book = Book(lines=(DIRECT1, other))
+    request = fixture("demo-full-120s.json")
+    own = [bid.model_copy(update={"bidder": "ownbook"}) if bid.crid == "sim2" else bid for bid in request.bids]
+    request = request.model_copy(update={"bids": own})
+    reservations = Reservations(refuse=frozenset({"direct1"}))
+
+    decision, reserved = select(request, pod_context(book), book, reserve=reservations)
+
+    assert "sim2" in {ad.crid for ad in decision.pod}
+    assert reserved == frozenset({"sim2"})
+
+
+def test_a_left_out_bid_that_was_not_eligible_keeps_its_outcome() -> None:
+    request = fixture("demo-full-120s.json")
+    cheap = DIRECT1.model_copy(update={"tier0": False})
+    book = Book(lines=(cheap,))
+    floor = pod_context(book, floor_cpm=Decimal(9))
+    reservations = Reservations()
+
+    data = request.model_copy(update={"bids": [b for b in request.bids if b.bidder == "ownbook"]})
+    decision, _ = select(data, floor, book, reserve=Reservations(refuse=frozenset({"x"})))
+    assert decision.outcomes["ownbook-s1-direct1"] is Outcome.FLOOR
+    assert "ownbook-s1-direct1" in decision.below_floor
+    assert reservations.asked == []

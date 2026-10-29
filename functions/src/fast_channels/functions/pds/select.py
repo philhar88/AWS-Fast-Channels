@@ -7,32 +7,37 @@ Behind the PDS's internal load balancer (Powertools ``ALBResolver``). The answer
   ``budget.Budgets.shard`` picks), and a line whose price cannot be reserved is left out.
 
 Each ad carries our impression tracker on the CDN (``core.pds.pod.tracker_url``). The module waits 100 ms for the
-answer; anything but a 200 with a known schema makes it render the auction's house ads (``SELECT_FALLBACK``). Each
-answer is logged as a ``pds.select`` decision record, which a subscription carries into the lake.
+answer; anything but a 200 with a known schema makes it render the auction's house ads (``SELECT_FALLBACK``). So the
+reservations get their own DynamoDB client (100 ms timeouts, one attempt) and stop after :data:`RESERVE_BEFORE_S`: a
+line not reserved by then is left out, never answered unreserved. A reservation that DynamoDB committed after the
+module gave up stays until the sweeper releases it. Each answer is logged as a ``pds.select`` decision record, which a
+subscription carries into the lake.
 """
 
 import os
 import time
 from datetime import UTC, datetime
 from functools import cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import boto3
 from aws_lambda_powertools import Logger, Metrics, single_metric
-from aws_lambda_powertools.event_handler import ALBResolver, Response, content_types
+from aws_lambda_powertools.event_handler import ALBResolver, Response
 from aws_lambda_powertools.metrics import MetricUnit
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 
 from fast_channels.core.pbs_config import TRACKER_PATH
 from fast_channels.core.pds.models import SelectRequest
 from fast_channels.core.pds.names import Endpoint
-from fast_channels.core.pds.pod import select_response
+from fast_channels.core.pds.pod import scheduled_ms, select_response, tracker_url
 from fast_channels.core.pds.records import select_record
-from fast_channels.core.pds.selection import pod_context, scheduled_ms, select
-from fast_channels.functions.pds.budget import Budgets
+from fast_channels.core.pds.selection import Reserve, pod_context, select
+from fast_channels.functions.pds.budget import budget_view
+from fast_channels.functions.pds.http import json_response, refused_fields
 from fast_channels.functions.pds.reservations import Hold, reserve
-from fast_channels.functions.pds.store import CLIENT_CONFIG, snapshot_store
+from fast_channels.functions.pds.store import snapshot_store
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
@@ -48,32 +53,33 @@ app = ALBResolver()
 
 store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
-ENR = 0
+budgets = budget_view
+"""The lines' budgets (one view per execution environment)."""
+ENR: Final = 0
 """The content-enrichment arm of every break until the crawl module enriches ``app.content`` (M17-04)."""
-
-
-@cache
-def budgets() -> Budgets:
-    """The lines' budgets, for the lines of the snapshot the function has."""
-    settings().require("pds_table")
-    return Budgets(settings().pds_table, lines=lambda: store().current.lines)
+REQUEST_CONFIG: Final = Config(connect_timeout=0.1, read_timeout=0.1, retries={"total_max_attempts": 1})
+"""The reservations' client: on the request path, inside the module's 100 ms."""
+RESERVE_BEFORE_S: Final = 0.06
+"""No reservation starts later than this into a request: the answer must reach the module within 100 ms."""
 
 
 @cache
 def dynamodb() -> Any:
-    """The reservations' client: short timeouts, since the module waits 100 ms for the whole answer."""
-    return boto3.client("dynamodb", config=CLIENT_CONFIG)
+    """The reservations' client (:data:`REQUEST_CONFIG`)."""
+    return boto3.client("dynamodb", config=REQUEST_CONFIG)
 
 
 @cache
 def tracker_base() -> str:
-    """Our impression tracker on the CDN: ``<content base URL>/ads/b.gif``."""
+    """Our impression tracker on the CDN: ``<content base URL>/ads/b.gif``.
+
+    Raises:
+        ValueError: it is not an https URL (the tracker cannot be built).
+    """
     settings().require("content_base_url")
-    return f"{settings().content_base_url.rstrip('/')}{TRACKER_PATH}"
-
-
-def _json(status: int, body: str) -> Response[str]:
-    return Response(status_code=status, content_type=content_types.APPLICATION_JSON, body=body)
+    base = f"{settings().content_base_url.rstrip('/')}{TRACKER_PATH}"
+    tracker_url(base, "sid.0", "crid")  # raises on a base no tracker can be built on
+    return base
 
 
 @app.post(Endpoint.SELECT.value)
@@ -83,23 +89,27 @@ def selection() -> Response[str]:
     try:
         request = SelectRequest.model_validate_json(app.current_event.decoded_body or "")
     except ValidationError as error:
-        fields = sorted({".".join(str(part) for part in e["loc"]) for e in error.errors()})
-        logger.warning("select request refused", extra={"fields": fields})
+        logger.warning("select request refused", extra={"fields": refused_fields(error)})
         metrics.add_metric(name="SelectRefused", unit=MetricUnit.Count, value=1)
-        return _json(400, '{"error":"invalid request"}')
+        return json_response(400, '{"error":"invalid request"}')
     try:
         return _answer(request, started)
     except Exception:
         logger.exception("select failed")
         metrics.add_metric(name="SelectErrors", unit=MetricUnit.Count, value=1)
-        return _json(500, '{"error":"internal"}')
+        return json_response(500, '{"error":"internal"}')
 
 
-def _reserver(request: SelectRequest) -> Any:
-    """The reservation step of ``selection.select`` for this break: refuses a line no shard can take, and every line
-    when DynamoDB fails (no line ad is answered unreserved)."""
+def _reserver(request: SelectRequest, started: float) -> Reserve:
+    """The reservation step of ``selection.select`` for this break. It refuses a line no shard can take, every line
+    once :data:`RESERVE_BEFORE_S` has passed, and every line of a reservation DynamoDB failed: no line ad is
+    answered unreserved."""
 
     def reserve_lines(wanted: Mapping[Line, tuple[str, ...]]) -> frozenset[str]:
+        everything = frozenset(crid for crids in wanted.values() for crid in crids)
+        if time.perf_counter() - started > RESERVE_BEFORE_S:
+            metrics.add_metric(name="ReservationsTooLate", unit=MetricUnit.Count, value=1)
+            return everything
         settings().require("pds_table", "ledger_table")
         view = budgets()
         holds: list[Hold] = []
@@ -125,7 +135,7 @@ def _reserver(request: SelectRequest) -> Any:
         except (BotoCoreError, ClientError) as error:
             logger.warning("reservation failed", extra={"error": type(error).__name__, "detail": str(error)[:300]})
             metrics.add_metric(name="ReservationErrors", unit=MetricUnit.Count, value=1)
-            return frozenset(refused | {crid for hold in holds for crid in hold.crids})
+            return everything
         return frozenset(refused | set(done.refused))
 
     return reserve_lines
@@ -133,12 +143,13 @@ def _reserver(request: SelectRequest) -> Any:
 
 def _answer(request: SelectRequest, started: float) -> Response[str]:
     logger.set_correlation_id(request.decision_id)
+    base = tracker_base()  # before anything is reserved: a bad setting fails the call, not a reservation
     snapshot = store().get()
     rules = pod_context(
         snapshot.book, floor_cpm=snapshot.floor_cpm, scheduled=scheduled_ms(request.dur_ms, snapshot.breaks_ms)
     )
-    decision, reserved = select(request, rules, snapshot.book, reserve=_reserver(request))
-    body = select_response(request, decision, tracker_base=tracker_base(), enr=ENR).model_dump_json()
+    decision, reserved = select(request, rules, snapshot.book, reserve=_reserver(request, started))
+    body = select_response(request, decision, tracker_base=base, enr=ENR).model_dump_json()
     record = select_record(
         request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3), reserved=reserved
     )
@@ -148,7 +159,7 @@ def _answer(request: SelectRequest, started: float) -> Response[str]:
     ) as by_reason:
         by_reason.add_dimension(name="reason", value=decision.reason.value)
     metrics.add_metric(name="LineAdsReserved", unit=MetricUnit.Count, value=len(reserved))
-    return _json(200, body)
+    return json_response(200, body)
 
 
 @logger.inject_lambda_context(clear_state=True)

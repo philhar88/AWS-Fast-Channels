@@ -914,7 +914,8 @@
                 "ForAllValues:StringLike": {
                   "dynamodb:LeadingKeys": [
                     "RES#*",
-                    "BUDGET#*"
+                    "BUDGET#*",
+                    "CAP#*"
                   ]
                 }
               },
@@ -1460,6 +1461,21 @@
       },
       "Type": "AWS::Glue::Table"
     },
+    "ModuleAlarmsPodErrors77ABCEF1": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"error\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "PodErrors",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
     "ModuleAlarmsPodsDEF1C494": {
       "Properties": {
         "FilterPattern": "\"fast-ctv-pod\" -\"warmup\"",
@@ -1501,7 +1517,7 @@
         "EvaluationPeriods": 1,
         "Metrics": [
           {
-            "Expression": "IF(pods >= 100, 100 * FILL(fallbacks, 0) / pods, 0)",
+            "Expression": "IF(pods >= 20, 100 * (FILL(f0, 0)) / pods, IF(FILL(f0, 0) >= 5, 100, 0))",
             "Id": "expr_1",
             "Label": "Breaks without the /policy patch, %",
             "ReturnData": true
@@ -1519,7 +1535,7 @@
             "ReturnData": false
           },
           {
-            "Id": "fallbacks",
+            "Id": "f0",
             "MetricStat": {
               "Metric": {
                 "MetricName": "PolicyFallbacks",
@@ -1558,15 +1574,15 @@
         "AlarmActions": [
           "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
         ],
-        "AlarmDescription": "More than 0.5% of pods in 5 minutes were the module's house fallback instead of the PDS's /select answer: no paid ad and no reservation in those breaks",
+        "AlarmDescription": "More than 0.5% of pods in 5 minutes were the module's house fallback instead of the PDS's /select answer, or empty after a module error: no paid ad and no reservation in those breaks",
         "AlarmName": "fastm-pds-select-fallbacks",
         "ComparisonOperator": "GreaterThanThreshold",
         "EvaluationPeriods": 1,
         "Metrics": [
           {
-            "Expression": "IF(pods >= 100, 100 * FILL(fallbacks, 0) / pods, 0)",
+            "Expression": "IF(pods >= 20, 100 * (FILL(f0, 0) + FILL(f1, 0)) / pods, IF(FILL(f0, 0) + FILL(f1, 0) >= 5, 100, 0))",
             "Id": "expr_1",
-            "Label": "Pods from the module's house fallback, %",
+            "Label": "Pods from the module's house fallback or errors, %",
             "ReturnData": true
           },
           {
@@ -1582,10 +1598,22 @@
             "ReturnData": false
           },
           {
-            "Id": "fallbacks",
+            "Id": "f0",
             "MetricStat": {
               "Metric": {
                 "MetricName": "SelectFallbacks",
+                "Namespace": "FastChannels/PrebidServer/fastm"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "f1",
+            "MetricStat": {
+              "Metric": {
+                "MetricName": "PodErrors",
                 "Namespace": "FastChannels/PrebidServer/fastm"
               },
               "Period": 300,
@@ -4588,7 +4616,8 @@
                 "ForAllValues:StringLike": {
                   "dynamodb:LeadingKeys": [
                     "RES#*",
-                    "BUDGET#*"
+                    "BUDGET#*",
+                    "CAP#*"
                   ]
                 }
               },

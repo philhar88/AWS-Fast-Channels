@@ -10,13 +10,15 @@ budget; this view only keeps the own book from bidding a line that could not be 
 import time
 from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
+from functools import cache
 from typing import TYPE_CHECKING, Any, Final
 
 import boto3
 
 from fast_channels.core.pds.delivery import BUDGET_SHARDS, budget_key, home_shard
 from fast_channels.functions.pds.reservations import item_key
-from fast_channels.functions.pds.store import CLIENT_CONFIG, Refreshed, Spawn, spawn_thread
+from fast_channels.functions.pds.store import CLIENT_CONFIG, Refreshed, Spawn, snapshot_store, spawn_thread
+from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
     from fast_channels.core.pds.book import Book, Line
@@ -100,3 +102,11 @@ class Budgets(Refreshed[Remaining]):
                 if not (request := response.get("UnprocessedKeys") or {}):
                     break
         return found
+
+
+@cache
+def budget_view() -> Budgets:
+    """The function's budget view (one per execution environment), on ``PDS_TABLE``, for the lines of the snapshot
+    the function has."""
+    settings().require("pds_table")
+    return Budgets(settings().pds_table, lines=lambda: snapshot_store().current.lines)
