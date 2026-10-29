@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from aws_cdk import Fn, Token
+from aws_cdk import aws_appconfig as appconfig
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_dynamodb as dynamodb
@@ -42,6 +43,8 @@ class DataExports:
     """AgentCore Memory of the scheduler agent; ``None`` when ``agent.enabled`` is false."""
     memory_preference_namespace: str
     """Namespace template of the Memory's USER_PREFERENCE strategy (the runtime's ``MEMORY_PREFERENCE_NAMESPACE``)."""
+    lake_bucket: s3.IBucket | None = None
+    """The ops module's lake bucket; ``None`` when ``modules.ops.enabled`` is false."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +96,20 @@ class MediaExports:
     (``core.specs.playback_configuration`` inputs other than the channel-specific ones)."""
     mediatailor_log_destination_arn: str
     """Vended-logs delivery destination that agent-created playback configurations deliver to."""
+
+
+@dataclass(frozen=True, slots=True)
+class OpsExports:
+    """What later module stacks consume from the Ops stack (``OpsStack.exports``)."""
+
+    appconfig_application: appconfig.IApplication
+    """AppConfig application ``<prefix>-fast``; the flags (M1-05) and release (M3-04) profiles are added to it."""
+    appconfig_environment: appconfig.IEnvironment
+    """Its environment ``<prefix>``."""
+    lake_database: str
+    """Glue database of the lake (``<prefix>_lake``)."""
+    lake_workgroup: str
+    """Athena workgroup of the lake (``<prefix>-lake``)."""
 
 
 def channel_playback(cdn_base_url: str, channel: ChannelExports) -> dict[str, str]:

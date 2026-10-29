@@ -182,6 +182,7 @@ class MediaStack(Stack):
             notification_email=config.notifications.email,
             trace_log_groups=self._trace_log_groups(),
             dead_letter_queues={"ingest": self.pipeline.dead_letter_queue},
+            census_changes=config.modules.ops.enabled,
         )
         self.exports = MediaExports(
             distribution=self.distribution,

@@ -11,6 +11,7 @@ from constructs import Construct
 
 from fast_channels.core.naming import agentcore_name, source_location_name
 from fast_channels.infra.config import FastChannelsConfig, Removal
+from fast_channels.infra.constructs.ops import LakeBucket
 from fast_channels.infra.constructs.storage import GSI1, MediaLibrary, MediaStorage, ReferenceCatalogTable
 from fast_channels.infra.exports import DataExports
 
@@ -31,7 +32,7 @@ MEMORY_PREFERENCE_NAMESPACE: Final = "/users/{actorId}/preferences/"
 
 class DataStack(Stack):
     """Ingest, media and logs buckets with their single bucket policies, the media library and reference catalog
-    tables, and the agent's AgentCore Memory.
+    tables, the agent's AgentCore Memory, and the ops module's lake bucket (``modules.ops.enabled``).
 
     Memory lives here, not in the Operator stack, so an Operator rollback can never get stuck on a Memory that is
     still ``CREATING`` (agentcore.md §12, gotcha 5). With ``removal: retain`` everything is retained, tables get
@@ -59,6 +60,16 @@ class DataStack(Stack):
         self.catalog = ReferenceCatalogTable(
             self, "Catalog", removal_policy=config.removal_policy, deletion_protection=protect
         )
+        self.lake: LakeBucket | None = None
+        if config.modules.ops.enabled:
+            self.lake = LakeBucket(
+                self,
+                "Lake",
+                prefix=config.prefix,
+                logs_bucket=self.storage.logs_bucket,
+                expiration=Duration.days(config.modules.ops.lake_retention_days),
+                removal_policy=config.removal_policy,
+            )
         self.memory: agentcore.Memory | None = None
         if config.agent.enabled:
             self.memory = agentcore.Memory(
@@ -107,6 +118,7 @@ class DataStack(Stack):
             catalog_table=table("CatalogTable", self.catalog),
             memory=memory,
             memory_preference_namespace=MEMORY_PREFERENCE_NAMESPACE,
+            lake_bucket=bucket("LakeBucket", self.lake.bucket) if self.lake is not None else None,
         )
 
     def _outputs(self) -> None:
@@ -120,6 +132,8 @@ class DataStack(Stack):
         }
         if self.memory is not None:
             outputs["MemoryId"] = self.memory.memory_id
+        if self.lake is not None:
+            outputs["LakeBucketName"] = self.lake.bucket.bucket_name
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)
 

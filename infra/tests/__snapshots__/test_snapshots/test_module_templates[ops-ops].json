@@ -1,0 +1,1214 @@
+{
+  "Description": "FAST Channels (fast): ops module and lake",
+  "Outputs": {
+    "AppConfigApplicationId": {
+      "Description": "AppConfig application",
+      "Value": {
+        "Ref": "AppConfigApplicationF162A144"
+      }
+    },
+    "AppConfigEnvironmentId": {
+      "Description": "AppConfig environment",
+      "Value": {
+        "Ref": "AppConfigEnvironmentD9747278"
+      }
+    },
+    "LakeDatabase": {
+      "Description": "Glue database of the lake",
+      "Value": "fast_lake"
+    },
+    "LakeWorkGroup": {
+      "Description": "Athena workgroup for lake queries",
+      "Value": "fast-lake"
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "AppConfigApplicationF162A144": {
+      "Properties": {
+        "Description": "FAST Channels (fast): feature flags and the release pointer",
+        "Name": "fast-fast",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::AppConfig::Application"
+    },
+    "AppConfigEnvironmentD9747278": {
+      "Properties": {
+        "ApplicationId": {
+          "Ref": "AppConfigApplicationF162A144"
+        },
+        "DeletionProtectionCheck": "BYPASS",
+        "Description": "The fast stage",
+        "Name": "fast",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::AppConfig::Environment"
+    },
+    "LakeAdsDeliveryfastdemoCB15E69A": {
+      "Properties": {
+        "DeliveryDestinationArn": {
+          "Fn::GetAtt": [
+            "LakeAdsDestination7E9D25AB",
+            "Arn"
+          ]
+        },
+        "DeliverySourceName": "fast-demo-ads",
+        "RecordFields": [
+          "eventTimestamp",
+          "awsAccountId",
+          "originId",
+          "customerId",
+          "eventType",
+          "sessionType",
+          "requestId",
+          "eventDescription",
+          "sessionId",
+          "vodVastResponseTimeOffset",
+          "adsRequestUrl",
+          "adMarkers",
+          "segmentationUpid",
+          "segmentationTypeId",
+          "originalTargetUrl",
+          "updatedTargetUrl",
+          "rawAdsRequestIndex",
+          "rawAdsResponse",
+          "rawAdsResponseIndex",
+          "avail",
+          "vastResponse",
+          "vastAd",
+          "vodCreativeOffsets",
+          "beaconInfo",
+          "adBreakCorrelationId",
+          "prefetchScheduleName",
+          "eventId",
+          "functionId",
+          "executionTimeMs",
+          "functionType",
+          "status",
+          "errorType",
+          "error",
+          "additionalInfo",
+          "cause",
+          "input",
+          "output",
+          "http",
+          "streamId"
+        ],
+        "S3EnableHiveCompatiblePath": false,
+        "S3SuffixPath": "{yyyy}/{MM}/{dd}/{HH}",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::Delivery"
+    },
+    "LakeAdsDestination7E9D25AB": {
+      "Properties": {
+        "DestinationResourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttLakeBucketB1D32E10Arn52DE6E6C",
+                  "Region": "us-east-1",
+                  "StackName": "FastChannels-Data"
+                }
+              },
+              "/mediatailor/ads"
+            ]
+          ]
+        },
+        "Name": "fast-lake-ads",
+        "OutputFormat": "json",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::DeliveryDestination"
+    },
+    "LakeCloudFrontAccessTableDA6D449B": {
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": {
+          "Ref": "LakeDatabase6CA13201"
+        },
+        "TableInput": {
+          "Description": "CloudFront standard logs v2 of the media distribution (no c-ip, cs-uri-query, x-forwarded-for)",
+          "Name": "cloudfront_access",
+          "Parameters": {
+            "classification": "parquet",
+            "has_encrypted_data": true,
+            "projection.day.digits": "2",
+            "projection.day.range": "1,31",
+            "projection.day.type": "integer",
+            "projection.enabled": "true",
+            "projection.hour.digits": "2",
+            "projection.hour.range": "0,23",
+            "projection.hour.type": "integer",
+            "projection.month.digits": "2",
+            "projection.month.range": "1,12",
+            "projection.month.type": "integer",
+            "projection.year.format": "yyyy",
+            "projection.year.interval": "1",
+            "projection.year.interval.unit": "YEARS",
+            "projection.year.range": "NOW-1YEARS,NOW",
+            "projection.year.type": "date",
+            "storage.location.template": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefStorageLogs2A2D4D26D31A2B6D",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  },
+                  "/AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefDeliveryDistribution45EACD51152C9566",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Media"
+                    }
+                  },
+                  "/year=${year}/month=${month}/day=${day}/hour=${hour}/"
+                ]
+              ]
+            }
+          },
+          "PartitionKeys": [
+            {
+              "Name": "year",
+              "Type": "string"
+            },
+            {
+              "Name": "month",
+              "Type": "string"
+            },
+            {
+              "Name": "day",
+              "Type": "string"
+            },
+            {
+              "Name": "hour",
+              "Type": "string"
+            }
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "timestamp_ms",
+                "Type": "string"
+              },
+              {
+                "Name": "distributionid",
+                "Type": "string"
+              },
+              {
+                "Name": "x_edge_request_id",
+                "Type": "string"
+              },
+              {
+                "Name": "x_edge_location",
+                "Type": "string"
+              },
+              {
+                "Name": "c_country",
+                "Type": "string"
+              },
+              {
+                "Name": "asn",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_method",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_host",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_uri_stem",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_user_agent",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_referer",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_protocol",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_protocol_version",
+                "Type": "string"
+              },
+              {
+                "Name": "ssl_protocol",
+                "Type": "string"
+              },
+              {
+                "Name": "sc_status",
+                "Type": "string"
+              },
+              {
+                "Name": "sc_bytes",
+                "Type": "string"
+              },
+              {
+                "Name": "sc_content_type",
+                "Type": "string"
+              },
+              {
+                "Name": "sc_range_start",
+                "Type": "string"
+              },
+              {
+                "Name": "sc_range_end",
+                "Type": "string"
+              },
+              {
+                "Name": "x_edge_result_type",
+                "Type": "string"
+              },
+              {
+                "Name": "x_edge_detailed_result_type",
+                "Type": "string"
+              },
+              {
+                "Name": "x_edge_response_result_type",
+                "Type": "string"
+              },
+              {
+                "Name": "time_taken",
+                "Type": "string"
+              },
+              {
+                "Name": "time_to_first_byte",
+                "Type": "string"
+              },
+              {
+                "Name": "origin_fbl",
+                "Type": "string"
+              },
+              {
+                "Name": "origin_lbl",
+                "Type": "string"
+              },
+              {
+                "Name": "cache_behavior_path_pattern",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_session_id",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_content_id",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_object_type",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_object_duration",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_encoded_bitrate",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_top_bitrate",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_measured_throughput",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_requested_maximum_throughput",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_buffer_length",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_buffer_starvation",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_deadline",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_playback_rate",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_startup",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_streaming_format",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_stream_type",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_next_object_request",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_next_range_request",
+                "Type": "string"
+              },
+              {
+                "Name": "cmcd_version",
+                "Type": "string"
+              }
+            ],
+            "Compressed": false,
+            "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefStorageLogs2A2D4D26D31A2B6D",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  },
+                  "/AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefDeliveryDistribution45EACD51152C9566",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Media"
+                    }
+                  },
+                  "/"
+                ]
+              ]
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+            },
+            "StoredAsSubDirectories": false
+          },
+          "TableType": "EXTERNAL_TABLE"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "LakeDatabase6CA13201": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseInput": {
+          "Description": "FAST Channels (fast) lake: CDN and MediaTailor logs",
+          "Name": "fast_lake"
+        }
+      },
+      "Type": "AWS::Glue::Database",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "LakeManifestDeliveryfastdemo1E768560": {
+      "DependsOn": [
+        "LakeAdsDeliveryfastdemoCB15E69A"
+      ],
+      "Properties": {
+        "DeliveryDestinationArn": {
+          "Fn::GetAtt": [
+            "LakeManifestDestination925369AA",
+            "Arn"
+          ]
+        },
+        "DeliverySourceName": "fast-demo-manifest",
+        "RecordFields": [
+          "eventTimestamp",
+          "awsAccountId",
+          "originId",
+          "customerId",
+          "eventType",
+          "sessionType",
+          "requestId",
+          "eventDescription",
+          "sessionId",
+          "originRequestUrl",
+          "responseBody",
+          "requestNextToken",
+          "assetPath",
+          "originFullUrl",
+          "originPrefixUrl",
+          "additionalInfo",
+          "cause",
+          "response",
+          "httpCode",
+          "errorMessage",
+          "adAdsResponse",
+          "adAdsRawResponse",
+          "adAdsRequest",
+          "adNumNewAvails",
+          "generatedMediaPlaylist",
+          "requestStartTime",
+          "requestEndTime",
+          "requestStartTimeEpochMillis",
+          "requestEndTimeEpochMillis",
+          "eventId",
+          "functionId",
+          "executionTimeMs",
+          "functionType",
+          "status",
+          "errorType",
+          "output",
+          "streamId"
+        ],
+        "S3EnableHiveCompatiblePath": false,
+        "S3SuffixPath": "{yyyy}/{MM}/{dd}/{HH}",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::Delivery"
+    },
+    "LakeManifestDestination925369AA": {
+      "Properties": {
+        "DestinationResourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttLakeBucketB1D32E10Arn52DE6E6C",
+                  "Region": "us-east-1",
+                  "StackName": "FastChannels-Data"
+                }
+              },
+              "/mediatailor/manifest"
+            ]
+          ]
+        },
+        "Name": "fast-lake-manifest",
+        "OutputFormat": "json",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::DeliveryDestination"
+    },
+    "LakeMediatailorAdsTable9EF71D3B": {
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": {
+          "Ref": "LakeDatabase6CA13201"
+        },
+        "TableInput": {
+          "Description": "MediaTailor ad decision server logs of the IaC playback configurations (no requestHeaders, rawAdsRequest)",
+          "Name": "mediatailor_ads",
+          "Parameters": {
+            "classification": "json",
+            "has_encrypted_data": true,
+            "projection.datehour.format": "yyyy/MM/dd/HH",
+            "projection.datehour.interval": "1",
+            "projection.datehour.interval.unit": "HOURS",
+            "projection.datehour.range": "NOW-30DAYS,NOW+1HOURS",
+            "projection.datehour.type": "date",
+            "projection.enabled": "true",
+            "storage.location.template": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefLakeBucketB1D32E103B48AD28",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  },
+                  "/mediatailor/ads/${datehour}/"
+                ]
+              ]
+            }
+          },
+          "PartitionKeys": [
+            {
+              "Name": "datehour",
+              "Type": "string"
+            }
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "eventtimestamp",
+                "Type": "string"
+              },
+              {
+                "Name": "awsaccountid",
+                "Type": "string"
+              },
+              {
+                "Name": "originid",
+                "Type": "string"
+              },
+              {
+                "Name": "customerid",
+                "Type": "string"
+              },
+              {
+                "Name": "eventtype",
+                "Type": "string"
+              },
+              {
+                "Name": "sessiontype",
+                "Type": "string"
+              },
+              {
+                "Name": "requestid",
+                "Type": "string"
+              },
+              {
+                "Name": "eventdescription",
+                "Type": "string"
+              },
+              {
+                "Name": "sessionid",
+                "Type": "string"
+              },
+              {
+                "Name": "vodvastresponsetimeoffset",
+                "Type": "string"
+              },
+              {
+                "Name": "adsrequesturl",
+                "Type": "string"
+              },
+              {
+                "Name": "admarkers",
+                "Type": "string"
+              },
+              {
+                "Name": "segmentationupid",
+                "Type": "string"
+              },
+              {
+                "Name": "segmentationtypeid",
+                "Type": "string"
+              },
+              {
+                "Name": "originaltargeturl",
+                "Type": "string"
+              },
+              {
+                "Name": "updatedtargeturl",
+                "Type": "string"
+              },
+              {
+                "Name": "rawadsrequestindex",
+                "Type": "string"
+              },
+              {
+                "Name": "rawadsresponse",
+                "Type": "string"
+              },
+              {
+                "Name": "rawadsresponseindex",
+                "Type": "string"
+              },
+              {
+                "Name": "avail",
+                "Type": "string"
+              },
+              {
+                "Name": "vastresponse",
+                "Type": "string"
+              },
+              {
+                "Name": "vastad",
+                "Type": "string"
+              },
+              {
+                "Name": "vodcreativeoffsets",
+                "Type": "string"
+              },
+              {
+                "Name": "beaconinfo",
+                "Type": "string"
+              },
+              {
+                "Name": "adbreakcorrelationid",
+                "Type": "string"
+              },
+              {
+                "Name": "prefetchschedulename",
+                "Type": "string"
+              },
+              {
+                "Name": "eventid",
+                "Type": "string"
+              },
+              {
+                "Name": "functionid",
+                "Type": "string"
+              },
+              {
+                "Name": "executiontimems",
+                "Type": "string"
+              },
+              {
+                "Name": "functiontype",
+                "Type": "string"
+              },
+              {
+                "Name": "status",
+                "Type": "string"
+              },
+              {
+                "Name": "errortype",
+                "Type": "string"
+              },
+              {
+                "Name": "error",
+                "Type": "string"
+              },
+              {
+                "Name": "additionalinfo",
+                "Type": "string"
+              },
+              {
+                "Name": "cause",
+                "Type": "string"
+              },
+              {
+                "Name": "input",
+                "Type": "string"
+              },
+              {
+                "Name": "output",
+                "Type": "string"
+              },
+              {
+                "Name": "http",
+                "Type": "string"
+              },
+              {
+                "Name": "streamid",
+                "Type": "string"
+              }
+            ],
+            "Compressed": false,
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefLakeBucketB1D32E103B48AD28",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  },
+                  "/mediatailor/ads/"
+                ]
+              ]
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"
+            },
+            "StoredAsSubDirectories": false
+          },
+          "TableType": "EXTERNAL_TABLE"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "LakeMediatailorManifestTable2E1840AC": {
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": {
+          "Ref": "LakeDatabase6CA13201"
+        },
+        "TableInput": {
+          "Description": "MediaTailor manifest service logs of the IaC playback configurations (no mediaTailorPath, input, http)",
+          "Name": "mediatailor_manifest",
+          "Parameters": {
+            "classification": "json",
+            "has_encrypted_data": true,
+            "projection.datehour.format": "yyyy/MM/dd/HH",
+            "projection.datehour.interval": "1",
+            "projection.datehour.interval.unit": "HOURS",
+            "projection.datehour.range": "NOW-30DAYS,NOW+1HOURS",
+            "projection.datehour.type": "date",
+            "projection.enabled": "true",
+            "storage.location.template": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefLakeBucketB1D32E103B48AD28",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  },
+                  "/mediatailor/manifest/${datehour}/"
+                ]
+              ]
+            }
+          },
+          "PartitionKeys": [
+            {
+              "Name": "datehour",
+              "Type": "string"
+            }
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "eventtimestamp",
+                "Type": "string"
+              },
+              {
+                "Name": "awsaccountid",
+                "Type": "string"
+              },
+              {
+                "Name": "originid",
+                "Type": "string"
+              },
+              {
+                "Name": "customerid",
+                "Type": "string"
+              },
+              {
+                "Name": "eventtype",
+                "Type": "string"
+              },
+              {
+                "Name": "sessiontype",
+                "Type": "string"
+              },
+              {
+                "Name": "requestid",
+                "Type": "string"
+              },
+              {
+                "Name": "eventdescription",
+                "Type": "string"
+              },
+              {
+                "Name": "sessionid",
+                "Type": "string"
+              },
+              {
+                "Name": "originrequesturl",
+                "Type": "string"
+              },
+              {
+                "Name": "responsebody",
+                "Type": "string"
+              },
+              {
+                "Name": "requestnexttoken",
+                "Type": "string"
+              },
+              {
+                "Name": "assetpath",
+                "Type": "string"
+              },
+              {
+                "Name": "originfullurl",
+                "Type": "string"
+              },
+              {
+                "Name": "originprefixurl",
+                "Type": "string"
+              },
+              {
+                "Name": "additionalinfo",
+                "Type": "string"
+              },
+              {
+                "Name": "cause",
+                "Type": "string"
+              },
+              {
+                "Name": "response",
+                "Type": "string"
+              },
+              {
+                "Name": "httpcode",
+                "Type": "string"
+              },
+              {
+                "Name": "errormessage",
+                "Type": "string"
+              },
+              {
+                "Name": "adadsresponse",
+                "Type": "string"
+              },
+              {
+                "Name": "adadsrawresponse",
+                "Type": "string"
+              },
+              {
+                "Name": "adadsrequest",
+                "Type": "string"
+              },
+              {
+                "Name": "adnumnewavails",
+                "Type": "string"
+              },
+              {
+                "Name": "generatedmediaplaylist",
+                "Type": "string"
+              },
+              {
+                "Name": "requeststarttime",
+                "Type": "string"
+              },
+              {
+                "Name": "requestendtime",
+                "Type": "string"
+              },
+              {
+                "Name": "requeststarttimeepochmillis",
+                "Type": "string"
+              },
+              {
+                "Name": "requestendtimeepochmillis",
+                "Type": "string"
+              },
+              {
+                "Name": "eventid",
+                "Type": "string"
+              },
+              {
+                "Name": "functionid",
+                "Type": "string"
+              },
+              {
+                "Name": "executiontimems",
+                "Type": "string"
+              },
+              {
+                "Name": "functiontype",
+                "Type": "string"
+              },
+              {
+                "Name": "status",
+                "Type": "string"
+              },
+              {
+                "Name": "errortype",
+                "Type": "string"
+              },
+              {
+                "Name": "output",
+                "Type": "string"
+              },
+              {
+                "Name": "streamid",
+                "Type": "string"
+              }
+            ],
+            "Compressed": false,
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Fn::GetStackOutput": {
+                      "OutputName": "PublishOutputRefLakeBucketB1D32E103B48AD28",
+                      "Region": "us-east-1",
+                      "StackName": "FastChannels-Data"
+                    }
+                  },
+                  "/mediatailor/manifest/"
+                ]
+              ]
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"
+            },
+            "StoredAsSubDirectories": false
+          },
+          "TableType": "EXTERNAL_TABLE"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "LakeVBreaksEC524B22": {
+      "DependsOn": [
+        "LakeCloudFrontAccessTableDA6D449B",
+        "LakeDatabase6CA13201",
+        "LakeMediatailorAdsTable9EF71D3B",
+        "LakeMediatailorManifestTable2E1840AC"
+      ],
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": "fast_lake",
+        "TableInput": {
+          "Description": "One row per aired break (SCTE-35 event id) that any session of an IaC playback configuration saw",
+          "Name": "v_breaks",
+          "Parameters": {
+            "comment": "Presto View",
+            "presto_view": "true"
+          },
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "evid",
+                "Type": "bigint"
+              },
+              {
+                "Name": "upid",
+                "Type": "string"
+              },
+              {
+                "Name": "channel",
+                "Type": "string"
+              },
+              {
+                "Name": "started_at",
+                "Type": "timestamp"
+              },
+              {
+                "Name": "first_request_at",
+                "Type": "timestamp"
+              },
+              {
+                "Name": "configurations",
+                "Type": "bigint"
+              },
+              {
+                "Name": "sessions",
+                "Type": "bigint"
+              },
+              {
+                "Name": "ads_requests",
+                "Type": "bigint"
+              },
+              {
+                "Name": "filled_avails",
+                "Type": "bigint"
+              },
+              {
+                "Name": "avail_seconds",
+                "Type": "double"
+              },
+              {
+                "Name": "filled_seconds",
+                "Type": "double"
+              }
+            ],
+            "SerdeInfo": {}
+          },
+          "TableType": "VIRTUAL_VIEW",
+          "ViewExpandedText": "/* Presto View */",
+          "ViewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggcmVxdWVzdHMgQVMgKFxuICBTRUxFQ1Qgb3JpZ2luaWQgQVMgY29uZmlndXJhdGlvbiwgc2Vzc2lvbmlkIEFTIHNlc3Npb25faWQsIHJlcXVlc3RpZCBBUyByZXF1ZXN0X2lkLFxuICAgIENBU1QoZnJvbV9pc284NjAxX3RpbWVzdGFtcChldmVudHRpbWVzdGFtcCkgQVMgdGltZXN0YW1wKDMpKSBBUyBhdCxcbiAgICBUUllfQ0FTVCh1cmxfZXh0cmFjdF9wYXJhbWV0ZXIoYWRzcmVxdWVzdHVybCwgJ2V2aWQnKSBBUyBiaWdpbnQpIEFTIGV2aWQsXG4gICAgdXJsX2V4dHJhY3RfcGFyYW1ldGVyKGFkc3JlcXVlc3R1cmwsICd1cGlkJykgQVMgdXBpZCxcbiAgICB1cmxfZXh0cmFjdF9wYXJhbWV0ZXIoYWRzcmVxdWVzdHVybCwgJ2NoJykgQVMgY2hhbm5lbFxuICBGUk9NIFwiZmFzdF9sYWtlXCIuXCJtZWRpYXRhaWxvcl9hZHNcIiBXSEVSRSBldmVudHR5cGUgPSAnTUFLSU5HX0FEU19SRVFVRVNUJ1xuKSxcbm1hcmtlcnMgQVMgKFxuICBTRUxFQ1Qgb3JpZ2luaWQgQVMgY29uZmlndXJhdGlvbiwgc2Vzc2lvbmlkIEFTIHNlc3Npb25faWQsXG4gICAgZnJvbV9iYXNlKHJlZ2V4cF9leHRyYWN0KGFkbWFya2VycywgJ0lEPVwiWzAtOV0rLVswLTldKy0oWzAtOUEtRmEtZl0rKVwiJywgMSksIDE2KSBBUyBldmlkLFxuICAgIHNlZ21lbnRhdGlvbnVwaWQgQVMgdXBpZCxcbiAgICBDQVNUKGZyb21faXNvODYwMV90aW1lc3RhbXAocmVnZXhwX2V4dHJhY3QoYWRtYXJrZXJzLCAnU1RBUlQtREFURT1cIihbXlwiXSspXCInLCAxKSkgQVMgdGltZXN0YW1wKDMpKSBBUyBzdGFydGVkX2F0XG4gIEZST00gXCJmYXN0X2xha2VcIi5cIm1lZGlhdGFpbG9yX2Fkc1wiIFdIRVJFIGV2ZW50dHlwZSA9ICdBRF9NQVJLRVJfRk9VTkQnXG4pLFxuZmlsbHMgQVMgKFxuICBTRUxFQ1QgcmVxdWVzdGlkIEFTIHJlcXVlc3RfaWQsXG4gICAgVFJZX0NBU1QoanNvbl9leHRyYWN0X3NjYWxhcihhdmFpbCwgJyQub3JpZ2luYXZhaWxkdXJhdGlvbicpIEFTIGRvdWJsZSkgQVMgYXZhaWxfc2Vjb25kcyxcbiAgICBUUllfQ0FTVChqc29uX2V4dHJhY3Rfc2NhbGFyKGF2YWlsLCAnJC5maWxsZWRkdXJhdGlvbicpIEFTIGRvdWJsZSkgQVMgZmlsbGVkX3NlY29uZHNcbiAgRlJPTSBcImZhc3RfbGFrZVwiLlwibWVkaWF0YWlsb3JfYWRzXCIgV0hFUkUgZXZlbnR0eXBlID0gJ0ZJTExFRF9BVkFJTCdcbilcblxuLFxuc2VlbiBBUyAoXG4gIFNFTEVDVCBldmlkLCBjb3VudChESVNUSU5DVCBjb25maWd1cmF0aW9uKSBBUyBjb25maWd1cmF0aW9ucywgY291bnQoRElTVElOQ1Qgc2Vzc2lvbl9pZCkgQVMgc2Vzc2lvbnNcbiAgRlJPTSAoXG4gICAgU0VMRUNUIGV2aWQsIGNvbmZpZ3VyYXRpb24sIHNlc3Npb25faWQgRlJPTSBtYXJrZXJzXG4gICAgVU5JT04gQUxMXG4gICAgU0VMRUNUIGV2aWQsIGNvbmZpZ3VyYXRpb24sIHNlc3Npb25faWQgRlJPTSByZXF1ZXN0c1xuICApXG4gIFdIRVJFIGV2aWQgSVMgTk9UIE5VTEwgR1JPVVAgQlkgZXZpZFxuKSxcbm1hcmtlZCBBUyAoXG4gIFNFTEVDVCBldmlkLCBtYXgodXBpZCkgQVMgdXBpZCwgbWluKHN0YXJ0ZWRfYXQpIEFTIHN0YXJ0ZWRfYXQgRlJPTSBtYXJrZXJzIFdIRVJFIGV2aWQgSVMgTk9UIE5VTEwgR1JPVVAgQlkgZXZpZFxuKSxcbnJlcXVlc3RlZCBBUyAoXG4gIFNFTEVDVCByLmV2aWQsIG1heChyLnVwaWQpIEFTIHVwaWQsIG1heChyLmNoYW5uZWwpIEFTIGNoYW5uZWwsIG1pbihyLmF0KSBBUyBmaXJzdF9yZXF1ZXN0X2F0LFxuICAgIGNvdW50KERJU1RJTkNUIHIucmVxdWVzdF9pZCkgQVMgYWRzX3JlcXVlc3RzLCBjb3VudChmLnJlcXVlc3RfaWQpIEFTIGZpbGxlZF9hdmFpbHMsXG4gICAgbWF4KGYuYXZhaWxfc2Vjb25kcykgQVMgYXZhaWxfc2Vjb25kcywgc3VtKGYuZmlsbGVkX3NlY29uZHMpIEFTIGZpbGxlZF9zZWNvbmRzXG4gIEZST00gcmVxdWVzdHMgciBMRUZUIEpPSU4gZmlsbHMgZiBPTiBmLnJlcXVlc3RfaWQgPSByLnJlcXVlc3RfaWRcbiAgV0hFUkUgci5ldmlkIElTIE5PVCBOVUxMIEdST1VQIEJZIHIuZXZpZFxuKVxuU0VMRUNUIHMuZXZpZCwgY29hbGVzY2UobS51cGlkLCBxLnVwaWQpIEFTIHVwaWQsIHEuY2hhbm5lbCwgbS5zdGFydGVkX2F0LCBxLmZpcnN0X3JlcXVlc3RfYXQsIHMuY29uZmlndXJhdGlvbnMsXG4gIHMuc2Vzc2lvbnMsIGNvYWxlc2NlKHEuYWRzX3JlcXVlc3RzLCAwKSBBUyBhZHNfcmVxdWVzdHMsIGNvYWxlc2NlKHEuZmlsbGVkX2F2YWlscywgMCkgQVMgZmlsbGVkX2F2YWlscyxcbiAgcS5hdmFpbF9zZWNvbmRzLCBxLmZpbGxlZF9zZWNvbmRzXG5GUk9NIHNlZW4gcyBMRUZUIEpPSU4gbWFya2VkIG0gT04gbS5ldmlkID0gcy5ldmlkIExFRlQgSk9JTiByZXF1ZXN0ZWQgcSBPTiBxLmV2aWQgPSBzLmV2aWQiLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJzY2hlbWEiOiJmYXN0X2xha2UiLCJjb2x1bW5zIjpbeyJuYW1lIjoiZXZpZCIsInR5cGUiOiJiaWdpbnQifSx7Im5hbWUiOiJ1cGlkIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJjaGFubmVsIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJzdGFydGVkX2F0IiwidHlwZSI6InRpbWVzdGFtcCgzKSJ9LHsibmFtZSI6ImZpcnN0X3JlcXVlc3RfYXQiLCJ0eXBlIjoidGltZXN0YW1wKDMpIn0seyJuYW1lIjoiY29uZmlndXJhdGlvbnMiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoic2Vzc2lvbnMiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoiYWRzX3JlcXVlc3RzIiwidHlwZSI6ImJpZ2ludCJ9LHsibmFtZSI6ImZpbGxlZF9hdmFpbHMiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoiYXZhaWxfc2Vjb25kcyIsInR5cGUiOiJkb3VibGUifSx7Im5hbWUiOiJmaWxsZWRfc2Vjb25kcyIsInR5cGUiOiJkb3VibGUifV0sInJ1bkFzSW52b2tlciI6ZmFsc2UsInByb3BlcnRpZXMiOnt9fQ== */"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "LakeVFillByPcFCC4E0C6": {
+      "DependsOn": [
+        "LakeCloudFrontAccessTableDA6D449B",
+        "LakeDatabase6CA13201",
+        "LakeMediatailorAdsTable9EF71D3B",
+        "LakeMediatailorManifestTable2E1840AC"
+      ],
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": "fast_lake",
+        "TableInput": {
+          "Description": "Ad requests, filled avails and fill rate per playback configuration and hour",
+          "Name": "v_fill_by_pc",
+          "Parameters": {
+            "comment": "Presto View",
+            "presto_view": "true"
+          },
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "configuration",
+                "Type": "string"
+              },
+              {
+                "Name": "hour",
+                "Type": "timestamp"
+              },
+              {
+                "Name": "breaks",
+                "Type": "bigint"
+              },
+              {
+                "Name": "sessions",
+                "Type": "bigint"
+              },
+              {
+                "Name": "ads_requests",
+                "Type": "bigint"
+              },
+              {
+                "Name": "filled_avails",
+                "Type": "bigint"
+              },
+              {
+                "Name": "avail_seconds",
+                "Type": "double"
+              },
+              {
+                "Name": "filled_seconds",
+                "Type": "double"
+              },
+              {
+                "Name": "fill_rate",
+                "Type": "double"
+              }
+            ],
+            "SerdeInfo": {}
+          },
+          "TableType": "VIRTUAL_VIEW",
+          "ViewExpandedText": "/* Presto View */",
+          "ViewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggcmVxdWVzdHMgQVMgKFxuICBTRUxFQ1Qgb3JpZ2luaWQgQVMgY29uZmlndXJhdGlvbiwgc2Vzc2lvbmlkIEFTIHNlc3Npb25faWQsIHJlcXVlc3RpZCBBUyByZXF1ZXN0X2lkLFxuICAgIENBU1QoZnJvbV9pc284NjAxX3RpbWVzdGFtcChldmVudHRpbWVzdGFtcCkgQVMgdGltZXN0YW1wKDMpKSBBUyBhdCxcbiAgICBUUllfQ0FTVCh1cmxfZXh0cmFjdF9wYXJhbWV0ZXIoYWRzcmVxdWVzdHVybCwgJ2V2aWQnKSBBUyBiaWdpbnQpIEFTIGV2aWQsXG4gICAgdXJsX2V4dHJhY3RfcGFyYW1ldGVyKGFkc3JlcXVlc3R1cmwsICd1cGlkJykgQVMgdXBpZCxcbiAgICB1cmxfZXh0cmFjdF9wYXJhbWV0ZXIoYWRzcmVxdWVzdHVybCwgJ2NoJykgQVMgY2hhbm5lbFxuICBGUk9NIFwiZmFzdF9sYWtlXCIuXCJtZWRpYXRhaWxvcl9hZHNcIiBXSEVSRSBldmVudHR5cGUgPSAnTUFLSU5HX0FEU19SRVFVRVNUJ1xuKSxcbm1hcmtlcnMgQVMgKFxuICBTRUxFQ1Qgb3JpZ2luaWQgQVMgY29uZmlndXJhdGlvbiwgc2Vzc2lvbmlkIEFTIHNlc3Npb25faWQsXG4gICAgZnJvbV9iYXNlKHJlZ2V4cF9leHRyYWN0KGFkbWFya2VycywgJ0lEPVwiWzAtOV0rLVswLTldKy0oWzAtOUEtRmEtZl0rKVwiJywgMSksIDE2KSBBUyBldmlkLFxuICAgIHNlZ21lbnRhdGlvbnVwaWQgQVMgdXBpZCxcbiAgICBDQVNUKGZyb21faXNvODYwMV90aW1lc3RhbXAocmVnZXhwX2V4dHJhY3QoYWRtYXJrZXJzLCAnU1RBUlQtREFURT1cIihbXlwiXSspXCInLCAxKSkgQVMgdGltZXN0YW1wKDMpKSBBUyBzdGFydGVkX2F0XG4gIEZST00gXCJmYXN0X2xha2VcIi5cIm1lZGlhdGFpbG9yX2Fkc1wiIFdIRVJFIGV2ZW50dHlwZSA9ICdBRF9NQVJLRVJfRk9VTkQnXG4pLFxuZmlsbHMgQVMgKFxuICBTRUxFQ1QgcmVxdWVzdGlkIEFTIHJlcXVlc3RfaWQsXG4gICAgVFJZX0NBU1QoanNvbl9leHRyYWN0X3NjYWxhcihhdmFpbCwgJyQub3JpZ2luYXZhaWxkdXJhdGlvbicpIEFTIGRvdWJsZSkgQVMgYXZhaWxfc2Vjb25kcyxcbiAgICBUUllfQ0FTVChqc29uX2V4dHJhY3Rfc2NhbGFyKGF2YWlsLCAnJC5maWxsZWRkdXJhdGlvbicpIEFTIGRvdWJsZSkgQVMgZmlsbGVkX3NlY29uZHNcbiAgRlJPTSBcImZhc3RfbGFrZVwiLlwibWVkaWF0YWlsb3JfYWRzXCIgV0hFUkUgZXZlbnR0eXBlID0gJ0ZJTExFRF9BVkFJTCdcbilcblxuU0VMRUNUIHIuY29uZmlndXJhdGlvbiwgZGF0ZV90cnVuYygnaG91cicsIHIuYXQpIEFTIGhvdXIsIGNvdW50KERJU1RJTkNUIHIuZXZpZCkgQVMgYnJlYWtzLFxuICBjb3VudChESVNUSU5DVCByLnNlc3Npb25faWQpIEFTIHNlc3Npb25zLCBjb3VudChESVNUSU5DVCByLnJlcXVlc3RfaWQpIEFTIGFkc19yZXF1ZXN0cyxcbiAgY291bnQoZi5yZXF1ZXN0X2lkKSBBUyBmaWxsZWRfYXZhaWxzLCBzdW0oZi5hdmFpbF9zZWNvbmRzKSBBUyBhdmFpbF9zZWNvbmRzLFxuICBzdW0oZi5maWxsZWRfc2Vjb25kcykgQVMgZmlsbGVkX3NlY29uZHMsXG4gIHN1bShmLmZpbGxlZF9zZWNvbmRzKSAvIG51bGxpZihzdW0oZi5hdmFpbF9zZWNvbmRzKSwgMCkgQVMgZmlsbF9yYXRlXG5GUk9NIHJlcXVlc3RzIHIgTEVGVCBKT0lOIGZpbGxzIGYgT04gZi5yZXF1ZXN0X2lkID0gci5yZXF1ZXN0X2lkXG5HUk9VUCBCWSByLmNvbmZpZ3VyYXRpb24sIGRhdGVfdHJ1bmMoJ2hvdXInLCByLmF0KSIsImNhdGFsb2ciOiJhd3NkYXRhY2F0YWxvZyIsInNjaGVtYSI6ImZhc3RfbGFrZSIsImNvbHVtbnMiOlt7Im5hbWUiOiJjb25maWd1cmF0aW9uIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJob3VyIiwidHlwZSI6InRpbWVzdGFtcCgzKSJ9LHsibmFtZSI6ImJyZWFrcyIsInR5cGUiOiJiaWdpbnQifSx7Im5hbWUiOiJzZXNzaW9ucyIsInR5cGUiOiJiaWdpbnQifSx7Im5hbWUiOiJhZHNfcmVxdWVzdHMiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoiZmlsbGVkX2F2YWlscyIsInR5cGUiOiJiaWdpbnQifSx7Im5hbWUiOiJhdmFpbF9zZWNvbmRzIiwidHlwZSI6ImRvdWJsZSJ9LHsibmFtZSI6ImZpbGxlZF9zZWNvbmRzIiwidHlwZSI6ImRvdWJsZSJ9LHsibmFtZSI6ImZpbGxfcmF0ZSIsInR5cGUiOiJkb3VibGUifV0sInJ1bkFzSW52b2tlciI6ZmFsc2UsInByb3BlcnRpZXMiOnt9fQ== */"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "LakeWorkGroupA1356543": {
+      "Properties": {
+        "Description": "FAST Channels (fast) lake queries",
+        "Name": "fast-lake",
+        "RecursiveDeleteOption": true,
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "WorkGroupConfiguration": {
+          "BytesScannedCutoffPerQuery": 10737418240,
+          "EnforceWorkGroupConfiguration": true,
+          "EngineVersion": {
+            "SelectedEngineVersion": "Athena engine version 3"
+          },
+          "ManagedQueryResultsConfiguration": {
+            "Enabled": true
+          },
+          "PublishCloudWatchMetricsEnabled": true
+        }
+      },
+      "Type": "AWS::Athena::WorkGroup"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

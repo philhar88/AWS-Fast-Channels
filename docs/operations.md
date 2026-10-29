@@ -313,6 +313,12 @@ uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage 
 A missing or malformed stage file stops `make` before any command runs. The repository ships two stages for the
 modules' development: `fastm` and `fastci` (the end-to-end tests' default prefix), each with every module on.
 
+A module with merged code adds its own stack after the ones it builds on, and may change theirs:
+
+| Module | Adds | Changes |
+|---|---|---|
+| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, and the AppConfig application `<prefix>-fast` with environment `<prefix>` ([observability.md](observability.md#lake)) | Data: the lake bucket (output `LakeBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
+
 ### Updates
 
 - Redeploying with an unchanged ladder and brand stills takes seconds for the kit: it is idempotent by fingerprint.
@@ -341,7 +347,9 @@ Draining a channel deletes only the programs Channel Assembly can still hold: it
 library programs from a day ago on, never the whole program history. Each pass stops before its function times out
 and reports what is left; the next poll, or the next `make destroy`, resumes where it stopped.
 
-- With `removal: destroy` (default) buckets are emptied and deleted, tables and Memory deleted.
+- With `removal: destroy` (default) buckets are emptied and deleted, tables and Memory deleted. The Ops stack goes
+  before Media and Data: its lake copies' deliveries first, then the Glue tables, views and workgroup (with its query
+  history); the lake bucket (every version of every object) goes with the Data stack.
 - With `removal: retain` the stacks are termination protected and the Data stack's resources are retained; the
   reaper does nothing, so runtime resources stay too. To delete such a deployment, turn termination protection
   off, run `make destroy` (the Media stack stops at `DELETE_FAILED` while its source location still holds VOD

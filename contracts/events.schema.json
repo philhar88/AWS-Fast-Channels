@@ -162,6 +162,26 @@
           "$ref": "#/$defs/CatalogItemChanged"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Census Changed"
+        },
+        "detail": {
+          "$ref": "#/$defs/CensusChanged"
+        }
+      }
     }
   ],
   "$defs": {
@@ -319,6 +339,35 @@
         "content_id"
       ],
       "title": "CatalogItemChanged",
+      "type": "object"
+    },
+    "CensusChanged": {
+      "description": "The number of the deployment's running channels crossed zero: the first channel started, or the last one\nstopped (published by the channel census with the ops module on; at most one census interval late).",
+      "properties": {
+        "running": {
+          "description": "Running channels now; 0 when the last one stopped.",
+          "minimum": 0,
+          "title": "Running",
+          "type": "integer"
+        },
+        "previous": {
+          "description": "Running channels at the census before.",
+          "minimum": 0,
+          "title": "Previous",
+          "type": "integer"
+        },
+        "correlation_id": {
+          "description": "Name of the census execution that saw the change.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "running",
+        "previous",
+        "correlation_id"
+      ],
+      "title": "CensusChanged",
       "type": "object"
     },
     "GeneratorInput": {

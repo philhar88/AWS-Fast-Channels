@@ -19,6 +19,7 @@ from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
 from fast_channels.infra.stacks.media import MediaStack
 from fast_channels.infra.stacks.models import ModelsStack
 from fast_channels.infra.stacks.operator import OperatorStack
+from fast_channels.infra.stacks.ops import OpsStack
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -37,8 +38,9 @@ def stage_id(prefix: str) -> str:
 
 class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
-    ``modules.crawl.enabled``, after Media), Edge (in us-east-1, when ``env.region`` is another region; named
-    ``<stage>-Edge-<region>``) and AccountBaseline (if ``observability.transaction_search`` is ``enable``).
+    ``modules.crawl.enabled``, after Media), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
+    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``) and AccountBaseline (if
+    ``observability.transaction_search`` is ``enable``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -69,6 +71,12 @@ class FastChannelsStage(Stage):
         self.data = DataStack(self, "Data", config=config, **stacks)
         self.media = MediaStack(self, "Media", config=config, data=self.data.exports, **stacks)
         self.media.add_stack_dependency(self.data)
+
+        self.ops: OpsStack | None = None
+        if config.modules.ops.enabled:
+            self.ops = OpsStack(self, "Ops", config=config, data=self.data.exports, media=self.media.exports, **stacks)
+            self.ops.add_stack_dependency(self.data)
+            self.ops.add_stack_dependency(self.media, "The lake copies the IaC playback configurations' log sources")
 
         self.baseline: AccountBaselineStack | None = None
         if config.observability.transaction_search is TransactionSearchMode.ENABLE:

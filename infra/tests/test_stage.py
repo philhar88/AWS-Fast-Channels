@@ -324,10 +324,10 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-MERGED_MODULES = ("models", "release")
+MERGED_MODULES = ("models", "ops", "release")
 """Modules whose code is merged; a module's pull request adds it here, with tests of what it synthesizes."""
-NEEDED_MODULES = ("ops", "demand", "pds")
-"""Modules a merged one needs on (``release`` needs ``ops``, ``demand`` and ``pds``) whose code is not merged yet:
+NEEDED_MODULES = ("demand", "pds")
+"""Modules a merged one needs on (``release`` needs ``demand`` and ``pds``) whose code is not merged yet:
 they add nothing, so the comparison below still isolates the merged code."""
 MODULE_STACKS = {"Crawl": "FastChannels-fastm-Crawl"}
 """Stacks of merged modules that add only stacks of their own (``crawl``); they stay off in the comparison, and
@@ -351,6 +351,7 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         "Data": "FastChannels-fastm-Data",
         "Media": "FastChannels-fastm-Media",
         "Models": "FastChannels-fastm-Models",
+        "Ops": "FastChannels-fastm-Ops",
         "Operator": "FastChannels-fastm-Operator",
     }
     assert names(fastm) == names(merged) | MODULE_STACKS
@@ -360,10 +361,8 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         assert normalized(fastm.template(stack)) == normalized(merged.template(modules_merged)), stack.stack_name
 
 
-def test_stage_checks_the_region_of_a_configuration_built_in_code() -> None:
-    config = FastChannelsConfig.model_validate(
-        {"agent": {"model": "us.anthropic.claude-haiku-5-5", "allowed_models": ["us.anthropic.claude-haiku-5-5"]}}
-    )
+def test_module_stacks_follow_the_stacks_they_build_on(deployment: GetDeployment) -> None:
+    stage = deployment({"modules.ops.enabled": True}).stage
 
-    with pytest.raises(ConfigError, match="which eu-west-1 cannot invoke"):
-        FastChannelsStage(App(), "S", config=config, env=Environment(account="123456789012", region="eu-west-1"))
+    assert {d.node.id for d in stage.ops.dependencies} == {"Data", "Media"}
+    assert stage.ops not in stage.operator.dependencies

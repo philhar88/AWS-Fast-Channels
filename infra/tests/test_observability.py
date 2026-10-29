@@ -14,13 +14,16 @@ from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk.assertions import Match, Template
 from cdk_nag import AwsSolutionsChecks, ServerlessChecks
 
+from fast_channels.core.events import CensusChanged
 from fast_channels.infra.constructs.observability import (
     TRACE_QUERIES,
+    CensusChanges,
     ChannelCensus,
     FastEventBus,
     MediaObservability,
     TraceQuery,
     census_definition,
+    census_parameter_name,
 )
 from fast_channels.infra.stacks.media import ChannelExports
 
@@ -399,3 +402,91 @@ def test_no_unacknowledged_nag_findings(tmp_path: Path) -> None:
 
     reports = json.loads((tmp_path / "validation-report.json").read_text())["pluginReports"]
     assert [v for r in reports for v in r.get("violations", [])] == []
+
+
+CHANGES = CensusChanges(parameter="/acme/ops/running-channels", event_bus="acme-fast-channels")
+
+
+def test_census_announces_zero_crossings_only_with_changes() -> None:
+    v3 = census_definition("acme")
+    states = census_definition("acme", CHANGES)["States"]
+
+    assert census_definition("acme", None) == v3
+    assert list(states) == [
+        *v3["States"],
+        "ReadLastCount",
+        "Changed",
+        "PublishCensusChanged",
+        "RecordCount",
+        "Unchanged",
+    ]
+    v3_publish = {key: value for key, value in v3["States"]["PublishCount"].items() if key != "End"}
+    assert states["PublishCount"] == v3_publish | {"Next": "ReadLastCount"}
+    assert states["ReadLastCount"]["Arguments"] == {"Name": "/acme/ops/running-channels"}
+    assert states["ReadLastCount"]["Assign"] == {"previous": "{% $number($states.result.Parameter.Value) %}"}
+    assert states["Changed"]["Choices"] == [
+        {"Condition": "{% ($running = 0) != ($previous = 0) %}", "Next": "PublishCensusChanged"},
+        {"Condition": "{% $running != $previous %}", "Next": "RecordCount"},
+    ]
+    assert states["Changed"]["Default"] == "Unchanged"
+
+
+def test_census_changed_is_put_before_the_count_is_recorded() -> None:
+    states = census_definition("acme", CHANGES)["States"]
+    [entry] = states["PublishCensusChanged"]["Arguments"]["Entries"]
+
+    assert states["PublishCensusChanged"]["Resource"] == "arn:aws:states:::events:putEvents"
+    assert entry == {
+        "EventBusName": "acme-fast-channels",
+        "Source": "fast-channels.acme",
+        "DetailType": "Census Changed",
+        "Detail": {
+            "running": "{% $running %}",
+            "previous": "{% $previous %}",
+            "correlation_id": "{% $states.context.Execution.Name %}",
+        },
+    }
+    assert set(entry["Detail"]) == set(CensusChanged.model_fields)
+    assert states["PublishCensusChanged"]["Next"] == "RecordCount"
+    assert states["RecordCount"]["Arguments"] == {
+        "Name": "/acme/ops/running-channels",
+        "Value": "{% $string($running) %}",
+        "Overwrite": True,
+    }
+    assert states["RecordCount"]["End"] is True
+
+
+def test_census_with_an_event_bus_records_its_count_and_may_put_events() -> None:
+    stack = new_stack()
+    bus = FastEventBus(stack, "Events", prefix="acme", log_retention=logs.RetentionDays.ONE_WEEK)
+    census = ChannelCensus(stack, "Census", prefix="acme", log_retention=logs.RetentionDays.ONE_WEEK, event_bus=bus)
+    template = Template.from_stack(stack)
+    [machine] = resources(template, "AWS::StepFunctions::StateMachine").values()
+    [policy] = [
+        p
+        for p in resources(template, "AWS::IAM::Policy").values()
+        if "CensusStateMachineRole" in json.dumps(p["Properties"]["Roles"])
+    ]
+    statements = policy["Properties"]["PolicyDocument"]["Statement"]
+    [bus_id] = resources(template, "AWS::Events::EventBus")
+    [parameter_id] = resources(template, "AWS::SSM::Parameter")
+
+    assert census.last_count is not None
+    assert census_parameter_name("acme") == "/acme/ops/running-channels"
+    template.has_resource_properties(
+        "AWS::SSM::Parameter", {"Name": "/acme/ops/running-channels", "Type": "String", "Value": "0"}
+    )
+    assert json.loads(machine["Properties"]["DefinitionString"]) == census_definition("acme", CHANGES)
+    [ssm] = [s for s in statements if "ssm:GetParameter" in s["Action"]]
+    assert ssm["Action"] == ["ssm:GetParameter", "ssm:PutParameter"]
+    assert parameter_id in json.dumps(ssm["Resource"])
+    [put] = [s for s in statements if s["Action"] == "events:PutEvents"]
+    assert put["Resource"] == {"Fn::GetAtt": [bus_id, "Arn"]}
+
+
+def test_census_without_an_event_bus_is_v3() -> None:
+    stack = new_stack()
+    census = ChannelCensus(stack, "Census", prefix="acme", log_retention=logs.RetentionDays.ONE_WEEK)
+
+    assert census.last_count is None
+    Template.from_stack(stack).resource_count_is("AWS::SSM::Parameter", 0)
