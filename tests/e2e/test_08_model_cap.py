@@ -21,6 +21,8 @@ TINY_CAP = Decimal("0.05")
 MAX_RUNS = 12
 PROMPT = "List the channels."
 CAP_REACHED = "MODEL_CAP_REACHED"
+OTEL_STREAM = "otel-rt-logs"
+"""The runtime writes each record twice, to this stream and to the session's stdout stream: count it once."""
 
 
 def _entry(stage: Stage) -> dict[str, object] | None:
@@ -82,13 +84,19 @@ def test_runs_past_the_cap_are_refused_and_notified_once(stage: Stage, player: P
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:  # runtime logs arrive with a delay
         page = logs.filter_log_events(
-            logGroupName=group, startTime=started_ms - 60_000, filterPattern='"model spend cap reached"'
+            logGroupName=group,
+            logStreamNames=[OTEL_STREAM],
+            startTime=started_ms - 60_000,
+            filterPattern='"model spend cap reached"',
         )
         notices = [event["message"] for event in page["events"]]
         if notices:
             time.sleep(20)  # let any duplicate arrive too
             page = logs.filter_log_events(
-                logGroupName=group, startTime=started_ms - 60_000, filterPattern='"model spend cap reached"'
+                logGroupName=group,
+                logStreamNames=[OTEL_STREAM],
+                startTime=started_ms - 60_000,
+                filterPattern='"model spend cap reached"',
             )
             notices = [event["message"] for event in page["events"]]
             break
