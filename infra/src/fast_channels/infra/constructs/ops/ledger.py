@@ -1,4 +1,4 @@
-"""The hash-chained ledger (DESIGN-v2.2 §18.5, ADR-0022): table → stream → writer → Firehose → S3 Object Lock.
+"""The hash-chained ledger (ADR-0022): table → stream → writer → Firehose → S3 Object Lock.
 
 - :class:`LedgerStorage` (Data stack): the ``<prefix>-ledger`` table that producers append entries to (conditional
   puts; :meth:`LedgerStorage.grant_append`), with a stream of new and old images, and the archive bucket.

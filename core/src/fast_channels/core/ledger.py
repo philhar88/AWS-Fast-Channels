@@ -1,5 +1,5 @@
-"""The ledger: append-only records of changes, money events and runbook actions, hash-chained per chain (DESIGN-v2.2
-§18.5, ADR-0022).
+"""The ledger: append-only records of changes, money events and runbook actions, hash-chained per chain
+(ADR-0022).
 
 A producer (the Release Controller, the PDS, a runbook) appends a :class:`LedgerEntry` to the ``<prefix>-ledger``
 table with a conditional put, so no entry is ever overwritten (:func:`entry_item`). The ledger writer reads the table's
@@ -45,7 +45,7 @@ class LedgerKind(StrEnum):
     """What a record is about."""
 
     RELEASE = "release"
-    """A Release Controller step (validate, apply, smoke, promote, roll back; DESIGN-v2.2 §8.3)."""
+    """A Release Controller step (validate, apply, smoke, promote, roll back)."""
     MONEY = "money"
     """A reservation, delivery, release or reconciliation of an own-book line (§13.4)."""
     RUNBOOK = "runbook"

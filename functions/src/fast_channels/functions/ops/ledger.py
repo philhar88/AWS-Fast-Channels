@@ -1,4 +1,4 @@
-"""Append to the ledger (DESIGN-v2.2 §18.5): what every producer (runbooks, the Release Controller, the PDS) calls.
+"""Append to the ledger (ADR-0022): what every producer (runbooks, the Release Controller, the PDS) calls.
 
     from fast_channels.functions.ops.ledger import append, entry
     append(entry("runbook/r13", LedgerKind.RUNBOOK, principal=..., action="runbook.swap", subject="fastm-demo"))

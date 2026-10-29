@@ -1,4 +1,4 @@
-"""Link new ledger entries into their hash chains and archive them (DESIGN-v2.2 §18.5).
+"""Link new ledger entries into their hash chains and archive them (ADR-0022).
 
 The ``<prefix>-ledger`` table's stream invokes this function with the changes of entry items only (the event source
 mapping's filter: ``type = entry``), in order per item. For each new entry:
