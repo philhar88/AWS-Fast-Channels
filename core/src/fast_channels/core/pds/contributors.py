@@ -1,0 +1,72 @@
+"""How other modules add fields to the ``/policy`` patch without the PDS knowing them.
+
+A :class:`PatchContributor` sees the request and the break's mode and returns a :class:`Contribution`: OpenRTB
+``app.content`` fields and fields for the decision record. The content-enrichment module, for example, contributes the
+show's metadata, or nothing for a holdout break. Contributions fail open: a contributor that raises, or that sets a
+field another contributor already set, is skipped and named in the result; the break is served without it.
+"""
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from pydantic import JsonValue
+
+    from fast_channels.core.pds.models import Mode, PolicyRequest
+
+
+@dataclass(frozen=True, slots=True)
+class Contribution:
+    """What one contributor adds to a break."""
+
+    app_content: Mapping[str, JsonValue] = field(default_factory=dict)
+    """Fields of OpenRTB ``app.content``."""
+    record: Mapping[str, JsonValue] = field(default_factory=dict)
+    """Fields of the policy decision record (for example the enrichment arm ``enr``)."""
+
+
+class PatchContributor(Protocol):
+    """A source of ``/policy`` patch fields."""
+
+    @property
+    def name(self) -> str:
+        """Identifies the contributor in records and logs."""
+        ...
+
+    def contribute(self, request: PolicyRequest, mode: Mode) -> Contribution:
+        """Fields for this break; an empty :class:`Contribution` for none."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class Contributions:
+    """Every contributor's fields, merged."""
+
+    app_content: dict[str, JsonValue] = field(default_factory=dict)
+    record: dict[str, JsonValue] = field(default_factory=dict)
+    applied: tuple[str, ...] = ()
+    """Contributors whose fields are in."""
+    skipped: tuple[str, ...] = ()
+    """Contributors that raised or collided with an earlier one."""
+
+
+def collect(contributors: Iterable[PatchContributor], request: PolicyRequest, mode: Mode) -> Contributions:
+    """Ask each contributor in turn and merge what they return (the first to set a field keeps it)."""
+    app_content: dict[str, JsonValue] = {}
+    record: dict[str, JsonValue] = {}
+    applied: list[str] = []
+    skipped: list[str] = []
+    for contributor in contributors:
+        try:
+            contribution = contributor.contribute(request, mode)
+        except Exception:  # any failure serves the break without this contributor
+            skipped.append(contributor.name)
+            continue
+        if app_content.keys() & contribution.app_content.keys() or record.keys() & contribution.record.keys():
+            skipped.append(contributor.name)
+            continue
+        app_content |= contribution.app_content
+        record |= contribution.record
+        applied.append(contributor.name)
+    return Contributions(app_content, record, tuple(applied), tuple(skipped))

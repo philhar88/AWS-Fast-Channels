@@ -29,6 +29,13 @@ All notable changes to this project are documented here. The format follows
   tags mapped to IAB Tech Lab Content Taxonomy 3.1 through the IAB CTV Genre Mapping (`genre-map.toml`, unknown ids
   refused). The sample catalog names each title's producer, language and type. See
   [docs/content-enrichment.md](docs/content-enrichment.md) and ADR 0031 (proposed).
+- **Pod Decision Service rules** (`fast_channels.core.pds`, [docs/pds.md](docs/pds.md)): the versioned `/policy` and
+  `/select` contract with the Prebid Server module (`contracts/pds-*.schema.json` and shared examples under
+  `contracts/fixtures/pds/`), privacy modes with every viewer parameter zeroed on an identity failure, the
+  right-to-left viewer-IP rule that ignores client-set X-Forwarded-For entries, a User-Agent device-type map, pod
+  selection (tier-0 lines first, accepted net value, cross-bidder creative, advertiser and category separation, pods
+  that fit the break, prefetch rounding, standalones for ad buffet, empty pods for avails under 30 s), trackers,
+  decision records, deterministic buckets and the ad-load price stub. Pure code: nothing is deployed yet.
 
 ## [3.0.0] - 2026-10-16
 

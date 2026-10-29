@@ -1,0 +1,400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pod Decision Service /select, contract version 1",
+  "description": "The fast-ctv module sends every bid after the auction and renders exactly the pod the answer names.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SelectRequest"
+    },
+    {
+      "$ref": "#/$defs/SelectResponse"
+    }
+  ],
+  "$defs": {
+    "AdmKind": {
+      "description": "What a bid's ``adm`` holds, as the module parsed it.",
+      "enum": [
+        "InLine",
+        "Wrapper"
+      ],
+      "title": "AdmKind",
+      "type": "string"
+    },
+    "Bid": {
+      "additionalProperties": false,
+      "description": "One bid of the auction, with what the module read from its ``adm``.",
+      "properties": {
+        "ref": {
+          "description": "The module's id of this bid, unique in the request.",
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "bidder": {
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "title": "Bidder",
+          "type": "string"
+        },
+        "seat": {
+          "default": "",
+          "maxLength": 64,
+          "title": "Seat",
+          "type": "string"
+        },
+        "impid": {
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "title": "Impid",
+          "type": "string"
+        },
+        "price": {
+          "$ref": "#/$defs/Money",
+          "description": "CPM, US dollars."
+        },
+        "dur": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Declared ad duration, seconds (bid.dur).",
+          "title": "Dur"
+        },
+        "vast_dur_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Linear <Duration> of the adm, milliseconds.",
+          "title": "Vast Dur Ms"
+        },
+        "crid": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Crid"
+        },
+        "adomain": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Adomain",
+          "type": "array"
+        },
+        "cat": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cat",
+          "type": "array"
+        },
+        "cattax": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Taxonomy of cat; OpenRTB's default is 1.",
+          "title": "Cattax"
+        },
+        "dealid": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dealid"
+        },
+        "house": {
+          "default": false,
+          "description": "An own-book house ad (ext.fast.house): a filler, never sold.",
+          "title": "House",
+          "type": "boolean"
+        },
+        "has_impression": {
+          "default": false,
+          "description": "The adm already has an <Impression>.",
+          "title": "Has Impression",
+          "type": "boolean"
+        },
+        "adm_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdmKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "InLine or Wrapper; null when adm is not usable VAST."
+        }
+      },
+      "required": [
+        "ref",
+        "bidder",
+        "impid",
+        "price"
+      ],
+      "title": "Bid",
+      "type": "object"
+    },
+    "Mode": {
+      "description": "Privacy mode of one break: what third parties may receive (docs/pds.md#privacy-modes).",
+      "enum": [
+        "FULL",
+        "PSEUDONYMOUS",
+        "CONTEXTUAL",
+        "SAFE",
+        "KIDS"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "Money": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "PodAd": {
+      "additionalProperties": false,
+      "description": "A sequenced ad of the pod.",
+      "properties": {
+        "impid": {
+          "title": "Impid",
+          "type": "string"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "impid",
+        "ref",
+        "sequence"
+      ],
+      "title": "PodAd",
+      "type": "object"
+    },
+    "PodReason": {
+      "description": "Outcome of pod selection.",
+      "enum": [
+        "filled",
+        "partial",
+        "empty",
+        "short_avail"
+      ],
+      "title": "PodReason",
+      "type": "string"
+    },
+    "SelectRequest": {
+      "additionalProperties": false,
+      "description": "``POST /select``: every bid of the auction, after it ran.",
+      "properties": {
+        "v": {
+          "const": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "decision_id": {
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "sid": {
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "title": "Sid",
+          "type": "string"
+        },
+        "pc": {
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "title": "Pc",
+          "type": "string"
+        },
+        "evid": {
+          "default": "",
+          "pattern": "^[0-9]{0,10}$",
+          "title": "Evid",
+          "type": "string"
+        },
+        "dur_ms": {
+          "minimum": 0,
+          "title": "Dur Ms",
+          "type": "integer"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Mode of the applied /policy patch; null when the module applied none."
+        },
+        "probe": {
+          "default": false,
+          "title": "Probe",
+          "type": "boolean"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/Slot"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Slots",
+          "type": "array"
+        },
+        "bids": {
+          "items": {
+            "$ref": "#/$defs/Bid"
+          },
+          "maxItems": 512,
+          "title": "Bids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "v",
+        "decision_id",
+        "sid",
+        "pc",
+        "dur_ms",
+        "mode",
+        "slots"
+      ],
+      "title": "SelectRequest",
+      "type": "object"
+    },
+    "SelectResponse": {
+      "additionalProperties": false,
+      "description": "``/select`` answer: exactly the pod the module renders, and our trackers for every ad in it.",
+      "properties": {
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "pod": {
+          "items": {
+            "$ref": "#/$defs/PodAd"
+          },
+          "title": "Pod",
+          "type": "array"
+        },
+        "standalone": {
+          "items": {
+            "$ref": "#/$defs/StandaloneAd"
+          },
+          "title": "Standalone",
+          "type": "array"
+        },
+        "trackers": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Impression URLs per bid ref, for every ad in pod and standalone.",
+          "title": "Trackers",
+          "type": "object"
+        },
+        "reason": {
+          "$ref": "#/$defs/PodReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "SelectResponse",
+      "type": "object"
+    },
+    "Slot": {
+      "additionalProperties": false,
+      "description": "One imp of the pod, in pod order.",
+      "properties": {
+        "impid": {
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "title": "Impid",
+          "type": "string"
+        },
+        "poddur": {
+          "description": "The pod's total duration in seconds (video.poddur).",
+          "exclusiveMinimum": 0,
+          "title": "Poddur",
+          "type": "integer"
+        },
+        "rqddurs": {
+          "description": "Exact ad durations the slot accepts, in seconds (video.rqddurs).",
+          "items": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "title": "Rqddurs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "impid",
+        "poddur"
+      ],
+      "title": "Slot",
+      "type": "object"
+    },
+    "StandaloneAd": {
+      "additionalProperties": false,
+      "description": "A standalone ad (no ``sequence``): the replacement MediaTailor uses if this slot's sequenced ad fails.",
+      "properties": {
+        "impid": {
+          "title": "Impid",
+          "type": "string"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "impid",
+        "ref"
+      ],
+      "title": "StandaloneAd",
+      "type": "object"
+    }
+  }
+}

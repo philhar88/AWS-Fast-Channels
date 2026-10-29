@@ -1,0 +1,78 @@
+{
+  "description": "An avail under 30 s gets an empty pod",
+  "context": {
+    "pod": {
+      "tier0_deals": [
+        "fast-direct-1"
+      ]
+    },
+    "tracker_base": "https://cdn.example.com/ads/b.gif",
+    "enr": 0
+  },
+  "request": {
+    "v": 1,
+    "decision_id": "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826",
+    "sid": "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d",
+    "pc": "fast-demo-p-a",
+    "evid": "820461826",
+    "dur_ms": 29970,
+    "mode": "CONTEXTUAL",
+    "probe": false,
+    "slots": [
+      {
+        "impid": "s1",
+        "poddur": 30,
+        "rqddurs": [
+          30
+        ]
+      }
+    ],
+    "bids": [
+      {
+        "ref": "ownbook-s1-house1",
+        "bidder": "ownbook",
+        "seat": "ownbook",
+        "impid": "s1",
+        "price": 0.01,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "house1",
+        "adomain": [
+          "publisher.example"
+        ],
+        "cat": [],
+        "cattax": null,
+        "dealid": null,
+        "house": true,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      },
+      {
+        "ref": "ownbook-s1-direct1",
+        "bidder": "ownbook",
+        "seat": "ownbook",
+        "impid": "s1",
+        "price": 8.0,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "direct1",
+        "adomain": [
+          "direct1.example"
+        ],
+        "cat": [],
+        "cattax": null,
+        "dealid": "fast-direct-1",
+        "house": false,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      }
+    ]
+  },
+  "response": {
+    "v": 1,
+    "pod": [],
+    "standalone": [],
+    "trackers": {},
+    "reason": "short_avail"
+  }
+}
