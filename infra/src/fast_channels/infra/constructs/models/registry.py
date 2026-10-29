@@ -7,7 +7,7 @@ from typing import Final
 from aws_cdk import aws_ssm as ssm
 from constructs import Construct, IConstruct
 
-from fast_channels.core.model_registry import TaskEntry, task_parameter
+from fast_channels.core.model_registry import TaskSettings, task_parameter
 from fast_channels.infra.arns import arn
 from fast_channels.infra.config import GEO_PLACEHOLDER
 
@@ -15,14 +15,15 @@ READ_ACTIONS: Final = ("ssm:GetParameter",)
 """What a reader of an entry needs: the agent reads its entry with ``GetParameter`` only."""
 
 
-def render(entry: TaskEntry) -> str:
-    """The SSM document of ``entry``: compact JSON of every field, in the entry's field order."""
-    return json.dumps(entry.model_dump(mode="json"), separators=(",", ":"))
+def render(settings: TaskSettings, profile_arn: str) -> str:
+    """The SSM document of a task (a :class:`~fast_channels.core.model_registry.TaskEntry`): compact JSON of its
+    settings, in field order, then its profile's ARN (a CloudFormation reference at synth time)."""
+    return json.dumps({**settings.model_dump(mode="json"), "profile_arn": profile_arn}, separators=(",", ":"))
 
 
 class ModelRegistry(Construct):
     """``/<prefix>/models/tasks/<task>`` for every task, each holding its
-    :class:`~fast_channels.core.model_registry.TaskEntry` as JSON.
+    :class:`~fast_channels.core.model_registry.TaskEntry` as JSON: its settings and its profile.
 
     Model ids are deploy-time: every entry must name one of ``allowed_models`` (the models the deployment's roles
     may invoke), so a later edit of a parameter can only choose among them, and readers refuse anything else.
@@ -30,13 +31,15 @@ class ModelRegistry(Construct):
     Args:
         prefix: deployment prefix (the parameter path).
         tasks: registry entries by task name, with ``{geo}`` resolved for the region.
+        profiles: the application inference profile ARN of every task.
         allowed_models: the IaC allow-list (``agent.allowed_models``, resolved).
 
     Attributes:
         parameters: the parameter of each task.
 
     Raises:
-        ValueError: a task's model is not in ``allowed_models``, or a model id still holds ``{geo}``.
+        ValueError: a task's model is not in ``allowed_models``, a model id still holds ``{geo}``, or a task has no
+            profile.
     """
 
     def __init__(
@@ -45,7 +48,8 @@ class ModelRegistry(Construct):
         id: str,
         *,
         prefix: str,
-        tasks: Mapping[str, TaskEntry],
+        tasks: Mapping[str, TaskSettings],
+        profiles: Mapping[str, str],
         allowed_models: Collection[str],
     ) -> None:
         super().__init__(scope, id)
@@ -53,13 +57,15 @@ class ModelRegistry(Construct):
             raise ValueError(f"{unresolved}: resolve {{geo}} for the region first (FastChannelsConfig.for_region)")
         if outside := {task: entry.model for task, entry in tasks.items() if entry.model not in allowed_models}:
             raise ValueError(f"models outside allowed_models {sorted(allowed_models)}: {outside}")
+        if missing := sorted(set(tasks) - set(profiles)):
+            raise ValueError(f"tasks without an inference profile: {missing}")
         self.parameters: dict[str, ssm.StringParameter] = {
             task: ssm.StringParameter(
                 self,
                 task,
                 parameter_name=task_parameter(prefix, task),
                 description=f"Model registry entry of task {task} (JSON; readers validate it against the allow-list)",
-                string_value=render(entry),
+                string_value=render(entry, profiles[task]),
             )
             for task, entry in sorted(tasks.items())
         }

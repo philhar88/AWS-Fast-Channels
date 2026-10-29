@@ -21,7 +21,7 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskEntry
+from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings
 from fast_channels.core.naming import is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
@@ -34,6 +34,9 @@ CONTEXT_KEY: Final = "fast-channels"
 GEO_PLACEHOLDER: Final = "{geo}"
 """Stands for the deployment region's inference-profile geography in model ids (:func:`geo_prefix`)."""
 DEFAULT_MODEL: Final = f"{GEO_PLACEHOLDER}.anthropic.claude-haiku-5-5"
+SCHEDULER_DAILY_CAP_USD: Final = 5
+"""The scheduler agent's daily spend cap, about ten times a busy demo day: four autopilot runs a day on each of five
+channels and 50 operator turns at about $0.005 each (``make eval``) is about $0.4."""
 DEFAULT_ALLOWED_MODELS: Final = (
     DEFAULT_MODEL,
     f"{GEO_PLACEHOLDER}.anthropic.claude-sonnet-5-5",
@@ -462,8 +465,9 @@ class OpsModule(_Module):
     """Run a synthetic playback canary on the probe playback configuration of each running channel."""
 
 
-class ModelTask(TaskEntry):
-    """One task's model-registry entry, rendered to SSM ``/<prefix>/models/tasks/<task>`` with ``{geo}`` resolved."""
+class ModelTask(TaskSettings):
+    """One task's model-registry entry, rendered to SSM ``/<prefix>/models/tasks/<task>`` with ``{geo}`` resolved and
+    the task's application inference profile."""
 
     @field_validator("model", mode="after")
     @classmethod
@@ -480,12 +484,14 @@ class ModelsModule(_Module):
     inference profile and spend cap. Entries choose only among ``agent.allowed_models``."""
     tasks: dict[str, ModelTask] = Field(
         # Validated like a value from cdk.json, so that {geo} resolves for the region.
-        default_factory=lambda: {"scheduler.plan": {"model": DEFAULT_MODEL}},
+        default_factory=lambda: {"scheduler.plan": {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD}},
         validate_default=True,
     )
     """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
     budgets_action: bool = False
-    """Add an AWS Budgets action per task role that denies the role's model invocations when its budget is spent."""
+    """Add an AWS Budgets action per task role with a ``daily_cap_usd`` that, once the task's daily spend reaches the
+    cap, denies the role's invocations of the task's inference profile. Needs ``notifications.email`` (AWS Budgets
+    emails it when the action runs) and the ``fast:task`` cost allocation tag activated in the payer account."""
 
     @field_validator("tasks")
     @classmethod
@@ -805,6 +811,11 @@ class FastChannelsConfig(_Section):
                 for task, entry in modules.models.tasks.items()
                 if (model := resolve_geo(entry.model, region) if region else entry.model) not in allowed
             ]
+            if modules.models.budgets_action and not self.notifications.email:
+                problems.append(
+                    f"{where}.models.budgets_action: AWS Budgets emails notifications.email when an action runs; "
+                    "set it or turn budgets_action off"
+                )
             if self.agent.enabled and SCHEDULER_TASK not in modules.models.tasks:
                 problems.append(
                     f"{where}.models.tasks: {SCHEDULER_TASK!r}, the scheduler agent's entry, is missing; add it or set "

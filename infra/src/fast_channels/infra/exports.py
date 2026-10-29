@@ -4,6 +4,7 @@ Constructs and stacks of every plane import these from here, so a construct such
 ``MediaObservability`` can be reused without the stack modules. ``stacks.data`` and ``stacks.media`` re-export them.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -114,6 +115,23 @@ class OpsExports:
     """Glue database of the lake (``<prefix>_lake``)."""
     lake_workgroup: str
     """Athena workgroup of the lake (``<prefix>-lake``)."""
+class TaskProfile:
+    """A model-registry task's model and its application inference profile, for the stacks of the task's callers."""
+
+    task: str
+    model: str
+    """The model the profile copies (resolved, from the allow-list)."""
+    arn: str
+    """The profile's ARN (a reference to the Models stack)."""
+
+
+@dataclass(frozen=True, slots=True)
+class ModelsExports:
+    """What the callers of model-registry tasks consume from the Models stack (``ModelsStack.exports``). Registry
+    entries and counters are addressed by name, so only the profiles are references."""
+
+    profiles: Mapping[str, TaskProfile]
+    """Each task's profile, by task name."""
 
 
 def channel_playback(cdn_base_url: str, channel: ChannelExports) -> dict[str, str]:

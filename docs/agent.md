@@ -327,23 +327,52 @@ allow-list. The agent never sends `temperature`, which Claude 5.x rejects. The s
 
 ### Model registry
 
-With `modules.models.enabled`, the `FastChannels-<prefix>-Models` stack renders one SSM parameter per LLM task,
-`/<prefix>/models/tasks/<task>`, from `modules.models.tasks` in `cdk.json` (the stack output `TaskParameters` lists
-them). Each entry names its model, the route (`bedrock`: Converse with the task's own settings), the effort, thinking,
-the output token budget and the task's data class; the schema is
-[contracts/model-registry.schema.json](../contracts/model-registry.schema.json). The scheduler agent's task is
+With `modules.models.enabled`, the `FastChannels-<prefix>-Models` stack gives every LLM task in
+`modules.models.tasks` (`cdk.json`):
+
+- an **application inference profile** `<prefix>-<task>`, copied from the system inference profile of the task's model
+  and tagged `fast:task=<task>`. Its id is the `ModelId` of the task's calls in the `AWS/Bedrock` metrics, so each task
+  has its own token, latency, throttle and cost figures; with the `fast:task` cost allocation tag activated (Billing
+  console, payer account), its spend shows in Cost Explorer and AWS Budgets too;
+- a **registry entry**, the SSM parameter `/<prefix>/models/tasks/<task>`: model, route (`bedrock`: Converse), effort,
+  thinking, output token budget, data class, daily cap, eval record and the profile's ARN
+  ([contracts/model-registry.schema.json](../contracts/model-registry.schema.json));
+- a **daily spend counter** in the `<prefix>-models` table.
+
+The stack outputs `TaskParameters`, `TaskProfiles` and `CounterTableName` list them. The scheduler agent's task is
 `scheduler.plan`, which ships with today's ModelSpec values (Haiku 5.5, effort `low` for chat and `medium` for plans,
-16,000 tokens). The agent resolves its model, with a 60 s cache, from the first source that is valid:
+16,000 tokens) and a daily cap of $5. The agent resolves its settings, with a 60 s cache, from the first source that is
+valid:
 
 1. the `scheduler.plan` registry entry (`MODEL_TASK_PARAMETER`);
 2. the ModelSpec (`/<prefix>/agent/model-spec`);
 3. the code default (`agent.model`).
 
-An entry that is missing, unreadable, invalid or names a model outside `agent.allowed_models` is skipped with a
-`model source unavailable` warning. Synth refuses an entry whose model is not allowed, and an entry for a task with
-viewer data (`data_class: viewer`) on a `global.` profile. Every run's `run started` log record names its `task`,
-`model_id` and `model_source` (`registry`, `model-spec` or `default`). A task's thinking setting is fixed: it never
-changes from one call to the next, because a change rewrites the prompt cache.
+An entry that is missing, unreadable, invalid, names a model outside `agent.allowed_models` or names another profile
+is skipped with a `model source unavailable` warning. Synth refuses an entry whose model is not allowed, and an entry
+for a task with viewer data (`data_class: viewer`) on a `global.` profile. Every run's `run started` log record names
+its `task`, `model_id` and `model_source` (`registry`, `model-spec` or `default`). A task's thinking setting is fixed:
+it never changes from one call to the next, because a change rewrites the prompt cache.
+
+**Through the profile only.** With the registry, every model call goes through the task's profile
+(`MODEL_PROFILE_ARN`), whatever the source, and the runtime role may invoke nothing else: the profile, and the
+foundation model only through it (`bedrock:InferenceProfileArn`), never the system profile directly or another task's
+profile. `agent.allowed_models` then holds one model for the agent, the task's, so switching the scheduler to another
+model is a `cdk.json` change and a deployment (a new profile), not an SSM edit; the ModelSpec and the entry still tune
+effort, thinking and `max_tokens`. Prompt caching works through the profile.
+
+**Daily cap.** Caps are circuit breakers against a runaway, set at about ten times expected use, not budgets. Before
+each run and each model call the agent makes a conditional write on the counter item `COUNTER#scheduler.plan#<UTC day>`
+that succeeds only while the day's spend is under `daily_cap_usd` (the entry's, or the deployed value when the entry
+is unusable); after each call it adds the call's cost from its token usage at list prices (`fast_channels.agent.caps`).
+Past the cap a run ends with `RUN_ERROR` `MODEL_CAP_REACHED` (a call within a run is cancelled with the same message
+as the reply), and the alert topic `<prefix>-alerts` gets one notification per task and day. It resumes at 00:00 UTC
+or as soon as the cap is raised. When the counter cannot be reached the run goes ahead and the agent logs a warning.
+
+With `modules.models.budgets_action` (and `notifications.email`), each task role with a cap also gets a daily AWS
+Budget on its `fast:task` spend whose action, at 100 %, attaches a policy denying that role's invocations of the
+task's profile. Budgets see spend hours late and only once the cost allocation tag is active; reverse an action in AWS
+Budgets (Action history) once the cause is fixed.
 
 ### Conformance suite and bringing your own model
 

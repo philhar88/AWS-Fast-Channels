@@ -9,7 +9,8 @@ Re-use is a primary goal. AWS Solutions Constructs 2.105 offer patterns that loo
 ## Decision
 Build on stable `aws-cdk-lib` L2 constructs (CloudFront, S3, DynamoDB TableV2, Step Functions with JSONata and the
 MediaConvert task, EventBridge, Cognito, AgentCore) plus thin FAST-specific constructs. Use L1 resources only where no L2
-exists (MediaTailor, MediaConvert templates, log deliveries). No alpha or preview modules on the default path.
+exists (MediaTailor, MediaConvert templates, log deliveries, Amazon Bedrock application inference profiles, AWS Budgets
+and budget actions). No alpha or preview modules on the default path.
 
 ## Why not Solutions Constructs
 - `S3ToStepfunctions` couples a stateful bucket and a stateless state machine in one construct (conflicts with the

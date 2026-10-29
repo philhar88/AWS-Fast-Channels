@@ -89,7 +89,13 @@ class FastChannelsStage(Stage):
         self.operator: OperatorStack | None = None
         if config.agent.enabled:
             self.operator = OperatorStack(
-                self, "Operator", config=config, data=self.data.exports, media=self.media.exports, **stacks
+                self,
+                "Operator",
+                config=config,
+                data=self.data.exports,
+                media=self.media.exports,
+                models=self.models.exports if self.models else None,
+                **stacks,
             )
             self.operator.add_stack_dependency(self.data, "AgentCore Memory is ACTIVE before the agent plane")
             self.operator.add_stack_dependency(self.media)

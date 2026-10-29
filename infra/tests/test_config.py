@@ -478,6 +478,14 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ),
         ({"modules.models.tasks": {"scheduler.plan": {"effort": "extreme"}}}, "fast-channels.modules.models.tasks"),
         (
+            {**modules_on("models"), "modules.models.budgets_action": True},
+            "fast-channels.modules.models.budgets_action: AWS Budgets emails notifications.email when an action runs",
+        ),
+        (
+            {"modules.models.tasks": {"scheduler.plan": {"profile_arn": "arn:aws:bedrock:us-east-1:1:x"}}},
+            "fast-channels.modules.models.tasks.scheduler.plan.profile_arn: Extra inputs are not permitted",
+        ),
+        (
             {
                 "modules.models.tasks": {
                     "recommender": {"model": "global.anthropic.claude-haiku-5-5", "data_class": "viewer"}

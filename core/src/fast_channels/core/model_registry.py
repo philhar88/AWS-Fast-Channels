@@ -1,7 +1,9 @@
 """The per-task model registry: one validated entry per LLM task, stored as SSM ``/<prefix>/models/tasks/<task>``.
 
 Each task (``scheduler.plan`` for the scheduling agent; Phase-2 tasks such as ``recommender``) names its Bedrock
-model, how it reaches it, and the request settings that stay fixed for the task. Model ids are chosen only among the
+model, how it reaches it, and the request settings that stay fixed for the task, and the deployment gives it its own
+application inference profile: the per-task cost and metrics primitive, and the only target the task's role may
+invoke. Model ids are chosen only among the
 deployment's IAM allow-list (``agent.allowed_models``): the registry is data, the allow-list is the security
 property, so a registry edit can only choose among models the deployment already grants. Readers validate every
 entry and refuse one outside the allow-list.
@@ -20,6 +22,8 @@ SCHEDULER_TASK: Final = "scheduler.plan"
 """The scheduling agent's task (the AgentCore Runtime in the operator plane)."""
 TASK_NAME: Final = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*")
 """Task names: dot-separated lowercase words (``scheduler.plan``, ``recommender.cohort``)."""
+PROFILE_ARN: Final = r"^arn:aws[a-z-]*:bedrock:[a-z0-9-]+:\d{12}:application-inference-profile/[a-z0-9]+$"
+"""An application inference profile's ARN."""
 GLOBAL_PROFILE_PREFIX: Final = "global."
 """Global cross-Region inference profiles route a request to any commercial Region in the world."""
 
@@ -75,9 +79,8 @@ class DataClass(StrEnum):
     VIEWER = "viewer"
 
 
-class TaskEntry(BaseModel):
-    """One task's registry entry: configured as ``modules.models.tasks.<task>`` and stored as the SSM document that
-    readers validate, with ``{geo}`` resolved for the region."""
+class TaskSettings(BaseModel):
+    """What a deployment configures for one task (``modules.models.tasks.<task>``)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", use_attribute_docstrings=True)
 
@@ -108,3 +111,12 @@ class TaskEntry(BaseModel):
                 "a task with viewer data needs a geographic profile (us., eu., ...)"
             )
         return self
+
+
+class TaskEntry(TaskSettings):
+    """One task's registry entry, the SSM document that readers validate: the task's settings with ``{geo}`` resolved
+    for the region, and the task's application inference profile."""
+
+    profile_arn: str = Field(pattern=PROFILE_ARN)
+    """The task's application inference profile, created by the deployment: the only model target its callers may
+    invoke."""

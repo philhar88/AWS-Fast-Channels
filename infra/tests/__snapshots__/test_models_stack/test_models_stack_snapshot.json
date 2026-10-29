@@ -1,9 +1,48 @@
 {
   "Description": "FAST Channels (fast): model registry",
   "Outputs": {
+    "CounterTableName": {
+      "Description": "DynamoDB table of the tasks' daily spend counters",
+      "Value": {
+        "Ref": "CountersFDB211E7"
+      }
+    },
+    "PublishOutputFnGetAttProfilesschedulerplanFCD17E5BInferenceProfileArn268D5DBC": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ProfilesschedulerplanFCD17E5B",
+          "InferenceProfileArn"
+        ]
+      }
+    },
     "TaskParameters": {
       "Description": "Registry entry (SSM parameter name) of each task",
       "Value": "{\"recommender\": \"/fast/models/tasks/recommender\", \"scheduler.plan\": \"/fast/models/tasks/scheduler.plan\"}"
+    },
+    "TaskProfiles": {
+      "Description": "Application inference profile ARN of each task",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "{\"recommender\":\"",
+            {
+              "Fn::GetAtt": [
+                "Profilesrecommender9351D4DC",
+                "InferenceProfileArn"
+              ]
+            },
+            "\",\"scheduler.plan\":\"",
+            {
+              "Fn::GetAtt": [
+                "ProfilesschedulerplanFCD17E5B",
+                "InferenceProfileArn"
+              ]
+            },
+            "\"}"
+          ]
+        ]
+      }
     }
   },
   "Parameters": {
@@ -14,6 +53,94 @@
     }
   },
   "Resources": {
+    "CountersFDB211E7": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          }
+        ],
+        "Replicas": [
+          {
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fast"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "TableName": "fast-models",
+        "TimeToLiveSpecification": {
+          "AttributeName": "expires_at",
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "Profilesrecommender9351D4DC": {
+      "Properties": {
+        "Description": "FAST Channels fast model task recommender",
+        "InferenceProfileName": "fast-recommender",
+        "ModelSource": {
+          "CopyFrom": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-5-5"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          },
+          {
+            "Key": "fast:task",
+            "Value": "recommender"
+          }
+        ]
+      },
+      "Type": "AWS::Bedrock::ApplicationInferenceProfile"
+    },
+    "ProfilesschedulerplanFCD17E5B": {
+      "Properties": {
+        "Description": "FAST Channels fast model task scheduler.plan",
+        "InferenceProfileName": "fast-scheduler-plan",
+        "ModelSource": {
+          "CopyFrom": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-5-5"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          },
+          {
+            "Key": "fast:task",
+            "Value": "scheduler.plan"
+          }
+        ]
+      },
+      "Type": "AWS::Bedrock::ApplicationInferenceProfile"
+    },
     "Registryrecommender990E589E": {
       "Properties": {
         "Description": "Model registry entry of task recommender (JSON; readers validate it against the allow-list)",
@@ -23,7 +150,21 @@
           "fast:owner": "iac"
         },
         "Type": "String",
-        "Value": "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":\"low\",\"thinking\":\"adaptive\",\"max_tokens\":8000,\"data_class\":\"viewer\",\"daily_cap_usd\":null,\"eval\":null}"
+        "Value": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":\"low\",\"thinking\":\"adaptive\",\"max_tokens\":8000,\"data_class\":\"viewer\",\"daily_cap_usd\":null,\"eval\":null,\"profile_arn\":\"",
+              {
+                "Fn::GetAtt": [
+                  "Profilesrecommender9351D4DC",
+                  "InferenceProfileArn"
+                ]
+              },
+              "\"}"
+            ]
+          ]
+        }
       },
       "Type": "AWS::SSM::Parameter"
     },
@@ -36,7 +177,21 @@
           "fast:owner": "iac"
         },
         "Type": "String",
-        "Value": "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":{\"chat\":\"low\",\"plan\":\"medium\"},\"thinking\":\"adaptive\",\"max_tokens\":16000,\"data_class\":\"operational\",\"daily_cap_usd\":null,\"eval\":null}"
+        "Value": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":{\"chat\":\"low\",\"plan\":\"medium\"},\"thinking\":\"adaptive\",\"max_tokens\":16000,\"data_class\":\"operational\",\"daily_cap_usd\":5.0,\"eval\":null,\"profile_arn\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ProfilesschedulerplanFCD17E5B",
+                  "InferenceProfileArn"
+                ]
+              },
+              "\"}"
+            ]
+          ]
+        }
       },
       "Type": "AWS::SSM::Parameter"
     }
