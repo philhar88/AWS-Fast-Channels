@@ -80,7 +80,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 
 | Source | Derived | Regenerate |
 |---|---|---|
-| `fast_channels.core.catalog`, `.ingest`, `.events` | `contracts/*` | `uv run python scripts/generate_contracts.py` |
+| `fast_channels.core.catalog`, `.ingest`, `.events`, `.model_registry` | `contracts/*` | `uv run python scripts/generate_contracts.py` |
 | `delivery.ROUTES` | `docs/path-contract.json` | `uv run pytest infra/tests/test_delivery.py --snapshot-update` |
 | Tool registry | Tool table in `docs/agent.md` | The snippet in [docs/agent.md](docs/agent.md#tool-reference) |
 | `FastChannelsConfig` | Configuration reference in `docs/operations.md` | The snippet under the tables in [docs/operations.md](docs/operations.md#configuration-reference) |

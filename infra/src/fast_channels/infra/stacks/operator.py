@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack
 
+from fast_channels.core.model_registry import SCHEDULER_TASK
 from fast_channels.core.naming import agent_namespace, agentcore_name
 from fast_channels.functions.tools.registry import confirm_tools
 from fast_channels.infra.config import TransactionSearchMode
@@ -35,7 +36,8 @@ class OperatorStack(Stack):
     console URL and the console's ``config.json`` names the clients, which would be a cycle across stacks.
 
     Args:
-        config: deployment configuration (``agent``, ``channels``, ``channel_assembly``, ``observability``).
+        config: deployment configuration (``agent``, ``channels``, ``channel_assembly``, ``observability``,
+            ``modules.models``).
         data: Data stack references (tables, buckets, Memory); ``data.memory`` must exist.
         media: Media stack exports (the only thing the operator plane reads from the media plane).
         console_dist: the console build (``console/dist``).
@@ -124,6 +126,7 @@ class OperatorStack(Stack):
             log_retention=retention,
             removal_policy=removal,
             record_prompts=config.observability.records_prompts,
+            model_task=SCHEDULER_TASK if config.modules.models.enabled else None,
         )
         AgentTelemetry(
             self,

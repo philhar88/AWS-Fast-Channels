@@ -10,17 +10,16 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel
 
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, RenditionProfile
 from fast_channels.infra.config import (
     AdsMode,
     ChannelTier,
     ConfigError,
     DemoLine,
-    Effort,
     ExternalVastAds,
     FastChannelsConfig,
     LedgerLock,
-    ModeEffort,
     ModulesConfig,
     PbsVersion,
     PreconditionedAds,
@@ -476,6 +475,16 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
             "task names must be dot-separated lowercase words, got ['Scheduler']",
         ),
         ({"modules.models.tasks": {"scheduler.plan": {"effort": "extreme"}}}, "fast-channels.modules.models.tasks"),
+        (
+            {
+                "modules.models.tasks": {
+                    "recommender": {"model": "global.anthropic.claude-haiku-5-5", "data_class": "viewer"}
+                }
+            },
+            "fast-channels.modules.models.tasks.recommender: model 'global.anthropic.claude-haiku-5-5' is a global "
+            "inference profile, which may process a request in any Region; a task with viewer data needs a geographic "
+            "profile",
+        ),
         ({"modules.demand.tasks": {"min": 5, "max": 4}}, "tasks.min (5) exceeds tasks.max (4)"),
         (
             {"modules.demand.dayparts": [{"cron": "cron(50 17 ? * MON-FRI *)", "min": 9}]},
@@ -503,7 +512,7 @@ def test_invalid_module_configurations(load_config: Load, overrides: dict[str, A
 
 
 def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> None:
-    recommender = {"model": "global.anthropic.claude-haiku-5-5", "effort": "low", "max_tokens": 8000}
+    recommender = {"model": "{geo}.anthropic.claude-haiku-5-5", "effort": "low", "max_tokens": 8000}
     config = load_config(
         with_shipped(
             **modules_on(*MODULES),
@@ -570,6 +579,35 @@ def test_task_models_resolve_when_the_registry_keeps_its_defaults(load_config: L
     config = load_config({"fast-channels": {"modules": {"models": {"enabled": True}}}}, region="eu-west-1")
 
     assert config.modules.models.tasks["scheduler.plan"].model == "eu.anthropic.claude-haiku-5-5"
+
+
+def test_viewer_data_tasks_refuse_a_region_whose_geography_is_global(load_config: Load) -> None:
+    recommender = {"model": "{geo}.anthropic.claude-haiku-5-5", "data_class": "viewer"}
+    viewer = {
+        "fast-channels": {
+            "agent": {"enabled": False},
+            "modules": {"models": {"enabled": True, "tasks": {"recommender": recommender}}},
+        }
+    }
+    operational = {"fast-channels": {"modules": {"models": {"enabled": True}}}}
+
+    message = config_error(load_config, viewer, region="sa-east-1")
+
+    assert "model 'global.anthropic.claude-haiku-5-5' is a global inference profile" in message
+    assert load_config(viewer, region="us-east-1").modules.models.tasks["recommender"].model == US_HAIKU
+    assert load_config(operational, region="sa-east-1").modules.models.tasks["scheduler.plan"].model == (
+        "global.anthropic.claude-haiku-5-5"
+    )
+
+
+def test_the_agent_needs_its_registry_entry(load_config: Load) -> None:
+    tasks = {"recommender": {"model": "{geo}.anthropic.claude-haiku-5-5"}}
+    registry = {"modules": {"models": {"enabled": True, "tasks": tasks}}}
+
+    message = config_error(load_config, {"fast-channels": registry}, region="us-east-1")
+
+    assert "fast-channels.modules.models.tasks: 'scheduler.plan', the scheduler agent's entry, is missing" in message
+    assert load_config({"fast-channels": {**registry, "agent": {"enabled": False}}}, region="us-east-1")
 
 
 def test_region_checks_cover_the_registry_without_the_agent(load_config: Load) -> None:

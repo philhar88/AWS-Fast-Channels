@@ -34,7 +34,8 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 The `modules` section holds optional modules for ad monetization, which are being built on the
 `feature/agentic-monetization` branch. Every module is off by default, and with every module off the stacks are
 exactly v3.0.0's, which snapshot tests of every template check (`infra/tests/test_snapshots.py`). A module's
-settings are validated from the start, but enabling a module changes nothing until its code is merged.
+settings are validated from the start, but enabling a module changes nothing until its code is merged. Merged so
+far: `models` (the per-task model registry, [agent.md](agent.md#model-registry)).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -126,7 +127,7 @@ settings are validated from the start, but enabling a module changes nothing unt
 | `effort` | `low` or `medium` or `high` or `max` or object | `{"chat": "low", "plan": "medium"}` | Reasoning effort: one level, or one per mode (`chat`, `plan`) for the scheduler agent. |
 | `thinking` | `adaptive` or `disabled` | `"adaptive"` | Extended thinking; fixed per task, because changing it per call rewrites the prompt cache. |
 | `max_tokens` | int | `16000` | Output token budget per model call. |
-| `data_class` | `operational` or `viewer` | `"operational"` | `viewer` if the task's prompts carry viewer data; swapping such a task's model needs human approval. |
+| `data_class` | `operational` or `viewer` | `"operational"` | `viewer` if the task's prompts carry viewer data, which keeps the model on a geographic inference profile (never `global.`); swapping such a task's model needs human approval. |
 | `daily_cap_usd` | float or null | `null` | Daily model spend at which the task's token counter refuses further calls (about ten times expected use); `null` sets no cap. |
 | `eval` | str or null | `null` | Key of the passing evaluation record that qualifies `model` for this task. |
 
@@ -256,7 +257,9 @@ Notes:
   and `pds`; `crawl` needs `pds` and `release`. `release.channels` ⊆ the IaC channel names (after `{prefix}` is
   replaced). With `release` on and `lab_channel` true, no IaC channel may be called `<prefix>-lab`. With `ops` on,
   `ledger_lock: compliance` needs `removal: retain`. With `models` on, every task's model is one of
-  `agent.allowed_models` and callable from the region. Within a module: `demand.tasks.min` ≤ `tasks.max`, with each
+  `agent.allowed_models` and callable from the region, a task with `data_class: viewer` never names a `global.`
+  profile (also when `{geo}` resolves to `global`), and with `agent.enabled` the registry holds the scheduler
+  agent's `scheduler.plan`. Within a module: `demand.tasks.min` ≤ `tasks.max`, with each
   daypart's `min` between them; each PDS hook group timeout at least its call's timeout; unique demo line ids and
   release channels. Unknown keys are refused at every level.
 - Model-registry task names contain dots, which a dotted override path would split: override a task with an object,
@@ -299,7 +302,7 @@ turns one module on and keeps the rest of `cdk.json`. `STAGE=<name>` selects a s
 
 ```bash
 make synth STAGE=fastm                       # cdk-nag included
-make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Operator
+make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Models, -Operator
 make seed STAGE=fastm SEED_ARGS="--wait --yes"
 make destroy STAGE=fastm
 make deploy STAGE=fastci PREFIX=fastci-pr7   # the same stage under another prefix
@@ -450,7 +453,7 @@ channels costs a few dollars a month. A 24/7 BASIC channel adds about $73 a mont
 | Agent | The agent forwards the operator's own token; the Gateway authorises every call with Cedar in `ENFORCE` mode; approval-gated tools wait for a human; no role may change the Gateway or its policies (explicit `Deny`). The Gateway's service role trusts only this deployment's Gateway (`aws:SourceAccount`, `aws:SourceArn`), and the Runtime role may read no object of the CDK assets bucket but its own code |
 | Autopilot credential | Exists only when an IaC channel has an `autopilot_cron`. Cognito returns the machine client's secret from `DescribeUserPoolClient`, which the AWS managed `ReadOnlyAccess` and `SecurityAudit` policies grant, so read-only access to the account is enough to mint autopilot tokens and plan and publish on the autopilot's channels. Deny `cognito-idp:DescribeUserPoolClient` on the user pool to every principal but the autopilot function's role (an SCP or permissions boundary) |
 | Tools (IAM) | One least-privilege role per tool target; destructive MediaTailor actions only on `<prefix>-agent-*`; creation calls only with this deployment's `fast:app` request tag; item-level DynamoDB grants; the reaper reaches only `<prefix>-*` names |
-| Model | Invocation limited to `agent.allowed_models`; the runtime-mutable ModelSpec cannot name other models or providers; no `temperature` |
+| Model | Invocation limited to `agent.allowed_models`; the runtime-mutable ModelSpec and model-registry entries cannot name other models or providers; no `temperature`. Registry tasks with viewer data stay on a geographic inference profile |
 | Prompt logging | Message content (operator prompts, the system prompt, tool results, model replies) stays out of the Runtime's logs and spans unless `observability.capture_prompts` is on, which it is by default only with `transaction_search` (online evaluations score that content). With it, anyone who can read `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` reads every operator's conversation ([observability.md](observability.md#what-the-agent-runtime-records)) |
 | Audit | The Gateway passes no caller identity to the tools. Every call of a write or destructive tool logs a `tool audit` record (tool, arguments and outcome, with the call's correlation id, Gateway request id and X-Ray trace id) in its function's log group, and the Gateway's `APPLICATION_LOGS` record each request; for agent runs the Runtime's `run started` record names the actor of the same correlation id (the session id). Correlation and trace ids are chosen by the caller, and console calls straight to the Gateway (Start, Stop) carry no actor, so these records link calls to conversations but do not prove who made them ([observability.md](observability.md#audit-trail)) |
 | Alerts | EventBridge publishes failure events to `<prefix>-alerts` through a rule-scoped role; the topic admits no service principal |
@@ -469,7 +472,8 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
   acknowledgements).
 - Cognito: require MFA, send email through Amazon SES, consider the Plus feature plan for threat protection, and keep
   `fast-admins` small.
-- Restrict who may call `ssm:PutParameter` on `/<prefix>/agent/model-spec` and trim `agent.allowed_models`.
+- Restrict who may call `ssm:PutParameter` on `/<prefix>/agent/model-spec` (and `/<prefix>/models/tasks/*` with
+  `modules.models`) and trim `agent.allowed_models`.
 - With an autopilot, deny `cognito-idp:DescribeUserPoolClient` on the user pool to everyone but the autopilot's role
   (see [Security model](#security-model)).
 - Keep message content out of the Runtime's logs outside debugging sessions (with Transaction Search, set

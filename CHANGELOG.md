@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
 - **Stages**: `stages/<name>.json` holds a named deployment's overrides (a partial `fast-channels` block), and
   `STAGE=<name>` applies it to `make synth`, `diff`, `deploy`, `destroy`, `seed` and `trace`
   (`scripts/stage_args.py`). Two stages ship, `fastm` and `fastci`, each with every module on.
+- **Model registry** (`modules.models`): the `FastChannels-<prefix>-Models` stack renders one validated SSM entry per
+  LLM task, `/<prefix>/models/tasks/<task>` (schema `contracts/model-registry.schema.json`), from
+  `modules.models.tasks`, with models only from `agent.allowed_models` and viewer-data tasks never on a `global.`
+  profile. The scheduler agent reads its `scheduler.plan` entry first (60 s cache), then the ModelSpec, then the code
+  default, and logs the task, model and source of every run. A spec or entry may set `thinking` (`adaptive` or
+  `disabled`).
 
 ## [3.0.0] - 2026-10-16
 

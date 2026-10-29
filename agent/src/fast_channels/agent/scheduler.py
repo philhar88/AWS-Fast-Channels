@@ -25,7 +25,7 @@ from fast_channels.agent.gateway import ToolCatalog, gateway_tools
 from fast_channels.agent.hooks import SharedStateTracker, ToolGuard, pending_approvals
 from fast_channels.agent.identity import Caller
 from fast_channels.agent.memory import session_manager
-from fast_channels.agent.model import ModelSpec, ModelSpecSource, bedrock_model
+from fast_channels.agent.model import TASK, ModelSpec, ModelSpecSource, bedrock_model
 from fast_channels.agent.protocol import AgentRunError, Mode, Turn
 
 if TYPE_CHECKING:
@@ -109,14 +109,17 @@ class Scheduler:
         caller = Caller.from_headers(headers)
         turn = Turn.from_input(run_input)
         mode = turn.mode or (Mode.PLAN if caller.machine else Mode.CHAT)
-        spec = self._specs.current()
+        active = self._specs.current()
+        spec = active.spec
         logger.info(
             "run started",
             extra={
                 "correlation_id": session_id,
                 "actor": caller.actor_id,
                 "mode": mode.value,
+                "task": TASK,
                 "model_id": spec.model_id,
+                "model_source": active.source.value,
             },
         )
         tracker = SharedStateTracker(turn.state)

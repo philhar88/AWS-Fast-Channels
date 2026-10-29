@@ -335,3 +335,21 @@ def test_system_prompt_and_skills_reach_the_model(harness: HarnessFactory) -> No
     assert "FAST Channels operator assistant" in call["system_prompt"]
     assert "<name>scheduling</name>" in call["system_prompt"]  # AgentSkills discloses the skill catalogue
     assert {spec["name"] for spec in call["tool_specs"]} >= {"skills", "schedule___plan", "schedule___publish"}
+
+
+def test_every_run_logs_its_task_model_and_model_source(
+    harness: HarnessFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    h = harness([text("ok")])
+
+    with caplog.at_level("INFO", logger="fast_channels.agent.scheduler"):
+        run(h.run("hi"))
+
+    [started] = [r for r in caplog.records if r.getMessage() == "run started"]
+    fields = {key: getattr(started, key) for key in ("task", "model_id", "model_source", "mode")}
+    assert fields == {
+        "task": "scheduler.plan",
+        "model_id": "us.anthropic.claude-haiku-5-5",
+        "model_source": "default",  # the harness's settings name no SSM parameter
+        "mode": "chat",
+    }

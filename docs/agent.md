@@ -301,7 +301,7 @@ The console's client is in `console/src/lib/agui.ts` and `console/src/lib/sse.ts
 |---|---|
 | Default | `{geo}.anthropic.claude-haiku-5-5`: the region's geographic inference profile, `us.` in US regions and ca-central-1, `eu.` in Europe, `au.` in ap-southeast-2, `global.` elsewhere |
 | Allowed by default | Haiku 5.5 and Sonnet 5.5, as the region's (`{geo}.`) and `global.` profiles (`agent.allowed_models`) |
-| Switch at runtime | SSM parameter `/<prefix>/agent/model-spec` (output `ModelSpecParameter`), read with a 60 s cache |
+| Switch at runtime | SSM parameter `/<prefix>/agent/model-spec` (output `ModelSpecParameter`), read with a 60 s cache; with the [model registry](#model-registry), its `scheduler.plan` entry comes first |
 | Cost | About $0.003–0.006 of Bedrock tokens per schedule built with Haiku 5.5 |
 
 Validation rejects geographic profiles that the deployment region cannot invoke (for example `us.` in `eu-west-1`)
@@ -321,7 +321,29 @@ aws ssm put-parameter --overwrite --name /fast/agent/model-spec --type String \
 The spec is deliberately narrow: a Bedrock model id from the allow-list, effort per mode (sent to Anthropic models
 only), and an output token budget. A spec naming any other model, or failing validation, falls back to the code
 default; a mutable provider or endpoint would let anyone with `ssm:PutParameter` redirect prompts outside the IAM
-allow-list. The agent never sends `temperature`, which Claude 5.x rejects.
+allow-list. The agent never sends `temperature`, which Claude 5.x rejects. The spec may also set `thinking`
+(`adaptive`, the default, which omits the field and leaves the model's own default; or `disabled`, which sends
+`thinking: {type: disabled}` to Anthropic models).
+
+### Model registry
+
+With `modules.models.enabled`, the `FastChannels-<prefix>-Models` stack renders one SSM parameter per LLM task,
+`/<prefix>/models/tasks/<task>`, from `modules.models.tasks` in `cdk.json` (the stack output `TaskParameters` lists
+them). Each entry names its model, the route (`bedrock`: Converse with the task's own settings), the effort, thinking,
+the output token budget and the task's data class; the schema is
+[contracts/model-registry.schema.json](../contracts/model-registry.schema.json). The scheduler agent's task is
+`scheduler.plan`, which ships with today's ModelSpec values (Haiku 5.5, effort `low` for chat and `medium` for plans,
+16,000 tokens). The agent resolves its model, with a 60 s cache, from the first source that is valid:
+
+1. the `scheduler.plan` registry entry (`MODEL_TASK_PARAMETER`);
+2. the ModelSpec (`/<prefix>/agent/model-spec`);
+3. the code default (`agent.model`).
+
+An entry that is missing, unreadable, invalid or names a model outside `agent.allowed_models` is skipped with a
+`model source unavailable` warning. Synth refuses an entry whose model is not allowed, and an entry for a task with
+viewer data (`data_class: viewer`) on a `global.` profile. Every run's `run started` log record names its `task`,
+`model_id` and `model_source` (`registry`, `model-spec` or `default`). A task's thinking setting is fixed: it never
+changes from one call to the next, because a change rewrites the prompt cache.
 
 ### Conformance suite and bringing your own model
 

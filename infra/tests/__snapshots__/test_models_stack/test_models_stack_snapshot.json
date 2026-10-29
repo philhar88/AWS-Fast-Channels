@@ -1,0 +1,71 @@
+{
+  "Description": "FAST Channels (fast): model registry",
+  "Outputs": {
+    "TaskParameters": {
+      "Description": "Registry entry (SSM parameter name) of each task",
+      "Value": "{\"recommender\": \"/fast/models/tasks/recommender\", \"scheduler.plan\": \"/fast/models/tasks/scheduler.plan\"}"
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "Registryrecommender990E589E": {
+      "Properties": {
+        "Description": "Model registry entry of task recommender (JSON; readers validate it against the allow-list)",
+        "Name": "/fast/models/tasks/recommender",
+        "Tags": {
+          "fast:app": "fast",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":\"low\",\"thinking\":\"adaptive\",\"max_tokens\":8000,\"data_class\":\"viewer\",\"daily_cap_usd\":null,\"eval\":null}"
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "RegistryschedulerplanCB39CFC9": {
+      "Properties": {
+        "Description": "Model registry entry of task scheduler.plan (JSON; readers validate it against the allow-list)",
+        "Name": "/fast/models/tasks/scheduler.plan",
+        "Tags": {
+          "fast:app": "fast",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":{\"chat\":\"low\",\"plan\":\"medium\"},\"thinking\":\"adaptive\",\"max_tokens\":16000,\"data_class\":\"operational\",\"daily_cap_usd\":null,\"eval\":null}"
+      },
+      "Type": "AWS::SSM::Parameter"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

@@ -25,11 +25,12 @@ One CDK `Stage` (`FastChannelsStage`) holds a deployment. Its id is `FastChannel
 |---|---|---|---|
 | `…-Data` | Data | Ingest, media and logs buckets with their bucket policies; `MediaLibrary` and `ReferenceCatalog` DynamoDB tables; AgentCore Memory | Always, first. Termination protection and `RETAIN` with `removal: retain` |
 | `…-Media` | Media | Event bus, ingest pipeline, ladders and their kits, Channel Assembly source location, IaC channels with their playback configurations, CloudFront distribution, runtime-resource reaper, dashboard and alarms | Always |
+| `…-Models` | Operator | The per-task model registry: one SSM parameter `/<prefix>/models/tasks/<task>` per LLM task | Only with `modules.models.enabled`, before Operator |
 | `…-Operator` | Operator | Cognito, agent tool Lambdas, AgentCore Gateway with its Cedar policy engine, AgentCore Runtime, autopilot, operator console | When `agent.enabled` (default) |
 | `…-Edge-<region>` | Media | CloudFront standard-logs-v2 delivery, CDN alert topic and 5xx alarm, in us-east-1 | Only when the deployment region is not us-east-1 (otherwise these live in Media); one per deployment region |
 | `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only with `observability.transaction_search: enable`. One per account and region, termination protected, retained |
 
-Dependencies run Data → Media → Operator. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
+Dependencies run Data → Media → (Models →) Operator. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
 refactored without export locks, and they also cross regions for the Edge stack. Memory lives in the Data stack so
 that an Operator rollback can never get stuck on a Memory that is still `CREATING`.
 
@@ -45,6 +46,7 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 |---|---|
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
 | Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: <SSAI URL>}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
+| Models | `TaskParameters` (JSON `{task: SSM parameter name}`) |
 | Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
 
 ```bash
@@ -215,6 +217,7 @@ module path.
 | `operator.tools` | `AgentTools` | One tool Lambda per registry target with least-privilege IAM; auto-stop scheduler group |
 | `operator.gateway` | `AgentGateway` | MCP Gateway (CUSTOM_JWT) with its own conditioned service role, Lambda targets, Cedar policy engine in `ENFORCE` mode |
 | `operator.runtime` | `SchedulerAgent` | AgentCore Runtime (code zip, AG-UI), ModelSpec parameter, online evaluations with traces |
+| `models.registry` | `ModelRegistry` | One validated registry entry per task (SSM), with models only from the allow-list |
 | `operator.deliveries` | `AgentTelemetry` | Vended logs (and traces) of Gateway, Memory and Runtime |
 | `operator.autopilot` | `Autopilot` | Scheduler schedules per channel, autopilot Lambda, DLQ, error and dead-letter alarms |
 | `operator.console` | `OperatorConsole` | Private bucket, CloudFront with OAC and CSP, `config.json` |

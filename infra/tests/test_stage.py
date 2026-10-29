@@ -74,6 +74,7 @@ def test_account_baseline_only_when_enabling_transaction_search(deployment: GetD
 
 def test_stack_dependencies(deployment: GetDeployment) -> None:
     stage = deployment(EVERYTHING, region="eu-west-1").stage
+    with_models = deployment({"modules.models.enabled": True}).stage
 
     def deps(stack: Stack) -> set[str]:
         return {d.node.id for d in stack.dependencies}
@@ -82,6 +83,8 @@ def test_stack_dependencies(deployment: GetDeployment) -> None:
     assert deps(stage.media) == {"Data"}
     assert deps(stage.operator) == {"Data", "Media", "AccountBaseline"}
     assert deps(stage.edge) == {"Data", "Media"}
+    assert deps(with_models.models) == set()
+    assert deps(with_models.operator) == {"Data", "Media", "Models"}
 
 
 def test_memory_is_created_before_any_operator_resource(default: Any) -> None:
@@ -321,27 +324,34 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-def test_fastm_synthesizes_exactly_v3_while_its_modules_have_no_code(
-    deployment: GetDeployment, normalized: Any
-) -> None:
-    """Enabling a module changes nothing until its code is merged; a module's pull request replaces this comparison
-    with snapshots of what the module adds."""
-    fastm = deployment(stage_overrides("fastm"))
-    v3 = deployment({"prefix": "fastm"})  # the shipped configuration under the stage's prefix, every module off
+MERGED_MODULES = ("models",)
+"""Modules whose code is merged; a module's pull request adds it here, with snapshots of what it synthesizes."""
 
-    assert FastChannelsConfig.from_context(fastm.app.node).modules != ModulesConfig()
-    assert FastChannelsConfig.from_context(v3.app.node).modules == ModulesConfig()
+
+def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeployment, normalized: Any) -> None:
+    """Enabling a module changes nothing until its code is merged: the ``fastm`` stage, with every module on,
+    synthesizes exactly what the shipped configuration does with only the merged modules on."""
+    stage = stage_args.load("fastm")
+    fastm = deployment(stage_overrides("fastm"))
+    merged = deployment({"prefix": "fastm", **{f"modules.{name}": stage["modules"][name] for name in MERGED_MODULES}})
+
+    merged_modules = FastChannelsConfig.from_context(merged.app.node).modules
+    assert FastChannelsConfig.from_context(fastm.app.node).modules != merged_modules
+    assert {name for name in ModulesConfig.model_fields if merged_modules.enabled(name)} == set(MERGED_MODULES)
     assert (
         names(fastm)
-        == names(v3)
+        == names(merged)
         == {
             "Data": "FastChannels-fastm-Data",
             "Media": "FastChannels-fastm-Media",
+            "Models": "FastChannels-fastm-Models",
             "Operator": "FastChannels-fastm-Operator",
         }
     )
-    for modules_on, modules_off in zip(fastm.stacks, v3.stacks, strict=True):
-        assert normalized(fastm.template(modules_on)) == normalized(v3.template(modules_off)), modules_on.stack_name
+    for modules_on, modules_merged in zip(fastm.stacks, merged.stacks, strict=True):
+        assert normalized(fastm.template(modules_on)) == normalized(merged.template(modules_merged)), (
+            modules_on.stack_name
+        )
 
 
 def test_stage_checks_the_region_of_a_configuration_built_in_code() -> None:

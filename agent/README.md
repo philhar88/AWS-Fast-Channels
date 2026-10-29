@@ -34,7 +34,7 @@ the same protocol to the same Gateway.
 |---|---|
 | Request | `RunAgentInput`. Only the newest user message is read, plus `context` and `state`. `threadId` should equal the runtime session id (at least 33 characters). |
 | Resume | `forwardedProps.approval = {"interrupt_id", "approved", "note"?}`, or standard AG-UI `resume: [{"interruptId", "status": "resolved" or "cancelled", "payload": {"approved", "note"}}]`. A plain new message while an approval is pending declines it, and the message becomes the reason the model reads. |
-| Mode | Optional `forwardedProps.mode`: `"chat"` or `"plan"`. It selects the ModelSpec effort. Machine callers (Autopilot) default to `plan`. |
+| Mode | Optional `forwardedProps.mode`: `"chat"` or `"plan"`. It selects the model's effort. Machine callers (Autopilot) default to `plan`. |
 | Events | `RUN_STARTED` → `TEXT_MESSAGE_START/CONTENT/END`, `TOOL_CALL_START/ARGS/END`, `TOOL_CALL_RESULT`, then `STATE_SNAPSHOT` (`{"channel", "plan", "schedule", "schedule_scope"}`) after schedule tools. A paused run sends `CUSTOM approval_required` (`{"interrupt_id", "tool", "arguments", "reason", "tool_call_id"}`). The run ends with `RUN_FINISHED` (`outcome.type = "interrupt"` when paused; `usage` holds token counts) or with `RUN_ERROR {code, message}`. |
 | Tool results | AG-UI `TOOL_CALL_RESULT` has no status field, so a failed call always carries the tools' error envelope `{"ok": false, "error": {"code", "message", "retryable", "hint"}}`. Tools return it themselves. A declined approval is code `DECLINED`. Failures that never reached a tool, such as a Cedar denial or a Gateway, MCP or Strands error, are wrapped as `TOOL_ERROR`. |
 | Shared state | `schedule` is EPG-shaped (`channel`, `generated_at`, `ladder_version`, `programs`). `schedule_scope` is `"channel"` when it is the channel's guide from now on (a `get_schedule` result, with later publishes and removals folded in), or `"published"` when the conversation published without reading the guide first, so it holds only the programs published here. |
@@ -49,13 +49,14 @@ the same protocol to the same Gateway.
 | `MEMORY_ID` | AgentCore Memory id. Without it, sessions are kept on local disk (development only). |
 | `MEMORY_PREFERENCE_NAMESPACE` | Optional. USER_PREFERENCE namespace template, for example `/users/{actorId}/preferences/`. When set, recalled preferences are added to the prompt. |
 | `CONFIRM_TOOLS` | Comma-separated qualified tool names that need operator approval (`registry.confirm_tools()`). |
-| `MODEL_SPEC_PARAMETER` | SSM String parameter holding the ModelSpec JSON `{"model_id", "effort": {"chat", "plan"}, "max_tokens"}`. Read with a 60 s cache. |
+| `MODEL_SPEC_PARAMETER` | SSM String parameter holding the ModelSpec JSON `{"model_id", "effort": {"chat", "plan"}, "max_tokens", "thinking"?}`. Read with a 60 s cache. |
+| `MODEL_TASK_PARAMETER` | Optional (set with `modules.models`). SSM String parameter holding the agent's model-registry entry (`scheduler.plan`, [contracts/model-registry.schema.json](../contracts/model-registry.schema.json)). Read first, with the same cache; the ModelSpec applies only when the entry is missing or invalid. |
 | `DEFAULT_MODEL_ID` | Code default model. Use the region's geo profile, for example `us.anthropic.claude-haiku-5-5`. |
 | `ALLOWED_MODELS` | Comma-separated model ids. A spec naming any other model is ignored. The runtime role must be able to invoke each of them. |
 | `CAPTURE_PROMPTS` | Optional debug switch, off by default. `true` keeps prompts, tool results and model replies in the runtime's logs and traces (see Logging below). |
 
 Runtime role: `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the allowed profiles,
-`ssm:GetParameter` on the spec parameter, and Memory read and write. The Gateway needs no IAM grant, because the
+`ssm:GetParameter` on the spec parameter (and on the registry entry with `modules.models`), and Memory read and write. The Gateway needs no IAM grant, because the
 operator's JWT is forwarded.
 
 ## Code zip (PYTHON_3_14, arm64)

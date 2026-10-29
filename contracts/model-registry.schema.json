@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "DataClass": {
+      "description": "What a task's prompts may contain: ``viewer`` data, or only ``operational`` data.",
+      "enum": [
+        "operational",
+        "viewer"
+      ],
+      "title": "DataClass",
+      "type": "string"
+    },
+    "Effort": {
+      "description": "Claude ``output_config.effort``.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "title": "Effort",
+      "type": "string"
+    },
+    "ModeEffort": {
+      "additionalProperties": false,
+      "description": "Effort per mode of the scheduler agent.",
+      "properties": {
+        "chat": {
+          "$ref": "#/$defs/Effort",
+          "default": "low",
+          "description": "Effort of chat turns."
+        },
+        "plan": {
+          "$ref": "#/$defs/Effort",
+          "default": "medium",
+          "description": "Effort of schedule building."
+        }
+      },
+      "title": "ModeEffort",
+      "type": "object"
+    },
+    "ModelRoute": {
+      "description": "How a task reaches its model.",
+      "enum": [
+        "bedrock"
+      ],
+      "title": "ModelRoute",
+      "type": "string"
+    },
+    "Thinking": {
+      "description": "Extended thinking: ``adaptive`` omits the field (the model's default); ``disabled`` turns it off.",
+      "enum": [
+        "adaptive",
+        "disabled"
+      ],
+      "title": "Thinking",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "SSM parameter /<prefix>/models/tasks/<task> (String, JSON), one per LLM task; scheduler.plan is the scheduling agent's. The model must be one of the deployment's allowed models; readers refuse an entry that is invalid or names any other model.",
+  "properties": {
+    "model": {
+      "description": "Bedrock model id or inference profile; one of ``agent.allowed_models``, with ``{geo}`` as there.",
+      "title": "Model",
+      "type": "string"
+    },
+    "route": {
+      "$ref": "#/$defs/ModelRoute",
+      "default": "bedrock",
+      "description": "``bedrock``: the Converse API with the task's own role and application inference profile."
+    },
+    "effort": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Effort"
+        },
+        {
+          "$ref": "#/$defs/ModeEffort"
+        }
+      ],
+      "default": {
+        "chat": "low",
+        "plan": "medium"
+      },
+      "description": "Reasoning effort: one level, or one per mode (``chat``, ``plan``) for the scheduler agent.",
+      "title": "Effort"
+    },
+    "thinking": {
+      "$ref": "#/$defs/Thinking",
+      "default": "adaptive",
+      "description": "Extended thinking; fixed per task, because changing it per call rewrites the prompt cache."
+    },
+    "max_tokens": {
+      "default": 16000,
+      "description": "Output token budget per model call.",
+      "maximum": 128000,
+      "minimum": 1,
+      "title": "Max Tokens",
+      "type": "integer"
+    },
+    "data_class": {
+      "$ref": "#/$defs/DataClass",
+      "default": "operational",
+      "description": "``viewer`` if the task's prompts carry viewer data, which keeps the model on a geographic inference profile\n(never ``global.``); swapping such a task's model needs human approval."
+    },
+    "daily_cap_usd": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Daily model spend at which the task's token counter refuses further calls (about ten times expected use);\n``null`` sets no cap.",
+      "title": "Daily Cap Usd"
+    },
+    "eval": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9.-]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Key of the passing evaluation record that qualifies ``model`` for this task.",
+      "title": "Eval"
+    }
+  },
+  "required": [
+    "model"
+  ],
+  "title": "FAST Channels model-registry entry",
+  "type": "object",
+  "examples": [
+    {
+      "model": "us.anthropic.claude-haiku-5-5",
+      "route": "bedrock",
+      "effort": {
+        "chat": "low",
+        "plan": "medium"
+      },
+      "thinking": "adaptive",
+      "max_tokens": 16000,
+      "data_class": "operational",
+      "daily_cap_usd": null,
+      "eval": null
+    },
+    {
+      "model": "us.anthropic.claude-haiku-5-5",
+      "route": "bedrock",
+      "effort": "low",
+      "thinking": "adaptive",
+      "max_tokens": 8000,
+      "data_class": "viewer",
+      "daily_cap_usd": 30.0,
+      "eval": null
+    }
+  ]
+}
