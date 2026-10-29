@@ -12,9 +12,11 @@ from aws_cdk import aws_s3_assets as s3_assets
 from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
+from fast_channels.core.model_registry import task_parameter
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
 from fast_channels.infra.config import GEO_PLACEHOLDER
+from fast_channels.infra.constructs.models.registry import READ_ACTIONS, entry_arn
 from fast_channels.infra.constructs.operator.agent_bundle import agent_artifact, agent_asset
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
 from fast_channels.infra.nag import acknowledge_references, file_asset_objects
@@ -49,6 +51,8 @@ class SchedulerAgent(Construct):
       end after 2 h.
     - Model: a ``ModelSpec`` JSON SSM parameter (switchable without a redeploy) whose model must be in
       ``allowed_models``; the role may invoke exactly those models (3-statement pattern for ``global.`` profiles).
+      With ``model_task`` the agent reads that task's model-registry entry first and the ModelSpec only when the
+      entry is missing or invalid.
     - Memory: read and write of the AgentCore Memory (events and preference records).
     - Code: the role reads its own code zip and no other object: the L2 grants read on the whole CDK assets bucket
       (every CDK app's code in the account), so a deny covers everything else.
@@ -71,6 +75,8 @@ class SchedulerAgent(Construct):
         log_retention, removal_policy: of the runtime log group.
         record_prompts: keep message content in the runtime's logs (``otel-rt-logs``) and spans (config
             ``observability.capture_prompts``); readable by anyone with ``logs:GetLogEvents`` on the group.
+        model_task: the agent's task in the model registry (``scheduler.plan``) when the registry is deployed
+            (``modules.models``): the role may read that entry, and ``MODEL_TASK_PARAMETER`` names it.
 
     Attributes:
         runtime: the Runtime; ``invoke_url`` is its HTTPS invocation endpoint (DEFAULT qualifier).
@@ -100,6 +106,7 @@ class SchedulerAgent(Construct):
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         record_prompts: bool = False,
+        model_task: str | None = None,
     ) -> None:
         super().__init__(scope, id)
         if model not in allowed_models:
@@ -119,6 +126,7 @@ class SchedulerAgent(Construct):
             "MEMORY_PREFERENCE_NAMESPACE": memory_preference_namespace,
             "CONFIRM_TOOLS": ",".join(confirm_tools),
             "MODEL_SPEC_PARAMETER": self.model_spec.parameter_name,
+            **({"MODEL_TASK_PARAMETER": task_parameter(prefix, model_task)} if model_task else {}),
             "DEFAULT_MODEL_ID": model,
             "ALLOWED_MODELS": ",".join(allowed_models),
             CAPTURE_PROMPTS: "true" if record_prompts else "false",
@@ -162,6 +170,12 @@ class SchedulerAgent(Construct):
         ):
             self.runtime.add_to_role_policy(statement)
         self.model_spec.grant_read(self.runtime)
+        if model_task:
+            self.runtime.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=list(READ_ACTIONS), resources=[entry_arn(self, prefix=prefix, task=model_task)]
+                )
+            )
         memory.grant_read(self.runtime)
         memory.grant_write(self.runtime)
         self.evaluation: agentcore.OnlineEvaluationConfig | None = None

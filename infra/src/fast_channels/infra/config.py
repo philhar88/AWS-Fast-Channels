@@ -21,6 +21,7 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskEntry
 from fast_channels.core.naming import is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
@@ -461,64 +462,8 @@ class OpsModule(_Module):
     """Run a synthetic playback canary on the probe playback configuration of each running channel."""
 
 
-class Effort(StrEnum):
-    """Claude ``output_config.effort``."""
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    MAX = "max"
-
-
-class ModeEffort(_Section):
-    """Effort per mode of the scheduler agent."""
-
-    chat: Effort = Effort.LOW
-    """Effort of chat turns."""
-    plan: Effort = Effort.MEDIUM
-    """Effort of schedule building."""
-
-
-class ModelRoute(StrEnum):
-    """How a task reaches its model."""
-
-    BEDROCK = "bedrock"
-
-
-class Thinking(StrEnum):
-    """Extended thinking: ``adaptive`` omits the field (the model's default); ``disabled`` turns it off."""
-
-    ADAPTIVE = "adaptive"
-    DISABLED = "disabled"
-
-
-class DataClass(StrEnum):
-    """What a task's prompts may contain: ``viewer`` data, or only ``operational`` data."""
-
-    OPERATIONAL = "operational"
-    VIEWER = "viewer"
-
-
-class ModelTask(_Section):
-    """One task's model-registry entry, rendered to SSM ``/<prefix>/models/tasks/<task>``."""
-
-    model: str
-    """Bedrock model id or inference profile; one of ``agent.allowed_models``, with ``{geo}`` as there."""
-    route: ModelRoute = ModelRoute.BEDROCK
-    """``bedrock``: the Converse API with the task's own role and application inference profile."""
-    effort: Effort | ModeEffort = ModeEffort()
-    """Reasoning effort: one level, or one per mode (``chat``, ``plan``) for the scheduler agent."""
-    thinking: Thinking = Thinking.ADAPTIVE
-    """Extended thinking; fixed per task, because changing it per call rewrites the prompt cache."""
-    max_tokens: int = Field(default=16_000, ge=1, le=128_000)
-    """Output token budget per model call."""
-    data_class: DataClass = DataClass.OPERATIONAL
-    """``viewer`` if the task's prompts carry viewer data; swapping such a task's model needs human approval."""
-    daily_cap_usd: float | None = Field(default=None, gt=0)
-    """Daily model spend at which the task's token counter refuses further calls (about ten times expected use);
-    ``null`` sets no cap."""
-    eval: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
-    """Key of the passing evaluation record that qualifies ``model`` for this task."""
+class ModelTask(TaskEntry):
+    """One task's model-registry entry, rendered to SSM ``/<prefix>/models/tasks/<task>`` with ``{geo}`` resolved."""
 
     @field_validator("model", mode="after")
     @classmethod
@@ -545,7 +490,7 @@ class ModelsModule(_Module):
     @field_validator("tasks")
     @classmethod
     def _task_names(cls, tasks: dict[str, ModelTask]) -> dict[str, ModelTask]:
-        if bad := [name for name in tasks if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*", name)]:
+        if bad := [name for name in tasks if not TASK_NAME.fullmatch(name)]:
             raise ValueError(f"task names must be dot-separated lowercase words, got {bad}")
         return tasks
 
@@ -856,6 +801,11 @@ class FastChannelsConfig(_Section):
                 for task, entry in modules.models.tasks.items()
                 if (model := resolve_geo(entry.model, region) if region else entry.model) not in allowed
             ]
+            if self.agent.enabled and SCHEDULER_TASK not in modules.models.tasks:
+                problems.append(
+                    f"{where}.models.tasks: {SCHEDULER_TASK!r}, the scheduler agent's entry, is missing; add it or set "
+                    "agent.enabled=false"
+                )
         return problems
 
     def _region_problems(self, region: str) -> list[str]:

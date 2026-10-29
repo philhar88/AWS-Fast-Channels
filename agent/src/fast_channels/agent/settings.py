@@ -29,6 +29,8 @@ class Settings:
             ``/users/{actorId}/preferences/`` (``MEMORY_PREFERENCE_NAMESPACE``); ``None`` disables recall.
         confirm_tools: Qualified tool names that need operator approval (``CONFIRM_TOOLS``, csv).
         model_spec_parameter: SSM parameter holding the ModelSpec JSON (``MODEL_SPEC_PARAMETER``).
+        model_task_parameter: SSM parameter holding the agent's model-registry entry, read before the ModelSpec
+            (``MODEL_TASK_PARAMETER``; set when the deployment has the model registry).
         default_model_id: Code default model (``DEFAULT_MODEL_ID``).
         allowed_models: Model ids the runtime role may invoke (``ALLOWED_MODELS``, csv); always includes the
             default.
@@ -40,6 +42,7 @@ class Settings:
     preference_namespace: str | None = None
     confirm_tools: frozenset[str] = frozenset()
     model_spec_parameter: str | None = None
+    model_task_parameter: str | None = None
     default_model_id: str = FALLBACK_MODEL_ID
     allowed_models: frozenset[str] = frozenset()
 
@@ -58,6 +61,7 @@ class Settings:
             preference_namespace=env.get("MEMORY_PREFERENCE_NAMESPACE") or None,
             confirm_tools=_csv(env.get("CONFIRM_TOOLS")),
             model_spec_parameter=env.get("MODEL_SPEC_PARAMETER") or None,
+            model_task_parameter=env.get("MODEL_TASK_PARAMETER") or None,
             default_model_id=default_model_id,
             allowed_models=_csv(env.get("ALLOWED_MODELS")) | {default_model_id},
         )

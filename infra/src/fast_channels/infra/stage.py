@@ -16,6 +16,7 @@ from fast_channels.infra.stacks.baseline import AccountBaselineStack
 from fast_channels.infra.stacks.data import DataStack
 from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
 from fast_channels.infra.stacks.media import MediaStack
+from fast_channels.infra.stacks.models import ModelsStack
 from fast_channels.infra.stacks.operator import OperatorStack
 
 if TYPE_CHECKING:
@@ -34,9 +35,9 @@ def stage_id(prefix: str) -> str:
 
 
 class FastChannelsStage(Stage):
-    """Data → Media → Operator (if ``agent.enabled``), plus Edge (in us-east-1, when ``env.region`` is another
-    region; named ``<stage>-Edge-<region>``) and AccountBaseline (if ``observability.transaction_search`` is
-    ``enable``).
+    """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Edge (in
+    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``) and AccountBaseline (if
+    ``observability.transaction_search`` is ``enable``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -72,6 +73,10 @@ class FastChannelsStage(Stage):
         if config.observability.transaction_search is TransactionSearchMode.ENABLE:
             self.baseline = AccountBaselineStack(self, "AccountBaseline", tags=tags)
 
+        self.models: ModelsStack | None = None
+        if config.modules.models.enabled:
+            self.models = ModelsStack(self, "Models", config=config, **stacks)
+
         self.operator: OperatorStack | None = None
         if config.agent.enabled:
             self.operator = OperatorStack(
@@ -79,6 +84,8 @@ class FastChannelsStage(Stage):
             )
             self.operator.add_stack_dependency(self.data, "AgentCore Memory is ACTIVE before the agent plane")
             self.operator.add_stack_dependency(self.media)
+            if self.models is not None:
+                self.operator.add_stack_dependency(self.models, "The agent reads its model registry entry")
             if self.baseline is not None:
                 self.operator.add_stack_dependency(self.baseline, "Gateway and Memory traces need Transaction Search")
 

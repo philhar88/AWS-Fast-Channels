@@ -3,9 +3,9 @@
     uv run python scripts/generate_contracts.py          # write the files
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
-Outputs: ``ingest-request.schema.json`` and ``events.schema.json`` (JSON Schema 2020-12),
-``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json`` (the
-same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
+Outputs: ``ingest-request.schema.json``, ``events.schema.json`` and ``model-registry.schema.json`` (JSON Schema
+2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json``
+(the same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
 targets: every schema is inline, optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/
 ``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
 """
@@ -23,6 +23,7 @@ from pydantic.json_schema import models_json_schema
 from fast_channels.core.catalog import CONTENT_ID_PATTERN, ContentItem, ContentPage, ContentQuery
 from fast_channels.core.events import DETAIL_TYPES
 from fast_channels.core.ingest import IngestRequest
+from fast_channels.core.model_registry import SCHEDULER_TASK, TaskEntry
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -59,6 +60,35 @@ def events_schema() -> dict[str, Any]:
         "description": "EventBridge events on the fast-channels bus; source is fast-channels.<prefix>.",
         "oneOf": events,
         **definitions,
+    }
+
+
+def model_registry_schema() -> dict[str, Any]:
+    """JSON Schema of a model-registry entry, the SSM document ``/<prefix>/models/tasks/<task>`` that the agent and
+    other model callers read; the examples are the shipped ``scheduler.plan`` entry (us-east-1) and a viewer-data
+    task."""
+    examples = [
+        TaskEntry(model="us.anthropic.claude-haiku-5-5"),
+        TaskEntry.model_validate(
+            {
+                "model": "us.anthropic.claude-haiku-5-5",
+                "effort": "low",
+                "max_tokens": 8000,
+                "data_class": "viewer",
+                "daily_cap_usd": 30,
+            }
+        ),
+    ]
+    return {
+        "$schema": JSON_SCHEMA,
+        **TaskEntry.model_json_schema(),
+        "title": "FAST Channels model-registry entry",
+        "description": (
+            "SSM parameter /<prefix>/models/tasks/<task> (String, JSON), one per LLM task; "
+            f"{SCHEDULER_TASK} is the scheduling agent's. The model must be one of the deployment's allowed models; "
+            "readers refuse an entry that is invalid or names any other model."
+        ),
+        "examples": [entry.model_dump(mode="json") for entry in examples],
     }
 
 
@@ -186,6 +216,7 @@ def render() -> dict[str, str]:
     return {
         "ingest-request.schema.json": as_json(ingest_request_schema()),
         "events.schema.json": as_json(events_schema()),
+        "model-registry.schema.json": as_json(model_registry_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
     }
