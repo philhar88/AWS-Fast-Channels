@@ -53,7 +53,9 @@ deployment could be created in the account and region.
   - A `shared` deployment in an account without a router deploys without error but reconciles nothing, so check for
     `FastChannels-AsRun` before choosing `shared`.
 - **Cost and latency.** One more Lambda invocation per as-run batch and about $1 per million EventBridge events.
-  Reconciliation stays near real time (seconds).
+  The latency does not change: the as-run log reaches subscriptions in batches about once a minute. On the shared
+  development stage a break was marked aired 20–74 s after its start with its own filter, and 44–66 s after it
+  through the router.
 - The reconciler takes either source (a log subscription batch or an EventBridge event), so a deployment can switch
   between `per_stage` and `shared` by redeploying its Media stack.
 - The live stage keeps `per_stage` and its own filter.
