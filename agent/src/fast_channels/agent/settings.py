@@ -3,7 +3,6 @@
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
 from typing import Self
 
 FALLBACK_MODEL_ID = "us.anthropic.claude-haiku-5-5"
@@ -12,19 +11,6 @@ FALLBACK_MODEL_ID = "us.anthropic.claude-haiku-5-5"
 
 class SettingsError(RuntimeError):
     """A required environment variable is missing."""
-
-
-def _usd(value: str | None) -> Decimal | None:
-    """A positive amount of US dollars, or ``None`` when unset; raises ``SettingsError`` for anything else."""
-    if not value:
-        return None
-    try:
-        amount = Decimal(value)
-    except InvalidOperation:
-        amount = Decimal("NaN")
-    if not amount.is_finite() or amount <= 0:
-        raise SettingsError(f"MODEL_DAILY_CAP_USD must be a positive number of US dollars, got {value!r}")
-    return amount
 
 
 def _csv(value: str | None) -> frozenset[str]:
@@ -47,9 +33,9 @@ class Settings:
             (``MODEL_TASK_PARAMETER``; set when the deployment has the model registry).
         model_profile_arn: the task's application inference profile (``MODEL_PROFILE_ARN``): with it, every model
             call goes through the profile, the only target the role may invoke.
+        model_task_default: the agent's registry entry as deployed (``MODEL_TASK_DEFAULT``, JSON): its settings
+            and cap whenever the entry in SSM cannot be used.
         model_counter_table: DynamoDB table of the daily spend counters (``MODEL_COUNTER_TABLE``).
-        daily_cap_usd: the task's daily spend cap as deployed (``MODEL_DAILY_CAP_USD``); a registry entry's own cap
-            applies while the entry is in use.
         alert_topic_arn: SNS topic told once a day when the cap is reached (``ALERT_TOPIC_ARN``).
         default_model_id: Code default model (``DEFAULT_MODEL_ID``).
         allowed_models: Model ids the runtime role may invoke (``ALLOWED_MODELS``, csv); always includes the
@@ -64,16 +50,15 @@ class Settings:
     model_spec_parameter: str | None = None
     model_task_parameter: str | None = None
     model_profile_arn: str | None = None
+    model_task_default: str | None = None
     model_counter_table: str | None = None
-    daily_cap_usd: Decimal | None = None
     alert_topic_arn: str | None = None
     default_model_id: str = FALLBACK_MODEL_ID
     allowed_models: frozenset[str] = frozenset()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Self:
-        """Build settings from ``env``; raises ``SettingsError`` when the region or Gateway URL is missing or the cap
-        is not a positive number."""
+        """Build settings from ``env``; raises ``SettingsError`` when the region or Gateway URL is missing."""
         region = env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION")
         gateway_url = env.get("GATEWAY_URL")
         if not region or not gateway_url:
@@ -88,8 +73,8 @@ class Settings:
             model_spec_parameter=env.get("MODEL_SPEC_PARAMETER") or None,
             model_task_parameter=env.get("MODEL_TASK_PARAMETER") or None,
             model_profile_arn=env.get("MODEL_PROFILE_ARN") or None,
+            model_task_default=env.get("MODEL_TASK_DEFAULT") or None,
             model_counter_table=env.get("MODEL_COUNTER_TABLE") or None,
-            daily_cap_usd=_usd(env.get("MODEL_DAILY_CAP_USD")),
             alert_topic_arn=env.get("ALERT_TOPIC_ARN") or None,
             default_model_id=default_model_id,
             allowed_models=_csv(env.get("ALLOWED_MODELS")) | {default_model_id},

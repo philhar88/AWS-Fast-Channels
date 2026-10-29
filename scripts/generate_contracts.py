@@ -4,11 +4,11 @@
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
 Outputs: ``ingest-request.schema.json``, ``events.schema.json``, ``model-registry.schema.json``,
-``catalog-context.schema.json`` and ``monetization-bundle.schema.json`` (JSON Schema 2020-12), ``catalog.openapi.yaml``
-(OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json`` (the same contract as an AgentCore
-Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway targets: every schema is inline,
-optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/``allOf`` remains (agentcore.md
-§5.2); operationIds become the tool names.
+``eval-record.schema.json``, ``catalog-context.schema.json`` and ``monetization-bundle.schema.json`` (JSON Schema
+2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json``
+(the same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
+targets: every schema is inline, optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/
+``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
 
 ``pds-policy.schema.json`` and ``pds-select.schema.json`` are the Pod Decision Service contract with the fast-ctv
 Prebid Server module (requests as the PDS accepts them, responses as it writes them). The examples under
@@ -31,7 +31,7 @@ from fast_channels.core.catalog import CONTENT_ID_PATTERN, ContentItem, ContentP
 from fast_channels.core.crawl.catalog_context import CatalogContext
 from fast_channels.core.events import DETAIL_TYPES
 from fast_channels.core.ingest import IngestRequest
-from fast_channels.core.model_registry import SCHEDULER_TASK, TaskEntry
+from fast_channels.core.model_registry import RECOMMENDER_CHECKS, REQUIRED_CHECKS, SCHEDULER_TASK, EvalRecord, TaskEntry
 from fast_channels.core.monetization.bundle import Bundle
 from fast_channels.core.pds.models import PolicyRequest, PolicyResponse, SelectRequest, SelectResponse
 from fast_channels.core.pds.pod import PodContext, select_pod, select_response
@@ -202,6 +202,47 @@ def monetization_bundle_schema() -> dict[str, Any]:
     }
 
 
+def eval_record_schema() -> dict[str, Any]:
+    """JSON Schema of an eval record, ``evals/records/<task>/<key>.json``: the evidence that qualifies a model for a
+    registry task. The example is the record format of the Phase-2 recommender, whose suite must report the
+    deterministic faithfulness check."""
+    example = EvalRecord.model_validate(
+        {
+            "task": "recommender",
+            "key": "haiku-5-5-adaptive-8k",
+            "model": "us.anthropic.claude-haiku-5-5",
+            "effort": "low",
+            "thinking": "adaptive",
+            "max_tokens": 8000,
+            "suite": "recommender conformance v1: 300 synthetic viewers, 8 personas",
+            "runs": 1,
+            "passed": True,
+            "checks": [
+                {"name": "schema_valid", "passed": True, "value": 1.0, "threshold": ">= 0.99"},
+                {"name": "faithfulness", "passed": True, "value": 0.933, "threshold": ">= 0.90"},
+                {"name": "policy_violations", "passed": True, "value": 0, "threshold": "== 0"},
+                {"name": "cost_per_rail", "passed": True, "value": 0.0024, "threshold": "<= 0.01"},
+            ],
+            "cost_usd": "0.49",
+            "recorded_at": "2026-10-27T22:00:00Z",
+        }
+    )
+    required = "; ".join(f"{task}: {', '.join(checks)}" for task, checks in REQUIRED_CHECKS.items())
+    return {
+        "$schema": JSON_SCHEMA,
+        **EvalRecord.model_json_schema(),
+        "title": "FAST Channels eval record",
+        "description": (
+            "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the "
+            "model registry on, synth refuses a task whose eval names no passing record for its model family and "
+            f"settings (effort, thinking, max_tokens). Required checks by task: {required}. The recommender's "
+            f"({', '.join(RECOMMENDER_CHECKS)}) include the deterministic faithfulness check: each tile's reason cites "
+            "only facts of the input."
+        ),
+        "examples": [example.model_dump(mode="json")],
+    }
+
+
 def _flatten(schema: Any, definitions: dict[str, Any]) -> Any:
     """Inline ``$ref``s, collapse ``anyOf: [X, null]`` to ``X`` and drop pydantic's ``title`` noise."""
     if isinstance(schema, list):
@@ -328,6 +369,7 @@ def render() -> dict[str, str]:
         "ingest-request.schema.json": as_json(ingest_request_schema()),
         "events.schema.json": as_json(events_schema()),
         "model-registry.schema.json": as_json(model_registry_schema()),
+        "eval-record.schema.json": as_json(eval_record_schema()),
         "catalog-context.schema.json": as_json(catalog_context_schema()),
         "monetization-bundle.schema.json": as_json(monetization_bundle_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",

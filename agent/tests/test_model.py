@@ -151,14 +151,13 @@ ENTRY: dict[str, Any] = {
 }
 
 
+DEPLOYED = {**ENTRY, "model": HAIKU, "max_tokens": 4000, "daily_cap_usd": 3.0}
+"""The entry as deployed (``MODEL_TASK_DEFAULT``)."""
+
+
 def registry_settings(**overrides: Any) -> Settings:
-    return settings(
-        model_task_parameter=TASK_PARAMETER,
-        model_spec_parameter="/fast/model",
-        model_profile_arn=PROFILE,
-        daily_cap_usd=Decimal(3),
-        **overrides,
-    )
+    defaults = {"model_task_default": json.dumps(DEPLOYED), "model_profile_arn": PROFILE}
+    return settings(model_task_parameter=TASK_PARAMETER, **{**defaults, **overrides})
 
 
 def test_registry_entry_becomes_the_spec() -> None:
@@ -234,26 +233,37 @@ def _respond_with(document: dict[str, Any]) -> Callable[[Stubber], None]:
         lambda stub: stub.add_client_error("get_parameter", "AccessDeniedException"),
     ],
 )
-def test_unusable_registry_entry_falls_back_to_the_model_spec_and_the_deployed_cap(
+def test_an_unusable_registry_entry_falls_back_to_the_entry_as_deployed(
     ssm: Stubber, respond: Callable[[Stubber], None], caplog: pytest.LogCaptureFixture
 ) -> None:
     respond(ssm)
-    ssm.add_response("get_parameter", parameter(json.dumps({"model_id": HAIKU, "max_tokens": 4000})))
 
     active = ModelSpecSource(registry_settings()).current()
 
-    assert active == ActiveSpec(ModelSpec(model_id=HAIKU, max_tokens=4000), SpecSource.MODEL_SPEC, Decimal(3))
+    assert active == ActiveSpec(
+        ModelSpec(model_id=HAIKU, effort=Effort(chat="low", plan="high"), max_tokens=4000),
+        SpecSource.DEFAULT,
+        Decimal("3.0"),
+    )
     [warning] = [r for r in caplog.records if r.levelname == "WARNING"]
     assert (warning.source, warning.parameter) == ("registry", TASK_PARAMETER)  # type: ignore[attr-defined]
 
 
-def test_without_usable_sources_the_default_applies(ssm: Stubber) -> None:
+def test_without_the_registry_the_model_spec_still_applies(ssm: Stubber) -> None:
     ssm.add_client_error("get_parameter", "ParameterNotFound")
+    ssm.add_response("get_parameter", parameter(json.dumps({"model_id": HAIKU, "max_tokens": 4000})))
+    source = ModelSpecSource(settings(model_task_parameter=TASK_PARAMETER, model_spec_parameter="/fast/model"))
+
+    assert source.current() == ActiveSpec(ModelSpec(model_id=HAIKU, max_tokens=4000), SpecSource.MODEL_SPEC)
+
+
+def test_an_invalid_deployed_entry_leaves_the_code_default(ssm: Stubber, caplog: pytest.LogCaptureFixture) -> None:
     ssm.add_client_error("get_parameter", "ParameterNotFound")
 
-    assert ModelSpecSource(registry_settings()).current() == ActiveSpec(
-        ModelSpec(model_id=HAIKU), SpecSource.DEFAULT, Decimal(3)
-    )
+    active = ModelSpecSource(registry_settings(model_task_default="{")).current()
+
+    assert active == ActiveSpec(ModelSpec(model_id=HAIKU), SpecSource.DEFAULT)
+    assert "the deployed registry entry is invalid" in caplog.text
 
 
 def test_registry_entry_without_a_model_spec_parameter(ssm: Stubber) -> None:

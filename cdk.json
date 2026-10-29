@@ -99,7 +99,7 @@
               "max_tokens": 16000,
               "data_class": "operational",
               "daily_cap_usd": 5,
-              "eval": null
+              "eval": "haiku-5-5-adaptive-16k"
             }
           },
           "budgets_action": false

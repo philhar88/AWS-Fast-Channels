@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Effort": {
+      "description": "Claude ``output_config.effort``.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "title": "Effort",
+      "type": "string"
+    },
+    "EvalCheck": {
+      "additionalProperties": false,
+      "description": "One check of an eval run.",
+      "properties": {
+        "name": {
+          "description": "What was checked, e.g. ``scenario_standard`` or ``faithfulness``.",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "description": "Whether the run met the check's threshold.",
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The measured value (a share, a count or US dollars), when the check has one.",
+          "title": "Value"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The pass condition, e.g. ``>= 0.95``, ``== 0`` or ``3/3 runs``.",
+          "title": "Threshold"
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "title": "EvalCheck",
+      "type": "object"
+    },
+    "ModeEffort": {
+      "additionalProperties": false,
+      "description": "Effort per mode of the scheduler agent.",
+      "properties": {
+        "chat": {
+          "$ref": "#/$defs/Effort",
+          "default": "low",
+          "description": "Effort of chat turns."
+        },
+        "plan": {
+          "$ref": "#/$defs/Effort",
+          "default": "medium",
+          "description": "Effort of schedule building."
+        }
+      },
+      "title": "ModeEffort",
+      "type": "object"
+    },
+    "Thinking": {
+      "description": "Extended thinking: ``adaptive`` omits the field (the model's default); ``disabled`` turns it off.",
+      "enum": [
+        "adaptive",
+        "disabled"
+      ],
+      "title": "Thinking",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the model registry on, synth refuses a task whose eval names no passing record for its model family and settings (effort, thinking, max_tokens). Required checks by task: scheduler.plan: scenario_standard, scenario_hard; recommender: schema_valid, faithfulness, policy_violations, cost_per_rail; recommender.cohort: schema_valid, faithfulness, policy_violations, cost_per_rail. The recommender's (schema_valid, faithfulness, policy_violations, cost_per_rail) include the deterministic faithfulness check: each tile's reason cites only facts of the input.",
+  "properties": {
+    "task": {
+      "description": "The task the suite tests.",
+      "pattern": "[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*",
+      "title": "Task",
+      "type": "string"
+    },
+    "key": {
+      "description": "The record's key (its file name), which a registry entry names in ``eval``.",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$",
+      "title": "Key",
+      "type": "string"
+    },
+    "model": {
+      "description": "The model id that ran (any routing of the same foundation model qualifies).",
+      "title": "Model",
+      "type": "string"
+    },
+    "effort": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Effort"
+        },
+        {
+          "$ref": "#/$defs/ModeEffort"
+        }
+      ],
+      "description": "The effort the suite ran with.",
+      "title": "Effort"
+    },
+    "thinking": {
+      "$ref": "#/$defs/Thinking",
+      "description": "The thinking setting the suite ran with."
+    },
+    "max_tokens": {
+      "description": "The output token budget the suite ran with.",
+      "maximum": 128000,
+      "minimum": 1,
+      "title": "Max Tokens",
+      "type": "integer"
+    },
+    "suite": {
+      "description": "The suite and its version, e.g. ``scheduler conformance v1: standard, hard``.",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Suite",
+      "type": "string"
+    },
+    "runs": {
+      "description": "Runs per scenario or input set.",
+      "minimum": 1,
+      "title": "Runs",
+      "type": "integer"
+    },
+    "passed": {
+      "description": "Every check passed.",
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "checks": {
+      "description": "The checks, each with its value and threshold.",
+      "items": {
+        "$ref": "#/$defs/EvalCheck"
+      },
+      "minItems": 1,
+      "title": "Checks",
+      "type": "array"
+    },
+    "cost_usd": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "Model spend of the whole run, at list prices.",
+      "title": "Cost Usd"
+    },
+    "recorded_at": {
+      "description": "When the run finished (UTC).",
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task",
+    "key",
+    "model",
+    "effort",
+    "thinking",
+    "max_tokens",
+    "suite",
+    "runs",
+    "passed",
+    "checks",
+    "cost_usd",
+    "recorded_at"
+  ],
+  "title": "FAST Channels eval record",
+  "type": "object",
+  "examples": [
+    {
+      "task": "recommender",
+      "key": "haiku-5-5-adaptive-8k",
+      "model": "us.anthropic.claude-haiku-5-5",
+      "effort": "low",
+      "thinking": "adaptive",
+      "max_tokens": 8000,
+      "suite": "recommender conformance v1: 300 synthetic viewers, 8 personas",
+      "runs": 1,
+      "passed": true,
+      "checks": [
+        {
+          "name": "schema_valid",
+          "passed": true,
+          "value": 1.0,
+          "threshold": ">= 0.99"
+        },
+        {
+          "name": "faithfulness",
+          "passed": true,
+          "value": 0.933,
+          "threshold": ">= 0.90"
+        },
+        {
+          "name": "policy_violations",
+          "passed": true,
+          "value": 0.0,
+          "threshold": "== 0"
+        },
+        {
+          "name": "cost_per_rail",
+          "passed": true,
+          "value": 0.0024,
+          "threshold": "<= 0.01"
+        }
+      ],
+      "cost_usd": "0.49",
+      "recorded_at": "2026-10-27T22:00:00Z"
+    }
+  ]
+}

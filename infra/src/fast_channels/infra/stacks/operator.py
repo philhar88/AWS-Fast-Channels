@@ -122,7 +122,7 @@ class OperatorStack(Stack):
             model_task = RegistryTask(
                 name=SCHEDULER_TASK,
                 profile=models.profiles[SCHEDULER_TASK],
-                daily_cap_usd=config.modules.models.tasks[SCHEDULER_TASK].daily_cap_usd,
+                settings=config.modules.models.tasks[SCHEDULER_TASK],
                 alert_topic_arn=alert_topic_arn(self, prefix),
             )
         model = model_task.profile.model if model_task else config.agent.model
@@ -146,13 +146,14 @@ class OperatorStack(Stack):
         )
         self.budget: TaskBudget | None = None
         email = config.notifications.email
-        if model_task and model_task.daily_cap_usd and config.modules.models.budgets_action and email:
+        cap = model_task.settings.daily_cap_usd if model_task else None
+        if model_task and cap and config.modules.models.budgets_action and email:
             self.budget = TaskBudget(
                 self,
                 "Budget",
                 budget_name=profile_name(prefix, SCHEDULER_TASK),
                 task=SCHEDULER_TASK,
-                daily_cap_usd=model_task.daily_cap_usd,
+                daily_cap_usd=cap,
                 role=self.agent.runtime.role,
                 profile_arn=model_task.profile.arn,
                 email=email,
@@ -206,7 +207,8 @@ class OperatorStack(Stack):
 
     def _outputs(self) -> None:
         """Values for operators and scripts (e2e, eval_model.py --gateway-url); ``AutopilotClientId`` only when the
-        machine client exists (an autopilot, or ``agent.machine_client``)."""
+        machine client exists (an autopilot, or ``agent.machine_client``), ``ModelSpecParameter`` only without the
+        model registry."""
         outputs = {
             "ConsoleUrl": self.console.url,
             "UserPoolId": self.identity.user_pool.user_pool_id,
@@ -215,7 +217,7 @@ class OperatorStack(Stack):
             "GatewayUrl": self.gateway.url,
             "RuntimeArn": self.agent.runtime.agent_runtime_arn,
             "RuntimeInvokeUrl": self.agent.invoke_url,
-            "ModelSpecParameter": self.agent.model_spec.parameter_name,
+            **({"ModelSpecParameter": self.agent.model_spec.parameter_name} if self.agent.model_spec else {}),
             "ToolFunctions": self.to_json_string(
                 {target: function.function.function_name for target, function in self.tools.functions.items()}
             ),

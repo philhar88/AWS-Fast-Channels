@@ -70,7 +70,7 @@ far: `models` (the per-task model registry, [agent.md](agent.md#model-registry))
 | `modules.ops.ledger_retention_days` | int | `30` | Object Lock retention of each ledger record; until it ends, `make destroy` cannot delete the archive (1 on development stages). |
 | `modules.ops.canary` | bool | `true` | Run a synthetic playback canary on the probe playback configuration of each running channel. |
 | `modules.models.enabled` | bool | `false` | Deploy the per-task model registry: one validated entry per LLM task, each with its own IAM role, application inference profile and spend cap. Entries choose only among `agent.allowed_models`. |
-| `modules.models.tasks` | map of str to object | `{"scheduler.plan": {"model": "{geo}.anthropic.claude-haiku-5-5", "route": "bedrock", "effort": {"chat": "low", "plan": "medium"}, "thinking": "adaptive", "max_tokens": 16000, "data_class": "operational", "daily_cap_usd": 5.0, "eval": null}}` | Registry entries by task name (dot-separated lowercase words); `scheduler.plan` is the scheduler agent. |
+| `modules.models.tasks` | map of str to object | `{"scheduler.plan": {"model": "{geo}.anthropic.claude-haiku-5-5", "route": "bedrock", "effort": {"chat": "low", "plan": "medium"}, "thinking": "adaptive", "max_tokens": 16000, "data_class": "operational", "daily_cap_usd": 5.0, "eval": "haiku-5-5-adaptive-16k"}}` | Registry entries by task name (dot-separated lowercase words); `scheduler.plan` is the scheduler agent. |
 | `modules.models.budgets_action` | bool | `false` | Add an AWS Budget per task role with a `daily_cap_usd` whose action, once the task's spend in the month reaches 31 days of the cap, denies the role's invocations of the task's inference profile (Budgets actions accept no daily budget). Needs `notifications.email` (AWS Budgets emails it when the action runs) and the `fast:task` cost allocation tag activated in the payer account. |
 | `modules.demand.enabled` | bool | `false` | Deploy programmatic demand: the Guidance for Deploying a Prebid Server on AWS as its own app at a pinned tag, with the repository's overlays and Prebid Server module, the guidance's bidder simulator in demo mode, census-gated scaling and an origin rule that admits only this stage's MediaTailor requests. |
 | `modules.demand.mode` | `own_book` or `demo` | `"demo"` | `own_book`: own-book bids only (no simulator); `demo`: the own book plus the guidance's bidder simulator, every number labelled simulated. |
@@ -259,8 +259,10 @@ Notes:
   replaced). With `release` on and `lab_channel` true, no IaC channel may be called `<prefix>-lab`. With `ops` on,
   `ledger_lock: compliance` needs `removal: retain`. With `models` on, every task's model is one of
   `agent.allowed_models` and callable from the region, a task with `data_class: viewer` never names a `global.`
-  profile (also when `{geo}` resolves to `global`), and with `agent.enabled` the registry holds the scheduler
-  agent's `scheduler.plan`. Within a module: `demand.tasks.min` ≤ `tasks.max`, with each
+  profile (also when `{geo}` resolves to `global`), with `agent.enabled` the registry holds the scheduler agent's
+  `scheduler.plan`, every task's `eval` names a passing eval record for its model and settings
+  (`evals/records/<task>/<key>.json`, [agent.md](agent.md#model-registry)), and `budgets_action` needs
+  `notifications.email`. Within a module: `demand.tasks.min` ≤ `tasks.max`, with each
   daypart's `min` between them; each PDS hook group timeout at least its call's timeout; unique demo line ids and
   release channels. Unknown keys are refused at every level.
 - Model-registry task names contain dots, which a dotted override path would split: override a task with an object,

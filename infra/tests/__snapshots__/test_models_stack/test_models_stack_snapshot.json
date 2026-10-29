@@ -154,7 +154,7 @@
           "Fn::Join": [
             "",
             [
-              "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":\"low\",\"thinking\":\"adaptive\",\"max_tokens\":8000,\"data_class\":\"viewer\",\"daily_cap_usd\":null,\"eval\":null,\"profile_arn\":\"",
+              "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":\"low\",\"thinking\":\"adaptive\",\"max_tokens\":8000,\"data_class\":\"viewer\",\"daily_cap_usd\":null,\"eval\":\"haiku-5-5-adaptive-8k\",\"profile_arn\":\"",
               {
                 "Fn::GetAtt": [
                   "Profilesrecommender9351D4DC",
@@ -181,7 +181,7 @@
           "Fn::Join": [
             "",
             [
-              "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":{\"chat\":\"low\",\"plan\":\"medium\"},\"thinking\":\"adaptive\",\"max_tokens\":16000,\"data_class\":\"operational\",\"daily_cap_usd\":5.0,\"eval\":null,\"profile_arn\":\"",
+              "{\"model\":\"us.anthropic.claude-haiku-5-5\",\"route\":\"bedrock\",\"effort\":{\"chat\":\"low\",\"plan\":\"medium\"},\"thinking\":\"adaptive\",\"max_tokens\":16000,\"data_class\":\"operational\",\"daily_cap_usd\":5.0,\"eval\":\"haiku-5-5-adaptive-16k\",\"profile_arn\":\"",
               {
                 "Fn::GetAtt": [
                   "ProfilesschedulerplanFCD17E5B",

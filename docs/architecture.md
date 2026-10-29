@@ -52,7 +52,7 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 | Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
 | Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: <SSAI URL>}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
 | Models | `TaskParameters` (JSON `{task: SSM parameter name}`), `TaskProfiles` (JSON `{task: inference profile ARN}`), `CounterTableName` |
-| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
+| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` (not with `modules.models`) |
 
 ```bash
 aws cloudformation describe-stacks --stack-name FastChannels-Media \

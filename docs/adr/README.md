@@ -17,7 +17,7 @@ new record that supersedes the old one rather than editing history.
 | [0009](0009-jwt-gateway-with-cedar-groups.md) | JWT-authenticated Gateway with Cedar policies per operator group | Accepted |
 | [0010](0010-ag-ui-protocol.md) | AG-UI as the agent ↔ client protocol | Accepted |
 | [0011](0011-runtime-over-harness.md) | AgentCore Runtime (Strands) over the managed Harness | Accepted |
-| [0012](0012-default-model.md) | Claude Haiku 5.5 as the default model, pluggable via a model spec | Accepted |
+| [0012](0012-default-model.md) | Claude Haiku 5.5 as the default model, pluggable via a model spec | Accepted, amended by 0029 |
 | [0013](0013-captions-roadmap.md) | Captions are on the roadmap, not in v3.0 | Superseded by 0014, then 0016 |
 | [0014](0014-captions-as-ladder-tracks.md) | Captions are IMSC1 tracks of the ladder: provided, embedded, then generated | Superseded by 0016 |
 | [0015](0015-pluggable-captioner-elemental-inference.md) | Missing captions come from a pluggable captioner: AWS Elemental Inference smart subtitles | Superseded by 0016 |
@@ -25,4 +25,5 @@ new record that supersedes the old one rather than editing history.
 | [0017](0017-ssai-only-frame-accurate-cues-with-esam.md) | SSAI only; frame-accurate ad cues with ESAM | Accepted |
 | [0020](0020-demand-through-the-prebid-server-guidance.md) | Programmatic demand through the AWS Prebid Server guidance | Proposed |
 | [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Proposed (ledger part) |
+| [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Proposed |

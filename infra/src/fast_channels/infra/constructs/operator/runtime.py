@@ -19,12 +19,13 @@ from fast_channels.infra.arns import arn
 from fast_channels.infra.config import GEO_PLACEHOLDER
 from fast_channels.infra.constructs.models.caps import counter_table_name, grant_counting
 from fast_channels.infra.constructs.models.profiles import foundation_model, task_invoke_statements
-from fast_channels.infra.constructs.models.registry import READ_ACTIONS, entry_arn
+from fast_channels.infra.constructs.models.registry import READ_ACTIONS, entry_arn, render
 from fast_channels.infra.constructs.operator.agent_bundle import agent_artifact, agent_asset
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
 from fast_channels.infra.nag import acknowledge_references, file_asset_objects
 
 if TYPE_CHECKING:
+    from fast_channels.core.model_registry import TaskSettings
     from fast_channels.infra.exports import TaskProfile
 
 IDLE_TIMEOUT: Final = Duration.minutes(10)
@@ -55,8 +56,8 @@ class RegistryTask:
     """The task (``scheduler.plan``)."""
     profile: TaskProfile
     """Its model and application inference profile."""
-    daily_cap_usd: float | None
-    """Its daily spend cap (``null``: none)."""
+    settings: TaskSettings
+    """Its registry settings (effort, thinking, max_tokens, daily cap), with ``{geo}`` resolved."""
     alert_topic_arn: str | None
     """Told once a day when the cap is reached (``None``: nobody)."""
 
@@ -71,9 +72,10 @@ class SchedulerAgent(Construct):
       end after 2 h.
     - Model: a ``ModelSpec`` JSON SSM parameter (switchable without a redeploy) whose model must be in
       ``allowed_models``; the role may invoke exactly those models (3-statement pattern for ``global.`` profiles).
-      With ``model_task`` (the model registry) the agent reads that task's registry entry first and the ModelSpec
-      only when the entry is missing or invalid, invokes only the task's application inference profile (the role
-      may invoke that profile and its model only through it), and counts the task's daily spend against its cap.
+      With ``model_task`` (the model registry) there is no ModelSpec: the agent reads that task's registry entry,
+      falling back to the entry as deployed (``MODEL_TASK_DEFAULT``), invokes only the task's application inference
+      profile (the role may invoke that profile and its model only through it), and counts the task's daily spend
+      against its cap.
     - Memory: read and write of the AgentCore Memory (events and preference records).
     - Code: the role reads its own code zip and no other object: the L2 grants read on the whole CDK assets bucket
       (every CDK app's code in the account), so a deny covers everything else.
@@ -101,7 +103,7 @@ class SchedulerAgent(Construct):
 
     Attributes:
         runtime: the Runtime; ``invoke_url`` is its HTTPS invocation endpoint (DEFAULT qualifier).
-        model_spec: the ModelSpec parameter.
+        model_spec: the ModelSpec parameter (``None`` with ``model_task``).
         log_group_retention: the ``LogRetention`` of the runtime's service-created log group.
         evaluation: the online evaluation configuration (``None`` without traces).
 
@@ -137,19 +139,23 @@ class SchedulerAgent(Construct):
             raise ValueError(f"{unresolved}: resolve {{geo}} for the region first (FastChannelsConfig.for_region)")
         if model_task and (model_task.profile.model, tuple(allowed_models)) != (model, (model,)):
             raise ValueError(f"with model task {model_task.name}, the model and allowed_models are its model only")
-        self.model_spec = ssm.StringParameter(
-            self,
-            "ModelSpec",
-            parameter_name=f"/{prefix}/agent/model-spec",
-            description="Scheduler agent ModelSpec: model_id (one of ALLOWED_MODELS), effort per mode, max_tokens",
-            string_value=json.dumps({"model_id": model, "effort": DEFAULT_EFFORT, "max_tokens": DEFAULT_MAX_TOKENS}),
-        )
+        self.model_spec: ssm.StringParameter | None = None
+        if model_task is None:
+            self.model_spec = ssm.StringParameter(
+                self,
+                "ModelSpec",
+                parameter_name=f"/{prefix}/agent/model-spec",
+                description="Scheduler agent ModelSpec: model_id (one of ALLOWED_MODELS), effort per mode, max_tokens",
+                string_value=json.dumps(
+                    {"model_id": model, "effort": DEFAULT_EFFORT, "max_tokens": DEFAULT_MAX_TOKENS}
+                ),
+            )
         environment = {
             "GATEWAY_URL": gateway_url,
             "MEMORY_ID": memory.memory_id,
             "MEMORY_PREFERENCE_NAMESPACE": memory_preference_namespace,
             "CONFIRM_TOOLS": ",".join(confirm_tools),
-            "MODEL_SPEC_PARAMETER": self.model_spec.parameter_name,
+            **({"MODEL_SPEC_PARAMETER": self.model_spec.parameter_name} if self.model_spec else {}),
             **(_registry_environment(prefix, model_task) if model_task else {}),
             "DEFAULT_MODEL_ID": model,
             "ALLOWED_MODELS": ",".join(allowed_models),
@@ -198,7 +204,8 @@ class SchedulerAgent(Construct):
         )
         for statement in statements:
             self.runtime.add_to_role_policy(statement)
-        self.model_spec.grant_read(self.runtime)
+        if self.model_spec is not None:
+            self.model_spec.grant_read(self.runtime)
         if model_task:
             self.runtime.add_to_role_policy(
                 iam.PolicyStatement(
@@ -296,11 +303,10 @@ def _registry_environment(prefix: str, task: RegistryTask) -> dict[str, str]:
     """The agent's model-registry settings (``fast_channels.agent.settings``)."""
     environment = {
         "MODEL_TASK_PARAMETER": task_parameter(prefix, task.name),
+        "MODEL_TASK_DEFAULT": render(task.settings, task.profile.arn),
         "MODEL_PROFILE_ARN": task.profile.arn,
         "MODEL_COUNTER_TABLE": counter_table_name(prefix),
     }
-    if task.daily_cap_usd is not None:
-        environment["MODEL_DAILY_CAP_USD"] = str(task.daily_cap_usd)
     if task.alert_topic_arn is not None:
         environment["ALERT_TOPIC_ARN"] = task.alert_topic_arn
     return environment

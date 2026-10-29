@@ -10,10 +10,12 @@ Every attribute docstring below is the field's documentation (also exported in t
 """
 
 import json
+import os
 import re
 from decimal import Decimal
 from enum import StrEnum
 from functools import cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
 
 from aws_cdk import RemovalPolicy
@@ -22,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings
+from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings, qualification
 from fast_channels.core.naming import is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
@@ -35,6 +37,12 @@ CONTEXT_KEY: Final = "fast-channels"
 GEO_PLACEHOLDER: Final = "{geo}"
 """Stands for the deployment region's inference-profile geography in model ids (:func:`geo_prefix`)."""
 DEFAULT_MODEL: Final = f"{GEO_PLACEHOLDER}.anthropic.claude-haiku-5-5"
+EVAL_RECORDS: Final = Path(__file__).resolve().parents[4] / "evals" / "records"
+"""The committed eval records (``evals/records/<task>/<key>.json``) that qualify registry entries."""
+EVAL_RECORDS_ENV: Final = "FAST_EVAL_RECORDS"
+"""Directories to read eval records from instead (``os.pathsep``-separated, first match wins), e.g. for tests."""
+SCHEDULER_EVAL: Final = "haiku-5-5-adaptive-16k"
+"""The committed record of the shipped ``scheduler.plan`` entry (``make eval TASK=scheduler.plan``)."""
 SCHEDULER_DAILY_CAP_USD: Final = 5
 """The scheduler agent's daily spend cap, about ten times a busy demo day: four autopilot runs a day on each of five
 channels and 50 operator turns at about $0.005 each (``make eval``) is about $0.4."""
@@ -485,7 +493,9 @@ class ModelsModule(_Module):
     inference profile and spend cap. Entries choose only among ``agent.allowed_models``."""
     tasks: dict[str, ModelTask] = Field(
         # Validated like a value from cdk.json, so that {geo} resolves for the region.
-        default_factory=lambda: {"scheduler.plan": {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD}},
+        default_factory=lambda: {
+            "scheduler.plan": {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD, "eval": SCHEDULER_EVAL}
+        },
         validate_default=True,
     )
     """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
@@ -818,6 +828,11 @@ class FastChannelsConfig(_Section):
                 for task, entry in modules.models.tasks.items()
                 if (model := resolve_geo(entry.model, region) if region else entry.model) not in allowed
             ]
+            problems += [
+                f"{where}.models.tasks[{task}]: {problem}"
+                for task, entry in modules.models.tasks.items()
+                for problem in qualification(eval_records(), task, entry)
+            ]
             if modules.models.budgets_action and not self.notifications.email:
                 problems.append(
                     f"{where}.models.budgets_action: AWS Budgets emails notifications.email when an action runs; "
@@ -882,6 +897,12 @@ class FastChannelsConfig(_Section):
             return cls.model_validate(data, context={"region": region})
         except ValidationError as error:
             raise ConfigError(_describe(error)) from None
+
+
+def eval_records() -> tuple[Path, ...]:
+    """Where eval records are read from: :data:`EVAL_RECORDS_ENV` when set, else :data:`EVAL_RECORDS`."""
+    configured = os.environ.get(EVAL_RECORDS_ENV)
+    return tuple(Path(d) for d in configured.split(os.pathsep) if d) if configured else (EVAL_RECORDS,)
 
 
 def _expand_prefix(data: dict[str, Any]) -> None:
