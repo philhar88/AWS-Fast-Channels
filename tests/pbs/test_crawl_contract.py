@@ -22,6 +22,7 @@ from local_mocks import (
     LATE_HEADER,
     LATE_TITLE,
     NATIVE,
+    PUBLISHER_DOMAIN,
     THIRD_PARTIES,
     TITLE,
     Mocks,
@@ -150,3 +151,19 @@ def test_t2_every_mapped_field_reaches_the_bidders(mocks: Mocks, pbs: Pbs) -> No
             assert newer.get(key) == value, (path, key, newer.get(key))
         if NATIVE:
             assert "ext" not in content or not set(NEWER) & set(content["ext"]), f"{path}: native, not in ext"
+
+
+def test_t2_who_receives_the_registry_ids_depends_on_the_release(mocks: Mocks, pbs: Pbs) -> None:
+    """Pins a difference between the releases (ADR 0031): on 4.4.0 ``app.content.data`` is first-party data, which the
+    answer's ``fpd.bidders`` rule gives the own book alone; on 3.43.0 its copy in ``content.ext`` reaches every bidder.
+    Either way it holds catalog ids only."""
+    cids = [{"name": PUBLISHER_DOMAIN, "cids": [TITLE]}]
+    received = bid_requests(mocks, pbs, sid=ENRICHED_SID, upid=TITLE)
+    for path, request in received.items():
+        content = request["app"]["content"]
+        if NATIVE:
+            assert content.get("data") == (cids if path == "/ownbook/openrtb" else None), path
+            assert "data" not in content.get("ext", {}), path
+        else:
+            assert content["ext"]["data"] == cids, f"{path}: the ext copy reaches every bidder on 3.43.0"
+            assert "data" not in content, path
