@@ -369,10 +369,12 @@ Past the cap a run ends with `RUN_ERROR` `MODEL_CAP_REACHED` (a call within a ru
 as the reply), and the alert topic `<prefix>-alerts` gets one notification per task and day. It resumes at 00:00 UTC
 or as soon as the cap is raised. When the counter cannot be reached the run goes ahead and the agent logs a warning.
 
-With `modules.models.budgets_action` (and `notifications.email`), each task role with a cap also gets a daily AWS
-Budget on its `fast:task` spend whose action, at 100 %, attaches a policy denying that role's invocations of the
-task's profile. Budgets see spend hours late and only once the cost allocation tag is active; reverse an action in AWS
-Budgets (Action history) once the cause is fixed.
+With `modules.models.budgets_action` (and `notifications.email`), each task role with a cap also gets an AWS Budget
+on its `fast:task` spend whose action, at 100 %, attaches a policy denying that role's invocations of the task's
+profile. Budgets actions accept no daily budget, so the budget is monthly at 31 days of the daily cap: the counter
+enforces the day, the budget catches what the counter cannot see (another caller of the profile). Budgets see spend
+hours late and only once the cost allocation tag is active; reverse an action in AWS Budgets (Action history) once
+the cause is fixed.
 
 ### Conformance suite and bringing your own model
 

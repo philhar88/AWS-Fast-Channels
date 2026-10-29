@@ -102,8 +102,8 @@ All notable changes to this project are documented here. The format follows
   `<prefix>-<task>` (tagged `fast:task`, its own `AWS/Bedrock` metrics and cost line), named in its registry entry;
   the scheduler agent invokes only its profile, and its role may invoke nothing else. A deterministic daily spend
   counter per task (`<prefix>-models`) refuses runs and calls past `daily_cap_usd` with `MODEL_CAP_REACHED` and tells
-  the alert topic once a day; `scheduler.plan` ships with a $5 cap. `budgets_action` adds an AWS Budgets action per
-  task role that denies the role's invocations past the cap.
+  the alert topic once a day; `scheduler.plan` ships with a $5 cap. `budgets_action` adds an AWS Budget per task role
+  (monthly, at 31 days of the cap: Budgets actions accept no daily budget) whose action denies the role's invocations.
 
 ## [3.0.0] - 2026-10-16
 

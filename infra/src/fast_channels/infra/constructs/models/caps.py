@@ -16,6 +16,9 @@ from fast_channels.infra.constructs.models.profiles import INVOKE_ACTIONS, TASK_
 
 COUNTER_PREFIX: Final = "COUNTER#"
 """Counter items are ``COUNTER#<task>#<UTC day>`` (``fast_channels.agent.caps``)."""
+BUDGET_DAYS: Final = 31
+"""AWS Budgets actions refuse daily budgets ("AWS Budgets Actions don't support daily granularity budget for now",
+measured 2026-10-29), so a task's budget is monthly at this many days of its daily cap."""
 COUNTER_ACTIONS: Final = ("dynamodb:UpdateItem",)
 """A task's caller only counts: a conditional ``ADD`` before each run and call, an ``ADD`` of each call's cost."""
 
@@ -62,8 +65,9 @@ def grant_counting(role: iam.IGrantable, scope: IConstruct, *, prefix: str, task
 
 
 class TaskBudget(Construct):
-    """An AWS Budget of one task's daily model spend whose action, once the spend reaches the cap, attaches a policy
-    that denies the task role's invocations of the task's profile: a runaway task stops only itself.
+    """An AWS Budget of one task's model spend whose action, once the month's spend reaches 31 days of the daily
+    cap, attaches a policy that denies the task role's invocations of the task's profile: a runaway task stops only
+    itself. Budgets actions accept no daily budget, so the token counter alone enforces the daily cap.
 
     Budgets see a task's spend through its profile's ``fast:task`` cost allocation tag, which must be activated in
     the payer account (Billing console, Cost allocation tags). Their data lags by hours, so the token counter stays
@@ -73,7 +77,7 @@ class TaskBudget(Construct):
     Args:
         budget_name: unique in the account.
         task: the task (its ``fast:task`` tag value).
-        daily_cap_usd: the budget, in US dollars per day.
+        daily_cap_usd: the task's daily cap; the monthly budget is :data:`BUDGET_DAYS` times it.
         role: the task's role (its name is what the action attaches the deny policy to).
         profile_arn: the task's application inference profile.
         email: who is told when the action runs.
@@ -126,8 +130,10 @@ class TaskBudget(Construct):
             budget=budgets.CfnBudget.BudgetDataProperty(
                 budget_name=budget_name,
                 budget_type="COST",
-                time_unit="DAILY",
-                budget_limit=budgets.CfnBudget.SpendProperty(amount=float(Decimal(str(daily_cap_usd))), unit="USD"),
+                time_unit="MONTHLY",
+                budget_limit=budgets.CfnBudget.SpendProperty(
+                    amount=float(Decimal(str(daily_cap_usd)) * BUDGET_DAYS), unit="USD"
+                ),
                 filter_expression=budgets.CfnBudget.ExpressionProperty(
                     tags=budgets.CfnBudget.TagValuesProperty(key=TASK_TAG, values=[task], match_options=["EQUALS"])
                 ),

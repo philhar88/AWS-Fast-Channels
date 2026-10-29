@@ -243,11 +243,11 @@ def test_budgets_action_denies_only_the_task_roles_profile(deployment: GetDeploy
 
     [budget] = template.find_resources("AWS::Budgets::Budget").values()
     assert budget["Properties"]["Budget"] == {
-        "BudgetLimit": {"Amount": 5, "Unit": "USD"},
+        "BudgetLimit": {"Amount": 155, "Unit": "USD"},  # 31 days of the $5 daily cap
         "BudgetName": "fast-scheduler-plan",
         "BudgetType": "COST",
         "FilterExpression": {"Tags": {"Key": "fast:task", "MatchOptions": ["EQUALS"], "Values": ["scheduler.plan"]}},
-        "TimeUnit": "DAILY",
+        "TimeUnit": "MONTHLY",  # Budgets actions refuse daily budgets
     }
     [action] = template.find_resources("AWS::Budgets::BudgetsAction").values()
     properties = action["Properties"]

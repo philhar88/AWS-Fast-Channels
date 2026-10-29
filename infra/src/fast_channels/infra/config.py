@@ -489,9 +489,10 @@ class ModelsModule(_Module):
     )
     """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
     budgets_action: bool = False
-    """Add an AWS Budgets action per task role with a ``daily_cap_usd`` that, once the task's daily spend reaches the
-    cap, denies the role's invocations of the task's inference profile. Needs ``notifications.email`` (AWS Budgets
-    emails it when the action runs) and the ``fast:task`` cost allocation tag activated in the payer account."""
+    """Add an AWS Budget per task role with a ``daily_cap_usd`` whose action, once the task's spend in the month
+    reaches 31 days of the cap, denies the role's invocations of the task's inference profile (Budgets actions accept
+    no daily budget). Needs ``notifications.email`` (AWS Budgets emails it when the action runs) and the ``fast:task``
+    cost allocation tag activated in the payer account."""
 
     @field_validator("tasks")
     @classmethod
