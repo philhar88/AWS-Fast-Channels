@@ -433,7 +433,7 @@
           ]
         },
         "FilterName": "fast-as-run",
-        "FilterPattern": "{ ($.eventType = \"VodProgramStart\") && ($.channelName = \"fast-*\") }",
+        "FilterPattern": "{ ($.eventType = \"VodProgramStart\" || $.eventType = \"AdBreakStart\") && ($.channelName = \"fast-*\") }",
         "LogGroupName": "MediaTailor/Channel/AsRunLog"
       },
       "Type": "AWS::Logs::SubscriptionFilter"
@@ -650,6 +650,7 @@
         "Description": "Mark scheduled programs AIRED from Channel Assembly as-run events",
         "Environment": {
           "Variables": {
+            "AS_RUN_BREAKS": "true",
             "LIBRARY_TABLE": {
               "Fn::GetStackOutput": {
                 "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
@@ -819,6 +820,305 @@
         "Roles": [
           {
             "Ref": "AsRunReconcilerRole43FDDDE5"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AsRunSweepScheduleB5BE4A45": {
+      "Properties": {
+        "Description": "Mark the breaks of fast channels that never aired",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(15 minutes)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "AsRunSweeper9D5F666B",
+              "Arn"
+            ]
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 0
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "AsRunSweepScheduleRoleFDCE414F",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "AsRunSweepScheduleRoleDefaultPolicy1889F12C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AsRunSweeper9D5F666B",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AsRunSweeper9D5F666B",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AsRunSweepScheduleRoleDefaultPolicy1889F12C",
+        "Roles": [
+          {
+            "Ref": "AsRunSweepScheduleRoleFDCE414F"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AsRunSweepScheduleRoleFDCE414F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: run the break sweep",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AsRunSweeper9D5F666B": {
+      "DependsOn": [
+        "AsRunSweeperRoleDefaultPolicy705F349B",
+        "AsRunSweeperRoleC0D1B6D5"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Mark scheduled ad breaks that never aired UNAIRED",
+        "Environment": {
+          "Variables": {
+            "AS_RUN_BREAKS": "true",
+            "LIBRARY_TABLE": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-Data"
+              }
+            },
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "as_run_reconciler"
+          }
+        },
+        "Handler": "fast_channels.functions.as_run_reconciler.sweep",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AsRunSweeperLogsE9F730A7"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "AsRunSweeperRoleC0D1B6D5",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 120,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "AsRunSweeperLogsE9F730A7": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AsRunSweeperRoleC0D1B6D5": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AsRunSweeperRoleDefaultPolicy705F349B": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AsRunSweeperLogsE9F730A7",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "dynamodb:Query",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                        "Region": "us-east-1",
+                        "StackName": "FastChannels-Data"
+                      }
+                    },
+                    "/index/GSI1"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": [
+                "dynamodb:Query",
+                "dynamodb:UpdateItem"
+              ],
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "CHANNEL#fast-*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                        "Region": "us-east-1",
+                        "StackName": "FastChannels-Data"
+                      }
+                    }
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AsRunSweeperRoleDefaultPolicy705F349B",
+        "Roles": [
+          {
+            "Ref": "AsRunSweeperRoleC0D1B6D5"
           }
         ]
       },

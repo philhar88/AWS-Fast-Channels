@@ -237,6 +237,14 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   `<CdnBaseUrl>/epg/<channel>.json`.
 - Channel Assembly writes `VodProgramStart` events to the account's as-run log group `MediaTailor/Channel/AsRunLog`.
   A subscription filter sends this deployment's events to a reconciler that marks programs `AIRED` with `aired_at`.
+- With the ops module (`modules.ops.enabled`) the filter also sends `AdBreakStart` events. Such an event carries no
+  break id, so the reconciler takes the program's break whose on-air time is nearest: the program's `aired_at` plus
+  the break's offset into the content plus the breaks before it. A live run of 20 breaks matched exactly that way to
+  the millisecond. The reconciler sets that break's `status` to `AIRED` and its `aired_at` on the `PROGRAM#` item.
+  Every 15 minutes a sweep marks `UNAIRED` the breaks whose time ended more than 10 minutes ago without a start, and
+  the breaks of `SKIPPED` programs: Channel Assembly logs nothing for a break it skips, for example after the
+  channel stopped. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as in the HLS
+  `DATERANGE` and the ad request, so guides and buyers can join on them.
 - Programs removed unaired when a channel starts late are `SKIPPED` ([Starting a channel late](#starting-a-channel-late)):
   listed with that status in the JSON feed, left out of the XMLTV feed.
 - `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow
@@ -250,9 +258,14 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
    "breaks": [{"offset_ms": 246246, "duration_ms": 60060}], "status": "PUBLISHED"}]}
 ```
 
-The as-run log group is shared by every channel in the account and region, and a log group allows two subscription
-filters, so at most two deployments per account and region get the `AIRED` reconciliation. The log group's retention
-is set to the last deploying stack's `observability.log_retention_days`, and deleting a stack leaves the group.
+With the ops module a break in the JSON feed reads
+`{"offset_ms": 246246, "duration_ms": 60060, "event_id": 1817010633, "upid": "FST3sintel"}`.
+
+The as-run log group is shared by every channel in the account and region, and each deployment's Media stack adds one
+subscription filter to it. CloudWatch Logs allows five subscription filters per log group (quota `L-87E7D306`, not
+adjustable), so **at most five deployments can exist per account and region**: a sixth one fails to create its
+filter. The log group's retention is set to the last deploying stack's `observability.log_retention_days`, and
+deleting a stack leaves the group.
 
 ## Alerts
 
