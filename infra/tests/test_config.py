@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import Effort, ModeEffort
+from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, RenditionProfile
 from fast_channels.infra.config import (
     AdsMode,
@@ -23,6 +24,7 @@ from fast_channels.infra.config import (
     ModulesConfig,
     PbsVersion,
     PreconditionedAds,
+    ReleaseStrategy,
     Removal,
     Simulator,
     TransactionSearchMode,
@@ -628,3 +630,9 @@ def test_json_schema_documents_every_module_field() -> None:
         for field, schema in definitions[name]["properties"].items():
             section = definitions.get(schema.get("$ref", "").removeprefix("#/$defs/"), {})
             assert "description" in schema or "properties" in section, f"{name}.{field} has no documentation"
+
+
+def test_release_strategies_name_the_core_rollouts() -> None:
+    """``modules.release.strategy`` selects one of the bundle's AppConfig strategies (DESIGN §8.4)."""
+    assert [s.value for s in ReleaseStrategy] == [t.value for t in RolloutTier]
+    assert {RolloutTier(s.value) for s in ReleaseStrategy} == set(ROLLOUTS)

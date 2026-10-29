@@ -36,6 +36,15 @@ All notable changes to this project are documented here. The format follows
   selection (tier-0 lines first, accepted net value, cross-bidder creative, advertiser and category separation, pods
   that fit the break, prefetch rounding, standalones for ad buffet, empty pods for avails under 30 s), trackers,
   decision records, deterministic buckets and the ad-load price stub. Pure code: nothing is deployed yet.
+- **Monetization desired state** (`fast_channels.core.monetization`, for the release module; no stack uses it yet):
+  MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
+  PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the
+  sibling playback configurations `<prefix>-<ch>-p-<s>` with their templated OpenRTB POST to Prebid Server
+  (threshold 121, ad buffet, no player value in the body), and the release bundle with its digest and a
+  contribution interface for other modules' function trees. Validators R-F1 to R-S1 and R-A1/R-A2 check the
+  documented Functions limits and the JSONata allow-list that MediaTailor does not enforce when a function is put,
+  the body template, the cache keys, the channel-policy pattern and the rollout strategy. The bundle's JSON Schema
+  is `contracts/monetization-bundle.schema.json`.
 
 ## [3.0.0] - 2026-10-16
 
