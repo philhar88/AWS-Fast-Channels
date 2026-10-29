@@ -10,6 +10,8 @@ through the SSM parameters under :func:`parameter_path`.
 from enum import StrEnum
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from fast_channels.core.tags import tag_key
 
 MODULE: Final = "demand"
@@ -115,3 +117,37 @@ def image_build_project(prefix: str) -> str:
 
 IMAGE_SOURCE_PREFIX: Final = "pbs-image/"
 """Key prefix of the build contexts in the assets bucket."""
+SIMULATOR_CODE_PREFIX: Final = "simulator/"
+"""Key prefix of the ``lambda`` simulator's code packages in the assets bucket."""
+
+
+def simulator_function(prefix: str) -> str:
+    """The bidder simulator's function in ``lambda`` mode (not ``<prefix>-pbs*``: those names are the guidance's)."""
+    return f"{prefix}-demand-simulator"
+
+
+NETWORK_CONTEXT: Final = "fast-channels:demand-network"
+"""CDK context with the guidance's network (:class:`DemandNetwork`, JSON), which ``scripts/prebid_guidance.py``
+passes once the guidance is deployed; the stage's ``Demand`` stack exists only with it."""
+
+
+class Subnet(BaseModel):
+    """A private subnet of the guidance's VPC."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(pattern=r"^subnet-[0-9a-f]+$")
+    az: str = Field(pattern=r"^[a-z]{2}(-[a-z]+)+-\d[a-z]$")
+    route_table: str = Field(pattern=r"^rtb-[0-9a-f]+$")
+
+
+class DemandNetwork(BaseModel):
+    """The guidance's network as the deploy script reads it from ``/<prefix>/demand/*`` and EC2."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    vpc_id: str = Field(pattern=r"^vpc-[0-9a-f]+$")
+    private_subnets: tuple[Subnet, ...] = Field(min_length=2)
+    task_security_group_id: str = Field(pattern=r"^sg-[0-9a-f]+$")
+    simulator_code_key: str | None = Field(default=None, pattern=rf"^{SIMULATOR_CODE_PREFIX}[0-9a-f]{{16}}\.zip$")
+    """Key of the ``lambda`` simulator's code package in the guidance's assets bucket."""

@@ -7,7 +7,7 @@ from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
 
 from fast_channels.core.naming import source_location_name
-from fast_channels.infra.config import AdsMode, AsRunMode, PriceClass
+from fast_channels.infra.config import AdsMode, AsRunMode, DemandMode, PriceClass
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.channel_assembly import (
     AS_RUN_LOG_GROUP,
@@ -129,7 +129,10 @@ class MediaStack(Stack):
             )
             for name in config.ladders.builtin
         }
-        self.provisioner = LadderProvisioner(self, "Kits", pipeline=self.pipeline)
+        demand = config.modules.demand
+        # Demand demo mode: the kits also encode the demo creatives the bidder simulator and direct lines serve.
+        demo = demand.enabled and demand.mode == DemandMode.DEMO
+        self.provisioner = LadderProvisioner(self, "Kits", pipeline=self.pipeline, demo=demo)
         self.kits = {
             name: LadderKit(self, f"Kit{name.title()}", ladder=self.ladders[name], provisioner=self.provisioner)
             for name in _kit_ladders(config)

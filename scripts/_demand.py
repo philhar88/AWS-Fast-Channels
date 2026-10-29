@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import zipfile
@@ -32,7 +33,10 @@ import stage_args
 from botocore.exceptions import ClientError
 
 from fast_channels.core import demand as names
-from fast_channels.core.demand import Parameter
+from fast_channels.core.demand import NETWORK_CONTEXT, SIMULATOR_CODE_PREFIX, DemandNetwork, Parameter, Subnet
+from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, simulator_creatives
+from fast_channels.core.ladder import Ladder
+from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.pbs_config import POD_SECONDS, render, simulator_host
 
 if TYPE_CHECKING:
@@ -50,6 +54,9 @@ GUIDANCE_PYTHON: Final = "3.11"
 GUIDANCE_STACK_ID: Final = "prebid-server-deployment-on-aws"
 SIMULATOR_STACK_ID: Final = "BiddingServerSimulator"
 CONFIG_ROOT: Final = Path("deployment/ecr/prebid-server")
+SIMULATOR_HANDLER: Final = Path("source/loadtest/bidder_simulator/lambdas/loadtest_bidder")
+"""The guidance's bidder simulator handler (overlay O5 reads ``video_creatives.json`` beside it)."""
+SIMULATOR_SLOTS: Final = 4
 KMS_PENDING_DAYS: Final = 7
 EC2_DESCRIBE: Final = {
     "subnet": ("describe_subnets", "SubnetIds"),
@@ -181,6 +188,7 @@ def smoke_passed(results: Mapping[str, Mapping[str, Any]]) -> bool:
         and results["no-secret"]["status"] == 403
         and results["off-grid-31s"]["status"] == 400
         and results["other-path"]["status"] == 403
+        and all(results[check]["passed"] for check in ("simulator", "demo-creatives") if check in results)
     )
 
 
@@ -491,18 +499,24 @@ class DemandStage:
             {"OVERRIDE_ECR_REGISTRY": image, "PATH": f"{venv / 'bin'}:{os.environ['PATH']}", "VIRTUAL_ENV": str(venv)}
         )
 
-    def render_into_checkout(self, content_base_url: str) -> None:
-        """The stage's Prebid Server configuration into the checkout, which the guidance uploads (overlay O3)."""
+    def render_into_checkout(self, content_base_url: str, demo: DemoIndex | None = None) -> None:
+        """The stage's Prebid Server configuration into the checkout, which the guidance uploads (overlay O3), and
+        the demo creatives beside the simulator's handler (overlay O5), which its stack packages."""
         from prebid_guidance import pbs_settings  # noqa: PLC0415 - the CLI module imports this one
 
         for rel, content in render(pbs_settings(self.config, content_base_url)).items():
             path = self.checkout / CONFIG_ROOT / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
-        demo = self.checkout / "source" / "loadtest" / "demo" / "dist"
-        if not demo.is_dir():  # the simulator stack serves a demo page we never use; it must exist to synthesize
-            demo.mkdir(parents=True)
-            (demo / "index.html").write_text("<!doctype html><title>FAST Channels demand</title>\n")
+        creatives = self.checkout / SIMULATOR_HANDLER / "video_creatives.json"
+        if (rendered := self.simulator_creatives(demo, content_base_url)) is not None:
+            creatives.write_text(rendered)
+        else:
+            creatives.unlink(missing_ok=True)
+        site = self.checkout / "source" / "loadtest" / "demo" / "dist"
+        if not site.is_dir():  # the simulator stack serves a demo page we never use; it must exist to synthesize
+            site.mkdir(parents=True)
+            (site / "index.html").write_text("<!doctype html><title>FAST Channels demand</title>\n")
 
     def simulator_endpoint(self, image: str) -> dict[str, str]:
         """The PBS stack's simulator parameters for the configured mode."""
@@ -553,6 +567,195 @@ class DemandStage:
             env=self.guidance_environment(image),
             stream=True,
         )
+
+    # ----- beside the guidance: the demo creatives and the Demand stack ------------------------------------------
+
+    @property
+    def demand_stack(self) -> str:
+        return f"{self.stage_id}-Demand"
+
+    def media_outputs(self) -> dict[str, str] | None:
+        """The Data and Media stacks' outputs, or None when the stage has no Media stack (a demand-only stage)."""
+        try:
+            return {**self.stack_outputs(f"{self.stage_id}-Data"), **self.stack_outputs(f"{self.stage_id}-Media")}
+        except DemandError:
+            return None
+
+    def demo_index(self) -> DemoIndex | None:
+        """The demo creatives of the stage's default ladder (``ads/<ladder>/demo/creatives.json``), or None: not in
+        demo mode, no Media stack, or a kit without them. Without them the simulator bids the guidance's creatives."""
+        if self.config.modules.demand.mode != "demo" or (outputs := self.media_outputs()) is None:
+            return None
+        key = demo_index_key(outputs["DefaultLadderVersion"])
+        try:
+            body = self.client("s3").get_object(Bucket=outputs["MediaBucketName"], Key=key)["Body"].read()
+        except ClientError:
+            log(f"no {key} in the media bucket: the simulator bids the guidance's own creatives")
+            return None
+        return DemoIndex.model_validate_json(body)
+
+    @staticmethod
+    def simulator_creatives(demo: DemoIndex | None, content_base_url: str) -> str | None:
+        """The simulator's ``video_creatives.json`` for overlay O5, or None without demo creatives."""
+        if demo is None:
+            return None
+        return json.dumps(simulator_creatives(demo, beacon_url=f"{content_base_url.rstrip('/')}/ads/b.gif"), indent=2)
+
+    def simulator_package(self, creatives: str | None) -> str:
+        """The ``lambda`` simulator's code (the guidance's handler with overlay O5, and the creatives) in the
+        guidance's assets bucket, under its content hash; returns the key."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("handler.py", "bid_response.json"):
+                shutil.copy(self.checkout / SIMULATOR_HANDLER / name, root / name)
+            if creatives is not None:
+                (root / "video_creatives.json").write_text(creatives)
+            package = zip_directory(root)
+        key = f"{SIMULATOR_CODE_PREFIX}{hashlib.sha256(package).hexdigest()[:16]}.zip"
+        bucket = names.assets_bucket(self.prefix, self.account, self.region)
+        self.client("s3").put_object(Bucket=bucket, Key=key, Body=package)
+        log(f"simulator code s3://{bucket}/{key}")
+        return key
+
+    def network(self, simulator_code_key: str | None = None) -> DemandNetwork:
+        """The guidance's network from the SSM contract and EC2: private subnets with their zones and route tables."""
+        parameters = self.parameters()
+        ids = parameters[Parameter.PRIVATE_SUBNET_IDS].split(",")
+        ec2 = self.client("ec2")
+        zones = {s["SubnetId"]: s["AvailabilityZone"] for s in ec2.describe_subnets(SubnetIds=ids)["Subnets"]}
+        tables: dict[str, str] = {}
+        main = ""
+        for table in ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [parameters[Parameter.VPC_ID]]}])[
+            "RouteTables"
+        ]:
+            for association in table.get("Associations", []):
+                if association.get("Main"):
+                    main = table["RouteTableId"]
+                elif subnet := association.get("SubnetId"):
+                    tables[subnet] = table["RouteTableId"]
+        return DemandNetwork(
+            vpc_id=parameters[Parameter.VPC_ID],
+            private_subnets=tuple(Subnet(id=i, az=zones[i], route_table=tables.get(i, main)) for i in ids),
+            task_security_group_id=parameters[Parameter.TASK_SECURITY_GROUP],
+            simulator_code_key=simulator_code_key,
+        )
+
+    def deploy_demand_stack(self, demo: DemoIndex | None, content_base_url: str) -> None:
+        """``FastChannels-<prefix>-Demand``: the private zone, and in ``lambda`` mode the simulator with its code."""
+        demand = self.config.modules.demand
+        key = None
+        if demand.mode == "demo" and demand.simulator == "lambda":
+            key = self.simulator_package(self.simulator_creatives(demo, content_base_url))
+        network = self.network(key)
+        log(f"deploying {self.stage_id}/Demand")
+        run(
+            [
+                CDK,
+                "deploy",
+                f"{self.stage_id}/Demand",
+                "--exclusively",
+                "--require-approval",
+                "never",
+                *self.repository_context(),
+                "-c",
+                f"{NETWORK_CONTEXT}={network.model_dump_json()}",
+            ],
+            env=self.cdk_environment(),
+            stream=True,
+        )
+
+    def simulator_function(self) -> str | None:
+        """The simulator's function name for the mode, or None (no simulator)."""
+        demand = self.config.modules.demand
+        if demand.mode != "demo":
+            return None
+        if demand.simulator == "lambda":
+            return names.simulator_function(self.prefix)
+        cloudformation = self.client("cloudformation")
+        for page in cloudformation.get_paginator("list_stack_resources").paginate(
+            StackName=names.simulator_stack(self.prefix)
+        ):
+            for row in page["StackResourceSummaries"]:
+                if row["ResourceType"] == "AWS::Lambda::Function" and row["LogicalResourceId"].startswith(
+                    "bidderSimulator"
+                ):
+                    return str(row["PhysicalResourceId"])
+        raise DemandError(f"no bidder simulator function in {names.simulator_stack(self.prefix)}")
+
+    def simulator_smoke(self, demo: DemoIndex | None) -> dict[str, Any]:
+        """A direct 4-slot pod request to the simulator, as Prebid Server's ``amt`` adapter sends it through the
+        load balancer: one bid per slot, each with a demo creative when the stage has them."""
+        function = self.simulator_function()
+        assert function is not None
+        request = {
+            "id": "smoke",
+            "imp": [
+                {"id": f"s{n}", "video": {"mimes": ["application/x-mpegURL"], "rqddurs": [30], "podid": 1}}
+                for n in range(1, SIMULATOR_SLOTS + 1)
+            ],
+        }
+        event = {
+            "httpMethod": "POST",
+            "path": "/",
+            "headers": {"content-type": "application/json"},
+            "body": json.dumps(request),
+            "isBase64Encoded": False,
+        }
+        answer = json.loads(
+            self.client("lambda").invoke(FunctionName=function, Payload=json.dumps(event).encode())["Payload"].read()
+        )
+        bids = [bid for seat in json.loads(answer.get("body") or "{}").get("seatbid", []) for bid in seat["bid"]]
+        expected = {c.crid for c in demo.creatives if c.role is DemoRole.SIMULATOR} if demo else None
+        crids = [str(bid.get("crid")) for bid in bids]
+        return {
+            "function": function,
+            "status": answer.get("statusCode"),
+            "bids": [
+                {
+                    "impid": b.get("impid"),
+                    "crid": b.get("crid"),
+                    "adomain": b.get("adomain"),
+                    "price": b.get("price"),
+                    "dur": b.get("dur"),
+                }
+                for b in bids
+            ],
+            "passed": answer.get("statusCode") == 200
+            and sorted(str(b.get("impid")) for b in bids) == [f"s{n}" for n in range(1, SIMULATOR_SLOTS + 1)]
+            and (expected is None or set(crids) <= expected),
+        }
+
+    def demo_creatives_smoke(self, demo: DemoIndex) -> dict[str, Any]:
+        """Every demo creative's multivariant, through the CDN, has the ladder's variants in order: codec, size and
+        frame rate (``ladder_signature``) and the nominal ``BANDWIDTH``."""
+        outputs = self.media_outputs() or {}
+        ladder = next(
+            (
+                Ladder.builtin(n)
+                for n in self.config.ladders.builtin
+                if Ladder.builtin(n).version == demo.ladder_version
+            ),
+            None,
+        )
+        results: dict[str, Any] = {}
+        with httpx.Client(timeout=10, follow_redirects=True) as http:
+            for creative in demo.creatives:
+                text = http.get(creative.hls_uri).text
+                variants = parse_multivariant(text)
+                row: dict[str, Any] = {"variants": len(variants)}
+                if ladder is not None:
+                    row["signature"] = ladder_signature(text) == expected_signature(ladder)
+                    row["bandwidth"] = [v.bandwidth for v in variants] == [
+                        ladder.nominal_bandwidth(r)[0] for r in ladder.video
+                    ]
+                results[creative.crid] = row
+        passed = ladder is not None and all(r["signature"] and r["bandwidth"] for r in results.values())
+        return {
+            "ladder": demo.ladder_version,
+            "content_base_url": outputs.get("ContentBaseUrl"),
+            **results,
+            "passed": passed,
+        }
 
     # ----- outputs and configuration -------------------------------------------------------------------------------
 
@@ -673,6 +876,11 @@ class DemandStage:
             results["no-secret"] = {"status": post(60, {}).status_code}
             results["off-grid-31s"] = {"status": post(31, {"X-Fast-Origin": secret}).status_code}
             results["other-path"] = {"status": http.get(f"https://{domain}/info/bidders").status_code}
+        if self.config.modules.demand.mode == "demo":
+            demo = self.demo_index()
+            results["simulator"] = self.simulator_smoke(demo)
+            if demo is not None:
+                results["demo-creatives"] = self.demo_creatives_smoke(demo)
         results["passed"] = smoke_passed(results)
         return results
 
@@ -704,7 +912,7 @@ class DemandStage:
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(json.dumps(retained.__dict__, indent=2))
         cloudformation = self.client("cloudformation")
-        for stack in (names.guidance_stack(self.prefix), names.simulator_stack(self.prefix)):
+        for stack in (self.demand_stack, names.guidance_stack(self.prefix), names.simulator_stack(self.prefix)):
             self.delete_stack(cloudformation, stack)
         self.remove_retained(retained)
         self.delete_parameters()
@@ -779,6 +987,7 @@ class DemandStage:
         residue = []
         cloudformation = self.client("cloudformation")
         for stack in (
+            self.demand_stack,
             names.guidance_stack(self.prefix),
             names.simulator_stack(self.prefix),
             names.toolkit_stack(self.prefix),
@@ -829,19 +1038,30 @@ class DemandStage:
                 case "kms":
                     state = self.client("kms", region).describe_key(KeyId=arn)["KeyMetadata"]["KeyState"]
                     return bool(state == "PendingDeletion")
-                case "ec2" if ":natgateway/" in arn:
-                    [nat] = self.client("ec2", region).describe_nat_gateways(NatGatewayIds=[arn.rsplit("/", 1)[1]])[
-                        "NatGateways"
-                    ]
-                    return bool(nat["State"] == "deleted")
-                case "ec2" if (kind := arn.split(":")[5].split("/", maxsplit=1)[0]) in EC2_DESCRIBE:
-                    operation, key = EC2_DESCRIBE[kind]
-                    found = getattr(self.client("ec2", region), operation)(**{key: [arn.rsplit("/", 1)[1]]})
-                    return not any(isinstance(value, list) and value for value in found.values())
+                case "ec2":
+                    return self.ec2_gone(arn, region)
                 case "ecs":
                     return self.ecs_gone(arn, region)
         except ClientError:
             return True
+        return False
+
+    def ec2_gone(self, arn: str, region: str) -> bool:
+        ec2, resource_id = self.client("ec2", region), arn.rsplit("/", 1)[1]
+        kind = arn.split(":")[5].split("/", maxsplit=1)[0]
+        if kind == "natgateway":
+            [nat] = ec2.describe_nat_gateways(NatGatewayIds=[resource_id])["NatGateways"]
+            return bool(nat["State"] == "deleted")
+        if kind == "vpc-peering-connection":
+            # A deleted peering connection stays visible for a while, with that status
+            [peering] = ec2.describe_vpc_peering_connections(VpcPeeringConnectionIds=[resource_id])[
+                "VpcPeeringConnections"
+            ] or [{"Status": {"Code": "deleted"}}]
+            return bool(peering["Status"]["Code"] in ("deleted", "rejected", "failed", "expired"))
+        if kind in EC2_DESCRIBE:
+            operation, key = EC2_DESCRIBE[kind]
+            found = getattr(ec2, operation)(**{key: [resource_id]})
+            return not any(isinstance(value, list) and value for value in found.values())
         return False
 
     def ecs_gone(self, arn: str, region: str) -> bool:

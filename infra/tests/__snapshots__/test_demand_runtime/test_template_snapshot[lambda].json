@@ -1,0 +1,436 @@
+{
+  "Description": "FAST Channels (fastm): demand beside the guidance",
+  "Outputs": {
+    "PrivateZoneId": {
+      "Description": "The stage's private zone",
+      "Value": {
+        "Ref": "DnsZone1A7256CF"
+      }
+    },
+    "SimulatorFunction": {
+      "Description": "The bidder simulator (lambda mode)",
+      "Value": {
+        "Ref": "SimulatorFunction16C62942"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "DnsZone1A7256CF": {
+      "Properties": {
+        "HostedZoneConfig": {
+          "Comment": "FAST Channels (fastm): Prebid Server's in-VPC endpoints"
+        },
+        "HostedZoneTags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Name": "fastm.fast.internal.",
+        "VPCs": [
+          {
+            "VPCId": "vpc-0123456789abcdef0",
+            "VPCRegion": "us-east-1"
+          }
+        ]
+      },
+      "Type": "AWS::Route53::HostedZone"
+    },
+    "SimulatorFunction16C62942": {
+      "DependsOn": [
+        "SimulatorRoleDefaultPolicy5A9DBD3D",
+        "SimulatorRole87397A10"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "fastm-cdk-assets-123456789012-us-east-1",
+          "S3Key": "simulator/0123456789abcdef.zip"
+        },
+        "Description": "FAST Channels: the guidance's bidder simulator with the stage's demo creatives (simulated)",
+        "Environment": {
+          "Variables": {
+            "A_BID_RESPONSE_DELAY_PROBABILITY": "0",
+            "A_BID_RESPONSE_TIMEOUT_PROBABILITY": "0",
+            "BID_RESPONSES_DELAY_PERCENTAGE": "0",
+            "BID_RESPONSES_TIMEOUT_PERCENTAGE": "0"
+          }
+        },
+        "FunctionName": "fastm-demand-simulator",
+        "Handler": "handler.lambda_handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "SimulatorLogs3EC7DC0C"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "ReservedConcurrentExecutions": 20,
+        "Role": {
+          "Fn::GetAtt": [
+            "SimulatorRole87397A10",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 5,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "SimulatorFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY38B072FC": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "SimulatorFunction16C62942",
+            "Arn"
+          ]
+        },
+        "Principal": "elasticloadbalancing.amazonaws.com"
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "SimulatorLoadBalancerD8057F49": {
+      "Properties": {
+        "LoadBalancerAttributes": [
+          {
+            "Key": "deletion_protection.enabled",
+            "Value": "false"
+          },
+          {
+            "Key": "routing.http.drop_invalid_header_fields.enabled",
+            "Value": "true"
+          }
+        ],
+        "Scheme": "internal",
+        "SecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "SimulatorLoadBalancerSecurityGroupB0C5A8F2",
+              "GroupId"
+            ]
+          }
+        ],
+        "Subnets": [
+          "subnet-0aaaaaaaaaaaaaaa1",
+          "subnet-0bbbbbbbbbbbbbbb2"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Type": "application"
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    },
+    "SimulatorLoadBalancerHttp3E7D73F9": {
+      "Properties": {
+        "DefaultActions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "SimulatorLoadBalancerHttpSimulatorGroup0495C406"
+            },
+            "Type": "forward"
+          }
+        ],
+        "LoadBalancerArn": {
+          "Ref": "SimulatorLoadBalancerD8057F49"
+        },
+        "Port": 80,
+        "Protocol": "HTTP",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::Listener"
+    },
+    "SimulatorLoadBalancerHttpSimulatorGroup0495C406": {
+      "DependsOn": [
+        "SimulatorFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY38B072FC"
+      ],
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TargetType": "lambda",
+        "Targets": [
+          {
+            "Id": {
+              "Fn::GetAtt": [
+                "SimulatorFunction16C62942",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup"
+    },
+    "SimulatorLoadBalancerSecurityGroupB0C5A8F2": {
+      "Properties": {
+        "GroupDescription": "FAST Channels: the bidder simulator load balancer, from Prebid Server tasks only",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "255.255.255.255/32",
+            "Description": "Disallow all traffic",
+            "FromPort": 252,
+            "IpProtocol": "icmp",
+            "ToPort": 86
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VpcId": "vpc-0123456789abcdef0"
+      },
+      "Type": "AWS::EC2::SecurityGroup"
+    },
+    "SimulatorLoadBalancerSecurityGroupfromFastChannelsfastmDemandSimulatorTasks4EFED7DC80781EC672": {
+      "Properties": {
+        "Description": "Prebid Server tasks",
+        "FromPort": 80,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "SimulatorLoadBalancerSecurityGroupB0C5A8F2",
+            "GroupId"
+          ]
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": "sg-0123456789abcdef0",
+        "ToPort": 80
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress"
+    },
+    "SimulatorLogs3EC7DC0C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/fastm-demand-simulator",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SimulatorRecord0FE59014": {
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::Join": [
+              "",
+              [
+                "dualstack.",
+                {
+                  "Fn::GetAtt": [
+                    "SimulatorLoadBalancerD8057F49",
+                    "DNSName"
+                  ]
+                }
+              ]
+            ]
+          },
+          "HostedZoneId": {
+            "Fn::GetAtt": [
+              "SimulatorLoadBalancerD8057F49",
+              "CanonicalHostedZoneID"
+            ]
+          }
+        },
+        "HostedZoneId": {
+          "Ref": "DnsZone1A7256CF"
+        },
+        "Name": "sim.fastm.fast.internal.",
+        "Type": "A"
+      },
+      "Type": "AWS::Route53::RecordSet"
+    },
+    "SimulatorRole87397A10": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "FAST Channels (fastm): the demo's bidder simulator",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SimulatorRoleDefaultPolicy5A9DBD3D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SimulatorLogs3EC7DC0C",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SimulatorRoleDefaultPolicy5A9DBD3D",
+        "Roles": [
+          {
+            "Ref": "SimulatorRole87397A10"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

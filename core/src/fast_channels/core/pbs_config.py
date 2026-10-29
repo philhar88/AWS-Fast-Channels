@@ -52,6 +52,10 @@ VIDEO_PROTOCOLS: Final = (3, 6, 7, 8)
 _HOST: Final = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
 
 
+SIMULATOR_RECORD: Final = "sim"
+"""The bidder simulator's record in the stage's private zone (``lambda`` mode)."""
+
+
 def private_zone(prefix: str) -> str:
     """The stage's private hosted zone in the Prebid Server VPC: ``<prefix>.fast.internal``."""
     return f"{prefix}.fast.internal"
@@ -64,7 +68,7 @@ def pds_host(prefix: str) -> str:
 
 def simulator_host(prefix: str) -> str:
     """Stable name of the bidder simulator in ``lambda`` mode (an internal load balancer in the Prebid Server VPC)."""
-    return f"sim.{private_zone(prefix)}"
+    return f"{SIMULATOR_RECORD}.{private_zone(prefix)}"
 
 
 def stored_request_id(seconds: int, *, kids: bool = False) -> str:

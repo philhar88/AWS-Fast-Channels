@@ -33,6 +33,10 @@ through the house ads fills any break exactly: MediaTailor drops the whole avail
 the playback configuration's personalization threshold (LEFTOVER_AVAIL_EXCEEDED_THRESHOLD, seen live with 14 + 30 s
 ads in a 60 s break)."""
 
+DEMO_AD_GOPS: Final = 15
+"""Length in GOPs of the demand module's demo creatives (``core/demo_demand.py``): 30.03 s, one 30 s slot of the
+stored requests. Only kits of a stage with ``modules.demand.mode: demo`` encode them."""
+
 KIT_SPEC: Final = f"breaks={'+'.join(map(str, BREAK_SLATE_GOPS))};ads={'+'.join(map(str, HOUSE_AD_GOPS))}"
 """Identifies the kit's slate and house-ad lengths; part of a kit's fingerprint, so changing them re-provisions it."""
 
