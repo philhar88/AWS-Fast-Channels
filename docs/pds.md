@@ -184,7 +184,9 @@ is skipped and named in the record.
 network, so `scripts/prebid_guidance.py deploy` deploys it right after the Demand stack, whose private zone it adds a
 record to, and `destroy` deletes it first ([docs/demand.md](demand.md#deploy-and-destroy)). Its state is the Data
 stack's: the table `<prefix>-pds` and the private config bucket exist with `modules.pds.enabled` and stay until
-`make destroy`.
+`make destroy`. The Data stack writes the config and lake bucket names to `/<prefix>/pds/config-bucket` and
+`/<prefix>/pds/lake-bucket`, which the Pds stack resolves at deploy: it takes no cross-stack reference to the Data
+stack, whose own deploys (`make deploy`) never see the guidance's network.
 
 | Part | What it is |
 |---|---|

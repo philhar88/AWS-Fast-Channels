@@ -181,7 +181,6 @@ def test_policy_records_flow_into_the_lake(deployment: GetDeployment) -> None:
     assert [p["Type"] for p in destination["ProcessingConfiguration"]["Processors"]] == [
         "Decompression",
         "CloudWatchLogProcessing",
-        "AppendDelimiterToRecord",
     ]
     assert subscription["FilterPattern"] == '{ $.record = "pds.policy" }'
     assert table["Name"] == "pds_policy"

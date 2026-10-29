@@ -929,10 +929,6 @@
                   }
                 ],
                 "Type": "CloudWatchLogProcessing"
-              },
-              {
-                "Parameters": [],
-                "Type": "AppendDelimiterToRecord"
               }
             ]
           },

@@ -1,10 +1,11 @@
 """``DecisionLog``: one kind of PDS decision record, from its function's log group into the lake.
 
 The function logs each record as a Powertools JSON line (``"record": "pds.<kind>"``). A subscription filter on that
-field sends the lines to a Firehose stream, which decompresses the CloudWatch Logs batches, keeps each message, adds a
-newline and writes gzip JSON under ``pds/<kind>/<yyyy>/<MM>/<dd>/<HH>/`` in the lake bucket (within a minute or
-5 MiB). The table ``pds_<kind>`` in the lake's Glue database reads them, partitioned by ``datehour`` (partition
-projection over the lake's retention, as the other lake tables are).
+field sends the lines to a Firehose stream, which decompresses the CloudWatch Logs batches, keeps each message (a
+function's log message ends with its newline, so no delimiter is added: that would make every other line empty) and
+writes gzip JSON lines under ``pds/<kind>/<yyyy>/<MM>/<dd>/<HH>/`` in the lake bucket (within a minute or 5 MiB).
+The table ``pds_<kind>`` in the lake's Glue database reads them, partitioned by ``datehour`` (partition projection
+over the lake's retention, as the other lake tables are).
 """
 
 import types
@@ -130,7 +131,6 @@ class DecisionLog(Construct):
                 processors=[
                     firehose.DecompressionProcessor(),
                     firehose.CloudWatchLogProcessor(data_message_extraction=True),
-                    firehose.AppendDelimiterToRecordProcessor(),
                 ],
                 logging_config=firehose.EnableLogging(stream_logs),
             ),
