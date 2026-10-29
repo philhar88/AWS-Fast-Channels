@@ -115,6 +115,9 @@ class OpsExports:
     """Glue database of the lake (``<prefix>_lake``)."""
     lake_workgroup: str
     """Athena workgroup of the lake (``<prefix>-lake``)."""
+
+
+@dataclass(frozen=True, slots=True)
 class TaskProfile:
     """A model-registry task's model and its application inference profile, for the stacks of the task's callers."""
 
