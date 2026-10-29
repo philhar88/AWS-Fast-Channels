@@ -23,6 +23,7 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from fast_channels.core.demand import QUALIFIER_MAX
+from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings, qualification
 from fast_channels.core.naming import is_agent_owned
@@ -622,7 +623,8 @@ class DemoLine(_Section):
     cat: tuple[str, ...] = ()
     """IAB categories of the line's ads (OpenRTB ``cat``)."""
     creatives: tuple[str, ...] = Field(min_length=1)
-    """Creative ids (``crid``) of the demo creatives the line serves."""
+    """Creative ids (``crid``) of the direct demo creatives the line serves (``direct1``, ``direct2``); a creative
+    serves at most one line."""
     cpm: Decimal = Field(gt=0)
     """Price per 1,000 impressions, US dollars (simulated)."""
     budget: Decimal = Field(gt=0)
@@ -649,8 +651,10 @@ class PdsModule(_Module):
     """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
     provisioned_concurrency: int = Field(default=2, ge=0)
     """Provisioned concurrency per function while any channel runs; 0 while none does."""
-    demo_lines: tuple[DemoLine, ...] = ()
-    """Synthetic direct lines served by the own book in demo mode."""
+    demo_lines: tuple[DemoLine, ...] = Field(default=(), max_length=8)
+    """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's
+    environment). Each line's budget is split over the own book's budget shards; a line stops serving once
+    reservations hold all of it."""
 
     @model_validator(mode="after")
     def _groups_hold_their_calls(self) -> Self:
@@ -665,6 +669,13 @@ class PdsModule(_Module):
         if problems:
             raise ValueError("\n".join(problems))
         _unique(tuple(line.id for line in self.demo_lines))
+        served = tuple(crid for line in self.demo_lines for crid in line.creatives)
+        try:
+            _unique(served)
+        except ValueError as error:
+            raise ValueError(f"demo_lines: a creative serves at most one line: {error}") from None
+        if unknown := sorted(set(served) - set(crids(DemoRole.DIRECT))):
+            raise ValueError(f"demo_lines: not direct demo creatives: {', '.join(unknown)}")
         return self
 
 

@@ -94,6 +94,8 @@ class Settings:
     """The Pod Decision Service's private config bucket, which holds its snapshot (pds module)."""
     pds_snapshot_base: str = field(default_factory=lambda: _env("PDS_SNAPSHOT_BASE"))
     """JSON of what the deployment configures in the snapshot (``core.pds.snapshot.SnapshotBase``)."""
+    pds_table: str = field(default_factory=lambda: _env("PDS_TABLE"))
+    """The Pod Decision Service's table (``<prefix>-pds``: budgets, caps, reservations, delivery)."""
 
     @property
     def app(self) -> str:

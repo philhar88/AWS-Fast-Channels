@@ -15,7 +15,7 @@ simulated.
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Final
+from typing import Any, Final, Protocol
 from urllib.parse import quote
 from xml.sax.saxutils import escape, quoteattr
 
@@ -31,6 +31,7 @@ __all__ = [
     "DemoIndex",
     "DemoRole",
     "IndexedCreative",
+    "InlineCreative",
     "demo_index",
     "demo_index_key",
     "simulator_creatives",
@@ -149,13 +150,34 @@ def _duration(ms: int) -> str:
     return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}.{millis:03d}"
 
 
-def vast_ad(creative: IndexedCreative) -> str:
-    """One inline VAST 4.2 ad of a demo creative (the simulator's ``adm``): no impression of its own, so the fast-ctv
-    module's notices and tracker are its impressions."""
+class InlineCreative(Protocol):
+    """What an inline ad of a preconditioned creative is made of (:class:`IndexedCreative`, the own book's)."""
+
+    @property
+    def crid(self) -> str: ...
+    @property
+    def advertiser(self) -> str: ...
+    @property
+    def creative_id(self) -> str: ...
+    @property
+    def hls_uri(self) -> str: ...
+    @property
+    def duration_ms(self) -> int: ...
+    @property
+    def width(self) -> int: ...
+    @property
+    def height(self) -> int: ...
+
+
+def vast_ad(creative: InlineCreative, *, ad_system: str = "fast-channels demo") -> str:
+    """One inline VAST 4.2 ad of a preconditioned creative (the simulator's and the own book's ``adm``): no impression
+    of its own, so the fast-ctv module's notices and tracker are its impressions. No ``<Advertiser>`` when it has
+    none (a house ad)."""
     c = creative
+    advertiser = f"<Advertiser>{escape(c.advertiser)}</Advertiser>" if c.advertiser else ""
     return (
-        f'<VAST version="4.2"><Ad id={quoteattr(c.crid)}><InLine><AdSystem>fast-channels demo</AdSystem>'
-        f"<AdTitle>{escape(c.crid)}</AdTitle><Advertiser>{escape(c.advertiser)}</Advertiser>"
+        f'<VAST version="4.2"><Ad id={quoteattr(c.crid)}><InLine><AdSystem>{escape(ad_system)}</AdSystem>'
+        f"<AdTitle>{escape(c.crid)}</AdTitle>{advertiser}"
         f"<Creatives><Creative id={quoteattr(c.creative_id)} adId={quoteattr(c.crid)}>"
         f'<UniversalAdId idRegistry="fast-channels">{escape(c.creative_id)}</UniversalAdId>'
         f"<Linear><Duration>{_duration(c.duration_ms)}</Duration><MediaFiles>"

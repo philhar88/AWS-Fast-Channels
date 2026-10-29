@@ -1,11 +1,13 @@
-"""The snapshot every PDS function serves from, loaded during init and refreshed every 30 seconds off the request path.
+"""What PDS functions serve from, loaded during init and refreshed off the request path: the snapshot (every 30 s)
+and, for the own book, its lines' budgets (:mod:`fast_channels.functions.pds.budget`).
 
-``load()`` reads ``snapshot/current.json`` once, during the function's init. Afterwards ``get()`` never waits on S3:
-when a refresh is due it starts one in a background thread (a conditional GET, ``If-None-Match`` with the last ETag,
-so an unchanged snapshot costs a 304 and no parsing) and serves the snapshot it has. Lambda freezes the thread between
-invocations; it carries on during the next one. A failed refresh keeps the snapshot already loaded and is tried again
-sooner. A function that never loaded one serves ``EMPTY``, the fail-safe snapshot (no third-party bidder, no viewer
-address).
+``load()`` reads the value once, during the function's init. Afterwards ``get()`` never waits: when a refresh is due
+it starts one in a background thread and serves what it has. Lambda freezes the thread between invocations; it carries
+on during the next one. A failed refresh keeps the value already loaded and is tried again sooner.
+
+The snapshot is ``snapshot/current.json``, read with a conditional GET (``If-None-Match`` with the last ETag, so an
+unchanged snapshot costs a 304 and no parsing). A function that never loaded one serves ``EMPTY``, the fail-safe
+snapshot (no third-party bidder, no viewer address, no own book).
 """
 
 import threading
@@ -24,16 +26,92 @@ from fast_channels.core.pds.snapshot import EMPTY, REFRESH_SECONDS, SNAPSHOT_KEY
 RETRY_SECONDS: Final = 5.0
 """After a failed refresh, how soon the next one is tried."""
 CLIENT_CONFIG: Final = Config(connect_timeout=1, read_timeout=1, retries={"total_max_attempts": 2, "mode": "standard"})
-"""S3 client of the refreshes (off the request path: a slow one only delays the next snapshot)."""
+"""Client of the refreshes (off the request path: a slow one only delays the next value)."""
 
 logger = Logger(child=True)
 
-
-def _thread(target: Callable[[], None]) -> None:
-    threading.Thread(target=target, name="snapshot-refresh", daemon=True).start()
+type Spawn = Callable[[Callable[[], None]], None]
 
 
-class SnapshotStore:
+def spawn_thread(target: Callable[[], None]) -> None:
+    """Run ``target`` in a daemon thread."""
+    threading.Thread(target=target, name="pds-refresh", daemon=True).start()
+
+
+class Refreshed[T]:
+    """A value refreshed every ``every`` seconds in the background (module docstring).
+
+    Args:
+        initial: what :meth:`get` serves until a refresh succeeds.
+        every: seconds between refreshes.
+        clock: monotonic seconds (tests pass their own).
+        spawn: runs a refresh off the request path (default: a daemon thread; tests run it inline).
+    """
+
+    name = "value"
+
+    def __init__(
+        self, initial: T, *, every: float, clock: Callable[[], float] = time.monotonic, spawn: Spawn = spawn_thread
+    ) -> None:
+        self._value = initial
+        self._every = every
+        self._clock = clock
+        self._spawn = spawn
+        self._next = float("-inf")
+        self._refreshing = threading.Lock()
+
+    def load(self) -> T:
+        """Read the value now (the function's init)."""
+        self._refresh()
+        return self._value
+
+    @property
+    def current(self) -> T:
+        """The value it has, without starting a refresh."""
+        return self._value
+
+    def get(self) -> T:
+        """The current value; starts a background refresh first if one is due and none is running."""
+        if self._clock() >= self._next and self._refreshing.acquire(blocking=False):
+            self._spawn(self._refresh_and_release)
+        return self._value
+
+    def _fetch(self) -> T | None:
+        """The new value, or None when it is unchanged. Raises on failure."""
+        raise NotImplementedError
+
+    def _refresh_and_release(self) -> None:
+        try:
+            self._refresh()
+        finally:
+            self._refreshing.release()
+
+    def _refresh(self) -> None:
+        started = self._clock()
+        try:
+            value = self._fetch()
+        except (BotoCoreError, ClientError, ValidationError, ValueError) as error:
+            logger.warning(
+                "refresh failed",
+                extra={
+                    "refreshed": self.name,
+                    "error": type(error).__name__,
+                    "detail": str(error)[:300],
+                    **self._describe(self._value),
+                },
+            )
+            self._next = started + RETRY_SECONDS
+            return
+        if value is not None:
+            self._value = value
+        self._next = started + self._every
+
+    def _describe(self, value: T) -> dict[str, Any]:
+        """What a log line says about ``value``."""
+        return {}
+
+
+class SnapshotStore(Refreshed[Snapshot]):
     """The current snapshot of one bucket.
 
     Args:
@@ -43,22 +121,20 @@ class SnapshotStore:
         spawn: runs a refresh off the request path (default: a daemon thread; tests run it inline).
     """
 
+    name = "snapshot"
+
     def __init__(
         self,
         bucket: str,
         *,
         client: Any = None,
         clock: Callable[[], float] = time.monotonic,
-        spawn: Callable[[Callable[[], None]], None] = _thread,
+        spawn: Spawn = spawn_thread,
     ) -> None:
+        super().__init__(EMPTY, every=REFRESH_SECONDS, clock=clock, spawn=spawn)
         self._bucket = bucket
         self._client = client
-        self._clock = clock
-        self._spawn = spawn
-        self._snapshot = EMPTY
         self._etag: str | None = None
-        self._next = float("-inf")
-        self._refreshing = threading.Lock()
 
     @property
     def client(self) -> Any:
@@ -66,48 +142,21 @@ class SnapshotStore:
             self._client = boto3.client("s3", config=CLIENT_CONFIG)
         return self._client
 
-    def load(self) -> Snapshot:
-        """Read the snapshot now (the function's init)."""
-        self._refresh()
-        return self._snapshot
-
-    def get(self) -> Snapshot:
-        """The current snapshot; starts a background refresh first if one is due and none is running."""
-        if self._clock() >= self._next and self._refreshing.acquire(blocking=False):
-            self._spawn(self._refresh_and_release)
-        return self._snapshot
-
-    def _refresh_and_release(self) -> None:
-        try:
-            self._refresh()
-        finally:
-            self._refreshing.release()
-
-    def _refresh(self) -> None:
+    def _fetch(self) -> Snapshot | None:
         request: dict[str, str] = {"Bucket": self._bucket, "Key": SNAPSHOT_KEY}
         if self._etag:
             request["IfNoneMatch"] = self._etag
-        started = self._clock()
         try:
             response = self.client.get_object(**request)
-            snapshot = Snapshot.model_validate_json(response["Body"].read())
         except ClientError as error:
             if error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 304:
-                self._next = started + REFRESH_SECONDS
-                return
-            self._failed(started, error)
-            return
-        except (BotoCoreError, ValidationError, ValueError) as error:
-            self._failed(started, error)
-            return
-        if snapshot.version != self._snapshot.version:
+                return None
+            raise
+        snapshot = Snapshot.model_validate_json(response["Body"].read())
+        if snapshot.version != self._value.version:
             logger.info("snapshot loaded", extra={"snapshot": snapshot.version})
-        self._snapshot, self._etag = snapshot, response.get("ETag")
-        self._next = started + REFRESH_SECONDS
+        self._etag = response.get("ETag")
+        return snapshot
 
-    def _failed(self, started: float, error: Exception) -> None:
-        logger.warning(
-            "snapshot refresh failed",
-            extra={"snapshot": self._snapshot.version, "error": type(error).__name__, "detail": str(error)[:300]},
-        )
-        self._next = started + RETRY_SECONDS
+    def _describe(self, value: Snapshot) -> dict[str, Any]:
+        return {"snapshot": value.version}

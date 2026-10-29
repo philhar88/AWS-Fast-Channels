@@ -10,18 +10,22 @@ from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
-from fast_channels.core.pds.records import PolicyRecord
+from fast_channels.core.pds.book import Line
+from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord
 from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, SnapshotBase, demo_demand
 from fast_channels.infra.config import DemandMode
 from fast_channels.infra.constructs.alerts import alert_topic_arn, dead_letter_alarm
 from fast_channels.infra.constructs.observability import census_parameter_name
 from fast_channels.infra.constructs.pds import (
     DecisionLog,
+    DeliveryCounter,
     PdsCensusGate,
     PdsFunction,
     PdsService,
+    ReleaseSweeper,
     SnapshotPublisher,
 )
+from fast_channels.infra.constructs.pds.delivery import allow_table
 from fast_channels.infra.constructs.queues import dead_letter_queue
 
 if TYPE_CHECKING:
@@ -32,12 +36,29 @@ if TYPE_CHECKING:
     from fast_channels.infra.config import FastChannelsConfig
 
 POLICY_HANDLER = "fast_channels.functions.pds.policy.handler"
+OWN_BOOK_HANDLER = "fast_channels.functions.pds.ownbook.handler"
 
 
 def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
-    """What the deployment puts in the snapshot: in demo mode, the guidance's bidder simulator as the demand."""
-    demo = config.modules.demand.mode is DemandMode.DEMO
-    return SnapshotBase(demand=demo_demand(config.prefix) if demo else {})
+    """What the deployment puts in the snapshot: in demo mode, the guidance's bidder simulator as the demand and the
+    synthetic direct lines (``modules.pds.demo_lines``) in the own book."""
+    if config.modules.demand.mode is not DemandMode.DEMO:
+        return SnapshotBase()
+    lines = tuple(
+        Line(
+            id=line.id,
+            advertiser=line.advertiser,
+            adomain=line.adomain,
+            cat=line.cat,
+            creatives=line.creatives,
+            cpm=line.cpm,
+            budget=line.budget,
+            per_session=line.caps.per_session,
+            tier0=line.tier0,
+        )
+        for line in config.modules.pds.demo_lines
+    )
+    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines)
 
 
 class PdsStack(Stack):
@@ -93,11 +114,23 @@ class PdsStack(Stack):
                 self, names.parameter_name(prefix, names.Parameter.LAKE_BUCKET)
             ),
         )
+        media = s3.Bucket.from_bucket_name(
+            self,
+            "MediaBucket",
+            ssm.StringParameter.value_for_string_parameter(
+                self, names.parameter_name(prefix, names.Parameter.MEDIA_BUCKET)
+            ),
+        )
+        # The Media stack's CDN, by SSM parameter too (our tracker's host).
+        content_base_url = ssm.StringParameter.value_for_string_parameter(
+            self, names.parameter_name(prefix, names.Parameter.CONTENT_BASE_URL)
+        )
         self.publisher = SnapshotPublisher(
             self,
             "Publisher",
             prefix=prefix,
             bucket=bucket,
+            media_bucket=media,
             base=snapshot_base(config),
             alert_topic=alerts,
             log_retention=retention,
@@ -117,6 +150,22 @@ class PdsStack(Stack):
         )
         self.policy.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
         self.service.add_endpoint(names.Endpoint.POLICY, self.policy)
+        self.own_book = PdsFunction(
+            self,
+            "OwnBook",
+            handler=OWN_BOOK_HANDLER,
+            description="PDS POST /ownbook/openrtb: the own book's bids (house ads and direct lines)",
+            environment={
+                "FAST_PREFIX": prefix,
+                "PDS_CONFIG_BUCKET": bucket.bucket_name,
+                "PDS_TABLE": names.table_name(prefix),
+            },
+            log_retention=retention,
+            removal_policy=removal,
+        )
+        self.own_book.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
+        allow_table(self.own_book.function, prefix, ["BatchGetItem"], ["BUDGET#*"])
+        self.service.add_endpoint(names.Endpoint.OWN_BOOK, self.own_book)
         self.policy_records = DecisionLog(
             self,
             "PolicyRecords",
@@ -126,6 +175,36 @@ class PdsStack(Stack):
             log_group=self.policy.function.log_group,
             lake_bucket=lake,
             retention_days=config.modules.ops.lake_retention_days,
+            log_retention=retention,
+            removal_policy=removal,
+        )
+        self.delivery = DeliveryCounter(
+            self,
+            "Delivery",
+            prefix=prefix,
+            content_base_url=content_base_url,
+            alert_topic=alerts,
+            log_retention=retention,
+            removal_policy=removal,
+        )
+        self.delivery_records = DecisionLog(
+            self,
+            "DeliveryRecords",
+            prefix=prefix,
+            kind="delivery",
+            model=DeliveryRecord,
+            log_group=self.delivery.function.log_group,
+            lake_bucket=lake,
+            retention_days=config.modules.ops.lake_retention_days,
+            log_retention=retention,
+            removal_policy=removal,
+        )
+        self.sweeper = ReleaseSweeper(
+            self,
+            "Sweeper",
+            prefix=prefix,
+            group=self.publisher.group,
+            alert_topic=alerts,
             log_retention=retention,
             removal_policy=removal,
         )
@@ -143,7 +222,7 @@ class PdsStack(Stack):
             self,
             "CensusGate",
             prefix=prefix,
-            functions=[self.policy],
+            functions=[self.policy, self.own_book],
             concurrency=pds.provisioned_concurrency,
             census_parameter=census_parameter_name(prefix),
             log_retention=retention,
@@ -156,6 +235,9 @@ class PdsStack(Stack):
             ),
             "Endpoint": (f"http://{pds_host(prefix)}", "The PDS's base URL in the Prebid Server VPC"),
             "PolicyFunction": (self.policy.function.function.function_name, "POST /policy"),
+            "OwnBookFunction": (self.own_book.function.function.function_name, "POST /ownbook/openrtb"),
+            "DeliveryFunction": (self.delivery.function.function.function_name, "Counts our tracker's impressions"),
+            "SweeperFunction": (self.sweeper.function.function.function_name, "Releases undelivered reservations"),
             "PublisherFunction": (self.publisher.function.function.function_name, "Publishes the snapshot"),
             "ConfigBucketName": (bucket.bucket_name, "The PDS's private config bucket (snapshot/current.json)"),
             "TableName": (names.table_name(prefix), "The PDS's table (the Data stack's)"),

@@ -528,6 +528,12 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ({"modules.pds.demo_lines": [LINE, LINE]}, "duplicate entries: direct1"),
         ({"modules.pds.demo_lines": [{**LINE, "creatives": []}]}, "should have at least 1 item"),
         ({"modules.pds.demo_lines": [{**LINE, "budget": 0}]}, "greater than 0"),
+        (
+            {"modules.pds.demo_lines": [LINE, {**LINE, "id": "direct-2"}]},
+            "a creative serves at most one line: duplicate entries: direct1",
+        ),
+        ({"modules.pds.demo_lines": [{**LINE, "creatives": ["sim1"]}]}, "not direct demo creatives: sim1"),
+        ({"modules.pds.demo_lines": [{**LINE, "id": f"l{n}"} for n in range(9)]}, "at most 8 items"),
         ({"modules.crawl.holdout_percent": 101}, "less than or equal to 100"),
     ],
 )

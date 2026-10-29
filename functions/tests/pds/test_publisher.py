@@ -1,4 +1,5 @@
-"""The snapshot publisher: ip-ranges.json in, a snapshot out only when its content changed."""
+"""The snapshot publisher: ip-ranges.json and the default ladder's kit in, a snapshot out only when its content
+changed, and the lines' budgets set."""
 
 import io
 import json
@@ -12,7 +13,11 @@ import pytest
 from botocore.response import StreamingBody
 from botocore.stub import ANY, Stubber
 
+from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
+from fast_channels.core.pds.book import Book, Line
 from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot, SnapshotBase, build, demo_demand, from_ip_ranges
+from fast_channels.core.specs import Creative as KitCreative
+from fast_channels.core.specs import vast_key, vast_pod
 from fast_channels.functions import aws
 from fast_channels.functions.pds import publisher
 from fast_channels.functions.settings import settings
@@ -28,6 +33,33 @@ RANGES: dict[str, Any] = {
     ],
     "ipv6_prefixes": [],
 }
+MEDIA = "fastm-media"
+LADDER = "standard@843ed1d05a"
+CDN = "https://d111111abcdef8.cloudfront.net"
+LINE = Line(
+    id="direct-1",
+    advertiser="Direct Advertiser 1",
+    adomain="direct1.example",
+    creatives=("direct1",),
+    cpm=8,
+    budget=100,
+    tier0=True,
+)
+LINED = BASE.model_copy(update={"lines": (LINE,)})
+POD = vast_pod(
+    creatives=[
+        KitCreative(creative_id=f"house-ad-{n}-x", duration_ms=30030, hls_uri=f"{CDN}/ads/s/house-ad-{n}-x/main.m3u8")
+        for n in (1, 2)
+    ],
+    content_base_url=CDN,
+    fill_ms=60060,
+)
+INDEX = demo_index(
+    LADDER,
+    {c.crid: (f"demo-{c.crid}", f"{CDN}/ads/s/demo-{c.crid}/main.m3u8", 30030) for c in DEMO_CREATIVES},
+    width=1920,
+    height=1080,
+)
 
 
 @dataclass
@@ -49,7 +81,11 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("PDS_CONFIG_BUCKET", BUCKET)
-    monkeypatch.setenv("PDS_SNAPSHOT_BASE", BASE.model_dump_json())
+    monkeypatch.setenv("PDS_SNAPSHOT_BASE", LINED.model_dump_json())
+    monkeypatch.setenv("FAST_PREFIX", "fastm")
+    monkeypatch.setenv("MEDIA_BUCKET", MEDIA)
+    monkeypatch.setenv("PDS_TABLE", "fastm-pds")
+    monkeypatch.setenv("LEDGER_TABLE", "fastm-ledger")
     settings.cache_clear()
     yield
     settings.cache_clear()
@@ -96,9 +132,38 @@ def written(s3: Stubber) -> None:
         )
 
 
-def test_the_first_publish_writes_the_snapshot_and_its_history(s3: Stubber, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def ssm() -> Iterator[Stubber]:
+    with Stubber(aws.client("ssm")) as stubber:
+        yield stubber
+        stubber.assert_no_pending_responses()
+
+
+def body(data: bytes) -> dict[str, Any]:
+    return {"Body": StreamingBody(io.BytesIO(data), len(data))}
+
+
+def kit(s3: Stubber, ssm: Stubber, *, demo: bool = True) -> None:
+    ssm.add_response(
+        "get_parameter",
+        {"Parameter": {"Name": "/fastm/pds/ladder-version", "Value": LADDER}},
+        {"Name": "/fastm/pds/ladder-version"},
+    )
+    s3.add_response("get_object", body(POD.encode()), {"Bucket": MEDIA, "Key": vast_key(LADDER)})
+    if demo:
+        s3.add_response(
+            "get_object", body(INDEX.model_dump_json().encode()), {"Bucket": MEDIA, "Key": demo_index_key(LADDER)}
+        )
+
+
+def test_the_first_publish_writes_the_snapshot_and_its_history(
+    s3: Stubber, ssm: Stubber, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = serve(monkeypatch, ranges())
+    budgets: list[dict[str, Any]] = []
+    monkeypatch.setattr(publisher, "set_budgets", lambda client, **kwargs: budgets.append(kwargs) or {"direct-1": [0]})
     published(s3, None)
+    kit(s3, ssm)
     written(s3)
 
     result = publisher.handler({}, Context())
@@ -106,6 +171,70 @@ def test_the_first_publish_writes_the_snapshot_and_its_history(s3: Stubber, monk
     assert calls == [publisher.IP_RANGES_URL]
     assert result["written"] is True
     assert (result["origin_facing"], result["bidders"]) == (1, ["amt"])
+    assert (result["ladder"], result["house"], result["lines"]) == (
+        LADDER,
+        ["house1", "house2"],
+        {"direct-1": ["direct1"]},
+    )
+    assert result["budgets_set"] == {"direct-1": [0]}
+    [call] = budgets
+    assert (call["table"], call["ledger_table"], call["lines"]) == ("fastm-pds", "fastm-ledger", (LINE,))
+
+
+def test_the_book_is_the_default_ladders_kit(s3: Stubber, ssm: Stubber) -> None:
+    kit(s3, ssm)
+
+    own = publisher.own_book(LINED, None, prefix="fastm", media_bucket=MEDIA)
+
+    assert own.ladder_version == LADDER
+    assert [c.crid for c in own.house] == ["house1", "house2"]
+    assert [(c.crid, c.advertiser) for c in own.creatives] == [("direct1", "Direct Advertiser 1")]
+    assert own.lines == (LINE,)
+
+
+def test_without_lines_the_demo_index_is_not_read(s3: Stubber, ssm: Stubber) -> None:
+    kit(s3, ssm, demo=False)
+
+    own = publisher.own_book(BASE, None, prefix="fastm", media_bucket=MEDIA)
+
+    assert (own.lines, own.creatives, len(own.house)) == ((), (), 2)
+
+
+def test_a_kit_without_demo_creatives_bids_house_only(s3: Stubber, ssm: Stubber) -> None:
+    kit(s3, ssm, demo=False)
+    s3.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+
+    own = publisher.own_book(LINED, None, prefix="fastm", media_bucket=MEDIA)
+
+    assert (own.ladder_version, own.creatives, len(own.house)) == (None, (), 2)
+
+
+@pytest.mark.parametrize("failure", ["parameter", "pod", "invalid-pod", "index-denied"])
+def test_an_unreadable_kit_keeps_the_published_creatives(s3: Stubber, ssm: Stubber, failure: str) -> None:
+    kept = Book(ladder_version="standard@0000000000", house=(), creatives=())
+    snapshot = build(LINED, own=kept, now=NOW)
+    match failure:
+        case "parameter":
+            ssm.add_client_error("get_parameter", service_error_code="ParameterNotFound", http_status_code=400)
+        case "pod" | "invalid-pod" | "index-denied":
+            ssm.add_response("get_parameter", {"Parameter": {"Name": "/fastm/pds/ladder-version", "Value": LADDER}})
+            if failure == "pod":
+                s3.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
+            elif failure == "invalid-pod":
+                s3.add_response("get_object", body(b"<VAST"))
+            else:
+                s3.add_response("get_object", body(POD.encode()))
+                s3.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
+
+    own = publisher.own_book(LINED, snapshot, prefix="fastm", media_bucket=MEDIA)
+
+    assert (own.ladder_version, own.lines) == ("standard@0000000000", (LINE,))
+
+
+def test_without_a_kit_or_a_published_book_only_the_lines_are_known(ssm: Stubber) -> None:
+    ssm.add_client_error("get_parameter", service_error_code="ParameterNotFound", http_status_code=400)
+
+    assert publisher.own_book(LINED, None, prefix="fastm", media_bucket=MEDIA) == Book(lines=(LINE,))
 
 
 def test_an_unchanged_snapshot_is_not_written_again(s3: Stubber, monkeypatch: pytest.MonkeyPatch) -> None:
