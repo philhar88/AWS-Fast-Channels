@@ -8,6 +8,9 @@ synthesizes exactly as shipped):
   fileAssetsBucketName        that bootstrap's file assets bucket
   imageAssetsRepositoryName   that bootstrap's container assets repository
 CloudFormation parameters are keyed by stack name, so with a prefix pass them as <stackPrefix>-pbs:<Name>=<value>.
+With a prefix the MetricsEtl Glue database is named <stackPrefix>-prebid-server-<region>-metricsetl-database: the
+shipped name is the guidance's only name unique per account and Region that does not depend on the stack, so two
+prefixed deployments in one account and Region collided on it.
 
 diff --git a/source/infrastructure/app.py b/source/infrastructure/app.py
 --- a/source/infrastructure/app.py
@@ -86,3 +89,19 @@ diff --git a/source/infrastructure/app.py b/source/infrastructure/app.py
      )
  
      return app.synth(validate_on_synthesis=True, skip_validation=False)
+diff --git a/source/infrastructure/prebid_server/prebid_glue_constructs.py b/source/infrastructure/prebid_server/prebid_glue_constructs.py
+--- a/source/infrastructure/prebid_server/prebid_glue_constructs.py
++++ b/source/infrastructure/prebid_server/prebid_glue_constructs.py
+@@ -148,6 +148,12 @@
+         self.GLUE_RESOURCE_PREFIX = f"{Aws.STACK_NAME}-{Aws.REGION}-{self.id.lower()}"
+         self.GLUE_JOB_NAME = f"{self.GLUE_RESOURCE_PREFIX}-job"
+         self.GLUE_DATABASE_NAME = f"prebid-server-{Aws.REGION}-{self.id.lower()}-database"
++        # Overlay O1 (FAST Channels): with a stack prefix the database name starts with it (lowercase, like every
++        # prefix), so several prefixed deployments can share an account and Region. It is the guidance's only name
++        # unique per account and Region that does not depend on the stack.
++        stack_prefix = self.node.try_get_context("stackPrefix")
++        if stack_prefix:
++            self.GLUE_DATABASE_NAME = f"{stack_prefix.lower()}-{self.GLUE_DATABASE_NAME}"
+         self.GLUE_WORKFLOW_NAME = f"{self.GLUE_RESOURCE_PREFIX}-workflow"
+ 
+         fp = Path(__file__).absolute().parents[1] / "prebid_server"

@@ -237,6 +237,15 @@ def test_the_applied_checkout_is_the_pinned_guidance_with_every_overlay() -> Non
 
 
 @applied
+def test_o1_prefixes_the_glue_database_the_only_name_unique_per_account() -> None:
+    """Without the prefix, two stages' guidance stacks in one account and Region collide on the database name."""
+    source = (CHECKOUT / "source/infrastructure/prebid_server/prebid_glue_constructs.py").read_text()
+
+    assert 'stack_prefix = self.node.try_get_context("stackPrefix")' in source
+    assert 'self.GLUE_DATABASE_NAME = f"{stack_prefix.lower()}-{self.GLUE_DATABASE_NAME}"' in source
+
+
+@applied
 def test_o5_simulator_bids_with_the_configured_creatives(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

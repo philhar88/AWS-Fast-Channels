@@ -37,7 +37,8 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
 
   | Overlay | Change |
   |---|---|
-  | O1 | Stack-name prefix and a dedicated CDK bootstrap per stage, from CDK context |
+  | O1 | Stack-name prefix and a dedicated CDK bootstrap per stage, from CDK context; the prefix also names the
+  MetricsEtl Glue database, the guidance's only account-unique name that ignored the stack |
   | O2 | Stack parameter `ExtraWafRuleGroupArn`: a customer rule group referenced first by the guidance's web ACL |
   | O4 | The fast-ctv module compiled through the guidance's `amt-bidder` injection point |
   | O5 | Bidder simulator creatives from configuration (30.03 s HLS creatives preconditioned on the ladder) |

@@ -23,7 +23,7 @@ repository = "https://github.com/prebid/prebid-server-java"
 # checkout-relative destination).
 [[overlays]]
 id = "O1"
-title = "Stack-name prefix and a dedicated CDK bootstrap"
+title = "Stack-name prefix (stack and Glue database names) and a dedicated CDK bootstrap"
 patch = "patches/O1-app-prefix-bootstrap.patch"
 
 [[overlays]]
@@ -53,6 +53,7 @@ patch = "patches/O7-ecs-deployment.patch"
 "source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py" = "63f0e245458251a7b74eddc49f1f762f79909e0ca0608863d8b78c47f1f10164"
 "source/infrastructure/prebid_server/cloudfront_entry_deployment.py" = "f3fc55b013db2fb4fd73ff86cb56863ebe5e046199601c976f93fe03bd37526b"
 "source/infrastructure/prebid_server/cloudfront_waf_construct.py" = "5ef8093fe9bd37c254bcdcfef49fefba541be907397b026801a11b056aea4725"
+"source/infrastructure/prebid_server/prebid_glue_constructs.py" = "18379a26479af4940b127b66f72087382980e111f1ca4dbf91448fe2275a8bec"
 "source/infrastructure/prebid_server/ecs_service_construct.py" = "eddc03463f91e2fa2647b5752ead345d7df5cdc241e455e0d814abde331f3a11"
 "source/infrastructure/prebid_server/stack_cfn_parameters.py" = "ed64b709976efba34403247c1429751641cd71303aba277985a49dd08aa4ae27"
 "source/loadtest/amt-bidder/copy-bidder-files.sh" = "6a3b0f0d190c21d5821ce35619ff0714632cd544daff6419d617051600425c9b"
