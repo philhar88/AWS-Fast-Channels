@@ -13,13 +13,14 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools import Logger, Metrics, single_metric
-from aws_lambda_powertools.event_handler import ALBResolver, Response, content_types
+from aws_lambda_powertools.event_handler import ALBResolver, Response
 from aws_lambda_powertools.metrics import MetricUnit
 from pydantic import ValidationError
 
 from fast_channels.core.pds.models import PolicyRequest
 from fast_channels.core.pds.policy import decide
 from fast_channels.core.pds.records import policy_record
+from fast_channels.functions.pds.http import json_response, refused_fields
 from fast_channels.functions.pds.store import snapshot_store
 
 if TYPE_CHECKING:
@@ -34,10 +35,6 @@ store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
 
 
-def _json(status: int, body: str) -> Response[str]:
-    return Response(status_code=status, content_type=content_types.APPLICATION_JSON, body=body)
-
-
 @app.post("/policy")
 def policy() -> Response[str]:
     """The answer, a 400 for a request that is not the contract's, or a 500: the module then changes nothing."""
@@ -45,17 +42,15 @@ def policy() -> Response[str]:
     try:
         request = PolicyRequest.model_validate_json(app.current_event.decoded_body or "")
     except ValidationError as error:
-        # Field locations only: a value may be a ticket.
-        fields = sorted({".".join(str(part) for part in e["loc"]) for e in error.errors()})
-        logger.warning("policy request refused", extra={"fields": fields})
+        logger.warning("policy request refused", extra={"fields": refused_fields(error)})
         metrics.add_metric(name="PolicyRefused", unit=MetricUnit.Count, value=1)
-        return _json(400, '{"error":"invalid request"}')
+        return json_response(400, '{"error":"invalid request"}')
     try:
         return _answer(request, started)
     except Exception:
         logger.exception("policy failed")
         metrics.add_metric(name="PolicyErrors", unit=MetricUnit.Count, value=1)
-        return _json(500, '{"error":"internal"}')
+        return json_response(500, '{"error":"internal"}')
 
 
 def _answer(request: PolicyRequest, started: float) -> Response[str]:
@@ -71,7 +66,7 @@ def _answer(request: PolicyRequest, started: float) -> Response[str]:
         by_mode.add_dimension(name="mode", value=decision.response.mode.value)
     if decision.response.device.ip is None and decision.response.device.ipv6 is None:
         metrics.add_metric(name="PolicyNoViewerIp", unit=MetricUnit.Count, value=1)
-    return _json(200, body)
+    return json_response(200, body)
 
 
 @logger.inject_lambda_context(clear_state=True)

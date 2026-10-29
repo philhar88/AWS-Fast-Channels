@@ -41,6 +41,12 @@
         "Ref": "PublisherFunction418C8B62"
       }
     },
+    "SelectFunction": {
+      "Description": "POST /select",
+      "Value": {
+        "Ref": "SelectFunction95C0A89B"
+      }
+    },
     "SweeperFunction": {
       "Description": "Releases undelivered reservations",
       "Value": {
@@ -292,14 +298,28 @@
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"Release1\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"Provision2\"}, \"Release1\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
               {
                 "Fn::GetAtt": [
                   "OwnBookFunction8D395A29",
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\"}, \"Retry\": [{\"ErrorEquals\": [\"Lambda.TooManyRequestsException\", \"Lambda.ServiceException\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"Lambda.ResourceNotFoundException\", \"Lambda.ProvisionedConcurrencyConfigNotFoundException\"], \"Next\": \"Released1\"}], \"End\": true}, \"Released1\": {\"Type\": \"Pass\", \"End\": true}}}"
+              "\", \"Qualifier\": \"live\"}, \"Retry\": [{\"ErrorEquals\": [\"Lambda.TooManyRequestsException\", \"Lambda.ServiceException\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"Lambda.ResourceNotFoundException\", \"Lambda.ProvisionedConcurrencyConfigNotFoundException\"], \"Next\": \"Released1\"}], \"Next\": \"Release2\"}, \"Released1\": {\"Type\": \"Pass\", \"Next\": \"Release2\"}, \"Provision2\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              {
+                "Fn::GetAtt": [
+                  "SelectFunction95C0A89B",
+                  "Arn"
+                ]
+              },
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"Release2\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              {
+                "Fn::GetAtt": [
+                  "SelectFunction95C0A89B",
+                  "Arn"
+                ]
+              },
+              "\", \"Qualifier\": \"live\"}, \"Retry\": [{\"ErrorEquals\": [\"Lambda.TooManyRequestsException\", \"Lambda.ServiceException\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"Lambda.ResourceNotFoundException\", \"Lambda.ProvisionedConcurrencyConfigNotFoundException\"], \"Next\": \"Released2\"}], \"End\": true}, \"Released2\": {\"Type\": \"Pass\", \"End\": true}}}"
             ]
           ]
         },
@@ -474,6 +494,9 @@
                 },
                 {
                   "Ref": "PolicyLive6AD5E16F"
+                },
+                {
+                  "Ref": "SelectLive5CCF2B7E"
                 }
               ]
             },
@@ -891,7 +914,8 @@
                 "ForAllValues:StringLike": {
                   "dynamodb:LeadingKeys": [
                     "RES#*",
-                    "BUDGET#*"
+                    "BUDGET#*",
+                    "CAP#*"
                   ]
                 }
               },
@@ -1436,6 +1460,204 @@
         }
       },
       "Type": "AWS::Glue::Table"
+    },
+    "ModuleAlarmsPodErrors77ABCEF1": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"error\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "PodErrors",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "ModuleAlarmsPodsDEF1C494": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "Pods",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "ModuleAlarmsPolicyFallbacksA464C68A": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"POLICY_\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "PolicyFallbacks",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "ModuleAlarmsPolicyFallbacksAlarmE13F058E": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "More than 1.0% of breaks in 5 minutes were served without the PDS's /policy patch (own book only, no third party, no viewer data): the PDS is slow, failing or unreachable",
+        "AlarmName": "fastm-pds-policy-fallbacks",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "IF(pods >= 20, 100 * (FILL(f0, 0)) / pods, IF(FILL(f0, 0) >= 5, 100, 0))",
+            "Id": "expr_1",
+            "Label": "Breaks without the /policy patch, %",
+            "ReturnData": true
+          },
+          {
+            "Id": "pods",
+            "MetricStat": {
+              "Metric": {
+                "MetricName": "Pods",
+                "Namespace": "FastChannels/PrebidServer/fastm"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "f0",
+            "MetricStat": {
+              "Metric": {
+                "MetricName": "PolicyFallbacks",
+                "Namespace": "FastChannels/PrebidServer/fastm"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ModuleAlarmsSelectFallbacksAlarm405F7CB8": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "More than 0.5% of pods in 5 minutes were the module's house fallback instead of the PDS's /select answer, or empty after a module error: no paid ad and no reservation in those breaks",
+        "AlarmName": "fastm-pds-select-fallbacks",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "IF(pods >= 20, 100 * (FILL(f0, 0) + FILL(f1, 0)) / pods, IF(FILL(f0, 0) + FILL(f1, 0) >= 5, 100, 0))",
+            "Id": "expr_1",
+            "Label": "Pods from the module's house fallback or errors, %",
+            "ReturnData": true
+          },
+          {
+            "Id": "pods",
+            "MetricStat": {
+              "Metric": {
+                "MetricName": "Pods",
+                "Namespace": "FastChannels/PrebidServer/fastm"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "f0",
+            "MetricStat": {
+              "Metric": {
+                "MetricName": "SelectFallbacks",
+                "Namespace": "FastChannels/PrebidServer/fastm"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "f1",
+            "MetricStat": {
+              "Metric": {
+                "MetricName": "PodErrors",
+                "Namespace": "FastChannels/PrebidServer/fastm"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ModuleAlarmsSelectFallbacksBC327284": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"SELECT_FALLBACK\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "SelectFallbacks",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
     },
     "OwnBookFunction8D395A29": {
       "DependsOn": [
@@ -2461,7 +2683,7 @@
             "PDS_CONFIG_BUCKET": {
               "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
-            "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\",\"lines\":[]}",
+            "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\",\"lines\":[],\"breaks_ms\":[30030,60060,90090,120120]}",
             "PDS_TABLE": "fastm-pds",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "pds.publisher"
@@ -2506,7 +2728,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PublisherFunctionCurrentVersion0CCBEA061519e7b8317a14346b80b37e65034deb": {
+    "PublisherFunctionCurrentVersion0CCBEA0600b66b81dba8dc576d11fa67a0e2ec05": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -2828,7 +3050,7 @@
       "Properties": {
         "ExecuteOnHandlerChange": true,
         "HandlerArn": {
-          "Ref": "PublisherFunctionCurrentVersion0CCBEA061519e7b8317a14346b80b37e65034deb"
+          "Ref": "PublisherFunctionCurrentVersion0CCBEA0600b66b81dba8dc576d11fa67a0e2ec05"
         },
         "InvocationType": "RequestResponse",
         "ServiceToken": {
@@ -2938,6 +3160,735 @@
         ]
       },
       "Type": "AWS::IAM::Policy"
+    },
+    "SelectFunction95C0A89B": {
+      "DependsOn": [
+        "SelectFunctionRoleDefaultPolicyB5A1FDD0",
+        "SelectFunctionRole3C7A8F8A"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "PDS POST /select: the pod of one break, its line ads reserved, our trackers",
+        "Environment": {
+          "Variables": {
+            "CONTENT_BASE_URL": {
+              "Ref": "SsmParameterValuefastmpdscontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LEDGER_TABLE": "fastm-ledger",
+            "PDS_CONFIG_BUCKET": {
+              "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "PDS_TABLE": "fastm-pds",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "pds.select"
+          }
+        },
+        "Handler": "fast_channels.functions.pds.select.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "SelectFunctionLogs20D169BF"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 1024,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "SelectFunctionRole3C7A8F8A",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 3,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "SelectFunctionCurrentVersion7190FF88f2e698d7eefc91a021ce6e424bd54997": {
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true
+      },
+      "Properties": {
+        "FunctionName": {
+          "Ref": "SelectFunction95C0A89B"
+        }
+      },
+      "Type": "AWS::Lambda::Version"
+    },
+    "SelectFunctionLogs20D169BF": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SelectFunctionRole3C7A8F8A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SelectFunctionRoleDefaultPolicyB5A1FDD0": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SelectFunctionLogs20D169BF",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/snapshot/current.json"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:BatchGetItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "BUDGET#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "dynamodb:UpdateItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "BUDGET#*",
+                    "CAP#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "RES#*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "pds/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SelectFunctionRoleDefaultPolicyB5A1FDD0",
+        "Roles": [
+          {
+            "Ref": "SelectFunctionRole3C7A8F8A"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "SelectLive5CCF2B7E": {
+      "Properties": {
+        "Description": "Served",
+        "FunctionName": {
+          "Ref": "SelectFunction95C0A89B"
+        },
+        "FunctionVersion": {
+          "Fn::GetAtt": [
+            "SelectFunctionCurrentVersion7190FF88f2e698d7eefc91a021ce6e424bd54997",
+            "Version"
+          ]
+        },
+        "Name": "live"
+      },
+      "Type": "AWS::Lambda::Alias"
+    },
+    "SelectLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY56ED183C": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "SelectLive5CCF2B7E"
+        },
+        "Principal": "elasticloadbalancing.amazonaws.com"
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "SelectRecords78338C14": {
+      "DependsOn": [
+        "SelectRecordsCloudWatchLogsCanPutRecordsDefaultPolicy30052DB4"
+      ],
+      "Properties": {
+        "DestinationArn": {
+          "Fn::GetAtt": [
+            "SelectRecordsStreamF6FB16B3",
+            "Arn"
+          ]
+        },
+        "FilterName": "fastm-pds-select-records",
+        "FilterPattern": "{ $.record = \"pds.select\" }",
+        "LogGroupName": {
+          "Ref": "SelectFunctionLogs20D169BF"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "SelectRecordsCloudWatchLogsCanPutRecords9195294F",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Logs::SubscriptionFilter"
+    },
+    "SelectRecordsCloudWatchLogsCanPutRecords9195294F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringLike": {
+                  "aws:SourceArn": "arn:aws:logs:us-east-1:123456789012:*"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "logs.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SelectRecordsCloudWatchLogsCanPutRecordsDefaultPolicy30052DB4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "firehose:PutRecord",
+                "firehose:PutRecordBatch"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SelectRecordsStreamF6FB16B3",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SelectRecordsCloudWatchLogsCanPutRecordsDefaultPolicy30052DB4",
+        "Roles": [
+          {
+            "Ref": "SelectRecordsCloudWatchLogsCanPutRecords9195294F"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "SelectRecordsStreamF6FB16B3": {
+      "DependsOn": [
+        "SelectRecordsStreamRoleDefaultPolicy305FAA37"
+      ],
+      "Properties": {
+        "DeliveryStreamEncryptionConfigurationInput": {
+          "KeyType": "AWS_OWNED_CMK"
+        },
+        "DeliveryStreamName": "fastm-pds-select",
+        "DeliveryStreamType": "DirectPut",
+        "ExtendedS3DestinationConfiguration": {
+          "BucketARN": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:s3:::",
+                {
+                  "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                }
+              ]
+            ]
+          },
+          "BufferingHints": {
+            "IntervalInSeconds": 60,
+            "SizeInMBs": 5
+          },
+          "CloudWatchLoggingOptions": {
+            "Enabled": true,
+            "LogGroupName": {
+              "Ref": "SelectRecordsStreamLogs4C6658E8"
+            },
+            "LogStreamName": {
+              "Ref": "SelectRecordsStreamLogsS3Destination8D4F9548"
+            }
+          },
+          "CompressionFormat": "GZIP",
+          "ErrorOutputPrefix": "pds/errors/select/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/",
+          "Prefix": "pds/select/!{timestamp:yyyy/MM/dd/HH}/",
+          "ProcessingConfiguration": {
+            "Enabled": true,
+            "Processors": [
+              {
+                "Parameters": [
+                  {
+                    "ParameterName": "CompressionFormat",
+                    "ParameterValue": "GZIP"
+                  }
+                ],
+                "Type": "Decompression"
+              },
+              {
+                "Parameters": [
+                  {
+                    "ParameterName": "DataMessageExtraction",
+                    "ParameterValue": "true"
+                  }
+                ],
+                "Type": "CloudWatchLogProcessing"
+              }
+            ]
+          },
+          "RoleARN": {
+            "Fn::GetAtt": [
+              "SelectRecordsStreamRole687B0146",
+              "Arn"
+            ]
+          }
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::KinesisFirehose::DeliveryStream"
+    },
+    "SelectRecordsStreamLogs4C6658E8": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/firehose/fastm-pds-select",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SelectRecordsStreamLogsS3Destination8D4F9548": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "SelectRecordsStreamLogs4C6658E8"
+        }
+      },
+      "Type": "AWS::Logs::LogStream",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "SelectRecordsStreamRole687B0146": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "firehose.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "FAST Channels (fastm): deliver pds.select decision records to the lake",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SelectRecordsStreamRoleDefaultPolicy305FAA37": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:Abort*",
+                "s3:DeleteObject*",
+                "s3:GetBucket*",
+                "s3:GetObject*",
+                "s3:List*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SelectRecordsStreamLogs4C6658E8",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SelectRecordsStreamRoleDefaultPolicy305FAA37",
+        "Roles": [
+          {
+            "Ref": "SelectRecordsStreamRole687B0146"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "SelectRecordsTableE024190E": {
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": "fastm_lake",
+        "TableInput": {
+          "Description": "The Pod Decision Service's pds.select decision records (core.pds.records)",
+          "Name": "pds_select",
+          "Parameters": {
+            "classification": "json",
+            "has_encrypted_data": true,
+            "projection.datehour.format": "yyyy/MM/dd/HH",
+            "projection.datehour.interval": "1",
+            "projection.datehour.interval.unit": "HOURS",
+            "projection.datehour.range": "NOW-30DAYS,NOW+1HOURS",
+            "projection.datehour.type": "date",
+            "projection.enabled": "true",
+            "storage.location.template": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/pds/select/${datehour}/"
+                ]
+              ]
+            }
+          },
+          "PartitionKeys": [
+            {
+              "Name": "datehour",
+              "Type": "string"
+            }
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "v",
+                "Type": "bigint"
+              },
+              {
+                "Name": "decision_id",
+                "Type": "string"
+              },
+              {
+                "Name": "sid",
+                "Type": "string"
+              },
+              {
+                "Name": "evid",
+                "Type": "string"
+              },
+              {
+                "Name": "pc",
+                "Type": "string"
+              },
+              {
+                "Name": "probe",
+                "Type": "boolean"
+              },
+              {
+                "Name": "latency_ms",
+                "Type": "double"
+              },
+              {
+                "Name": "record",
+                "Type": "string"
+              },
+              {
+                "Name": "dur_ms",
+                "Type": "bigint"
+              },
+              {
+                "Name": "mode",
+                "Type": "string"
+              },
+              {
+                "Name": "limit_ms",
+                "Type": "bigint"
+              },
+              {
+                "Name": "poddur",
+                "Type": "bigint"
+              },
+              {
+                "Name": "reason",
+                "Type": "string"
+              },
+              {
+                "Name": "pod",
+                "Type": "array<string>"
+              },
+              {
+                "Name": "standalone",
+                "Type": "array<string>"
+              },
+              {
+                "Name": "filled_ms",
+                "Type": "bigint"
+              },
+              {
+                "Name": "bids",
+                "Type": "array<string>"
+              },
+              {
+                "Name": "below_floor",
+                "Type": "bigint"
+              },
+              {
+                "Name": "reserved",
+                "Type": "array<string>"
+              },
+              {
+                "Name": "timestamp",
+                "Type": "string"
+              },
+              {
+                "Name": "correlation_id",
+                "Type": "string"
+              },
+              {
+                "Name": "xray_trace_id",
+                "Type": "string"
+              },
+              {
+                "Name": "snapshot",
+                "Type": "string"
+              }
+            ],
+            "Compressed": false,
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/pds/select/"
+                ]
+              ]
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe"
+            },
+            "StoredAsSubDirectories": false
+          },
+          "TableType": "EXTERNAL_TABLE"
+        }
+      },
+      "Type": "AWS::Glue::Table"
     },
     "ServiceLoadBalancer31A7DB79": {
       "Properties": {
@@ -3114,6 +4065,55 @@
       },
       "Type": "AWS::ElasticLoadBalancingV2::ListenerRule"
     },
+    "ServiceLoadBalancerHttpRouteSelectRule9268C53A": {
+      "Properties": {
+        "Actions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "ServiceTargetSelect5A512C36"
+            },
+            "Type": "forward"
+          }
+        ],
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "PathPatternConfig": {
+              "Values": [
+                "/select"
+              ]
+            }
+          },
+          {
+            "Field": "http-request-method",
+            "HttpRequestMethodConfig": {
+              "Values": [
+                "POST"
+              ]
+            }
+          }
+        ],
+        "ListenerArn": {
+          "Ref": "ServiceLoadBalancerHttp922C9E54"
+        },
+        "Priority": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule"
+    },
     "ServiceRecord640D25D5": {
       "Properties": {
         "AliasTarget": {
@@ -3250,6 +4250,36 @@
           {
             "Id": {
               "Ref": "PolicyLive6AD5E16F"
+            }
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup"
+    },
+    "ServiceTargetSelect5A512C36": {
+      "DependsOn": [
+        "SelectLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY56ED183C"
+      ],
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TargetType": "lambda",
+        "Targets": [
+          {
+            "Id": {
+              "Ref": "SelectLive5CCF2B7E"
             }
           }
         ]
@@ -3586,7 +4616,8 @@
                 "ForAllValues:StringLike": {
                   "dynamodb:LeadingKeys": [
                     "RES#*",
-                    "BUDGET#*"
+                    "BUDGET#*",
+                    "CAP#*"
                   ]
                 }
               },

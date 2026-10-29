@@ -178,7 +178,7 @@ def test_the_own_book_and_the_module_call_the_pds_on_its_stable_private_name() -
         "policy-url": "http://pds.fastm.fast.internal/policy",
         "policy-timeout-ms": 50,
         "select-url": "http://pds.fastm.fast.internal/select",
-        "select-timeout-ms": 100,
+        "select-timeout-ms": 150,
         "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
         "log-requests": True,
     }

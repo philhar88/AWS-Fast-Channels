@@ -9,19 +9,18 @@ without the own book, and the module's house fallback has nothing to render.
 
 import json
 import os
-from functools import cache
 from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools import Logger, Metrics
-from aws_lambda_powertools.event_handler import ALBResolver, Response, content_types
+from aws_lambda_powertools.event_handler import ALBResolver, Response
 from aws_lambda_powertools.metrics import MetricUnit
 from pydantic import ValidationError
 
 from fast_channels.core.pds.book import BidRequest, response
 from fast_channels.core.pds.names import Endpoint
-from fast_channels.functions.pds.budget import Budgets
+from fast_channels.functions.pds.budget import budget_view
+from fast_channels.functions.pds.http import json_response, refused_fields
 from fast_channels.functions.pds.store import snapshot_store
-from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -35,11 +34,8 @@ store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
 
 
-@cache
-def budgets() -> Budgets:
-    """The lines' budgets, for the lines of the snapshot the function has."""
-    settings().require("pds_table")
-    return Budgets(settings().pds_table, lines=lambda: store().current.lines)
+budgets = budget_view
+"""The lines' budgets (one view per execution environment)."""
 
 
 @app.post(Endpoint.OWN_BOOK.value)
@@ -48,16 +44,15 @@ def own_book() -> Response[str]:
     try:
         request = BidRequest.model_validate_json(app.current_event.decoded_body or "")
     except ValidationError as error:
-        fields = sorted({".".join(str(part) for part in e["loc"]) for e in error.errors()})
-        logger.warning("own-book request refused", extra={"fields": fields})
+        logger.warning("own-book request refused", extra={"fields": refused_fields(error)})
         metrics.add_metric(name="OwnBookRefused", unit=MetricUnit.Count, value=1)
-        return Response(status_code=400, content_type=content_types.APPLICATION_JSON, body='{"error":"invalid"}')
+        return json_response(400, '{"error":"invalid"}')
     try:
         return _answer(request)
     except Exception:
         logger.exception("own book failed")
         metrics.add_metric(name="OwnBookErrors", unit=MetricUnit.Count, value=1)
-        return Response(status_code=500, content_type=content_types.APPLICATION_JSON, body='{"error":"internal"}')
+        return json_response(500, '{"error":"internal"}')
 
 
 def _answer(request: BidRequest) -> Response[str]:
@@ -80,8 +75,8 @@ def _answer(request: BidRequest) -> Response[str]:
     )
     metrics.add_metric(name="OwnBookBids", unit=MetricUnit.Count, value=len(bids))
     if answer is None:
-        return Response(status_code=204, content_type=content_types.APPLICATION_JSON, body="")
-    return Response(status_code=200, content_type=content_types.APPLICATION_JSON, body=json.dumps(answer))
+        return json_response(204, "")
+    return json_response(200, json.dumps(answer))
 
 
 @logger.inject_lambda_context(clear_state=True)

@@ -160,6 +160,10 @@ def zip_directory(root: Path) -> bytes:
     return buffer.getvalue()
 
 
+PREBID_CONTAINER: Final = "Prebid-Container"
+"""The guidance's Prebid Server container, whose log the fallback alarms read."""
+
+
 def console_bucket(url: str) -> str:
     """The bucket of an S3 console URL output (``...?region=<r>&bucket=<name>``)."""
     return parse_qs(urlsplit(url).query)["bucket"][0]
@@ -659,6 +663,9 @@ class DemandStage:
         groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
         [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
         return DemandNetwork(
+            container_log_group=self.container_log_group(
+                parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]
+            ),
             vpc_id=parameters[Parameter.VPC_ID],
             private_subnets=tuple(Subnet(id=i, az=zones[i], route_table=tables.get(i, main)) for i in ids),
             task_security_group_id=parameters[Parameter.TASK_SECURITY_GROUP],
@@ -668,6 +675,24 @@ class DemandStage:
             target_group_arn=target_group,
             simulator_code_key=simulator_code_key,
         )
+
+    def container_log_group(self, cluster: str, service: str) -> str | None:
+        """The log group of Prebid Server's container (``Prebid-Container`` in the guidance's task definition, else its
+        only container that logs to CloudWatch), or None without one."""
+        ecs = self.client("ecs")
+        services = ecs.describe_services(cluster=cluster, services=[service])["services"]
+        if not services:
+            log(f"no service {service}: the fallback alarms are left out")
+            return None
+        definition = ecs.describe_task_definition(taskDefinition=services[0]["taskDefinition"])["taskDefinition"]
+        groups = {
+            container["name"]: container["logConfiguration"]["options"]["awslogs-group"]
+            for container in definition["containerDefinitions"]
+            if container.get("logConfiguration", {}).get("logDriver") == "awslogs"
+        }
+        if PREBID_CONTAINER in groups:
+            return str(groups[PREBID_CONTAINER])
+        return str(next(iter(groups.values()))) if len(groups) == 1 else None
 
     def deploy_demand_stack(self, demo: DemoIndex | None, content_base_url: str) -> None:
         """``FastChannels-<prefix>-Demand`` (the private zone, and in ``lambda`` mode the simulator with its code), then

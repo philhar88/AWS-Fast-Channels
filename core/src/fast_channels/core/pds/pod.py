@@ -86,6 +86,9 @@ class Outcome(StrEnum):
     """Its creative, advertiser domain or IAB category is already in the pod."""
     NO_ROOM = "no_room"
     """The pod's durations are used up."""
+    UNRESERVED = "unreserved"
+    """An own-book line ad whose price could not be reserved: no budget left, the session's cap reached
+    (``core.pds.selection``)."""
 
 
 class PodContext(BaseModel):
@@ -172,9 +175,18 @@ def limit_ms(dur_ms: int, scheduled_ms: int | None) -> int:
     A live request carries the frame-exact duration (or, for a late join, the remainder), so a whole-second
     ``dur_ms`` equal to the schedule of record's rounded duration is a prefetch retrieval's.
     """
-    if scheduled_ms is not None and dur_ms != scheduled_ms and dur_ms == whole_seconds(scheduled_ms) * 1000:
-        return scheduled_ms
-    return dur_ms
+    return scheduled_ms if scheduled_ms is not None and _prefetched(dur_ms, scheduled_ms) else dur_ms
+
+
+def _prefetched(dur_ms: int, scheduled_ms: int) -> bool:
+    """Whether ``dur_ms`` is a prefetch retrieval's rounding of the ``scheduled_ms`` break."""
+    return dur_ms != scheduled_ms and dur_ms == whole_seconds(scheduled_ms) * 1000
+
+
+def scheduled_ms(dur_ms: int, breaks_ms: Iterable[int]) -> int | None:
+    """The break of record (one of the schedule's ``breaks_ms``) that ``dur_ms`` is the prefetch rounding of (60,000
+    for 60,060), or None."""
+    return next((ms for ms in breaks_ms if _prefetched(dur_ms, ms)), None)
 
 
 def _house(bid: Bid, context: PodContext) -> bool:
@@ -345,6 +357,16 @@ def _reason(winners: int, slots: int) -> PodReason:
             return PodReason.PARTIAL
 
 
+def tier0_bids(request: SelectRequest, context: PodContext) -> frozenset[str]:
+    """Refs of the bids from tier-0 lines and deals."""
+    return frozenset(bid.ref for bid in request.bids if _tier0(bid, context))
+
+
+def below_floor_bids(request: SelectRequest, context: PodContext) -> frozenset[str]:
+    """Refs of the bids under the floor (house ads and tier-0 lines are never under it)."""
+    return frozenset(bid.ref for bid in request.bids if _below_floor(bid, context))
+
+
 def select_pod(request: SelectRequest, context: PodContext = DEFAULT_CONTEXT) -> PodDecision:
     """Select the pod for ``request`` (rules in the module docstring)."""
     slots = request.slots
@@ -352,8 +374,7 @@ def select_pod(request: SelectRequest, context: PodContext = DEFAULT_CONTEXT) ->
     if len(lambdas) != len(slots):
         raise ValueError(f"lambdas has {len(lambdas)} entries for {len(slots)} slots")
     pod = _Pod(poddur=min(slot.poddur for slot in slots), budget=limit_ms(request.dur_ms, context.scheduled_ms))
-    tier0 = frozenset(bid.ref for bid in request.bids if _tier0(bid, context))
-    below_floor = frozenset(bid.ref for bid in request.bids if _below_floor(bid, context))
+    tier0, below_floor = tier0_bids(request, context), below_floor_bids(request, context)
     if request.dur_ms < MIN_AVAIL_MS:
         outcomes = dict.fromkeys((bid.ref for bid in request.bids), Outcome.SHORT_AVAIL)
         return PodDecision(PodReason.SHORT_AVAIL, pod.budget, pod.poddur, (), (), outcomes, tier0, below_floor)

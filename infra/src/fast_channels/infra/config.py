@@ -645,9 +645,10 @@ class PdsModule(_Module):
     """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone."""
     policy_group_timeout_ms: int = Field(default=80, gt=0)
     """Timeout of the hook group that holds the ``/policy`` call (at least ``policy_timeout_ms``)."""
-    select_timeout_ms: int = Field(default=100, gt=0)
-    """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids."""
-    select_group_timeout_ms: int = Field(default=150, gt=0)
+    select_timeout_ms: int = Field(default=150, gt=0)
+    """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids. ``/select`` reserves the
+    pod's line ads in DynamoDB first (p99 74 ms measured, about 130 ms on a first call after an idle spell)."""
+    select_group_timeout_ms: int = Field(default=200, gt=0)
     """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
     provisioned_concurrency: int = Field(default=2, ge=0)
     """Provisioned concurrency per function while any channel runs; 0 while none does."""

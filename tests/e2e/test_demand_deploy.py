@@ -608,7 +608,7 @@ def test_the_simulator_package_holds_the_handler_and_the_creatives(
 
 
 def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.DemandStage, stub: Any) -> None:
-    ssm, ec2, elb = stub("ssm"), stub("ec2"), stub("elbv2")
+    ssm, ec2, elb, ecs = stub("ssm"), stub("ec2"), stub("elbv2"), stub("ecs")
     alb = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fastcix-alb/0123456789abcdef"
     pbs = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-pbs/0123456789abcdef"
     values = {
@@ -653,6 +653,21 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
         },
         {"LoadBalancerArn": alb},
     )
+    task = "arn:aws:ecs:us-east-1:123456789012:task-definition/fastcix-pbs:3"
+    ecs.add_response(
+        "describe_services",
+        {"services": [{"taskDefinition": task}]},
+        {"cluster": values["cluster-arn"], "services": [values["service-arn"]]},
+    )
+    container = {
+        "name": "Prebid-Container",
+        "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "fastcix-pbs-PrebidContainerLogs"}},
+    }
+    ecs.add_response(
+        "describe_task_definition",
+        {"taskDefinition": {"containerDefinitions": [{"name": "sidecar"}, container]}},
+        {"taskDefinition": task},
+    )
 
     network = stage.network("simulator/0123456789abcdef.zip")
 
@@ -662,6 +677,25 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
     ]
     assert (network.vpc_id, network.task_security_group_id) == ("vpc-1", "sg-1")
     assert network.target_group_arn == pbs, "the Prebid Server targets, not the cache's Lambda"
+    assert network.container_log_group == "fastcix-pbs-PrebidContainerLogs"
+
+
+def test_a_task_without_one_log_group_or_a_missing_service_gives_none(stage: _demand.DemandStage, stub: Any) -> None:
+    ecs = stub("ecs")
+
+    def logging(name: str, group: str) -> dict[str, Any]:
+        return {"name": name, "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": group}}}
+
+    for containers, expected in (
+        ([{"name": "c"}], None),
+        ([logging("a", "g1"), logging("b", "g2")], None),
+        ([logging("only", "g3")], "g3"),
+    ):
+        ecs.add_response("describe_services", {"services": [{"taskDefinition": "td"}]})
+        ecs.add_response("describe_task_definition", {"taskDefinition": {"containerDefinitions": containers}})
+        assert stage.container_log_group("cluster", "service") == expected
+    ecs.add_response("describe_services", {"services": []})
+    assert stage.container_log_group("cluster", "service") is None
 
 
 def test_the_simulator_smoke_wants_one_demo_bid_per_slot(stage: _demand.DemandStage, stub: Any) -> None:

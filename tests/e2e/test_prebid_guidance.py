@@ -217,7 +217,7 @@ def test_pbs_settings_follow_the_stage(tmp_path: Path) -> None:
     assert (settings.prefix, settings.simulator, settings.server_instances) == ("fastx", True, 2)
     assert (settings.tracker_base_url, settings.publisher_domain) == ("https://media.example.com", "media.example.com")
     assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (50, 80)
-    assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (100, 150)
+    assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (150, 200)
 
 
 def test_render_config_refuses_a_stage_without_demand(capsys: pytest.CaptureFixture[str]) -> None:

@@ -124,7 +124,7 @@ class DeliveryCounter(Construct):
             {nag.LAMBDA_DLQ: "Invoked asynchronously by CloudWatch Logs; failed batches go to the DeadLetters queue"},
         )
         allow_table(self.function, prefix, ["PutItem"], ["IMP#*", "FILL#*"])
-        allow_table(self.function, prefix, ["GetItem", "UpdateItem"], ["RES#*", "BUDGET#*"])
+        allow_table(self.function, prefix, ["GetItem", "UpdateItem"], ["RES#*", "BUDGET#*", "CAP#*"])
         allow_ledger(self.function, prefix)
         log_group = logs.LogGroup.from_log_group_name(self, "AdsLogs", mediatailor_log_group(prefix))
         self.subscription = logs.SubscriptionFilter(
@@ -196,7 +196,7 @@ class ReleaseSweeper(Construct):
             ["dynamodb:Query"],
             [f"{arn(self, 'dynamodb', 'table', table_name(prefix))}/index/{PENDING_INDEX}"],
         )
-        allow_table(self.function, prefix, ["GetItem", "UpdateItem"], ["RES#*", "BUDGET#*"])
+        allow_table(self.function, prefix, ["GetItem", "UpdateItem"], ["RES#*", "BUDGET#*", "CAP#*"])
         allow_ledger(self.function, prefix)
         role = iam.Role(
             self,

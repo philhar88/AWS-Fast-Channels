@@ -26,6 +26,8 @@ from fast_channels.core.pds.pod import Outcome  # noqa: TC001 - pydantic resolve
 from fast_channels.core.pds.xff import IpRule  # noqa: TC001 - pydantic resolves field types at runtime
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from fast_channels.core.pds.pod import PodDecision
     from fast_channels.core.pds.policy import PolicyDecision
 
@@ -99,6 +101,7 @@ class SelectRecord(_Record):
     filled_ms: int = Field(description="Σ VAST durations of the pod.")
     bids: list[BidRecord] = Field(description="Every bid at or above the floor.")
     below_floor: int = Field(ge=0, description="Bids under the floor, counted only.")
+    reserved: list[str] = Field(default_factory=list, description="Crids of the own-book line ads reserved.")
 
 
 def policy_record(request: PolicyRequest, decision: PolicyDecision, *, latency_ms: float) -> PolicyRecord:
@@ -126,7 +129,9 @@ def policy_record(request: PolicyRequest, decision: PolicyDecision, *, latency_m
     )
 
 
-def select_record(request: SelectRequest, decision: PodDecision, *, latency_ms: float) -> SelectRecord:
+def select_record(
+    request: SelectRequest, decision: PodDecision, *, latency_ms: float, reserved: Iterable[str] = ()
+) -> SelectRecord:
     """The record of one ``/select`` answer."""
     bids = [
         BidRecord(
@@ -164,6 +169,7 @@ def select_record(request: SelectRequest, decision: PodDecision, *, latency_ms: 
         filled_ms=decision.filled_ms,
         bids=[bid for bid in bids if bid.ref not in decision.below_floor],
         below_floor=len(decision.below_floor),
+        reserved=sorted(reserved),
     )
 
 

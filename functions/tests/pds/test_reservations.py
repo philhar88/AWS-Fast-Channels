@@ -395,3 +395,29 @@ def test_a_budget_another_run_set_first_is_left_to_it() -> None:
         stubber.add_client_error("transact_write_items", service_error_code="AccessDeniedException")
         with pytest.raises(ClientError, match="AccessDenied"):
             set_budgets(client, table="t", ledger_table="l", lines=[line], now=NOW)
+
+
+def test_a_released_ad_gives_its_cap_count_back_and_a_late_impression_takes_it_again(dynamodb: Tables) -> None:
+    db = dynamodb
+    set_budgets(db.client, table=db.pds, ledger_table=db.ledger, lines=[DIRECT2], now=NOW)
+    reserve(
+        db.client,
+        table=db.pds,
+        ledger_table=db.ledger,
+        decision=decision(1),
+        sid=SID,
+        holds=[hold(DIRECT2, "direct2")],
+        now=NOW,
+    )
+
+    def count() -> str:
+        item = db.item(cap_key(SID, "direct-2"))
+        assert item is not None
+        return str(item["n"]["N"])
+
+    assert count() == "1"
+    later = NOW + timedelta(hours=3)
+    release(db.client, table=db.pds, ledger_table=db.ledger, decision=decision(1), crid="direct2", now=later)
+    assert count() == "0", "an ad that never played does not use up the cap"
+    deliver(db.client, table=db.pds, ledger_table=db.ledger, decision=decision(1), crid="direct2", at=later)
+    assert count() == "1", "a late impression counts again"

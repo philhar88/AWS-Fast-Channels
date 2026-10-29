@@ -16,7 +16,7 @@
                       "module-code": "fast-ctv"
                     }
                   ],
-                  "timeout": 150
+                  "timeout": 200
                 }
               ]
             },

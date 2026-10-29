@@ -44,9 +44,7 @@
         "dur": 30,
         "vast_dur_ms": 30030,
         "crid": "house1",
-        "adomain": [
-          "publisher.example"
-        ],
+        "adomain": [],
         "cat": [],
         "cattax": null,
         "dealid": null,
@@ -82,9 +80,7 @@
         "dur": 30,
         "vast_dur_ms": 30030,
         "crid": "house2",
-        "adomain": [
-          "publisher.example"
-        ],
+        "adomain": [],
         "cat": [],
         "cattax": null,
         "dealid": null,

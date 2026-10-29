@@ -159,6 +159,8 @@ class DemandNetwork(BaseModel):
     )
     simulator_code_key: str | None = Field(default=None, pattern=rf"^{SIMULATOR_CODE_PREFIX}[0-9a-f]{{16}}\.zip$")
     """Key of the ``lambda`` simulator's code package in the guidance's assets bucket."""
+    container_log_group: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_./#-]{1,512}$")
+    """Prebid Server's container log group (the guidance's task definition), where the fast-ctv module logs."""
 
 
 def census_gate(prefix: str) -> str:

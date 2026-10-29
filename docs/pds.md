@@ -4,8 +4,7 @@ The Pod Decision Service (PDS) decides, for every ad break of every monetized se
 third parties and which ads make up the pod. It is part of the optional ad-monetization modules (`modules.pds`, off by
 default; see [operations.md](operations.md#configuration-reference)), which are being built on the
 `feature/agentic-monetization` branch. The rules and the contract live in `fast_channels.core.pds`; the service
-that runs them beside Prebid Server is [described below](#the-service). `/policy` and the own book are served;
-`/select` follows.
+that runs them beside Prebid Server is [described below](#the-service): `/policy`, `/select` and the own book.
 
 - [The two calls](#the-two-calls)
 - [Contract](#contract)
@@ -129,7 +128,17 @@ one with neither "Mobile" nor a tablet token, which many TV boxes send.
 
 The break is the duration MediaTailor requested, with one exception: a prefetch retrieval carries the duration rounded
 to whole seconds (60,000 ms for a 60,060 ms break). When the requested duration is exactly the schedule of record's
-duration rounded, the schedule's duration is the limit, so two 30.03 s ads fit a prefetched 60 s break.
+duration rounded, the schedule's duration is the limit, so two 30.03 s ads fit a prefetched 60 s break. The schedule
+of record is the default ladder's 30.03 s grid of break lengths, which the snapshot carries.
+
+`/select` (`fast_channels.core.pds.selection`) runs these rules with the snapshot's tier-0 deals and floor, and then
+reserves every own-book line ad in the pod or among its standalones
+([Reservations and delivery](#reservations-and-delivery)): a standalone can be the impression too. When a line's ad
+cannot be reserved (no shard has its price, the session's cap is reached, DynamoDB failed), the rules run again
+without that creative, up to three rounds, and then without any line ad not reserved: the answer never holds an
+unreserved line ad, and the bid's outcome is `unreserved`. A reservation of an ad a later round dropped stays until the
+sweeper releases it. Not yet: session history (the recent-creatives rule has none to apply), creatives approved for
+kids breaks, and each bidder's accepted share.
 
 Worked example (the demo demand, one FULL session, a 120.12 s break; `contracts/fixtures/pds/select/demo-full-120s.json`):
 
@@ -185,7 +194,7 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
 
 | State | When | What changes |
 |---|---|---|
-| `RESERVED` | `/select` placed the ad (from M2-04) | One `TransactWriteItems`: the price (`cpm / 1000`) leaves a budget shard of the line, the session's count for the line goes up, the reservation is written, and the ledger gets a `money.reserve` event. All of it, or none |
+| `RESERVED` | `/select` placed the ad, as a winner or a standalone | One `TransactWriteItems`: the price (`cpm / 1000`) leaves a budget shard of the line, the session's count for the line goes up, the reservation is written, and the ledger gets a `money.reserve` event. All of it, or none |
 | `DELIVERED` | MediaTailor fired our tracker for the ad | The reservation and the shard's `delivered` amount, with a `money.deliver` event |
 | `RELEASED` | No impression two hours after the reservation (MediaTailor retries a beacon for up to an hour) | The price goes back to the shard, with a `money.release` event. An impression that still arrives is delivered anyway, marked late |
 | `RECONCILED` | Later, against the counterparty's count | |
@@ -254,14 +263,16 @@ at deploy (the ladder at every publish): it takes no cross-stack reference to th
 
 | Part | What it is |
 |---|---|
-| Load balancer | An internal Application Load Balancer in the guidance's private subnets at `pds.<prefix>.fast.internal`, HTTP on port 80. Its security group admits only the Prebid Server tasks' security group. `POST /policy` and `POST /ownbook/openrtb` go to their functions; anything else gets a 404 |
+| Load balancer | An internal Application Load Balancer in the guidance's private subnets at `pds.<prefix>.fast.internal`, HTTP on port 80. Its security group admits only the Prebid Server tasks' security group. `POST /policy`, `POST /select` and `POST /ownbook/openrtb` go to their functions; anything else gets a 404 |
 | `/policy` function | Python 3.14 on arm64, 1,024 MB, outside the VPC: the load balancer invokes it, so it has no network-interface cold start. The load balancer calls its `live` alias. It answers with `decide()` and the current snapshot, logs one `pds.policy` decision record and the metrics `PolicyDecisions` (by `mode`), `PolicyNoViewerIp`, `PolicyRefused` (a 400) and `PolicyErrors` (a 500) in the `FastChannels` namespace, each by `service` |
+| `/select` function | Like `/policy`'s. It answers with the pod rules on the current snapshot, reserves the pod's line ads (`TransactWriteItems` on `BUDGET#`, `CAP#` and `RES#` items and the ledger's `pds/*` chains, on a DynamoDB client with 100 ms timeouts and one attempt, opened during init and kept open by the budget view's reads; no reservation starts after 90 ms, since the module waits 150 ms), puts our tracker on every ad, and logs one `pds.select` decision record (with the crids reserved) and the metrics `SelectDecisions` (by `reason`), `LineAdsReserved`, `ReservationErrors`, `SelectRefused` and `SelectErrors` |
 | `/ownbook/openrtb` function | Like `/policy`'s (1,024 MB, outside the VPC, the `live` alias, warm while channels run). It reads the snapshot and the lines' budget shards (`BatchGetItem` on `BUDGET#*` only), and logs one line per request with the imps, durations and bids, and the metrics `OwnBookBids`, `OwnBookRefused` and `OwnBookErrors` |
 | Delivery function | On the subscription to the MediaTailor log group. It writes `IMP#`, `FILL#`, the reservations and budget shards, and appends to the ledger's `pds/*` chains; metrics `Impressions`, `Fills`, `LineAdsDelivered`, `LateDeliveries`. Its records go to the lake as `pds_delivery` |
 | Release sweeper | Every 15 minutes (EventBridge Scheduler), with a dead-letter queue and alarm |
+| Fallback alarms | Metric filters on Prebid Server's container log (`deploy-demand` reads its group from the task definition) count the module's `fast-ctv-pod` lines, those whose `/policy` patch was not applied (`POLICY_…`, `NO_POLICY_HOOK`), those whose pod is the house fallback (`SELECT_FALLBACK`) and the module's errors (an empty VAST), leaving out the warm-up's and the herd's synthetic auctions, in `FastChannels/PrebidServer/<prefix>`. `<prefix>-pds-policy-fallbacks` fires above 1% of breaks in 5 minutes and `<prefix>-pds-select-fallbacks` above 0.5% (house fallbacks and errors); below 20 auctions in 5 minutes either fires once 5 breaks fell back, so a stage with few viewers still learns the PDS is down |
 | Census gate | `<prefix>-pds-census-gate`, Step Functions with JSONata and SDK calls only, on `Census Changed`. When the first channel starts it sets `modules.pds.provisioned_concurrency` on every function's `live` alias; 15 minutes after the last one stops, if none runs then, it removes it. `deploy-demand` runs it once with the census's current count. With `provisioned_concurrency: 0` every run removes it, so lowering the setting also removes what was set |
 | Snapshot | `snapshot/current.json` in the private config bucket (never the CDN, never the ingest bucket), with each version kept 30 days under `snapshot/history/`. It holds the demand allow-list (in demo mode the guidance's bidder simulator, `amt`), shed bidders, the floor, CloudFront's origin-facing networks from `ip-ranges.json`, which the viewer-IP rule needs, and the own book (lines, their creatives, the house ads; the publisher reads only the kits' `vast.xml` and `demo/creatives.json` in the media bucket, and sets the lines' budget shards). The publisher writes it when the stack deploys and every hour, and only when its content changed. Each function reads it during its init and then every 30 seconds in the background with a conditional GET, so no request waits on S3; one that has never read it serves no third-party bidder and no viewer address |
-| Decision records | A subscription on the function's log group sends the `pds.policy` lines to the Firehose stream `<prefix>-pds-policy`, which writes them to the lake bucket under `pds/policy/<yyyy>/<MM>/<dd>/<HH>/`, within a minute. The lake table `pds_policy` reads them |
+| Decision records | A subscription on each function's log group sends its records to a Firehose stream (`<prefix>-pds-policy`, `-select`, `-delivery`), which writes them to the lake bucket under `pds/<kind>/<yyyy>/<MM>/<dd>/<HH>/`, within a minute. The lake tables `pds_policy`, `pds_select` and `pds_delivery` read them |
 
 Why in the VPC and warm: `/policy` gets 50 ms. Reached over API Gateway and a NAT gateway, a third of MediaTailor's
 auctions fell back to the own book in a live test, every first break among them, because the function and its
