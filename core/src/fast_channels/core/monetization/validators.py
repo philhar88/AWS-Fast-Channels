@@ -954,4 +954,3 @@ def check_secret_free(text: str, *, secrets: Iterable[SecretStr], where: str) ->
     if any((value := s.get_secret_value()) and value in text for s in secrets):
         return [_violation(Rule.P2, where, "contains the origin secret")]
     return []
-
