@@ -522,8 +522,8 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
             "policy_group_timeout_ms (40) is shorter than policy_timeout_ms (50)",
         ),
         (
-            {"modules.pds.select_timeout_ms": 200},
-            "select_group_timeout_ms (150) is shorter than select_timeout_ms (200)",
+            {"modules.pds.select_timeout_ms": 250},
+            "select_group_timeout_ms (200) is shorter than select_timeout_ms (250)",
         ),
         ({"modules.pds.demo_lines": [LINE, LINE]}, "duplicate entries: direct1"),
         ({"modules.pds.demo_lines": [{**LINE, "creatives": []}]}, "should have at least 1 item"),

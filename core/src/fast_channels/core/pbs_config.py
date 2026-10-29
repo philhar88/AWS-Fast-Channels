@@ -100,8 +100,8 @@ class PbsSettings(BaseModel):
     app_name: str = Field(default="FAST Channels", min_length=1, max_length=100)
     policy_timeout_ms: int = Field(default=50, gt=0)
     policy_group_timeout_ms: int = Field(default=80, gt=0)
-    select_timeout_ms: int = Field(default=100, gt=0)
-    select_group_timeout_ms: int = Field(default=150, gt=0)
+    select_timeout_ms: int = Field(default=150, gt=0)
+    select_group_timeout_ms: int = Field(default=200, gt=0)
 
     @field_validator("publisher_domain")
     @classmethod

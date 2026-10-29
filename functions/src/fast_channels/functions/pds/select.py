@@ -7,9 +7,10 @@ Behind the PDS's internal load balancer (Powertools ``ALBResolver``). The answer
   ``budget.Budgets.shard`` picks), and a line whose price cannot be reserved is left out.
 
 Each ad carries our impression tracker on the CDN (``core.pds.pod.tracker_url``). The module waits 100 ms for the
-answer; anything but a 200 with a known schema makes it render the auction's house ads (``SELECT_FALLBACK``). So the
-reservations get their own DynamoDB client (100 ms timeouts, one attempt) and stop after :data:`RESERVE_BEFORE_S`: a
-line not reserved by then is left out, never answered unreserved. A reservation that DynamoDB committed after the
+answer (``modules.pds.select_timeout_ms``, 150 ms); anything but a 200 with a known schema makes it render the
+auction's house ads (``SELECT_FALLBACK``). So the reservations get their own DynamoDB client (100 ms timeouts, one
+attempt), which the budget view's background reads keep connected, and stop after :data:`RESERVE_BEFORE_S`: a line
+not reserved by then is left out, never answered unreserved. A reservation that DynamoDB committed after the
 module gave up stays until the sweeper releases it. Each answer is logged as a ``pds.select`` decision record, which a
 subscription carries into the lake.
 """
@@ -35,7 +36,7 @@ from fast_channels.core.pds.names import Endpoint
 from fast_channels.core.pds.pod import scheduled_ms, select_response, tracker_url
 from fast_channels.core.pds.records import select_record
 from fast_channels.core.pds.selection import Reserve, pod_context, select
-from fast_channels.functions.pds.budget import budget_view
+from fast_channels.functions.pds.budget import Budgets
 from fast_channels.functions.pds.http import json_response, refused_fields
 from fast_channels.functions.pds.reservations import Hold, item_key, reserve
 from fast_channels.functions.pds.store import snapshot_store
@@ -54,20 +55,25 @@ app = ALBResolver()
 
 store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
-budgets = budget_view
-"""The lines' budgets (one view per execution environment)."""
 ENR: Final = 0
 """The content-enrichment arm of every break until the crawl module enriches ``app.content`` (M17-04)."""
 REQUEST_CONFIG: Final = Config(connect_timeout=0.1, read_timeout=0.1, retries={"total_max_attempts": 1})
 """The reservations' client: on the request path, inside the module's 100 ms."""
-RESERVE_BEFORE_S: Final = 0.06
-"""No reservation starts later than this into a request: the answer must reach the module within 100 ms."""
+RESERVE_BEFORE_S: Final = 0.09
+"""No reservation starts later than this into a request: the answer must reach the module within 150 ms."""
 
 
 @cache
 def dynamodb() -> Any:
     """The reservations' client (:data:`REQUEST_CONFIG`)."""
     return boto3.client("dynamodb", config=REQUEST_CONFIG)
+
+
+@cache
+def budgets() -> Budgets:
+    """The lines' budgets, read on the reservations' client: its reads every 5 s keep that connection open."""
+    settings().require("pds_table")
+    return Budgets(settings().pds_table, lines=lambda: store().current.lines, client=dynamodb())
 
 
 @cache
@@ -171,7 +177,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
 
 def warm() -> None:
     """Open the reservations' connection to DynamoDB during init: a first request would otherwise pay its DNS, TCP
-    and TLS set-up inside the module's 100 ms (seen live: reservations refused on new execution environments)."""
+    and TLS set-up inside the module's wait (seen live: reservations refused on new execution environments)."""
     if not (lines := store().current.lines):
         return
     settings().require("pds_table")

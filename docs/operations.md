@@ -87,8 +87,8 @@ it costs.
 | `modules.pds.enabled` | bool | `false` | Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per break. |
 | `modules.pds.policy_timeout_ms` | int | `50` | Timeout of the module's `/policy` call; on expiry the break is served from the own book alone. |
 | `modules.pds.policy_group_timeout_ms` | int | `80` | Timeout of the hook group that holds the `/policy` call (at least `policy_timeout_ms`). |
-| `modules.pds.select_timeout_ms` | int | `100` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. |
-| `modules.pds.select_group_timeout_ms` | int | `150` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
+| `modules.pds.select_timeout_ms` | int | `150` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. `/select` reserves the pod's line ads in DynamoDB first (p99 74 ms measured, about 130 ms on a first call after an idle spell). |
+| `modules.pds.select_group_timeout_ms` | int | `200` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
 | `modules.pds.provisioned_concurrency` | int | `2` | Provisioned concurrency per function while any channel runs; 0 while none does. |
 | `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's environment). Each line's budget is split over the own book's budget shards; a line stops serving once reservations hold all of it. |
 | `modules.release.enabled` | bool | `false` | Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and is rolled back unattended on an alarm. |
