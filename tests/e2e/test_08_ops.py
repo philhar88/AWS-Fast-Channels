@@ -254,8 +254,13 @@ def test_the_alerts_poller_polls_while_the_channel_runs(
         return [event for page in pages for event in page["events"]] or None
 
     found = wait_for(polls, timeout=CENSUS_TIMEOUT_S, interval=30, what=f"ChannelAlerts metrics in {group}")
+    pages = logs.get_paginator("filter_log_events").paginate(
+        logGroupName=group, startTime=int(since.timestamp() * 1000), filterPattern='{ $.level = "ERROR" }'
+    )
+    errors = [event["message"][:500] for page in pages for event in page["events"]]
 
     assert found
+    assert not errors, errors[0]  # e.g. ListAlerts denied: the polls while the channel ran failed
 
 
 def test_account_quota_alarms_exist_and_are_not_alarming(ops: Stage) -> None:

@@ -174,7 +174,7 @@
             {
               "Action": "mediatailor:ListAlerts",
               "Effect": "Allow",
-              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-*"
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:alerts/*"
             },
             {
               "Action": "ssm:GetParameter",

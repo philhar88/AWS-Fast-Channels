@@ -106,6 +106,6 @@ def test_the_alerts_poller_runs_every_minute_on_the_census(ops: Template) -> Non
     assert schedule["ScheduleExpression"] == "rate(1 minute)"
     assert json.loads(schedule["Target"]["Input"]) == {"scheduled_time": "<aws.scheduler.scheduled-time>"}
     assert "mediatailor:ListAlerts" in policies
-    assert ":channel/fast-*" in policies
+    assert ":alerts/*" in policies  # where ListAlerts is authorized, whatever channel it reads
     assert "parameter/fast/ops/running-channels" in policies
     assert "events:PutEvents" in policies

@@ -258,10 +258,13 @@ class AlertsPoller(Construct):
             removal_policy=removal_policy,
         )
         self.function.allow(["mediatailor:ListChannels"], ["*"])  # no resource-level permissions
+        # ListAlerts is authorized on the account's alerts resource, not on the channel queried (observed on fastm:
+        # "not authorized to perform: mediatailor:ListAlerts on resource: ...:alerts/*"); the ingest pipeline grants
+        # it the same way.
         self.function.allow(
             ["mediatailor:ListAlerts"],
-            [arn(self, "mediatailor", "channel", f"{prefix}-*")],
-            why="Alerts of this deployment's channels (named <prefix>-*)",
+            [arn(self, "mediatailor", "alerts", "*")],
+            why="ListAlerts is authorized on alerts/* only",
         )
         self.function.allow(["ssm:GetParameter"], [arn(self, "ssm", "parameter", census_parameter.lstrip("/"))])
         self.function.allow(["events:PutEvents"], [event_bus.event_bus_arn])
