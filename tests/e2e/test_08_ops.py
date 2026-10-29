@@ -8,6 +8,7 @@ after the events, and the census runs every five minutes, so these tests wait up
 
 import gzip
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
@@ -41,13 +42,26 @@ def ops(stage: Stage) -> Stage:
 
 @pytest.fixture(scope="module")
 def aired_breaks(published: dict[str, Any], observation: Observation) -> dict[int, str]:
-    """SCTE-35 event id -> program of every break the channel aired while the SSAI session watched."""
-    assert observation.breaks, "the channel tests aired no break"
-    return {
+    """SCTE-35 event id -> program of every scheduled break whose ad marker the SSAI session saw.
+
+    Only those: the session stops watching once every variant has shown ads, and MediaTailor requests ads for a
+    break only in a session that plays it, so a break that aired after the session left is in no ADS log. The
+    marker's ``DATERANGE`` ID is ``<start epoch ms>-<segmentation type>-<event id in hex>``.
+    """
+    scheduled = {
         scte_event_id(program["name"], index): program["name"]
         for program in published["programs"]
         for index, _ in enumerate(program["breaks"])
     }
+    seen = {
+        int(hex_id, 16)
+        for markers in observation.splices.values()
+        for marker in markers
+        if re.fullmatch(r"[0-9A-Fa-f]+", hex_id := marker.rsplit("-", 1)[-1])
+    }
+    aired = {evid: program for evid, program in scheduled.items() if evid in seen}
+    assert aired, f"the session saw no scheduled break: markers {sorted(seen)}, scheduled {sorted(scheduled)}"
+    return aired
 
 
 def test_ops_stack_outputs(ops: Stage) -> None:
