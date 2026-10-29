@@ -98,6 +98,19 @@ class Settings:
     """JSON of what the deployment configures in the snapshot (``core.pds.snapshot.SnapshotBase``)."""
     pds_table: str = field(default_factory=lambda: _env("PDS_TABLE"))
     """The Pod Decision Service's table (``<prefix>-pds``: budgets, caps, reservations, delivery)."""
+    release_bucket: str = field(default_factory=lambda: _env("RELEASE_BUCKET"))
+    """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
+    release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
+    """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
+    release_table: str = field(default_factory=lambda: _env("RELEASE_TABLE"))
+    """The Release Controller's state table (``<prefix>-release``)."""
+    release_log_destination: str = field(default_factory=lambda: _env("RELEASE_LOG_DESTINATION"))
+    """ARN of the siblings' vended-log destination (the module's KMS-encrypted log group)."""
+    lake_deliveries: str = field(default_factory=lambda: _env("LAKE_DELIVERIES"))
+    """JSON ``{log type: {"destination": ARN, "s3": S3 delivery configuration}}``: where the lake (ops module)
+    receives each MediaTailor log type, and in which layout."""
+    origin_secret_region: str = field(default_factory=lambda: _env("ORIGIN_SECRET_REGION"))
+    """Region of the demand origin's secrets (the DemandEdge stack, in us-east-1)."""
 
     @property
     def app(self) -> str:

@@ -761,6 +761,17 @@
           "title": "Child Directed",
           "type": "boolean"
         },
+        "outputs": {
+          "default": [
+            "hls"
+          ],
+          "description": "The channel's outputs (rendition profiles): one playback URL each in ``/plan/playback/<channel>.json``.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
         "policy_source_arns": {
           "description": "The ``ArnLike aws:SourceArn`` values as playback-configuration names: the v3.0.0 configuration (the channel\nname) and the sibling pattern ``<channel>-p-?``.",
           "items": {

@@ -145,14 +145,15 @@ class ConfigurationAlarms(Construct):
 
 class ZeroAdsDetector(Construct):
     """Every hour, ``fast_channels.functions.ops.zero_ads_sessions`` counts the sessions that saw at least three
-    breaks without an ad request; the alarm ``<prefix>-zero-ads-sessions`` fires on any.
+    breaks without an ad request; the alarm ``<prefix>-<name>`` fires on any.
 
     Args:
         prefix: deployment prefix.
-        ads_log_group: the deployment's MediaTailor vended-log group.
+        ads_log_group: the MediaTailor vended-log group it reads (the deployment's, or the release module's).
         topic: the stage's alert topic.
         log_retention: retention of the function's logs.
         removal_policy: what happens to them when the stack is deleted.
+        name: the alarm's name after the prefix, and the detector's metric dimension (``service``).
 
     Attributes:
         function: the detector. alarm: its alarm.
@@ -168,14 +169,16 @@ class ZeroAdsDetector(Construct):
         topic: sns.ITopic,
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
+        name: str = "zero-ads-sessions",
     ) -> None:
         super().__init__(scope, id)
+        service = f"ops.{name.replace('-', '_')}"
         self.function = FastFunction(
             self,
             "Detector",
             handler="fast_channels.functions.ops.zero_ads_sessions.handler",
             description="Count the sessions that saw ad breaks without requesting ads (hourly)",
-            environment={"ADS_LOG_GROUP": ads_log_group},
+            environment={"ADS_LOG_GROUP": ads_log_group, "POWERTOOLS_SERVICE_NAME": service},
             timeout=Duration.minutes(5),
             memory_size=256,
             log_retention=log_retention,
@@ -199,11 +202,11 @@ class ZeroAdsDetector(Construct):
         self.alarm = alarm(
             self,
             "Alarm",
-            name=f"{prefix}-zero-ads-sessions",
+            name=f"{prefix}-{name}",
             metric=cw.Metric(
                 namespace=METRICS_NAMESPACE,
                 metric_name="ZeroAdsSessions",
-                dimensions_map={"service": "ops.zero_ads_sessions"},
+                dimensions_map={"service": service},
                 statistic=cw.Stats.SUM,
                 period=Duration.hours(1),
             ),

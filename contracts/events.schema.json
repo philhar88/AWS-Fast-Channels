@@ -202,6 +202,26 @@
           "$ref": "#/$defs/ChannelAlert"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Desired State Rendered"
+        },
+        "detail": {
+          "$ref": "#/$defs/DesiredStateRendered"
+        }
+      }
     }
   ],
   "$defs": {
@@ -436,6 +456,34 @@
         "correlation_id"
       ],
       "title": "ChannelAlert",
+      "type": "object"
+    },
+    "DesiredStateRendered": {
+      "description": "A deployment rendered a new release bundle (release module): the stack wrote it to the release bucket, and the\nRelease Controller validates and applies it to each monetized channel's idle sibling.",
+      "properties": {
+        "bundle_key": {
+          "description": "S3 key of the bundle document, release/<digest>/bundle.json.",
+          "title": "Bundle Key",
+          "type": "string"
+        },
+        "digest": {
+          "description": "SHA-256 of the bundle: its version.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "correlation_id": {
+          "description": "The CloudFormation request that rendered it.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_key",
+        "digest",
+        "correlation_id"
+      ],
+      "title": "DesiredStateRendered",
       "type": "object"
     },
     "GeneratorInput": {

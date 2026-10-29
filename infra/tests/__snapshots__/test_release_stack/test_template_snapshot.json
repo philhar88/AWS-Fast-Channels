@@ -1,0 +1,3532 @@
+{
+  "Description": "FAST Channels (fastm): Release Controller",
+  "Outputs": {
+    "BundleBucketName": {
+      "Description": "Release bundles (release/<digest>/bundle.json)",
+      "Value": {
+        "Ref": "ControllerBundlesC4F66A3B"
+      }
+    },
+    "DriftFunction": {
+      "Description": "The drift check (hourly)",
+      "Value": {
+        "Ref": "ControllerDrift2C829B47"
+      }
+    },
+    "SiblingLogGroup": {
+      "Description": "The siblings' MediaTailor logs (KMS)",
+      "Value": {
+        "Ref": "Logs71AC9AA5"
+      }
+    },
+    "Siblings": {
+      "Description": "Sibling configurations",
+      "Value": "[\"fastm-demo-p-a\", \"fastm-demo-p-b\", \"fastm-demo-p-z\"]"
+    },
+    "StateMachineArn": {
+      "Description": "The apply path",
+      "Value": {
+        "Ref": "ControllerStateMachine0A1D2014"
+      }
+    },
+    "StateTableName": {
+      "Description": "The Release Controller's state",
+      "Value": {
+        "Ref": "ControllerState81621A42"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdsdeliveryfunctionC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/delivery-function",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/cdn-base-url",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleasechannelsfastmdemoC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/channels/fastm-demo",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/content-base-url",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/media-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "ControllerApply033D6DE8": {
+      "DependsOn": [
+        "ControllerApplyRoleDefaultPolicy2FFEE881",
+        "ControllerApplyRole6F80745E"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: one step of the apply path",
+        "Environment": {
+          "Variables": {
+            "CDN_BASE_URL": {
+              "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LAKE_DELIVERIES": "{\"AD_DECISION_SERVER_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-ads\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}},\"MANIFEST_SERVICE_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-manifest\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}}}",
+            "LEDGER_TABLE": "fastm-ledger",
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "ORIGIN_SECRET_REGION": "us-east-1",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.apply",
+            "RELEASE_BUCKET": {
+              "Ref": "ControllerBundlesC4F66A3B"
+            },
+            "RELEASE_CHANNELS": "fastm-demo",
+            "RELEASE_LOG_DESTINATION": {
+              "Fn::GetAtt": [
+                "LogsDestination64C85DDD",
+                "Arn"
+              ]
+            },
+            "RELEASE_TABLE": {
+              "Ref": "ControllerState81621A42"
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.release.apply.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerApplyLogs61DEAE88"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerApplyRole6F80745E",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerApplyLogs61DEAE88": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerApplyRole6F80745E": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerApplyRoleDefaultPolicy2FFEE881": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerApplyLogs61DEAE88",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:DescribeDeliveries",
+                "logs:DescribeDeliverySources",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:Scan",
+                "dynamodb:UpdateItem"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerState81621A42",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ControllerBundlesC4F66A3B",
+                        "Arn"
+                      ]
+                    },
+                    "/release/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "secretsmanager:GetSecretValue",
+              "Effect": "Allow",
+              "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:fastm/demand/origin-*"
+            },
+            {
+              "Action": [
+                "mediatailor:AllowVendedLogDeliveryForResource",
+                "mediatailor:ConfigureLogsForPlaybackConfiguration",
+                "mediatailor:GetPlaybackConfiguration",
+                "mediatailor:PutPlaybackConfiguration",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*"
+            },
+            {
+              "Action": [
+                "mediatailor:GetFunction",
+                "mediatailor:PutFunction",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "release/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            },
+            {
+              "Action": "iam:CreateServiceLinkedRole",
+              "Condition": {
+                "StringEquals": {
+                  "iam:AWSServiceName": "mediatailor.amazonaws.com"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:iam::123456789012:role/aws-service-role/mediatailor.amazonaws.com/*"
+            },
+            {
+              "Action": "logs:PutDeliverySource",
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:delivery-source:fastm-*"
+            },
+            {
+              "Action": "logs:CreateDelivery",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-*",
+                "arn:aws:logs:us-east-1:123456789012:delivery-source:fastm-*",
+                "arn:aws:logs:us-east-1:123456789012:delivery:*",
+                {
+                  "Fn::GetAtt": [
+                    "LogsDestination64C85DDD",
+                    "Arn"
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "logs:TagResource",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:delivery-source:fastm-*",
+                "arn:aws:logs:us-east-1:123456789012:delivery:*"
+              ]
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/plan/playback/*"
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerApplyRoleDefaultPolicy2FFEE881",
+        "Roles": [
+          {
+            "Ref": "ControllerApplyRole6F80745E"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerBundle3AB631F3": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ControllerBundlesAutoDeleteObjectsCustomResourceB98896F0",
+        "ControllerBundlesPolicyDE245A37",
+        "ControllerBundlesC4F66A3B",
+        "ControllerOnDesiredState63791D37",
+        "ControllerStateMachineEventsRoleDefaultPolicy7C5C0637",
+        "ControllerStateMachineEventsRoleCE35CC84",
+        "ControllerStateMachine0A1D2014",
+        "ControllerStateMachineRoleDefaultPolicy4677079B",
+        "ControllerStateMachineRoleF4C16666"
+      ],
+      "Properties": {
+        "Bucket": {
+          "Ref": "ControllerBundlesC4F66A3B"
+        },
+        "Bundle": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"channels\":[{\"child_directed\":false,\"name\":\"fastm-demo\",\"outputs\":[\"hls\"],\"policy_source_arns\":[\"fastm-demo\",\"fastm-demo-p-?\"]}],\"functions\":[{\"CustomOutputConfiguration\":{\"Output\":{\"aws.availSuppressionMode\":\"{% 'BEHIND_LIVE_EDGE' %}\",\"aws.availSuppressionValue\":\"{% '00:00:00' %}\",\"aws.logMode\":\"{% 'DISABLED' %}\",\"aws.preroll\":\"{% 'disabled' %}\",\"aws.reportingMode\":\"{% 'server' %}\"},\"Runtime\":\"JSONATA\"},\"Description\":\"Session controls: mid-break joins see slate, server-side beacons, no debug log, no pre-roll.\",\"FunctionId\":\"fastm_ps_ctl\",\"FunctionType\":\"CUSTOM_OUTPUT\"},{\"Description\":\"PRE_SESSION_INITIALIZATION root: runs 1 step(s) in order and commits only its Output.\",\"FunctionId\":\"fastm_ps_root\",\"FunctionType\":\"SEQUENTIAL_EXECUTOR\",\"SequentialExecutorConfiguration\":{\"FunctionList\":[{\"FunctionId\":\"fastm_ps_ctl\"}],\"Output\":{\"aws.availSuppressionMode\":\"{% aws.availSuppressionMode %}\",\"aws.availSuppressionValue\":\"{% aws.availSuppressionValue %}\",\"aws.logMode\":\"{% aws.logMode %}\",\"aws.preroll\":\"{% aws.preroll %}\",\"aws.reportingMode\":\"{% aws.reportingMode %}\"},\"Runtime\":\"JSONATA\",\"TimeoutMilliseconds\":400}}],\"grid_seconds\":[30,60,90,120],\"prefix\":\"fastm\",\"rollout\":{\"deployment_duration_in_minutes\":30,\"description\":\"Simulated gate: a simulated audience, 10% steps over 30 minutes.\",\"final_bake_time_in_minutes\":10,\"growth_factor\":10.0,\"growth_type\":\"LINEAR\",\"name\":\"demo\"},\"siblings\":[{\"channel\":\"fastm-demo\",\"letter\":\"a\",\"name\":\"fastm-demo-p-a\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-demo-p-a\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\",\"ContentSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"]},\"PercentEnabled\":100},\"Name\":\"fastm-demo-p-a\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasechannelsfastmdemoC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"role\":\"general\",\"route\":\"pbs\"},{\"channel\":\"fastm-demo\",\"letter\":\"b\",\"name\":\"fastm-demo-p-b\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-demo-p-b\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\",\"ContentSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"]},\"PercentEnabled\":100},\"Name\":\"fastm-demo-p-b\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasechannelsfastmdemoC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"role\":\"general\",\"route\":\"pbs\"},{\"channel\":\"fastm-demo\",\"letter\":\"z\",\"name\":\"fastm-demo-p-z\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-demo-p-z\",\"X-Fast-Probe\":\"1\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\",\"ContentSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"],\"PublishOptInEventTypes\":[\"PRE_SESSION_INIT_HOOK_SUMMARY\",\"PRE_SESSION_INIT_FUNCTION_COMPLETED\"]},\"PercentEnabled\":100},\"Name\":\"fastm-demo-p-z\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasechannelsfastmdemoC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"role\":\"probe\",\"route\":\"pbs\"}],\"stored_requests\":[\"fast-pod-120s\",\"fast-pod-30s\",\"fast-pod-60s\",\"fast-pod-90s\",\"fast-pod-kids-120s\",\"fast-pod-kids-30s\",\"fast-pod-kids-60s\",\"fast-pod-kids-90s\"],\"v\":1}"
+            ]
+          ]
+        },
+        "EventBus": "fastm-fast-channels",
+        "Prefix": "fastm",
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "ControllerDesiredStateProviderframeworkonEventC4F08960",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "Custom::DesiredState",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerBundlesAutoDeleteObjectsCustomResourceB98896F0": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ControllerBundlesPolicyDE245A37"
+      ],
+      "Properties": {
+        "BucketName": {
+          "Ref": "ControllerBundlesC4F66A3B"
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "Custom::S3AutoDeleteObjects",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerBundlesC4F66A3B": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true"
+          },
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerBundlesPolicyDE245A37": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "ControllerBundlesC4F66A3B"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerBundlesC4F66A3B",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerBundlesC4F66A3B",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": 1.2
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerBundlesC4F66A3B",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerBundlesC4F66A3B",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:DeleteObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:PutBucketPolicy"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerBundlesC4F66A3B",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerBundlesC4F66A3B",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::S3::BucketPolicy"
+    },
+    "ControllerDeadLetters9A8CFC51": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerDeadLettersAlarmB5C9DFE5": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A Desired State Rendered event could not start the Release Controller: the bundle is not applied. Start the state machine with the event's detail (bundle_key, digest, correlation_id) as input",
+        "AlarmName": "fastm-release-dead-letters",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "ControllerDeadLetters9A8CFC51",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ControllerDeadLettersPolicy2ECFC292": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerDeadLetters9A8CFC51",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "ControllerOnDesiredState63791D37",
+                      "Arn"
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerDeadLetters9A8CFC51",
+                  "Arn"
+                ]
+              },
+              "Sid": "AllowEventRuleFastChannelsfastmReleaseControllerOnDesiredStateBD68ACAE"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Queues": [
+          {
+            "Ref": "ControllerDeadLetters9A8CFC51"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::QueuePolicy"
+    },
+    "ControllerDesiredState05B2A0B3": {
+      "DependsOn": [
+        "ControllerDesiredStateRoleDefaultPolicy9206764C",
+        "ControllerDesiredStateRole278C9445"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: publish the rendered bundle",
+        "Environment": {
+          "Variables": {
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.desired_state"
+          }
+        },
+        "Handler": "fast_channels.functions.release.desired_state.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerDesiredStateLogsE63AE553"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerDesiredStateRole278C9445",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerDesiredStateLogsE63AE553": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerDesiredStateProviderframeworkonEventC4F08960": {
+      "DependsOn": [
+        "ControllerDesiredStateProviderframeworkonEventServiceRoleDefaultPolicyF806FE0B",
+        "ControllerDesiredStateProviderframeworkonEventServiceRole1AD6CD6A"
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "AWS CDK resource provider framework - onEvent (FastChannels-fastm/Release/Controller/DesiredStateProvider)",
+        "Environment": {
+          "Variables": {
+            "USER_ON_EVENT_FUNCTION_ARN": {
+              "Fn::GetAtt": [
+                "ControllerDesiredState05B2A0B3",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "Handler": "framework.onEvent",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerDesiredStateProviderframeworkonEventLogs3578A0FE"
+          }
+        },
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerDesiredStateProviderframeworkonEventServiceRole1AD6CD6A",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 900,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerDesiredStateProviderframeworkonEventLogs3578A0FE": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerDesiredStateProviderframeworkonEventServiceRole1AD6CD6A": {
+      "DependsOn": [
+        "ControllerDesiredStateProviderframeworkonEventLogs3578A0FE"
+      ],
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          },
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerDesiredStateProviderframeworkonEventServiceRoleDefaultPolicyF806FE0B": {
+      "DependsOn": [
+        "ControllerDesiredStateProviderframeworkonEventLogs3578A0FE"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerDesiredState05B2A0B3",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerDesiredState05B2A0B3",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "lambda:GetFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerDesiredState05B2A0B3",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerDesiredStateProviderframeworkonEventServiceRoleDefaultPolicyF806FE0B",
+        "Roles": [
+          {
+            "Ref": "ControllerDesiredStateProviderframeworkonEventServiceRole1AD6CD6A"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerDesiredStateRole278C9445": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerDesiredStateRoleDefaultPolicy9206764C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerDesiredStateLogsE63AE553",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ControllerBundlesC4F66A3B",
+                        "Arn"
+                      ]
+                    },
+                    "/release/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "events:PutEvents",
+              "Effect": "Allow",
+              "Resource": "arn:aws:events:us-east-1:123456789012:event-bus/fastm-fast-channels"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerDesiredStateRoleDefaultPolicy9206764C",
+        "Roles": [
+          {
+            "Ref": "ControllerDesiredStateRole278C9445"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerDrift2C829B47": {
+      "DependsOn": [
+        "ControllerDriftRoleDefaultPolicy5D1A3F4D",
+        "ControllerDriftRole393D1A9F"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: drift of siblings, Functions, policies",
+        "Environment": {
+          "Variables": {
+            "CDN_BASE_URL": {
+              "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LAKE_DELIVERIES": "{\"AD_DECISION_SERVER_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-ads\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}},\"MANIFEST_SERVICE_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-manifest\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}}}",
+            "LEDGER_TABLE": "fastm-ledger",
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "ORIGIN_SECRET_REGION": "us-east-1",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.drift",
+            "RELEASE_BUCKET": {
+              "Ref": "ControllerBundlesC4F66A3B"
+            },
+            "RELEASE_CHANNELS": "fastm-demo",
+            "RELEASE_LOG_DESTINATION": {
+              "Fn::GetAtt": [
+                "LogsDestination64C85DDD",
+                "Arn"
+              ]
+            },
+            "RELEASE_TABLE": {
+              "Ref": "ControllerState81621A42"
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.release.drift.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerDriftLogs6C4296E5"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerDriftRole393D1A9F",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerDriftAlarm96B89204": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A sibling, its Functions or a monetized channel's policy is not what the Release Controller applied (see the drift check's log for the paths)",
+        "AlarmName": "fastm-release-drift",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "release.drift"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ReleaseDrift",
+        "Namespace": "FastChannels",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 3600,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ControllerDriftLogs6C4296E5": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerDriftRole393D1A9F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerDriftRoleDefaultPolicy5D1A3F4D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerDriftLogs6C4296E5",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:Scan"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerState81621A42",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ControllerBundlesC4F66A3B",
+                        "Arn"
+                      ]
+                    },
+                    "/release/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "secretsmanager:GetSecretValue",
+              "Effect": "Allow",
+              "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:fastm/demand/origin-*"
+            },
+            {
+              "Action": "mediatailor:GetPlaybackConfiguration",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*"
+            },
+            {
+              "Action": "mediatailor:GetFunction",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
+            },
+            {
+              "Action": "mediatailor:GetChannelPolicy",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerDriftRoleDefaultPolicy5D1A3F4D",
+        "Roles": [
+          {
+            "Ref": "ControllerDriftRole393D1A9F"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerDriftSchedule1689B562": {
+      "Properties": {
+        "Description": "Release drift check of fastm every hour",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "ControllerDrift2C829B47",
+              "Arn"
+            ]
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 1
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "ControllerDriftScheduleRole2CAF3EE6",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "ControllerDriftScheduleRole2CAF3EE6": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: run the release drift check",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerDriftScheduleRoleDefaultPolicy085FB8FF": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerDrift2C829B47",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerDrift2C829B47",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerDriftScheduleRoleDefaultPolicy085FB8FF",
+        "Roles": [
+          {
+            "Ref": "ControllerDriftScheduleRole2CAF3EE6"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerOnDesiredState63791D37": {
+      "Properties": {
+        "Description": "Apply each new release bundle",
+        "EventBusName": "fastm-fast-channels",
+        "EventPattern": {
+          "detail-type": [
+            "Desired State Rendered"
+          ],
+          "source": [
+            "fast-channels.fastm"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "ControllerStateMachine0A1D2014"
+            },
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "ControllerDeadLetters9A8CFC51",
+                  "Arn"
+                ]
+              }
+            },
+            "Id": "Target0",
+            "InputTransformer": {
+              "InputPathsMap": {
+                "detail-bundle_key": "$.detail.bundle_key",
+                "detail-correlation_id": "$.detail.correlation_id",
+                "detail-digest": "$.detail.digest"
+              },
+              "InputTemplate": "{\"bundle_key\":<detail-bundle_key>,\"digest\":<detail-digest>,\"correlation_id\":<detail-correlation_id>}"
+            },
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 3
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "ControllerStateMachineEventsRoleCE35CC84",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "ControllerReaperE3BE5DD4": {
+      "DependsOn": [
+        "ControllerReaperRoleDefaultPolicy12002899",
+        "ControllerReaperRole03332CF9"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: delete its siblings and Functions",
+        "Environment": {
+          "Variables": {
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.reaper"
+          }
+        },
+        "Handler": "fast_channels.functions.release.reaper.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerReaperLogs0256EC17"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerReaperRole03332CF9",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerReaperLogs0256EC17": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerReaperProviderframeworkonEvent360B069B": {
+      "DependsOn": [
+        "ControllerReaperProviderframeworkonEventServiceRoleDefaultPolicyB9758B63",
+        "ControllerReaperProviderframeworkonEventServiceRole4AC2EBB9"
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "AWS CDK resource provider framework - onEvent (FastChannels-fastm/Release/Controller/ReaperProvider)",
+        "Environment": {
+          "Variables": {
+            "USER_ON_EVENT_FUNCTION_ARN": {
+              "Fn::GetAtt": [
+                "ControllerReaperE3BE5DD4",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "Handler": "framework.onEvent",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerReaperProviderframeworkonEventLogsA8902671"
+          }
+        },
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerReaperProviderframeworkonEventServiceRole4AC2EBB9",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 900,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerReaperProviderframeworkonEventLogsA8902671": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerReaperProviderframeworkonEventServiceRole4AC2EBB9": {
+      "DependsOn": [
+        "ControllerReaperProviderframeworkonEventLogsA8902671"
+      ],
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          },
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerReaperProviderframeworkonEventServiceRoleDefaultPolicyB9758B63": {
+      "DependsOn": [
+        "ControllerReaperProviderframeworkonEventLogsA8902671"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerReaperE3BE5DD4",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerReaperE3BE5DD4",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "lambda:GetFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerReaperE3BE5DD4",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerReaperProviderframeworkonEventServiceRoleDefaultPolicyB9758B63",
+        "Roles": [
+          {
+            "Ref": "ControllerReaperProviderframeworkonEventServiceRole4AC2EBB9"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerReaperResource4688AF43": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ControllerState81621A42",
+        "ControllerStateMachineEventsRoleDefaultPolicy7C5C0637",
+        "ControllerStateMachineEventsRoleCE35CC84",
+        "ControllerStateMachine0A1D2014",
+        "ControllerStateMachineRoleDefaultPolicy4677079B",
+        "ControllerStateMachineRoleF4C16666"
+      ],
+      "Properties": {
+        "Channels": [
+          "fastm-demo"
+        ],
+        "MediaBucket": {
+          "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+        },
+        "Prefix": "fastm",
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "ControllerReaperProviderframeworkonEvent360B069B",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "Custom::ReleaseReaper",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerReaperRole03332CF9": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerReaperRoleDefaultPolicy12002899": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerReaperLogs0256EC17",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:DescribeDeliveries",
+                "logs:DescribeDeliverySources",
+                "mediatailor:ListFunctions",
+                "mediatailor:ListPlaybackConfigurations",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "mediatailor:DeletePlaybackConfiguration",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/*-p-?"
+            },
+            {
+              "Action": "mediatailor:DeleteFunction",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
+            },
+            {
+              "Action": [
+                "logs:DeleteDelivery",
+                "logs:DeleteDeliverySource"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:delivery-source:*-p-?-*",
+                "arn:aws:logs:us-east-1:123456789012:delivery:*"
+              ]
+            },
+            {
+              "Action": "s3:DeleteObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/plan/playback/*"
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerReaperRoleDefaultPolicy12002899",
+        "Roles": [
+          {
+            "Ref": "ControllerReaperRole03332CF9"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerState81621A42": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          }
+        ],
+        "Replicas": [
+          {
+            "PointInTimeRecoverySpecification": {
+              "PointInTimeRecoveryEnabled": true
+            },
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fastm"
+              },
+              {
+                "Key": "fast:module",
+                "Value": "release"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "TableName": "fastm-release"
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerStateMachine0A1D2014": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ControllerStateMachineRoleDefaultPolicy4677079B",
+        "ControllerStateMachineRoleF4C16666"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Prepare\",\"States\":{\"Prepare\":{\"Next\":\"AlreadyReleased?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"InvalidBundleError\"],\"Next\":\"BundleRejected\"},{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"prepare\",\"bundle_key\":\"{% $states.input.bundle_key %}\",\"digest\":\"{% $states.input.digest %}\",\"request\":\"{% $exists($states.input.correlation_id) ? $states.input.correlation_id : $states.context.Execution.Name %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"plan\":\"{% $states.result.Payload %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"AlreadyReleased?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $plan.skip %}\",\"Next\":\"NothingToDo\"}],\"Default\":\"Accept\"},\"Accept\":{\"Next\":\"Functions\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":30,\"MaxAttempts\":40,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"accept\",\"request\":\"{% $plan.request %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"plan\":\"{% $merge([$plan, $states.result.Payload]) %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Functions\":{\"Next\":\"Configure\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"functions\",\"siblings\":\"{% $plan.siblings %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Configure\":{\"Type\":\"Map\",\"Next\":\"Publish\",\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Items\":\"{% $plan.siblings %}\",\"ItemSelector\":{\"step\":\"configure\",\"sibling\":\"{% $states.context.Map.Item.Value %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"},\"ItemProcessor\":{\"ProcessorConfig\":{\"Mode\":\"INLINE\"},\"StartAt\":\"ConfigureSibling\",\"States\":{\"ConfigureSibling\":{\"QueryLanguage\":\"JSONata\",\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":\"{% $states.input %}\"},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"}}},\"MaxConcurrency\":1},\"Publish\":{\"Next\":\"CheckDrift\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"StaleStateError\"],\"MaxAttempts\":3}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"publish\",\"results\":\"{% $states.input %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"CheckDrift\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerDrift2C829B47",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"change_id\":\"{% $plan.change_id %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"RecordFailure\":{\"Next\":\"ReleaseFailed\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"fail\",\"release\":\"{% $exists($plan.release) ? $plan.release : null %}\",\"change_id\":\"{% $exists($plan.change_id) ? $plan.change_id : null %}\",\"error\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"ReleaseFailed\":{\"Type\":\"Fail\",\"Error\":\"ReleaseFailed\",\"Cause\":\"See the ledger's release.fail record\"},\"NothingToDo\":{\"Type\":\"Succeed\"},\"BundleRejected\":{\"Type\":\"Fail\",\"Error\":\"BundleRejected\",\"Cause\":\"See the ledger's release.reject record\"}},\"TimeoutSeconds\":5400,\"Comment\":\"Release Controller: validate the bundle, take the lock, create its Functions, configure the idle siblings, publish the plans and ledger the release (DESIGN §8.3)\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "ControllerStateMachineLogs9E009582",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "ControllerStateMachineRoleF4C16666",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fastm-release",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerStateMachineEventsRoleCE35CC84": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerStateMachineEventsRoleDefaultPolicy7C5C0637": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ControllerStateMachine0A1D2014"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerStateMachineEventsRoleDefaultPolicy7C5C0637",
+        "Roles": [
+          {
+            "Ref": "ControllerStateMachineEventsRoleCE35CC84"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerStateMachineLogs9E009582": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsfastmRelease-Controller-0F994377-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerStateMachineRoleDefaultPolicy4677079B": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerApply033D6DE8",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::GetAtt": [
+                    "ControllerDrift2C829B47",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerApply033D6DE8",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerDrift2C829B47",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerStateMachineRoleDefaultPolicy4677079B",
+        "Roles": [
+          {
+            "Ref": "ControllerStateMachineRoleF4C16666"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ControllerStateMachineRoleF4C16666": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092"
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Lambda function for auto-deleting objects in ",
+              {
+                "Ref": "ControllerBundlesC4F66A3B"
+              },
+              " S3 bucket."
+            ]
+          ]
+        },
+        "Handler": "index.handler",
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs5E5D1456"
+          }
+        },
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 900
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs5E5D1456": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs5E5D1456"
+      ],
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ImpressionsCanInvokeLambdaAA69907C": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "SsmParameterValuefastmpdsdeliveryfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+        },
+        "Principal": "logs.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "Logs71AC9AA5",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ImpressionsD3B62AAD": {
+      "DependsOn": [
+        "ImpressionsCanInvokeLambdaAA69907C"
+      ],
+      "Properties": {
+        "DestinationArn": {
+          "Ref": "SsmParameterValuefastmpdsdeliveryfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+        },
+        "FilterName": "fastm-pds-delivery-release",
+        "FilterPattern": "{ ($.eventType = \"BEACON_FIRED\") && ($.beaconInfo.trackingEvent = \"impression\") }",
+        "LogGroupName": {
+          "Ref": "Logs71AC9AA5"
+        }
+      },
+      "Type": "AWS::Logs::SubscriptionFilter"
+    },
+    "Logs71AC9AA5": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "KmsKeyId": {
+          "Fn::GetAtt": [
+            "LogsKeyB5D1D597",
+            "Arn"
+          ]
+        },
+        "LogGroupName": "/aws/vendedlogs/mediatailor/fastm-release",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "LogsDestination64C85DDD": {
+      "Properties": {
+        "DestinationResourceArn": {
+          "Fn::GetAtt": [
+            "Logs71AC9AA5",
+            "Arn"
+          ]
+        },
+        "Name": "fastm-release-mediatailor",
+        "OutputFormat": "json",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::DeliveryDestination"
+    },
+    "LogsKeyB5D1D597": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "FAST Channels (fastm): the monetized playback configurations' MediaTailor logs",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Statement": [
+            {
+              "Action": [
+                "kms:CancelKeyDeletion",
+                "kms:Create*",
+                "kms:Delete*",
+                "kms:Describe*",
+                "kms:Disable*",
+                "kms:Enable*",
+                "kms:Get*",
+                "kms:List*",
+                "kms:Put*",
+                "kms:Revoke*",
+                "kms:RotateKeyOnDemand",
+                "kms:ScheduleKeyDeletion",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:Update*"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::123456789012:root"
+              },
+              "Resource": "*",
+              "Sid": "AccountAdministers"
+            },
+            {
+              "Action": [
+                "kms:Decrypt",
+                "kms:Describe*",
+                "kms:Encrypt",
+                "kms:GenerateDataKey*",
+                "kms:ReEncrypt*"
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "kms:EncryptionContext:aws:logs:arn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "logs.us-east-1.amazonaws.com"
+              },
+              "Resource": "*",
+              "Sid": "CloudWatchLogsUsesItForThisLogGroup"
+            },
+            {
+              "Action": [
+                "kms:Decrypt",
+                "kms:DescribeKey"
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "kms:ViaService": "logs.us-east-1.amazonaws.com"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "ZeroAdsDetectorRole98E1C3DF",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::KMS::Key",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "LogsPolicyResourcePolicy46E9E43C": {
+      "Properties": {
+        "PolicyDocument": "{\"Statement\":[{\"Action\":[\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"123456789012\"},\"ArnLike\":{\"aws:SourceArn\":\"arn:aws:logs:us-east-1:123456789012:delivery-source:fastm-*\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"delivery.logs.amazonaws.com\"},\"Resource\":\"arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release:log-stream:*\",\"Sid\":\"VendedLogDelivery\"}],\"Version\":\"2012-10-17\"}",
+        "PolicyName": "FastChannelsfastmReleaseLogsPolicy428D082D"
+      },
+      "Type": "AWS::Logs::ResourcePolicy"
+    },
+    "ReleaseGuard3432AE9F": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): only the Release Controller changes monetization",
+        "Path": "/",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "mediatailor:CreatePrefetchSchedule",
+                "mediatailor:DeleteFunction",
+                "mediatailor:DeletePlaybackConfiguration",
+                "mediatailor:DeletePrefetchSchedule",
+                "mediatailor:PutChannelPolicy",
+                "mediatailor:PutFunction",
+                "mediatailor:PutPlaybackConfiguration"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*"
+              ],
+              "Sid": "OnlyTheReleaseControllerChangesMonetization"
+            },
+            {
+              "Action": [
+                "logs:CreateExportTask",
+                "logs:DisassociateKmsKey",
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:PutSubscriptionFilter",
+                "logs:StartLiveTail",
+                "logs:StartQuery"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release",
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release:*"
+              ],
+              "Sid": "OnlyNamedReadersReadTheSiblingsLogs"
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::IAM::ManagedPolicy"
+    },
+    "SiblingAlarmsFastmDemoPAFunctionErrors105097B6": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-a: Function.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-a-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPAGetmanifestErrors56EF51A9": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-a: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-a-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPAPreadsrequesthookErrors08C70279": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-a: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-a-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPAPresessioninithookErrors7851C027": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-a: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-a-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPBFunctionErrors9EFCFC41": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-b: Function.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-b-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPBGetmanifestErrorsD910FCE6": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-b: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-b-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPBPreadsrequesthookErrors9E7781B5": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-b: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-b-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPBPresessioninithookErrors15D10683": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-b: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-b-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPZFunctionErrorsCF8C1695": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-z: Function.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-z-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPZGetmanifestErrors357329C8": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-z: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-z-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPZPreadsrequesthookErrorsB068EA08": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-z: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-z-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmDemoPZPresessioninithookErrors5572F095": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-z: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fastm-demo-p-z-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-demo-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ZeroAdsAlarmB6328B9B": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "Sessions saw at least three ad breaks but requested no ads: possible ad suppression by a direct caller (see the detector's log for the session ids)",
+        "AlarmName": "fastm-release-zero-ads-sessions",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "ops.release_zero_ads_sessions"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ZeroAdsSessions",
+        "Namespace": "FastChannels",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ZeroAdsDetectorFAD25C08": {
+      "DependsOn": [
+        "ZeroAdsDetectorRoleDefaultPolicy77B74653",
+        "ZeroAdsDetectorRole98E1C3DF"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Count the sessions that saw ad breaks without requesting ads (hourly)",
+        "Environment": {
+          "Variables": {
+            "ADS_LOG_GROUP": "/aws/vendedlogs/mediatailor/fastm-release",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "ops.release_zero_ads_sessions"
+          }
+        },
+        "Handler": "fast_channels.functions.ops.zero_ads_sessions.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ZeroAdsDetectorLogs26DC62CF"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ZeroAdsDetectorRole98E1C3DF",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ZeroAdsDetectorLogs26DC62CF": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ZeroAdsDetectorRole98E1C3DF": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ZeroAdsDetectorRoleDefaultPolicy77B74653": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ZeroAdsDetectorLogs26DC62CF",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:GetQueryResults",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "logs:StartQuery",
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release"
+            },
+            {
+              "Action": [
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:StartQuery"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Logs71AC9AA5",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ZeroAdsDetectorRoleDefaultPolicy77B74653",
+        "Roles": [
+          {
+            "Ref": "ZeroAdsDetectorRole98E1C3DF"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ZeroAdsScheduleAD8E86B1": {
+      "Properties": {
+        "Description": "Count the zero-ad sessions of fastm every hour",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "ZeroAdsDetectorFAD25C08",
+              "Arn"
+            ]
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 1
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "ZeroAdsScheduleRoleF09EA709",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "ZeroAdsScheduleRoleDefaultPolicyFBE9B115": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ZeroAdsDetectorFAD25C08",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ZeroAdsDetectorFAD25C08",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ZeroAdsScheduleRoleDefaultPolicyFBE9B115",
+        "Roles": [
+          {
+            "Ref": "ZeroAdsScheduleRoleF09EA709"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ZeroAdsScheduleRoleF09EA709": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

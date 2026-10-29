@@ -7,6 +7,7 @@ from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import source_location_name
 from fast_channels.core.pds.names import Parameter as PdsParameter
 from fast_channels.core.pds.names import parameter_name as pds_parameter
@@ -182,6 +183,8 @@ class MediaStack(Stack):
             self._channel(channel, config=config, data=data, ads_url=external_ads) for channel in config.channels.iac
         )
         channels = tuple(channel.exports for channel in self.channels)
+        if config.modules.release.enabled:
+            self._release_parameters(config, data, content_base_url)
 
         self.observability = MediaObservability(
             self,
@@ -268,6 +271,29 @@ class MediaStack(Stack):
         linear.node.add_dependency(kit)  # its filler slate and VAST pod
         self.reaper.run_after_deleting(linear)  # a filler slate in use cannot be deleted (observed)
         return linear
+
+    def _release_parameters(self, config: FastChannelsConfig, data: DataExports, content_base_url: str) -> None:
+        """What the release module's stack, deployed beside the guidance, reads from this one: SSM parameters, not
+        cross-stack references (this stack also deploys without it)."""
+        prefix = config.prefix
+        values = {
+            release_names.parameter_name(prefix, release_names.Parameter.CONTENT_BASE_URL): content_base_url,
+            release_names.parameter_name(prefix, release_names.Parameter.CDN_BASE_URL): self.delivery.cdn_base_url,
+            release_names.parameter_name(prefix, release_names.Parameter.MEDIA_BUCKET): data.media_bucket.bucket_name,
+            **{
+                release_names.channel_parameter_name(prefix, channel.name): channel.channel_url
+                for channel in self.channels
+                if channel.name in config.modules.release.channels
+            },
+        }
+        for name, value in values.items():
+            ssm.StringParameter(
+                self,
+                "ReleaseParameter" + name.removeprefix(f"/{prefix}/release").replace("/", "-"),  # stable per name
+                parameter_name=name,
+                string_value=value,
+                description="Read by the release module's stack (fast_channels.core.monetization.names)",
+            )
 
     def _trace_log_groups(self) -> list[logs.ILogGroup]:
         """Log groups the saved trace queries search besides the bus and MediaConvert logs: the pipeline's state

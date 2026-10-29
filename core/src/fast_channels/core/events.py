@@ -100,6 +100,15 @@ class ChannelAlert(BaseModel):
     correlation_id: str = Field(description="The poll's scheduled time, which every alert of one poll shares.")
 
 
+class DesiredStateRendered(BaseModel):
+    """A deployment rendered a new release bundle (release module): the stack wrote it to the release bucket, and the
+    Release Controller validates and applies it to each monetized channel's idle sibling."""
+
+    bundle_key: str = Field(description="S3 key of the bundle document, release/<digest>/bundle.json.")
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$", description="SHA-256 of the bundle: its version.")
+    correlation_id: str = Field(description="The CloudFormation request that rendered it.")
+
+
 DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     IngestRequest: "Ingest Requested",
     AssetReady: "Asset Ready",
@@ -111,6 +120,7 @@ DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     CatalogItemChanged: "Catalog Item Changed",
     CensusChanged: "Census Changed",
     ChannelAlert: "Channel Alert",
+    DesiredStateRendered: "Desired State Rendered",
 }
 
 

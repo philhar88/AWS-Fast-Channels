@@ -22,9 +22,27 @@ NEWS = {"channels.iac": [{"name": "{prefix}-demo"}, {"name": "{prefix}-news"}]}
 ACCOUNT, REGION = "123456789012", "us-east-1"
 
 
+def _unguarded(resources: dict[str, Any]) -> dict[str, Any]:
+    """``resources`` without the release guard (``test_release_stack`` checks it): its managed policy, and its
+    attachment to each role."""
+    guards = [
+        {"Ref": key}
+        for key, r in resources.items()
+        if key.startswith("ReleaseGuard") and r["Type"] == "AWS::IAM::ManagedPolicy"
+    ]
+    found = {key: r for key, r in resources.items() if {"Ref": key} not in guards}
+    for key, resource in found.items():
+        attached = resource.get("Properties", {}).get("ManagedPolicyArns")
+        if resource["Type"] == "AWS::IAM::Role" and attached:
+            kept = [a for a in attached if a not in guards]
+            properties = {k: v for k, v in resource["Properties"].items() if k != "ManagedPolicyArns"}
+            found[key] = resource | {"Properties": properties | ({"ManagedPolicyArns": kept} if kept else {})}
+    return found
+
+
 def _changed(on: Any, off: Any, stack: str) -> dict[str, Any]:
-    """Resources of ``stack`` that differ between two deployments, as they are in ``on``."""
-    a = on.template(getattr(on.stage, stack)).to_json()["Resources"]
+    """Resources of ``stack`` that differ between two deployments, as they are in ``on`` (without the guard)."""
+    a = _unguarded(on.template(getattr(on.stage, stack)).to_json()["Resources"])
     b = off.template(getattr(off.stage, stack)).to_json()["Resources"]
     return {key: a.get(key) for key in sorted(set(a) | set(b)) if a.get(key) != b.get(key)}
 
@@ -70,7 +88,17 @@ def test_release_changes_only_the_policy_and_guard_of_monetized_channels(
     on, off = deployment(RELEASE_ON), deployment(NEEDED_ON)
 
     media = _changed(on, off, "media")
-    assert {r["Type"] for r in media.values()} == {"Custom::ChannelGuard", "AWS::MediaTailor::ChannelPolicy"}
+    parameters = {r["Properties"]["Name"] for r in media.values() if r["Type"] == "AWS::SSM::Parameter"}
+    assert parameters == {  # what the Release stack reads (M3-03), not cross-stack references
+        "/fast/release/content-base-url",
+        "/fast/release/cdn-base-url",
+        "/fast/release/media-bucket",
+        "/fast/release/channels/fast-demo",
+    }
+    assert {r["Type"] for r in media.values()} - {"AWS::SSM::Parameter"} == {
+        "Custom::ChannelGuard",
+        "AWS::MediaTailor::ChannelPolicy",
+    }
     assert _changed(on, off, "data") == {}
     [tools] = _changed(on, off, "operator").values()  # the channels tool: agent channels get the pattern too
     assert tools["Properties"]["Handler"] == "fast_channels.functions.tools.channels.handler"

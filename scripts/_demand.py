@@ -38,6 +38,7 @@ from fast_channels.core.demand import NETWORK_CONTEXT, SIMULATOR_CODE_PREFIX, De
 from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, simulator_creatives
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
+from fast_channels.core.monetization import names as release_names
 from fast_channels.core.pbs_config import POD_SECONDS, render, simulator_host
 from fast_channels.core.pds import names as pds_names
 
@@ -582,9 +583,19 @@ class DemandStage:
     def pds_stack(self) -> str:
         return f"{self.stage_id}-Pds"
 
+    @property
+    def release_stack(self) -> str:
+        return release_names.stack_name(self.stage_id)
+
     def beside_stacks(self) -> list[str]:
-        """The repository's stacks in the guidance's VPC, in deploy order: Demand, then Pds if the module is on."""
-        return [f"{self.stage_id}/Demand"] + ([f"{self.stage_id}/Pds"] if self.config.modules.pds.enabled else [])
+        """The repository's stacks that need the guidance's network, in deploy order: Demand, then Pds and Release
+        if their modules are on (the release bundle names the guidance's CloudFront domain)."""
+        modules = self.config.modules
+        return (
+            [f"{self.stage_id}/Demand"]
+            + ([f"{self.stage_id}/Pds"] if modules.pds.enabled else [])
+            + ([f"{self.stage_id}/Release"] if modules.release.enabled else [])
+        )
 
     def media_outputs(self) -> dict[str, str] | None:
         """The Data and Media stacks' outputs, or None when the stage has no Media stack (a demand-only stage)."""
@@ -660,13 +671,15 @@ class DemandStage:
 
     def deploy_demand_stack(self, demo: DemoIndex | None, content_base_url: str) -> None:
         """``FastChannels-<prefix>-Demand`` (the private zone, and in ``lambda`` mode the simulator with its code), then
-        ``FastChannels-<prefix>-Pds`` with ``modules.pds.enabled``: both need the guidance's network."""
+        ``FastChannels-<prefix>-Pds`` with ``modules.pds.enabled`` and ``FastChannels-<prefix>-Release`` with
+        ``modules.release.enabled``: they need the guidance's network."""
         demand = self.config.modules.demand
         key = None
         if demand.mode == "demo" and demand.simulator == "lambda":
             key = self.simulator_package(self.simulator_creatives(demo, content_base_url))
         network = self.network(key)
         self.check_pds_state()
+        self.check_release_state()
         log(f"deploying {', '.join(self.beside_stacks())}")
         run(
             [
@@ -696,6 +709,21 @@ class DemandStage:
             raise DemandError(
                 f"the PDS's parameters {sorted(missing)} are missing: run `make deploy` with modules.pds.enabled first"
             )
+
+    def check_release_state(self) -> None:
+        """With ``modules.release.enabled`` the Media stack must publish what the Release stack reads (``make
+        deploy`` first); without it, a Release stack left from before is deleted (its reaper deletes the siblings
+        and Functions the controller created)."""
+        if not self.config.modules.release.enabled:
+            self.delete_stack(self.client("cloudformation"), self.release_stack)
+            return
+        name = release_names.parameter_name(self.prefix, release_names.Parameter.CONTENT_BASE_URL)
+        try:
+            self.client("ssm").get_parameter(Name=name)
+        except ClientError:
+            raise DemandError(
+                f"no SSM parameter {name}: run `make deploy` with modules.release.enabled first"
+            ) from None
 
     def start_census_gate(self) -> str:
         """Run the census gate once with the census's last count, so a stage deployed without running channels
@@ -1037,6 +1065,7 @@ class DemandStage:
         record.write_text(json.dumps(retained.__dict__, indent=2))
         cloudformation = self.client("cloudformation")
         for stack in (
+            self.release_stack,
             self.pds_stack,
             self.demand_stack,
             names.guidance_stack(self.prefix),
@@ -1116,6 +1145,7 @@ class DemandStage:
         residue = []
         cloudformation = self.client("cloudformation")
         for stack in (
+            self.release_stack,
             self.pds_stack,
             self.demand_stack,
             names.guidance_stack(self.prefix),
@@ -1138,7 +1168,7 @@ class DemandStage:
             for page in tagging.get_paginator("get_resources").paginate(
                 TagFilters=[
                     {"Key": "fast:app", "Values": [self.prefix]},
-                    {"Key": names.MODULE_TAG, "Values": [names.MODULE, pds_names.MODULE]},
+                    {"Key": names.MODULE_TAG, "Values": [names.MODULE, pds_names.MODULE, release_names.MODULE]},
                 ]
             ):
                 residue += [

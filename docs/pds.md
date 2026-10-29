@@ -199,8 +199,9 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
 - **Ledger.** Every change of money is an entry in the ledger chain `pds/line/<id>`: `money.budget`, `money.reserve`,
   `money.deliver`, `money.release`, with the amount as a decimal string, the shard and the break's `decision_id`.
   Never a viewer id.
-- **Delivery.** A subscription filter on the stage's MediaTailor log group (`/aws/vendedlogs/mediatailor/<prefix>`)
-  sends the impression beacons (`BEACON_FIRED`, `trackingEvent` impression) to the delivery function. Only our tracker
+- **Delivery.** A subscription filter on the stage's MediaTailor log group (`/aws/vendedlogs/mediatailor/<prefix>`),
+  and with the release module one on the siblings' log group (`<prefix>-pds-delivery-release`,
+  [release-controller.md](release-controller.md#the-siblings-logs)), sends the impression beacons (`BEACON_FIRED`, `trackingEvent` impression) to the delivery function. Only our tracker
   counts: the CDN's host and `/ads/b.gif` with a `d` parameter (the kit's own pod beacons and billing notices have
   none), fired in the session it names. The parameters come from `beaconInfo.beaconUri`, so the count does not depend
   on CloudFront's logs. Fills count once per `(sid, evid)` and impressions once per `(sid, evid, crid)`, however often

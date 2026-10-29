@@ -187,6 +187,15 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        if config.modules.release.enabled:
+            # The siblings log to the release module's own log group: its stack subscribes this function to it.
+            ssm.StringParameter(
+                self,
+                "DeliveryFunctionParameter",
+                parameter_name=names.parameter_name(prefix, names.Published.DELIVERY_FUNCTION),
+                string_value=self.delivery.function.function.function_arn,
+                description="Read by the release module's stack: the impressions of the sibling configurations",
+            )
         self.delivery_records = DecisionLog(
             self,
             "DeliveryRecords",

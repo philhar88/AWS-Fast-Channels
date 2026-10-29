@@ -79,7 +79,15 @@ class Parameter(StrEnum):
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
 
 
-def parameter_name(prefix: str, parameter: Parameter) -> str:
+class Published(StrEnum):
+    """The SSM parameters ``/<prefix>/pds/<name>`` the Pds stack writes for the stacks deployed after it."""
+
+    DELIVERY_FUNCTION = "delivery-function"
+    """The delivery function's ARN (with the release module on): the Release stack subscribes it to the siblings' log
+    group, so their impressions are counted too."""
+
+
+def parameter_name(prefix: str, parameter: Parameter | Published) -> str:
     """``/<prefix>/pds/<parameter>``."""
     return f"/{prefix}/pds/{parameter.value}"
 
