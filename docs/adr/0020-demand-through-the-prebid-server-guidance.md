@@ -73,6 +73,14 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
     geolocation from every bidder but the own book.
 
   The configuration is rendered without secrets.
+- **The Pod Decision Service runs in the Prebid Server VPC**, behind an internal Application Load Balancer at
+  `pds.<prefix>.fast.internal` that admits only the Prebid Server tasks' security group. Its functions run outside
+  the VPC (the load balancer invokes them), and a census-gated provisioned concurrency keeps them warm while channels
+  run. The reason is the 50 ms `/policy` budget: in a live test over API Gateway and a NAT gateway, a third of
+  MediaTailor's auctions fell back to the own book, the first break of every session among them, with cold functions
+  and connections. A Fargate service is built only if a measured break herd needs it. Each function serves from a
+  snapshot in a private config bucket (the demand allow-list, CloudFront's origin-facing networks), which a publisher
+  refreshes, and logs one decision record per call into the lake.
 
 ## Consequences
 - A second deployable app with its own toolchain (the guidance's Poetry project and a CDK bootstrap per stage),

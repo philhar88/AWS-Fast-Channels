@@ -163,6 +163,46 @@ def test_names_follow_the_prefix(stage: _demand.DemandStage) -> None:
     assert any(arg == 'fast-channels.prefix="fastcix"' for arg in context)
 
 
+def test_the_pds_stack_deploys_after_the_demand_stack(stage: _demand.DemandStage) -> None:
+    assert stage.pds_stack == "FastChannels-fastcix-Pds"
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Pds"]
+
+
+def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
+    return {
+        "StackName": name,
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+        "Outputs": [{"OutputKey": key, "OutputValue": value} for key, value in outputs.items()],
+    }
+
+
+def test_both_census_gates_start_with_the_last_count(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm, cloudformation, stepfunctions = stub("ssm"), stub("cloudformation"), stub("stepfunctions")
+    ssm.add_response(
+        "get_parameter",
+        {"Parameter": {"Name": "/fastcix/ops/running-channels", "Value": "1"}},
+        {"Name": "/fastcix/ops/running-channels"},
+    )
+    arns = {
+        "FastChannels-fastcix-Demand": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-census-gate",
+        "FastChannels-fastcix-Pds": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-pds-census-gate",
+    }
+    detail = json.dumps({"detail": {"running": 1, "previous": 1, "correlation_id": "deploy-demand"}})
+    for name, arn in arns.items():
+        cloudformation.add_response(
+            "describe_stacks", {"Stacks": [_stack(name, {"CensusGateArn": arn})]}, {"StackName": name}
+        )
+    for arn in arns.values():
+        stepfunctions.add_response(
+            "start_execution",
+            {"executionArn": f"{arn}:x", "startDate": datetime(2026, 10, 29, tzinfo=UTC)},
+            {"stateMachineArn": arn, "input": detail},
+        )
+
+    assert stage.start_census_gate() == f"{arns['FastChannels-fastcix-Demand']}:x"
+
+
 def test_guidance_parameters_are_keyed_by_the_renamed_stack(stage: _demand.DemandStage) -> None:
     assert stage.guidance_parameters("fastcix-pbs", {"SpotInstanceWeight": "0", "EnableLogAnalytics": "false"}) == [
         "--parameters",

@@ -3,9 +3,10 @@ dedicated CDK bootstrap, the Prebid Server image, the guidance's stacks and the 
 
 Used by ``scripts/prebid_guidance.py`` (``doctor``, ``bootstrap``, ``build-image``, ``deploy``, ``outputs``,
 ``upload-config``, ``smoke``, ``destroy``, ``inventory``). Deploy order (DESIGN §4.3): DemandEdge and DemandBuild →
-bootstrap → image → guidance (simulator stack first in ``guidance_stack`` mode) → SSM parameters. Destroy runs it
-backwards and also removes what the guidance's templates retain: its S3 buckets (every version), log groups,
-inactive task definitions; its KMS keys are scheduled for deletion with the 7-day minimum, the only residue.
+bootstrap → image → guidance (simulator stack first in ``guidance_stack`` mode) → SSM parameters → Demand (and Pds
+with ``modules.pds.enabled``) → the census gates once. Destroy runs it backwards and also removes what the guidance's
+templates retain: its S3 buckets (every version), log groups, inactive task definitions; its KMS keys are scheduled for
+deletion with the 7-day minimum, the only residue.
 """
 
 import hashlib
@@ -38,6 +39,7 @@ from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.pbs_config import POD_SECONDS, render, simulator_host
+from fast_channels.core.pds import names as pds_names
 
 if TYPE_CHECKING:
     import boto3
@@ -574,6 +576,14 @@ class DemandStage:
     def demand_stack(self) -> str:
         return f"{self.stage_id}-Demand"
 
+    @property
+    def pds_stack(self) -> str:
+        return f"{self.stage_id}-Pds"
+
+    def beside_stacks(self) -> list[str]:
+        """The repository's stacks in the guidance's VPC, in deploy order: Demand, then Pds if the module is on."""
+        return [f"{self.stage_id}/Demand"] + ([f"{self.stage_id}/Pds"] if self.config.modules.pds.enabled else [])
+
     def media_outputs(self) -> dict[str, str] | None:
         """The Data and Media stacks' outputs, or None when the stage has no Media stack (a demand-only stage)."""
         try:
@@ -647,18 +657,19 @@ class DemandStage:
         )
 
     def deploy_demand_stack(self, demo: DemoIndex | None, content_base_url: str) -> None:
-        """``FastChannels-<prefix>-Demand``: the private zone, and in ``lambda`` mode the simulator with its code."""
+        """``FastChannels-<prefix>-Demand`` (the private zone, and in ``lambda`` mode the simulator with its code), then
+        ``FastChannels-<prefix>-Pds`` with ``modules.pds.enabled``: both need the guidance's network."""
         demand = self.config.modules.demand
         key = None
         if demand.mode == "demo" and demand.simulator == "lambda":
             key = self.simulator_package(self.simulator_creatives(demo, content_base_url))
         network = self.network(key)
-        log(f"deploying {self.stage_id}/Demand")
+        log(f"deploying {', '.join(self.beside_stacks())}")
         run(
             [
                 CDK,
                 "deploy",
-                f"{self.stage_id}/Demand",
+                *self.beside_stacks(),
                 "--exclusively",
                 "--require-approval",
                 "never",
@@ -682,6 +693,11 @@ class DemandStage:
             stateMachineArn=arn, input=json.dumps({"detail": detail})
         )["executionArn"]
         log(f"census gate started with running={running}: {execution}")
+        if self.config.modules.pds.enabled and (pds := self.stack_outputs(self.pds_stack).get("CensusGateArn")):
+            gate = self.client("stepfunctions").start_execution(
+                stateMachineArn=pds, input=json.dumps({"detail": detail})
+            )["executionArn"]
+            log(f"PDS census gate started with running={running}: {gate}")
         return str(execution)
 
     def herd(self, rate: int, seconds: int) -> dict[str, Any]:
@@ -967,7 +983,12 @@ class DemandStage:
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(json.dumps(retained.__dict__, indent=2))
         cloudformation = self.client("cloudformation")
-        for stack in (self.demand_stack, names.guidance_stack(self.prefix), names.simulator_stack(self.prefix)):
+        for stack in (
+            self.pds_stack,
+            self.demand_stack,
+            names.guidance_stack(self.prefix),
+            names.simulator_stack(self.prefix),
+        ):
             self.delete_stack(cloudformation, stack)
         self.remove_retained(retained)
         self.delete_parameters()
@@ -1042,6 +1063,7 @@ class DemandStage:
         residue = []
         cloudformation = self.client("cloudformation")
         for stack in (
+            self.pds_stack,
             self.demand_stack,
             names.guidance_stack(self.prefix),
             names.simulator_stack(self.prefix),
@@ -1063,7 +1085,7 @@ class DemandStage:
             for page in tagging.get_paginator("get_resources").paginate(
                 TagFilters=[
                     {"Key": "fast:app", "Values": [self.prefix]},
-                    {"Key": names.MODULE_TAG, "Values": [names.MODULE]},
+                    {"Key": names.MODULE_TAG, "Values": [names.MODULE, pds_names.MODULE]},
                 ]
             ):
                 residue += [

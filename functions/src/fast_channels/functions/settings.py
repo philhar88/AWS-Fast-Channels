@@ -90,6 +90,10 @@ class Settings:
     """Channels that runbook R12 may start when found stopped (the envelope's always-on list; none yet)."""
     evergreen_block: str = field(default_factory=lambda: _env("EVERGREEN_BLOCK"))
     """The pre-approved evergreen block that R13 and R15 would swap in (none yet)."""
+    pds_config_bucket: str = field(default_factory=lambda: _env("PDS_CONFIG_BUCKET"))
+    """The Pod Decision Service's private config bucket, which holds its snapshot (pds module)."""
+    pds_snapshot_base: str = field(default_factory=lambda: _env("PDS_SNAPSHOT_BASE"))
+    """JSON of what the deployment configures in the snapshot (``core.pds.snapshot.SnapshotBase``)."""
 
     @property
     def app(self) -> str:

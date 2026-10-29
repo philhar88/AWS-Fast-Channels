@@ -36,6 +36,13 @@ All notable changes to this project are documented here. The format follows
   selection (tier-0 lines first, accepted net value, cross-bidder creative, advertiser and category separation, pods
   that fit the break, prefetch rounding, standalones for ad buffet, empty pods for avails under 30 s), trackers,
   decision records, deterministic buckets and the ad-load price stub. Pure code: nothing is deployed yet.
+- **Pod Decision Service** (`modules.pds`, `FastChannels-<prefix>-Pds`, [docs/pds.md](docs/pds.md#the-service)):
+  `POST /policy` behind an internal load balancer at `pds.<prefix>.fast.internal` in the Prebid Server VPC, which
+  admits only the Prebid Server tasks. The function runs outside the VPC and is kept warm by a census-gated
+  provisioned concurrency while channels run. A snapshot publisher keeps the demand allow-list and CloudFront's
+  origin-facing networks in a private config bucket; each `/policy` decision record goes to the lake (`pds_policy`).
+  The Data stack holds the module's table `<prefix>-pds` and the config bucket; `deploy-demand` deploys the stack after
+  the Demand stack and `destroy-demand` deletes it first.
 - **Monetization desired state** (`fast_channels.core.monetization`, for the release module; no stack uses it yet):
   MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
   PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the

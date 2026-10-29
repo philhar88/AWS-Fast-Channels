@@ -260,8 +260,10 @@ order (DESIGN §4.3):
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
 6. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
    `lambda` mode the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)), the census
-   gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)); then one run
-   of the census gate with the current count.
+   gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)). With
+   `modules.pds.enabled`, **`FastChannels-<prefix>-Pds`** follows with the same context: the Pod Decision Service at
+   `pds.<prefix>.fast.internal` ([docs/pds.md](pds.md#the-service)). Then one run of each census gate with the current
+   count.
 7. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
    VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs
    `POLICY_UNAVAILABLE`); the same POST without the secret, and a request to another path, are blocked at the edge
@@ -270,12 +272,14 @@ order (DESIGN §4.3):
 `upload-config` uploads a changed configuration to the guidance's `current/` prefix and stored-data bucket and forces
 a new ECS deployment, which overlay O7 runs at full capacity.
 
-`destroy` deletes the Demand stack and the guidance's stacks, then what the guidance's templates retain (the S3 buckets with every object version,
-the container, DataSync, Lambda and Container Insights log groups, inactive task definitions), the SSM contract, the
+`destroy` deletes the Pds and Demand stacks and the guidance's stacks, then what the guidance's templates retain (the
+S3 buckets with every object version, the container, DataSync, Lambda and Container Insights log groups, inactive task
+definitions), the SSM contract, the
 bootstrap (its retained bucket and repository too) and the repository's two stacks. It records what the templates
 retain (`build/prebid-guidance/<prefix>-retained.json`) before it deletes anything, so an interrupted destroy picks up
 where it stopped when run again. The guidance's six KMS keys are scheduled for deletion with the 7-day minimum; they
-are the only residue. `inventory` lists anything else tagged `fast:module=demand` for the prefix, or named for it,
+are the only residue. The Pod Decision Service's table and config bucket are the Data stack's and stay until
+`make destroy`. `inventory` lists anything else tagged `fast:module=demand` or `pds` for the prefix, or named for it,
 and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
 
 A stage with Prebid Server deployed costs about $120–150 a month while idle (two NAT gateways, the load balancers, the

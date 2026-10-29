@@ -3,9 +3,9 @@
 The Pod Decision Service (PDS) decides, for every ad break of every monetized session, what Prebid Server may ask
 third parties and which ads make up the pod. It is part of the optional ad-monetization modules (`modules.pds`, off by
 default; see [operations.md](operations.md#configuration-reference)), which are being built on the
-`feature/agentic-monetization` branch. This page describes the rules and the contract, which live in
-`fast_channels.core.pds` and are complete; the service that runs them behind Prebid Server is added by the module's
-next changes.
+`feature/agentic-monetization` branch. The rules and the contract live in `fast_channels.core.pds`; the service
+that runs them beside Prebid Server is [described below](#the-service). `/policy` is served; `/select` and the own
+book follow.
 
 - [The two calls](#the-two-calls)
 - [Contract](#contract)
@@ -17,6 +17,7 @@ next changes.
 - [Decision records](#decision-records)
 - [Buckets](#buckets)
 - [Patch contributors](#patch-contributors)
+- [The service](#the-service)
 
 ## The two calls
 
@@ -176,3 +177,30 @@ Other modules add `app.content` fields and decision-record fields through the `P
 (`fast_channels.core.pds.contributors`) without the PDS knowing them; the content-enrichment module contributes the
 show's metadata this way. Contributions fail open: a contributor that raises, or that sets a field an earlier one set,
 is skipped and named in the record.
+
+## The service
+
+`FastChannels-<prefix>-Pds` runs in the Prebid Server guidance's VPC. Like the Demand stack it needs the guidance's
+network, so `scripts/prebid_guidance.py deploy` deploys it right after the Demand stack, whose private zone it adds a
+record to, and `destroy` deletes it first ([docs/demand.md](demand.md#deploy-and-destroy)). Its state is the Data
+stack's: the table `<prefix>-pds` and the private config bucket exist with `modules.pds.enabled` and stay until
+`make destroy`.
+
+| Part | What it is |
+|---|---|
+| Load balancer | An internal Application Load Balancer in the guidance's private subnets at `pds.<prefix>.fast.internal`, HTTP on port 80. Its security group admits only the Prebid Server tasks' security group. `POST /policy` goes to its function; anything else gets a 404 |
+| `/policy` function | Python 3.14 on arm64, 1,024 MB, outside the VPC: the load balancer invokes it, so it has no network-interface cold start. The load balancer calls its `live` alias. It answers with `decide()` and the current snapshot, logs one `pds.policy` decision record and the metrics `PolicyDecisions` (by mode), `PolicyNoViewerIp`, `PolicyRefused` (a 400) and `PolicyErrors` (a 500) in the `FastChannels` namespace |
+| Census gate | `<prefix>-pds-census-gate`, Step Functions with JSONata and SDK calls only, on `Census Changed`. When the first channel starts it sets `modules.pds.provisioned_concurrency` on every function's `live` alias; 15 minutes after the last one stops, if none runs then, it removes it. `deploy-demand` runs it once with the census's current count. With `provisioned_concurrency: 0` there is no gate |
+| Snapshot | `snapshot/current.json` in the private config bucket (never the CDN, never the ingest bucket), with each version kept 30 days under `snapshot/history/`. It holds the demand allow-list (in demo mode the guidance's bidder simulator, `amt`), shed bidders, the floor and CloudFront's origin-facing networks from `ip-ranges.json`, which the viewer-IP rule needs. The publisher writes it when the stack deploys and every hour, and only when its content changed. Each function reads it at cold start and every 30 seconds with a conditional GET; one that has never read it serves no third-party bidder and no viewer address |
+| Decision records | A subscription on the function's log group sends the `pds.policy` lines to the Firehose stream `<prefix>-pds-policy`, which writes them to the lake bucket under `pds/policy/<yyyy>/<MM>/<dd>/<HH>/`, within a minute. The lake table `pds_policy` reads them |
+
+Why in the VPC and warm: `/policy` gets 50 ms. Reached over API Gateway and a NAT gateway, a third of MediaTailor's
+auctions fell back to the own book in a live test, every first break among them, because the function and its
+connections were cold.
+
+```sql
+SELECT mode, reason, ip_rule, count(*) AS breaks, approx_percentile(latency_ms, 0.99) AS p99_ms
+FROM "<prefix>_lake".pds_policy
+WHERE datehour >= date_format(current_timestamp - interval '1' hour, '%Y/%m/%d/%H')
+GROUP BY 1, 2, 3
+```
