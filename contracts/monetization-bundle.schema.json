@@ -1,0 +1,1092 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FAST Channels release bundle",
+  "description": "Desired monetization state rendered at synth and applied by the Release Controller: every Function document (ids are stems; the release adds _rNNNN), every sibling playback configuration without the origin secret, the expected channel-policy pattern, the stored requests and the rollout.",
+  "type": "object",
+  "required": [
+    "digest",
+    "bundle"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the bundle JSON."
+    },
+    "bundle": {
+      "additionalProperties": false,
+      "description": "The desired state of one deployment (``release/<digest>/bundle.json``).",
+      "properties": {
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "prefix": {
+          "title": "Prefix",
+          "type": "string"
+        },
+        "functions": {
+          "description": "Every Function document, stems for ids, children before the executors that run them.",
+          "items": {
+            "$ref": "#/$defs/Function"
+          },
+          "title": "Functions",
+          "type": "array"
+        },
+        "siblings": {
+          "items": {
+            "$ref": "#/$defs/Sibling"
+          },
+          "title": "Siblings",
+          "type": "array"
+        },
+        "channels": {
+          "items": {
+            "$ref": "#/$defs/MonetizedChannel"
+          },
+          "title": "Channels",
+          "type": "array"
+        },
+        "stored_requests": {
+          "description": "Stored-request ids the Prebid Server configuration serves (validator R-P5).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Stored Requests",
+          "type": "array"
+        },
+        "grid_seconds": {
+          "description": "``session.avail_duration_secs`` of every break length the planner airs (30, 60, 90, 120).",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Grid Seconds",
+          "type": "array"
+        },
+        "rollout": {
+          "$ref": "#/$defs/Rollout"
+        }
+      },
+      "required": [
+        "prefix",
+        "functions",
+        "siblings",
+        "channels",
+        "stored_requests",
+        "grid_seconds",
+        "rollout"
+      ],
+      "title": "Bundle",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "AdConditioningConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "StreamingMediaFileConditioning": {
+          "enum": [
+            "TRANSCODE",
+            "NONE"
+          ],
+          "title": "Streamingmediafileconditioning",
+          "type": "string"
+        }
+      },
+      "required": [
+        "StreamingMediaFileConditioning"
+      ],
+      "title": "AdConditioningConfiguration",
+      "type": "object"
+    },
+    "AdDecisionServerConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "HttpRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "VastResponse": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VastResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AdDecisionServerConfiguration",
+      "type": "object"
+    },
+    "AdsInteractionLog": {
+      "additionalProperties": false,
+      "properties": {
+        "PublishOptInEventTypes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publishoptineventtypes"
+        },
+        "ExcludeEventTypes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excludeeventtypes"
+        }
+      },
+      "title": "AdsInteractionLog",
+      "type": "object"
+    },
+    "AdsPersonalizationTimeouts": {
+      "additionalProperties": false,
+      "properties": {
+        "AdsRequestTimeoutMilliseconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adsrequesttimeoutmilliseconds"
+        },
+        "LiveMaximumAdsPersonalizationTimeMilliseconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Livemaximumadspersonalizationtimemilliseconds"
+        },
+        "VodMaximumAdsPersonalizationTimeMilliseconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vodmaximumadspersonalizationtimemilliseconds"
+        }
+      },
+      "title": "AdsPersonalizationTimeouts",
+      "type": "object"
+    },
+    "AdsRoute": {
+      "description": "Which ADS a sibling's breaks go to.",
+      "enum": [
+        "pbs",
+        "opaque"
+      ],
+      "title": "AdsRoute",
+      "type": "string"
+    },
+    "AvailSuppression": {
+      "additionalProperties": false,
+      "properties": {
+        "Mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "OFF",
+                "BEHIND_LIVE_EDGE",
+                "AFTER_LIVE_EDGE"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "Value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "FillPolicy": {
+          "anyOf": [
+            {
+              "enum": [
+                "FULL_AVAIL_ONLY",
+                "PARTIAL_AVAIL"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fillpolicy"
+        }
+      },
+      "title": "AvailSuppression",
+      "type": "object"
+    },
+    "Cache": {
+      "additionalProperties": false,
+      "description": "``HttpRequestCacheConfiguration``: responses are cached per playback configuration, keyed by ``Key``.",
+      "properties": {
+        "TtlMinimumSeconds": {
+          "minimum": 1,
+          "title": "Ttlminimumseconds",
+          "type": "integer"
+        },
+        "TtlMaximumSeconds": {
+          "minimum": 1,
+          "title": "Ttlmaximumseconds",
+          "type": "integer"
+        },
+        "Key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Key"
+        }
+      },
+      "required": [
+        "TtlMinimumSeconds",
+        "TtlMaximumSeconds"
+      ],
+      "title": "Cache",
+      "type": "object"
+    },
+    "CdnConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "AdSegmentUrlPrefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adsegmenturlprefix"
+        },
+        "ContentSegmentUrlPrefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contentsegmenturlprefix"
+        }
+      },
+      "title": "CdnConfiguration",
+      "type": "object"
+    },
+    "CustomOutputConfiguration": {
+      "additionalProperties": false,
+      "description": "``CustomOutputConfiguration``: output bindings evaluated against the session state, no call.",
+      "properties": {
+        "Runtime": {
+          "const": "JSONATA",
+          "default": "JSONATA",
+          "title": "Runtime",
+          "type": "string"
+        },
+        "Output": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        }
+      },
+      "title": "CustomOutputConfiguration",
+      "type": "object"
+    },
+    "Function": {
+      "additionalProperties": false,
+      "description": "A ``PutFunction`` request: exactly the configuration its ``FunctionType`` names.\n\nIn the bundle ``function_id`` and the executor's step ids are stems; :meth:`released` gives the release's ids.",
+      "properties": {
+        "FunctionId": {
+          "title": "Functionid",
+          "type": "string"
+        },
+        "FunctionType": {
+          "$ref": "#/$defs/FunctionType"
+        },
+        "Description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "HttpRequestConfiguration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpRequestConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "CustomOutputConfiguration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CustomOutputConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "SequentialExecutorConfiguration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SequentialExecutorConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "Tags": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        }
+      },
+      "required": [
+        "FunctionId",
+        "FunctionType"
+      ],
+      "title": "Function",
+      "type": "object"
+    },
+    "FunctionRef": {
+      "additionalProperties": false,
+      "description": "``FunctionRef``: one step of a sequential executor (``RunCondition`` exists only here).",
+      "properties": {
+        "FunctionId": {
+          "title": "Functionid",
+          "type": "string"
+        },
+        "RunCondition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runcondition"
+        },
+        "Alias": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alias"
+        }
+      },
+      "required": [
+        "FunctionId"
+      ],
+      "title": "FunctionRef",
+      "type": "object"
+    },
+    "FunctionType": {
+      "description": "The function types the bundle builds (botocore also has ``AWS_SERVICE_REQUEST``, ``CONCURRENT_EXECUTOR`` and\n``VAST_REQUEST``, which no module uses yet).",
+      "enum": [
+        "CUSTOM_OUTPUT",
+        "HTTP_REQUEST",
+        "SEQUENTIAL_EXECUTOR"
+      ],
+      "title": "FunctionType",
+      "type": "string"
+    },
+    "Hook": {
+      "description": "Where MediaTailor runs a mapped function (``FunctionMapping`` keys).",
+      "enum": [
+        "PRE_SESSION_INITIALIZATION",
+        "PRE_ADS_REQUEST",
+        "POST_ADS_RESPONSE",
+        "PRE_MANIFEST_INSERTION"
+      ],
+      "title": "Hook",
+      "type": "string"
+    },
+    "HttpRequest": {
+      "additionalProperties": false,
+      "description": "``AdDecisionServerConfiguration.HttpRequest``.",
+      "properties": {
+        "Method": {
+          "anyOf": [
+            {
+              "enum": [
+                "GET",
+                "POST"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method"
+        },
+        "Body": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body"
+        },
+        "Headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        },
+        "CompressRequest": {
+          "anyOf": [
+            {
+              "enum": [
+                "NONE",
+                "GZIP"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compressrequest"
+        }
+      },
+      "title": "HttpRequest",
+      "type": "object"
+    },
+    "HttpRequestConfiguration": {
+      "additionalProperties": false,
+      "description": "``HttpRequestConfiguration``: one HTTP call; its ``Output`` may read ``response``.",
+      "properties": {
+        "Runtime": {
+          "const": "JSONATA",
+          "default": "JSONATA",
+          "title": "Runtime",
+          "type": "string"
+        },
+        "MethodType": {
+          "enum": [
+            "GET",
+            "POST"
+          ],
+          "title": "Methodtype",
+          "type": "string"
+        },
+        "Url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "RequestTimeoutMilliseconds": {
+          "title": "Requesttimeoutmilliseconds",
+          "type": "integer"
+        },
+        "Body": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body"
+        },
+        "Headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        },
+        "Output": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        },
+        "Cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cache"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "MethodType",
+        "Url",
+        "RequestTimeoutMilliseconds"
+      ],
+      "title": "HttpRequestConfiguration",
+      "type": "object"
+    },
+    "LogConfiguration": {
+      "additionalProperties": false,
+      "description": "``ConfigureLogsForPlaybackConfiguration`` (the API sets logging with its own call).",
+      "properties": {
+        "PercentEnabled": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Percentenabled",
+          "type": "integer"
+        },
+        "EnabledLoggingStrategies": {
+          "items": {
+            "enum": [
+              "VENDED_LOGS",
+              "LEGACY_CLOUDWATCH"
+            ],
+            "type": "string"
+          },
+          "title": "Enabledloggingstrategies",
+          "type": "array"
+        },
+        "AdsInteractionLog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdsInteractionLog"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ManifestServiceInteractionLog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestServiceInteractionLog"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "PercentEnabled",
+        "EnabledLoggingStrategies"
+      ],
+      "title": "LogConfiguration",
+      "type": "object"
+    },
+    "ManifestServiceInteractionLog": {
+      "additionalProperties": false,
+      "properties": {
+        "PublishOptInEventTypes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publishoptineventtypes"
+        },
+        "ExcludeEventTypes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excludeeventtypes"
+        }
+      },
+      "title": "ManifestServiceInteractionLog",
+      "type": "object"
+    },
+    "MonetizedChannel": {
+      "additionalProperties": false,
+      "description": "A channel the release module monetizes, with the channel policy it must have (validator R-C1).\n\nThe policy is created with the channel and never released (the Release Controller never calls\n``PutChannelPolicy``: a policy change on a running channel is not session-safe, P0-08 \u00a73.2).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "child_directed": {
+          "default": false,
+          "title": "Child Directed",
+          "type": "boolean"
+        },
+        "policy_source_arns": {
+          "description": "The ``ArnLike aws:SourceArn`` values as playback-configuration names: the v3.0.0 configuration (the channel\nname) and the sibling pattern ``<channel>-p-?``.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Policy Source Arns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "policy_source_arns"
+      ],
+      "title": "MonetizedChannel",
+      "type": "object"
+    },
+    "PlaybackConfiguration": {
+      "additionalProperties": false,
+      "description": "A sibling's ``PutPlaybackConfiguration`` request plus its ``LogConfiguration``, in API shape.\n\nMembers a monetized sibling must not set (``SlateAdUrl``: the break slate plays; ``LivePreRollConfiguration``,\n``YieldOptimizationConfiguration``, ``Bumper``, ``TranscodeProfileName``, ...) are not modelled, so they are\nrefused.",
+      "properties": {
+        "Name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "VideoContentSourceUrl": {
+          "title": "Videocontentsourceurl",
+          "type": "string"
+        },
+        "AdDecisionServerUrl": {
+          "title": "Addecisionserverurl",
+          "type": "string"
+        },
+        "AdDecisionServerConfiguration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdDecisionServerConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "InsertionMode": {
+          "anyOf": [
+            {
+              "enum": [
+                "STITCHED_ONLY",
+                "PLAYER_SELECT"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Insertionmode"
+        },
+        "CdnConfiguration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CdnConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "AdConditioningConfiguration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdConditioningConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "PersonalizationThresholdSeconds": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Personalizationthresholdseconds"
+        },
+        "AvailSuppression": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AvailSuppression"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "AdsPersonalizationTimeouts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdsPersonalizationTimeouts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "FunctionMapping": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/Hook"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Functionmapping"
+        },
+        "LogConfiguration": {
+          "$ref": "#/$defs/LogConfiguration"
+        },
+        "Tags": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tags"
+        }
+      },
+      "required": [
+        "Name",
+        "VideoContentSourceUrl",
+        "AdDecisionServerUrl",
+        "LogConfiguration"
+      ],
+      "title": "PlaybackConfiguration",
+      "type": "object"
+    },
+    "Rollout": {
+      "additionalProperties": false,
+      "description": "An AppConfig deployment strategy for the release pointer (``CreateDeploymentStrategy``).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "growth_type": {
+          "enum": [
+            "LINEAR",
+            "EXPONENTIAL"
+          ],
+          "title": "Growth Type",
+          "type": "string"
+        },
+        "growth_factor": {
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "title": "Growth Factor",
+          "type": "number"
+        },
+        "deployment_duration_in_minutes": {
+          "minimum": 0,
+          "title": "Deployment Duration In Minutes",
+          "type": "integer"
+        },
+        "final_bake_time_in_minutes": {
+          "minimum": 0,
+          "title": "Final Bake Time In Minutes",
+          "type": "integer"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "growth_type",
+        "growth_factor",
+        "deployment_duration_in_minutes",
+        "final_bake_time_in_minutes"
+      ],
+      "title": "Rollout",
+      "type": "object"
+    },
+    "SequentialExecutorConfiguration": {
+      "additionalProperties": false,
+      "description": "``SequentialExecutorConfiguration`` (no ``MaxConcurrency``: that is the concurrent executor's).",
+      "properties": {
+        "Runtime": {
+          "const": "JSONATA",
+          "default": "JSONATA",
+          "title": "Runtime",
+          "type": "string"
+        },
+        "FunctionList": {
+          "items": {
+            "$ref": "#/$defs/FunctionRef"
+          },
+          "title": "Functionlist",
+          "type": "array"
+        },
+        "TimeoutMilliseconds": {
+          "title": "Timeoutmilliseconds",
+          "type": "integer"
+        },
+        "Output": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output"
+        }
+      },
+      "required": [
+        "FunctionList",
+        "TimeoutMilliseconds"
+      ],
+      "title": "SequentialExecutorConfiguration",
+      "type": "object"
+    },
+    "Sibling": {
+      "additionalProperties": false,
+      "description": "One sibling playback configuration, release-agnostic.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "channel": {
+          "title": "Channel",
+          "type": "string"
+        },
+        "letter": {
+          "title": "Letter",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/SiblingRole"
+        },
+        "route": {
+          "$ref": "#/$defs/AdsRoute",
+          "default": "pbs"
+        },
+        "playback": {
+          "$ref": "#/$defs/PlaybackConfiguration"
+        }
+      },
+      "required": [
+        "name",
+        "channel",
+        "letter",
+        "role",
+        "playback"
+      ],
+      "title": "Sibling",
+      "type": "object"
+    },
+    "SiblingRole": {
+      "description": "What a sibling configuration serves.",
+      "enum": [
+        "general",
+        "kids",
+        "probe"
+      ],
+      "title": "SiblingRole",
+      "type": "string"
+    },
+    "VastResponse": {
+      "additionalProperties": false,
+      "description": "``AdDecisionServerConfiguration.VastResponse``.",
+      "properties": {
+        "AdSequencingMode": {
+          "anyOf": [
+            {
+              "enum": [
+                "FOLLOW_AD_SEQUENCE",
+                "IGNORE_AD_SEQUENCE",
+                "FOLLOW_AD_SEQUENCE_ONLY_LIVE",
+                "FOLLOW_AD_SEQUENCE_ONLY_VOD"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adsequencingmode"
+        }
+      },
+      "title": "VastResponse",
+      "type": "object"
+    }
+  }
+}

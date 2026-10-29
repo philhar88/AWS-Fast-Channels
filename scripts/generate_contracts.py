@@ -3,12 +3,12 @@
     uv run python scripts/generate_contracts.py          # write the files
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
-Outputs: ``ingest-request.schema.json``, ``events.schema.json``, ``model-registry.schema.json`` and
-``catalog-context.schema.json`` (JSON Schema 2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS
-contract) and ``catalog.gateway.openapi.json`` (the same contract as an AgentCore Gateway OpenAPI target reads it).
-The OpenAPI documents are flattened for Gateway targets: every schema is inline, optional fields drop their ``null``
-branch, and no ``$ref``/``anyOf``/``oneOf``/``allOf`` remains (agentcore.md §5.2); operationIds become the tool
-names.
+Outputs: ``ingest-request.schema.json``, ``events.schema.json``, ``model-registry.schema.json``,
+``catalog-context.schema.json`` and ``monetization-bundle.schema.json`` (JSON Schema 2020-12), ``catalog.openapi.yaml``
+(OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json`` (the same contract as an AgentCore
+Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway targets: every schema is inline,
+optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/``allOf`` remains (agentcore.md
+§5.2); operationIds become the tool names.
 
 ``pds-policy.schema.json`` and ``pds-select.schema.json`` are the Pod Decision Service contract with the fast-ctv
 Prebid Server module (requests as the PDS accepts them, responses as it writes them). The examples under
@@ -32,6 +32,7 @@ from fast_channels.core.crawl.catalog_context import CatalogContext
 from fast_channels.core.events import DETAIL_TYPES
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.model_registry import SCHEDULER_TASK, TaskEntry
+from fast_channels.core.monetization.bundle import Bundle
 from fast_channels.core.pds.models import PolicyRequest, PolicyResponse, SelectRequest, SelectResponse
 from fast_channels.core.pds.pod import PodContext, select_pod, select_response
 from fast_channels.core.pds.policy import Demand, decide
@@ -175,6 +176,29 @@ def pds_fixtures() -> dict[str, dict[str, Any]]:
     return fixtures
 
 
+def monetization_bundle_schema() -> dict[str, Any]:
+    """JSON Schema of the release bundle as stored (``release/<digest>/bundle.json``): the digest and the bundle."""
+    bundle = Bundle.model_json_schema(by_alias=True)
+    definitions = bundle.pop("$defs")
+    return {
+        "$schema": JSON_SCHEMA,
+        "title": "FAST Channels release bundle",
+        "description": (
+            "Desired monetization state rendered at synth and applied by the Release Controller: every Function "
+            "document (ids are stems; the release adds _rNNNN), every sibling playback configuration without the "
+            "origin secret, the expected channel-policy pattern, the stored requests and the rollout."
+        ),
+        "type": "object",
+        "required": ["digest", "bundle"],
+        "additionalProperties": False,
+        "properties": {
+            "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the bundle JSON."},
+            "bundle": bundle,
+        },
+        "$defs": definitions,
+    }
+
+
 def _flatten(schema: Any, definitions: dict[str, Any]) -> Any:
     """Inline ``$ref``s, collapse ``anyOf: [X, null]`` to ``X`` and drop pydantic's ``title`` noise."""
     if isinstance(schema, list):
@@ -302,6 +326,7 @@ def render() -> dict[str, str]:
         "events.schema.json": as_json(events_schema()),
         "model-registry.schema.json": as_json(model_registry_schema()),
         "catalog-context.schema.json": as_json(catalog_context_schema()),
+        "monetization-bundle.schema.json": as_json(monetization_bundle_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
         "pds-policy.schema.json": as_json(pds_policy_schema()),
