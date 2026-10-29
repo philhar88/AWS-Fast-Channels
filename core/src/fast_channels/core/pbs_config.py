@@ -173,7 +173,9 @@ def _group(timeout_ms: int, hook: str) -> dict[str, Any]:
 
 def _own_book_only() -> dict[str, Any]:
     """An activity that only the own book may perform."""
-    rule = {"condition": {"component_type": ["bidder"], "component_name": [OWN_BOOK]}, "allow": True}
+    # Prebid Server Java 3.43.0 reads the component type by its enum name: "bidder", as the Prebid documentation
+    # spells it, makes the whole account unreadable (found by the contract tests).
+    rule = {"condition": {"component_type": ["BIDDER"], "component_name": [OWN_BOOK]}, "allow": True}
     return {"default": False, "rules": [rule]}
 
 
@@ -227,7 +229,8 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
             SIMULATOR: {"enabled": settings.simulator},
             "generic": {
                 "aliases": {
-                    OWN_BOOK: {"enabled": True, "endpoint": f"{pds}/ownbook/openrtb", "ortb-version": "2.6"},
+                    # An alias's ortb-version binds to the enum by name; "2.6" stops Prebid Server at startup.
+                    OWN_BOOK: {"enabled": True, "endpoint": f"{pds}/ownbook/openrtb", "ortb-version": "ORTB_2_6"},
                 },
             },
         },

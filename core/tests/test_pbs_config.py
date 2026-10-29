@@ -145,7 +145,7 @@ def test_account_keeps_ids_user_data_and_precise_geo_from_every_bidder_but_the_o
     for activity in activities.values():
         assert activity["default"] is False
         assert activity["rules"] == [
-            {"condition": {"component_type": ["bidder"], "component_name": [OWN_BOOK]}, "allow": True}
+            {"condition": {"component_type": ["BIDDER"], "component_name": [OWN_BOOK]}, "allow": True}
         ]
 
 
@@ -170,7 +170,7 @@ def test_the_own_book_and_the_module_call_the_pds_on_its_stable_private_name() -
     assert config["adapters"]["generic"]["aliases"][OWN_BOOK] == {
         "enabled": True,
         "endpoint": "http://pds.fastm.fast.internal/ownbook/openrtb",
-        "ortb-version": "2.6",
+        "ortb-version": "ORTB_2_6",
     }
     assert module == {
         "enabled": True,

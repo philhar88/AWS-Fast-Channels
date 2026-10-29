@@ -28,7 +28,7 @@ adapters:
       ownbook:
         enabled: true
         endpoint: "http://pds.fastm.fast.internal/ownbook/openrtb"
-        ortb-version: "2.6"
+        ortb-version: "ORTB_2_6"
 hooks:
   fast-ctv:
     enabled: true

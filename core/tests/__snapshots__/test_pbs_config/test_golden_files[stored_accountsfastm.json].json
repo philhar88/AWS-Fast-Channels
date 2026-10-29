@@ -51,7 +51,7 @@
                 "ownbook"
               ],
               "component_type": [
-                "bidder"
+                "BIDDER"
               ]
             }
           }
@@ -67,7 +67,7 @@
                 "ownbook"
               ],
               "component_type": [
-                "bidder"
+                "BIDDER"
               ]
             }
           }
@@ -83,7 +83,7 @@
                 "ownbook"
               ],
               "component_type": [
-                "bidder"
+                "BIDDER"
               ]
             }
           }
