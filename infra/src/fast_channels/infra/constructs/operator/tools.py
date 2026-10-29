@@ -37,6 +37,9 @@ APP_TAG: Final = TAG_APP
 _TABLE_READ: Final = ("GetItem", "BatchGetItem", "Query", "Scan", "ConditionCheckItem")
 _TABLE_WRITE: Final = ("PutItem", "UpdateItem", "DeleteItem", "BatchWriteItem")
 _CHANNELS: Final = "every channel of the deployment is named <prefix>-* (config validation)"
+MEDIATAILOR_SERVICE: Final = "mediatailor.amazonaws.com"
+MEDIATAILOR_SLR: Final = f"aws-service-role/{MEDIATAILOR_SERVICE}/AWSServiceRoleForMediaTailor"
+"""Path and name of MediaTailor's service-linked role, which writes channel and playback configuration logs."""
 _DESCRIPTIONS: Final = {
     "catalog": "Agent tools: reference catalog search",
     "library": "Agent tools: media library and ingest",
@@ -298,6 +301,14 @@ class AgentTools(Construct):
             ),
             [agent_configurations],
             why=owned,
+        )
+        # ConfigureLogsForChannel and ConfigureLogsForPlaybackConfiguration refuse a caller that may not create
+        # MediaTailor's service-linked role, even when the role exists ("Cannot create the service-linked role ...
+        # add the iam:CreateServiceLinkedRole permission"); MediaTailor writes the logs with that role.
+        fn.allow(
+            ["iam:CreateServiceLinkedRole"],
+            [self._stack.format_arn(service="iam", region="", resource="role", resource_name=MEDIATAILOR_SLR)],
+            conditions={"StringEquals": {"iam:AWSServiceName": MEDIATAILOR_SERVICE}},
         )
         fn.allow(
             _mt("DeleteProgram"),
