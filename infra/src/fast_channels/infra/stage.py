@@ -87,17 +87,7 @@ class FastChannelsStage(Stage):
             self.ops.add_stack_dependency(self.data)
             self.ops.add_stack_dependency(self.media, "The lake copies the IaC playback configurations' log sources")
 
-        self.as_run: AsRunRouterStack | None = None
-        if as_run_router:
-            self.as_run = AsRunRouterStack(
-                self,
-                "AsRun",
-                log_retention=config.observability.log_retention,
-                notification_email=config.notifications.email,
-                tags=tags,
-            )
-            # The Media stack's custom resource creates the as-run log group that the router subscribes to.
-            self.as_run.add_stack_dependency(self.media, "The as-run log group exists")
+        self.as_run = self._as_run_router(config, tags) if as_run_router else None
 
         self.baseline: AccountBaselineStack | None = None
         if config.observability.transaction_search is TransactionSearchMode.ENABLE:
@@ -165,3 +155,15 @@ class FastChannelsStage(Stage):
         Aspects.of(self).add(FunctionLogGroups(log_groups))
         for key, value in tags.items():
             Tags.of(self).add(key, value)
+
+    def _as_run_router(self, config: FastChannelsConfig, tags: dict[str, str]) -> AsRunRouterStack:
+        """The account's as-run router stack, after Media (whose custom resource creates the as-run log group)."""
+        stack = AsRunRouterStack(
+            self,
+            "AsRun",
+            log_retention=config.observability.log_retention,
+            notification_email=config.notifications.email,
+            tags=tags,
+        )
+        stack.add_stack_dependency(self.media, "The as-run log group exists")
+        return stack
