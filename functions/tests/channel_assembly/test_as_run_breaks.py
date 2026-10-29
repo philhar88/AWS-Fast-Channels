@@ -217,8 +217,11 @@ def test_other_write_errors_fail_the_batch(
         reconciler.handler(subscription(first), context)
 
 
-def test_eventbridge_as_run_events_are_reconciled_too(monkeypatch: pytest.MonkeyPatch, context: Any) -> None:
-    """The shared as-run router puts each event on the default bus with the as-run event as its detail."""
+def test_eventbridge_as_run_events_are_reconciled_too(
+    monkeypatch: pytest.MonkeyPatch, context: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The shared as-run router puts each event on the default bus with the as-run event, and its ``as_run_id``, as
+    its detail."""
     library = Library()
     monkeypatch.setattr(reconciler, "_program", library.program)
     monkeypatch.setattr(reconciler, "_decide", library.decide)
@@ -226,13 +229,19 @@ def test_eventbridge_as_run_events_are_reconciled_too(monkeypatch: pytest.Monkey
     start = next(e for e in RUN["as_run"] if e["eventType"] == "VodProgramStart")
     library.items[start["programName"]]["aired_at"] = start["timeStamp"]
 
+    detail = {**first, "as_run_id": "fastv3-exp-p0d-ch-hls/3792"}
+
     reconciler.handler(
-        {"id": "e-1", "detail-type": "AdBreakStart", "source": "fast-channels.as-run", "detail": first}, context
+        {"id": "e-1", "detail-type": "AdBreakStart", "source": "fast-channels.as-run", "detail": detail}, context
     )
+    [record] = [r for r in caplog.records if r.getMessage() == "ad break aired"]
     reconciler.handler({"unexpected": True}, context)
 
     [marked] = [b for b in library.items[first["programName"]]["breaks"] if "status" in b]
     assert (marked["status"], marked["aired_at"]) == ("AIRED", first["timeStamp"])
+    line = json.loads(reconciler.logger.registered_formatter.format(record))  # as it reaches CloudWatch
+    assert (line["as_run_id"], line["bus_event_id"]) == ("fastv3-exp-p0d-ch-hls/3792", "e-1")
+    assert line["event_id"] == marked["event_id"]  # the SCTE-35 event id of the break
 
 
 def test_eventbridge_events_that_are_not_as_run_events_are_dropped(context: Any) -> None:

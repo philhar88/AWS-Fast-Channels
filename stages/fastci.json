@@ -2,7 +2,8 @@
   "prefix": "fastci",
   "observability": {
     "mediatailor_log_percent": 100,
-    "log_retention_days": 7
+    "log_retention_days": 7,
+    "as_run": "shared"
   },
   "modules": {
     "ops": {

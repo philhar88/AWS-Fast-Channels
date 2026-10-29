@@ -263,9 +263,15 @@ With the ops module a break in the JSON feed reads
 
 The as-run log group is shared by every channel in the account and region, and each deployment's Media stack adds one
 subscription filter to it. CloudWatch Logs allows five subscription filters per log group (quota `L-87E7D306`, not
-adjustable), so **at most five deployments can exist per account and region**: a sixth one fails to create its
-filter. The log group's retention is set to the last deploying stack's `observability.log_retention_days`, and
-deleting a stack leaves the group.
+adjustable), so **at most five such deployments can exist per account and region**: a sixth one fails to create
+its filter. `observability.as_run` lifts the limit
+([ADR-0032](adr/0032-shared-as-run-router.md)): with `shared`, a deployment reads its channels' as-run events from
+the account's default event bus instead, through a rule on `detail.channelName`. The account's router stack
+`FastChannels-AsRun` holds the only filter and puts every event there (source `fast-channels.as-run`, the event type
+as detail-type, the event and its `as_run_id` as detail). `make as-run-router` deploys that stack once per account
+and region; `make deploy` and `make destroy` never select it. It is termination protected and must stay while any
+deployment reads the shared log. The log group's retention is set to the last deploying stack's
+`observability.log_retention_days`, and deleting a stack leaves the group.
 
 ## Alerts
 

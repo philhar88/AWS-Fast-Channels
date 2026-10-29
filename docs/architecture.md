@@ -31,6 +31,7 @@ One CDK `Stage` (`FastChannelsStage`) holds a deployment. Its id is `FastChannel
 | `…-DemandEdge` | Demand | The two origin secrets and the WAF rule group the Prebid Server guidance's web ACL references first, in us-east-1 ([demand.md](demand.md)) | Only with `modules.demand.enabled`; named `…-DemandEdge-<region>` outside us-east-1 |
 | `…-DemandBuild` | Demand | The Prebid Server image repository, its x86 CodeBuild project, and the CloudFormation execution policy of the guidance's dedicated CDK bootstrap | Only with `modules.demand.enabled` |
 | `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only with `observability.transaction_search: enable`. One per account and region, termination protected, retained |
+| `FastChannels-AsRun` | Account | The as-run router: the one subscription on the as-run log, putting every event on the default event bus for `observability.as_run: shared` deployments; its alarms and dead-letter queue ([ADR-0032](adr/0032-shared-as-run-router.md)) | Only by `make as-run-router`, never by `make deploy` or `make destroy`. One per account and region, termination protected |
 
 The demand module's Prebid Server is the AWS guidance, deployed as its own CDK app (`<prefix>-pbs`, and
 `<prefix>-pbs-sim` with the guidance's simulator) by `make deploy-demand`, never by `make deploy`.

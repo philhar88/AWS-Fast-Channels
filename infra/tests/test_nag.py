@@ -32,6 +32,10 @@ TOPOLOGIES = {
         },
         "eu-west-1",
     ),
+    "as-run-router": (
+        {"as-run-router": True, "observability.as_run": "shared", "modules.ops.enabled": True},
+        "us-east-1",
+    ),
     "external-ads-custom-domain-two-ladders": (
         {
             "ladders.builtin": ["standard", "mobile"],

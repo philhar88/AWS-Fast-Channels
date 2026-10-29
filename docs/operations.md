@@ -62,6 +62,7 @@ far: `models` (the per-task model registry, [agent.md](agent.md#model-registry))
 | `observability.transaction_search` | `off` or `enable` or `existing` | `"off"` | `enable` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans are then billed as CloudWatch Logs); `existing` if it is already on in this account and region. |
 | `observability.log_retention_days` | int | `7` | Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs). |
 | `observability.mediatailor_log_percent` | int | `100` | Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production). |
+| `observability.as_run` | `per_stage` or `shared` | `"per_stage"` | `per_stage`: the stage subscribes to the as-run log itself (CloudWatch Logs allows five subscriptions per log group, so at most five such stages per account and region); `shared`: the stage reads as-run events from the account's `FastChannels-AsRun` router through EventBridge, which `make as-run-router` deploys once per account and region (ADR-0032). |
 | `observability.capture_prompts` | bool or null | `null` | Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation. Default: only when `transaction_search` is not `off`, because the online evaluations score that content. |
 | `notifications.email` | str or null | `null` | Email subscribed to alarms and asset/ladder failure events. |
 | `modules.ops.enabled` | bool | `false` | Deploy the ops module: a per-stage data lake (S3, Glue, Athena), a hash-chained ledger of changes and money events, account quota alarms and detectors, runbooks and a probe canary. |
@@ -315,6 +316,19 @@ uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage 
 A missing or malformed stage file stops `make` before any command runs. The repository ships two stages for the
 modules' development: `fastm` and `fastci` (the end-to-end tests' default prefix), each with every module on.
 
+Each deployment subscribes to the account's as-run log, which allows five subscriptions, so an account and region
+holds at most five deployments with the default `observability.as_run: per_stage`. Both stages read the account's
+shared as-run router instead (`as_run: shared`, [ADR-0032](adr/0032-shared-as-run-router.md)), so they take no
+subscription. Deploy the router once per account and region, after any deployment's Media stack (which creates the
+as-run log group):
+
+```bash
+make as-run-router STAGE=fastm   # the stack FastChannels-AsRun, with fastm's log retention and alert email
+```
+
+`make deploy` and `make destroy` never select the router stack. It is termination protected. Delete it only once no
+deployment in the account and region is `shared`: turn termination protection off and delete the stack.
+
 A module with merged code adds its own stack after the ones it builds on, and may change theirs:
 
 | Module | Adds | Changes |
@@ -370,9 +384,10 @@ and reports what is left; the next poll, or the next `make destroy`, resumes whe
   reaper does nothing, so runtime resources stay too. To delete such a deployment, turn termination protection
   off, run `make destroy` (the Media stack stops at `DELETE_FAILED` while its source location still holds VOD
   sources), then `scripts/cleanup.py --apply` and `make destroy` again.
-- Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search), the account-shared
-  as-run log group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops
-  module, a locked ledger archive (above).
+- Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search), the
+  `FastChannels-AsRun` stack (the as-run router of `make as-run-router`), the account-shared as-run log
+  group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops module, a
+  locked ledger archive (above).
 - If the reaper fails on its first attempt (the error is shown in the stack events), run `make destroy` again; it
   resumes where it stopped.
 - When the reaper cannot finish (a VOD source locked by orphaned programs, an interrupted destroy, a stack deleted
@@ -440,7 +455,7 @@ Defaults per account and region; request increases in Service Quotas before you 
 | AgentCore Runtime | New sessions; active sessions | 25 TPS; 5,000 (us-east-1) | |
 | Amazon Bedrock | Tokens and requests per minute per model | Account specific | Check before running many autopilots |
 | CloudFront | Custom cache and response headers policies | 20 each per account | The distribution uses no custom cache policy and one response headers policy |
-| CloudWatch Logs | Subscription filters per log group | 5 (`L-87E7D306`, not adjustable) | At most five deployments per account and region reconcile the shared as-run log |
+| CloudWatch Logs | Subscription filters per log group | 5 (`L-87E7D306`, not adjustable) | The as-run log: one per `per_stage` deployment and one for the as-run router; `shared` deployments take none (ADR-0032) |
 | Cognito | Emails with the default sender | Low daily limit | Configure Amazon SES for production |
 
 ## Costs

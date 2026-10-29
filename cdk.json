@@ -72,6 +72,7 @@
         "transaction_search": "off",
         "log_retention_days": 7,
         "mediatailor_log_percent": 100,
+        "as_run": "per_stage",
         "capture_prompts": null
       },
       "notifications": {

@@ -15,7 +15,7 @@ from aws_cdk.assertions import Template
 from syrupy.extensions.json import JSONSnapshotExtension
 
 from fast_channels.core.ladder import BUILTIN_DIR, LADDERS_DIR_ENV, Ladder, LadderOps, propose
-from fast_channels.infra.app import build
+from fast_channels.infra.app import AS_RUN_ROUTER, build
 from fast_channels.infra.config import EVAL_RECORDS, EVAL_RECORDS_ENV, FastChannelsConfig
 
 if TYPE_CHECKING:
@@ -35,8 +35,9 @@ WEAK_REFERENCE_OUTPUT = "PublishOutput"
 
 
 def context(overrides: Overrides | None = None) -> dict[str, Any]:
-    """cdk.json context plus ``-c fast-channels.<path>=<value>``-style overrides, with bundling disabled."""
-    dotted = {f"fast-channels.{k}": v for k, v in (overrides or {}).items()}
+    """cdk.json context plus ``-c fast-channels.<path>=<value>``-style overrides, with bundling disabled. The key
+    ``as-run-router`` (``-c as-run-router=true``, ``make as-run-router``) is passed as it is."""
+    dotted = {k if k == AS_RUN_ROUTER else f"fast-channels.{k}": v for k, v in (overrides or {}).items()}
     return {**CDK_CONTEXT, "aws:cdk:bundling-stacks": [], **dotted}
 
 

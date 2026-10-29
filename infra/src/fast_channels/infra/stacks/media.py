@@ -7,7 +7,7 @@ from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
 
 from fast_channels.core.naming import source_location_name
-from fast_channels.infra.config import AdsMode, PriceClass
+from fast_channels.infra.config import AdsMode, AsRunMode, PriceClass
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.channel_assembly import (
     AS_RUN_LOG_GROUP,
@@ -159,6 +159,7 @@ class MediaStack(Stack):
             log_retention=retention,
             removal_policy=removal,
             breaks=config.modules.ops.enabled,
+            shared=config.observability.as_run is AsRunMode.SHARED,
         )
         external_ads = config.ads.url if config.ads.mode is AdsMode.EXTERNAL_VAST else None
         self.channels = tuple(

@@ -25,13 +25,13 @@ CONTEXT_ARGS := $(if $(PREFIX),-c fast-channels.prefix=$(PREFIX))
 PREFIX_OPT := $(if $(PREFIX),--prefix $(PREFIX))
 endif
 
-.PHONY: help install console check lint typecheck test synth diff deploy destroy seed model-access eval trace pbs-test \
-	pbs-contract deploy-demand destroy-demand
+.PHONY: help install console check lint typecheck test synth diff deploy destroy as-run-router seed model-access eval \
+	trace pbs-test pbs-contract deploy-demand destroy-demand
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@echo "  STAGE=<name> (stages/<name>.json) or PREFIX=<name> selects the deployment of synth, diff, deploy,"
-	@echo "  destroy, seed and trace."
+	@echo "  destroy, as-run-router, seed and trace."
 
 install: ## Install Python (uv), CDK CLI and console dependencies
 	uv sync --all-packages
@@ -69,6 +69,9 @@ deploy: console ## Deploy every stack (about 20 minutes the first time)
 
 destroy: ## Delete every stack and the runtime resources the pipeline and agent created
 	$(CDK) destroy '**' --force $(CONTEXT_ARGS)
+
+as-run-router: console ## Deploy the account's as-run router for stages with observability.as_run shared (ADR-0032)
+	$(CDK) deploy '*/AsRun' --exclusively --require-approval never -c as-run-router=true $(CONTEXT_ARGS)
 
 model-access: ## Check (and optionally request) Amazon Bedrock model access for the agent
 	uv run python scripts/check_model_access.py

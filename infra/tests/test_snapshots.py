@@ -77,3 +77,12 @@ def test_module_templates(
     d = fresh_deployment(overrides)
 
     assert normalized(d.template(getattr(d.stage, stack))) == snapshot_json
+
+
+def test_as_run_router_snapshot(
+    deployment: Callable[..., Any], normalized: Callable[..., Any], snapshot_json: SnapshotAssertion
+) -> None:
+    """The account's as-run router stack (``make as-run-router``)."""
+    d = deployment({"as-run-router": True})
+
+    assert normalized(d.template(d.stage.as_run)) == snapshot_json

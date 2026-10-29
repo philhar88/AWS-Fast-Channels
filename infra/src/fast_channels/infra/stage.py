@@ -12,6 +12,7 @@ from fast_channels.infra.constructs.functions import (
     LogGroupDefaults,
     StateMachineDefaults,
 )
+from fast_channels.infra.stacks.as_run import AsRunRouterStack
 from fast_channels.infra.stacks.baseline import AccountBaselineStack
 from fast_channels.infra.stacks.crawl import CrawlStack
 from fast_channels.infra.stacks.data import DataStack
@@ -42,8 +43,9 @@ class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
     ``modules.crawl.enabled``, after Media), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
     us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (if
-    ``observability.transaction_search`` is ``enable``), and DemandEdge (in us-east-1) and DemandBuild (if
-    ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md).
+    ``observability.transaction_search`` is ``enable``), DemandEdge (in us-east-1) and DemandBuild (if
+    ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), and
+    AsRun (the account's as-run router, only with ``as_run_router``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -54,9 +56,13 @@ class FastChannelsStage(Stage):
         config: validated deployment configuration; it is validated again for ``env.region``
             (:meth:`~fast_channels.infra.config.FastChannelsConfig.for_region`), which resolves ``{geo}`` model ids.
         env: account (may be unresolved) and region (required) of the deployment.
+        as_run_router: add the account's as-run router stack ``FastChannels-AsRun`` (``make as-run-router``, ADR-0032).
+            It is never part of the stage otherwise, so ``make deploy`` and ``make destroy`` leave it alone.
     """
 
-    def __init__(self, scope: Construct, id: str, *, config: FastChannelsConfig, env: Environment) -> None:
+    def __init__(
+        self, scope: Construct, id: str, *, config: FastChannelsConfig, env: Environment, as_run_router: bool = False
+    ) -> None:
         if not env.region:
             raise ValueError("the deployment region must be known at synth time (set AWS_REGION or a profile region)")
         config = config.for_region(env.region)
@@ -80,6 +86,18 @@ class FastChannelsStage(Stage):
             self.ops = OpsStack(self, "Ops", config=config, data=self.data.exports, media=self.media.exports, **stacks)
             self.ops.add_stack_dependency(self.data)
             self.ops.add_stack_dependency(self.media, "The lake copies the IaC playback configurations' log sources")
+
+        self.as_run: AsRunRouterStack | None = None
+        if as_run_router:
+            self.as_run = AsRunRouterStack(
+                self,
+                "AsRun",
+                log_retention=config.observability.log_retention,
+                notification_email=config.notifications.email,
+                tags=tags,
+            )
+            # The Media stack's custom resource creates the as-run log group that the router subscribes to.
+            self.as_run.add_stack_dependency(self.media, "The as-run log group exists")
 
         self.baseline: AccountBaselineStack | None = None
         if config.observability.transaction_search is TransactionSearchMode.ENABLE:

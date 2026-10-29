@@ -101,7 +101,7 @@ def _as_run_events(event: dict[str, Any]) -> list[AsRunEvent]:
         logger.append_keys(log_stream=data.log_stream)
         messages = [log_event.message for log_event in data.log_events]
     elif isinstance(event.get("detail"), dict):
-        logger.append_keys(event_id=event.get("id"))
+        logger.append_keys(bus_event_id=event.get("id"), as_run_id=event["detail"].get("as_run_id"))
         messages = [json.dumps(event["detail"])]
     else:
         logger.warning("neither a log subscription batch nor an EventBridge event", extra={"keys": sorted(event)})

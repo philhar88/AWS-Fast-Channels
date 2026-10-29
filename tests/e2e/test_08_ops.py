@@ -1,6 +1,6 @@
 """The ops module, on stages that enable it (skipped otherwise): its stack outputs, the lake's MediaTailor log copies
-without the excluded fields, ``v_breaks`` returning the breaks this run aired, and ``Census Changed`` events for the
-channel's start and stop.
+without the excluded fields, ``v_breaks`` returning the breaks this run aired, the as-run reconciler marking those
+breaks ``AIRED``, and ``Census Changed`` events for the channel's start and stop.
 
 Runs after the channel tests, which aired the breaks and stopped the channel. The log copies reach S3 a few minutes
 after the events, and the census runs every five minutes, so these tests wait up to about ten minutes.
@@ -15,12 +15,15 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 from _stack import MODULE_OUTPUT_KEYS, Module, Plane, Stage
+from boto3.dynamodb.conditions import Key
 from harness import wait_for
 
 from fast_channels.core.timeline import scte_event_id
+from fast_channels.functions.tools.library_store import GSI1
 
 if TYPE_CHECKING:
     from harness import Observation
+    from mypy_boto3_dynamodb.service_resource import Table
 
 pytestmark = pytest.mark.e2e
 
@@ -31,6 +34,7 @@ EXCLUDED: Final = {
 """Fields the lake's copies never hold (``infra.constructs.ops.lake``)."""
 DELIVERY_TIMEOUT_S: Final = 900
 CENSUS_TIMEOUT_S: Final = 420
+AS_RUN_TIMEOUT_S: Final = 300
 
 
 @pytest.fixture(scope="module")
@@ -140,6 +144,26 @@ def test_v_breaks_returns_every_aired_break_with_its_event_id(
 
     assert {int(row["evid"] or 0) for row in rows} == set(aired_breaks)
     assert all(int(row["sessions"] or 0) >= 1 for row in rows), rows
+
+
+def test_the_as_run_reconciler_marks_the_aired_breaks(ops: Stage, library: Table, aired_breaks: dict[int, str]) -> None:
+    """Every break the session saw is ``AIRED``, with its ``aired_at``, on its ``PROGRAM`` item: from the stage's own
+    as-run subscription or, with ``observability.as_run`` ``shared``, through the account's as-run router."""
+
+    def marked() -> dict[int, dict[str, Any]] | None:
+        found: dict[int, dict[str, Any]] = {}
+        for program in set(aired_breaks.values()):
+            key = Key("gsi1pk").eq(f"PROGRAM#{program}")
+            for item in library.query(IndexName=GSI1, KeyConditionExpression=key)["Items"]:
+                breaks = item.get("breaks")
+                for brk in breaks if isinstance(breaks, list) else []:
+                    if isinstance(brk, dict) and brk.get("status") == "AIRED":
+                        found[int(str(brk["event_id"]))] = brk
+        return found if set(aired_breaks) <= set(found) else None
+
+    found = wait_for(marked, timeout=AS_RUN_TIMEOUT_S, interval=15, what=f"AIRED breaks {sorted(aired_breaks)}")
+
+    assert all(found[evid].get("aired_at") for evid in aired_breaks), found
 
 
 def _census_changes(ops: Stage, since: datetime) -> list[dict[str, Any]]:

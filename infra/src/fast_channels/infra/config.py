@@ -180,6 +180,13 @@ class TransactionSearchMode(StrEnum):
     EXISTING = "existing"
 
 
+class AsRunMode(StrEnum):
+    """How the deployment reads Channel Assembly's account-shared as-run log."""
+
+    PER_STAGE = "per_stage"
+    SHARED = "shared"
+
+
 class PriceClass(StrEnum):
     """CloudFront price class (edge locations the distribution uses)."""
 
@@ -412,6 +419,11 @@ class ObservabilityConfig(_Section):
     """Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs)."""
     mediatailor_log_percent: int = Field(default=100, ge=0, le=100)
     """Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production)."""
+    as_run: AsRunMode = AsRunMode.PER_STAGE
+    """``per_stage``: the stage subscribes to the as-run log itself (CloudWatch Logs allows five subscriptions per log
+    group, so at most five such stages per account and region); ``shared``: the stage reads as-run events from the
+    account's ``FastChannels-AsRun`` router through EventBridge, which ``make as-run-router`` deploys once per account
+    and region (ADR-0032)."""
     capture_prompts: bool | None = None
     """Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent
     runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation.
