@@ -63,7 +63,8 @@ def decision_table(record: str) -> str:
 
 
 class Parameter(StrEnum):
-    """The SSM parameters ``/<prefix>/pds/<name>`` the Data and Media stacks write for the Pds stack.
+    """The SSM parameters ``/<prefix>/pds/<name>`` the Data and Media stacks write for the Pds stack (and the Pds
+    stack for the Release stack).
 
     The Pds stack exists only in a synth with the guidance's network, so it cannot take weak references to them:
     their own deploys (``make deploy``, without that network) would drop the outputs those need.
@@ -77,6 +78,9 @@ class Parameter(StrEnum):
     """The CDN's content base URL, our tracker's host (Media stack)."""
     LADDER_VERSION = "ladder-version"
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
+    DELIVERY_FUNCTION = "delivery-function"
+    """The delivery function's ARN (Pds stack, with the release module on): the Release stack subscribes it to the
+    siblings' log group, so their impressions are counted too."""
 
 
 def parameter_name(prefix: str, parameter: Parameter) -> str:

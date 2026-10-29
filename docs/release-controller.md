@@ -128,6 +128,11 @@ the account administers the key, CloudWatch Logs uses it for this log group only
 may decrypt through CloudWatch Logs (today the zero-ad-sessions detector). To read the group otherwise, an
 administrator adds a statement to the key policy, which CloudTrail records.
 
+The Pod Decision Service counts the siblings' impressions from this group: the subscription filter
+`<prefix>-pds-delivery-release` sends their impression beacons to its delivery function, with the same pattern as its
+filter on the stage's group ([pds.md](pds.md#reservations-and-delivery)). The Release stack owns the filter, because
+it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/delivery-function`.
+
 ## Alarms
 
 | Alarm | Fires on |

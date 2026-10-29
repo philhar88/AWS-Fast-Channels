@@ -42,6 +42,10 @@
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
+    "SsmParameterValuefastmpdsdeliveryfunctionC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/delivery-function",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
     "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter": {
       "Default": "/fastm/release/cdn-base-url",
       "Type": "AWS::SSM::Parameter::Value<String>"
@@ -2446,6 +2450,38 @@
         ]
       },
       "Type": "AWS::IAM::Role"
+    },
+    "ImpressionsCanInvokeLambdaAA69907C": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "SsmParameterValuefastmpdsdeliveryfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+        },
+        "Principal": "logs.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "Logs71AC9AA5",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ImpressionsD3B62AAD": {
+      "DependsOn": [
+        "ImpressionsCanInvokeLambdaAA69907C"
+      ],
+      "Properties": {
+        "DestinationArn": {
+          "Ref": "SsmParameterValuefastmpdsdeliveryfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+        },
+        "FilterName": "fastm-pds-delivery-release",
+        "FilterPattern": "{ ($.eventType = \"BEACON_FIRED\") && ($.beaconInfo.trackingEvent = \"impression\") }",
+        "LogGroupName": {
+          "Ref": "Logs71AC9AA5"
+        }
+      },
+      "Type": "AWS::Logs::SubscriptionFilter"
     },
     "Logs71AC9AA5": {
       "DeletionPolicy": "Delete",

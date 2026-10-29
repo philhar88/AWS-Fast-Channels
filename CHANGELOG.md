@@ -62,7 +62,8 @@ All notable changes to this project are documented here. The format follows
   alarms and a zero-ad-sessions detector watch the siblings. With the module on, every other role of the stage is
   denied the writes the controller owns (managed policy `ReleaseGuard`), and the controller never changes a channel
   policy. `deploy-demand` deploys the stack after Pds; deleting it reaps what the controller created. The Media stack
-  writes the SSM parameters `/<prefix>/release/*` it reads.
+  writes the SSM parameters `/<prefix>/release/*` it reads. The Pod Decision Service's delivery function also counts
+  the siblings' impressions, through a subscription filter on their log group.
 - **Monetization desired state** (`fast_channels.core.monetization`, for the release module):
   MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
   PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the

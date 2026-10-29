@@ -5,14 +5,19 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, RemovalPolicy, Stack, Tags
 from aws_cdk import aws_events as events
+from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_logs as logs
+from aws_cdk import aws_logs_destinations as logs_destinations
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.monetization import names
+from fast_channels.core.pds import names as pds_names
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.alerts import alert_topic_arn
 from fast_channels.infra.constructs.ops import ConfigurationAlarms, ZeroAdsDetector
 from fast_channels.infra.constructs.ops.lake import LAKE_SUFFIX_PATH
+from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release import bundle as rendering
 from fast_channels.infra.constructs.release.controller import ReleaseController
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
@@ -97,6 +102,7 @@ class ReleaseStack(Stack):
             name="release-zero-ads-sessions",
         )
         self.logs.grant_read(self.zero_ads.function.function.role)  # type: ignore[arg-type]
+        self.impressions = self._impressions(prefix)
         outputs = {
             "StateMachineArn": (self.controller.state_machine.state_machine_arn, "The apply path"),
             "BundleBucketName": (self.controller.bucket.bucket_name, "Release bundles (release/<digest>/bundle.json)"),
@@ -107,3 +113,24 @@ class ReleaseStack(Stack):
         }
         for name, (value, description) in outputs.items():
             CfnOutput(self, name, value=value, description=description)
+
+    def _impressions(self, prefix: str) -> logs.SubscriptionFilter:
+        """The Pod Decision Service's delivery function also counts the siblings' impressions: the same filter as on
+        the stage's log group (``IMPRESSIONS``), on the module's. Imported by ARN as in this environment, so the
+        filter's invoke permission is created (a token ARN would leave its account unknown and skip it)."""
+        delivery = lambda_.Function.from_function_attributes(
+            self,
+            "PdsDelivery",
+            function_arn=ssm.StringParameter.value_for_string_parameter(
+                self, pds_names.parameter_name(prefix, pds_names.Parameter.DELIVERY_FUNCTION)
+            ),
+            same_environment=True,
+        )
+        return logs.SubscriptionFilter(
+            self,
+            "Impressions",
+            log_group=self.logs.log_group,
+            destination=logs_destinations.LambdaDestination(delivery),
+            filter_pattern=IMPRESSIONS,
+            filter_name=f"{prefix}-pds-delivery-release",
+        )

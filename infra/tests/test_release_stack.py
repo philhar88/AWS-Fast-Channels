@@ -9,6 +9,7 @@ from aws_cdk import Stack
 
 from fast_channels.core.demand import NETWORK_CONTEXT
 from fast_channels.core.monetization.validators import validate_bundle
+from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release.guards import DENIED_ACTIONS
 
 if TYPE_CHECKING:
@@ -94,12 +95,17 @@ def test_it_reads_the_media_stack_by_parameter_not_by_weak_reference(deployment:
         "/fastm/release/cdn-base-url",
         "/fastm/release/media-bucket",
         "/fastm/release/channels/fastm-demo",
+        "/fastm/pds/delivery-function",  # the Pds stack's
     }
     plain = deployment(RELEASE)
     for stack in ("data", "media", "ops"):
         assert plain.template(getattr(plain.stage, stack)).to_json() == d.template(getattr(d.stage, stack)).to_json()
-    media = {p["Name"] for p in resources(d.template(d.stage.media), "AWS::SSM::Parameter").values()}
-    assert ssm - {"/cdk-bootstrap/hnb659fds/version"} <= media
+    written = {
+        p["Name"]
+        for stack in (d.stage.media, d.stage.pds)
+        for p in resources(d.template(stack), "AWS::SSM::Parameter").values()
+    }
+    assert ssm - {"/cdk-bootstrap/hnb659fds/version"} <= written
 
 
 def test_the_bundle_is_rendered_at_synth_and_published_at_deploy(deployment: GetDeployment) -> None:
@@ -248,6 +254,34 @@ def test_every_sibling_has_the_hook_alarms_and_the_zero_ad_sessions_detector(dep
     variables = detector["Environment"]["Variables"]
     assert variables["POWERTOOLS_SERVICE_NAME"] == "ops.release_zero_ads_sessions"
     assert "/aws/vendedlogs/mediatailor/fastm-release" in json.dumps(variables)
+
+
+def test_the_siblings_impressions_reach_the_pds_delivery_function(deployment: GetDeployment) -> None:
+    """The siblings log to the module's group, not the stage's: the delivery function must read it too, or the
+    sweeper would release delivered impressions as undelivered."""
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release).to_json()
+    resources_ = template["Resources"]
+    [log_group] = [
+        k
+        for k, r in resources_.items()
+        if r["Type"] == "AWS::Logs::LogGroup"
+        and r["Properties"].get("LogGroupName") == "/aws/vendedlogs/mediatailor/fastm-release"
+    ]
+    [subscription] = [r["Properties"] for r in resources_.values() if r["Type"] == "AWS::Logs::SubscriptionFilter"]
+    assert subscription["FilterName"] == "fastm-pds-delivery-release"
+    assert subscription["LogGroupName"] == {"Ref": log_group}
+    assert subscription["FilterPattern"] == IMPRESSIONS.log_pattern_string
+    [permission] = [r["Properties"] for r in resources_.values() if r["Type"] == "AWS::Lambda::Permission"]
+    assert permission["Principal"] == "logs.amazonaws.com"
+    assert permission["SourceArn"] == {"Fn::GetAtt": [log_group, "Arn"]}
+    assert permission["FunctionName"] == subscription["DestinationArn"]
+    parameter = "/fastm/pds/delivery-function"
+    assert parameter in {p["Default"] for p in template["Parameters"].values()}
+    pds = resources(d.template(d.stage.pds), "AWS::SSM::Parameter")
+    assert [p["Name"] for p in pds.values()] == [parameter]
+    off = deployment({**RELEASE, "modules.release.enabled": False}, extra=EXTRA)
+    assert not resources(off.template(off.stage.pds), "AWS::SSM::Parameter")
 
 
 def _definition(template: Template) -> dict[str, Any]:
