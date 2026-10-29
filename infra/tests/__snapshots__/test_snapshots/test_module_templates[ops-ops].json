@@ -595,7 +595,7 @@
                       "StackName": "FastChannels-Data"
                     }
                   },
-                  "/mediatailor/ads/${datehour}/"
+                  "/mediatailor/ads/AWSLogs/123456789012/mediatailoraddecisionserverinteractionlogs/${datehour}/"
                 ]
               ]
             }
@@ -824,7 +824,7 @@
                       "StackName": "FastChannels-Data"
                     }
                   },
-                  "/mediatailor/manifest/${datehour}/"
+                  "/mediatailor/manifest/AWSLogs/123456789012/mediatailormanifestservicelogs/${datehour}/"
                 ]
               ]
             }

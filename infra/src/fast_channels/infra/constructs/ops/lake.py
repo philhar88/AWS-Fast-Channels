@@ -246,6 +246,10 @@ class LakeLog:
     """CloudWatch Logs delivery source log type."""
     suffix: str
     """Delivery source name suffix (``<playback configuration>-<suffix>``) and key prefix ``mediatailor/<suffix>/``."""
+    service_dir: str
+    """The directory S3 deliveries of this log type write under ``AWSLogs/<account>/`` (observed on fastm,
+    2026-10-29: ``mediatailor/ads/AWSLogs/<account>/mediatailoraddecisionserverinteractionlogs/<yyyy>/<MM>/<dd>/
+    <HH>/<account>_mediatailoraddecisionserverinteractionlogs_<region>_<configuration>_<yyyyMMddTHH>Z_<id>.log.gz``)."""
     table: str
     fields: tuple[str, ...]
     description: str
@@ -255,6 +259,7 @@ LAKE_LOGS: Final = (
     LakeLog(
         "AD_DECISION_SERVER_LOGS",
         "ads",
+        "mediatailoraddecisionserverinteractionlogs",
         "mediatailor_ads",
         ADS_LOG_FIELDS,
         "MediaTailor ad decision server logs of the IaC playback configurations (no requestHeaders, rawAdsRequest)",
@@ -262,6 +267,7 @@ LAKE_LOGS: Final = (
     LakeLog(
         "MANIFEST_SERVICE_LOGS",
         "manifest",
+        "mediatailormanifestservicelogs",
         "mediatailor_manifest",
         MANIFEST_LOG_FIELDS,
         "MediaTailor manifest service logs of the IaC playback configurations (no mediaTailorPath, input, http)",
@@ -500,7 +506,7 @@ class Lake(Construct):
                     s3_enable_hive_compatible_path=False,
                 )
                 self.deliveries.append(previous)
-            location = f"s3://{lake_bucket.bucket_name}/{path}/"
+            location = f"s3://{lake_bucket.bucket_name}/{path}/AWSLogs/{stack.account}/{log.service_dir}/"
             self.tables[log.table] = glue.S3Table(
                 self,
                 log.table.title().replace("_", ""),

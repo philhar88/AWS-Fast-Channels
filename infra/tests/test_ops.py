@@ -191,9 +191,22 @@ def test_cloudfront_table_reads_the_v3_parquet_without_viewer_fields(ops: Any) -
 
 
 @pytest.mark.parametrize(
-    ("table", "fields"), [("mediatailor_ads", ADS_LOG_FIELDS), ("mediatailor_manifest", MANIFEST_LOG_FIELDS)]
+    ("table", "fields", "location"),
+    [
+        (
+            "mediatailor_ads",
+            ADS_LOG_FIELDS,
+            "/mediatailor/ads/AWSLogs/123456789012/mediatailoraddecisionserverinteractionlogs/",
+        ),
+        (
+            "mediatailor_manifest",
+            MANIFEST_LOG_FIELDS,
+            "/mediatailor/manifest/AWSLogs/123456789012/mediatailormanifestservicelogs/",
+        ),
+    ],
 )
-def test_mediatailor_tables(ops: Any, table: str, fields: tuple[str, ...]) -> None:
+def test_mediatailor_tables(ops: Any, table: str, fields: tuple[str, ...], location: str) -> None:
+    """The location is where MediaTailor's S3 deliveries write (observed on fastm, 2026-10-29)."""
     props = by_name(ops.template(ops.stage.ops), "AWS::Glue::Table")[table]["TableInput"]
     parameters = props["Parameters"]
 
@@ -202,7 +215,7 @@ def test_mediatailor_tables(ops: Any, table: str, fields: tuple[str, ...]) -> No
     assert [k["Name"] for k in props["PartitionKeys"]] == ["datehour"]
     assert parameters["projection.datehour.format"] == "yyyy/MM/dd/HH"
     assert parameters["projection.datehour.interval.unit"] == "HOURS"
-    assert json.dumps(parameters["storage.location.template"]).endswith('${datehour}/"]]}')
+    assert json.dumps(parameters["storage.location.template"]).endswith(f'{location}${{datehour}}/"]]}}')
 
 
 def test_workgroup_caps_every_query(ops: Any) -> None:
