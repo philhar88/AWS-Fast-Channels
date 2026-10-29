@@ -32,6 +32,10 @@ POD_SECONDS: Final = (30, 60, 90, 120)
 SLOT_SECONDS: Final = 30
 TMAX_MS: Final = 500
 OWN_BOOK: Final = "ownbook"
+OWN_BOOK_MAXBIDS: Final = 9
+"""Bids per slot that Prebid Server keeps from the own book (``ext.prebid.multibid``; 9 is its most). Without it,
+Prebid Server keeps one bid per bidder and slot, the best: the house ads, which ``/select`` uses as fillers and
+standalones and the module's fallback renders, would never reach the module."""
 """Bidder code of the own book: a ``generic`` alias on the Pod Decision Service's ``/ownbook/openrtb``."""
 SIMULATOR: Final = "amt"
 """Bidder code of the guidance's bidder simulator (its ``amt`` adapter)."""
@@ -145,10 +149,11 @@ def _slot(index: int, count: int, poddur: int) -> dict[str, Any]:
 
 
 def stored_request(settings: PbsSettings, seconds: int, *, kids: bool = False) -> dict[str, Any]:
-    """The stored request for a ``seconds`` break: ``seconds / 30`` structured slots of one pod, own book only.
+    """The stored request for a ``seconds`` break: ``seconds / 30`` structured slots of one pod, own book only, which
+    may bid several ads per slot (:data:`OWN_BOOK_MAXBIDS`).
 
-    Raises:
-        ValueError: ``seconds`` is not one of :data:`POD_SECONDS`.
+        Raises:
+            ValueError: ``seconds`` is not one of :data:`POD_SECONDS`.
     """
     if seconds not in POD_SECONDS:
         raise ValueError(f"no stored request for {seconds} s breaks: the grid is {POD_SECONDS}")
@@ -173,6 +178,7 @@ def stored_request(settings: PbsSettings, seconds: int, *, kids: bool = False) -
         },
         "regs": {"coppa": 1 if kids else 0},
         "imp": [_slot(index, count, seconds) for index in range(1, count + 1)],
+        "ext": {"prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": OWN_BOOK_MAXBIDS}]}},
     }
 
 
