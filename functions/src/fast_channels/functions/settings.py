@@ -68,6 +68,10 @@ class Settings:
     publisher_domain: str = field(default_factory=lambda: _env("PUBLISHER_DOMAIN"))
     """The publisher's domain, the registry of catalog content ids in context objects (empty: not configured)."""
     region: str = field(default_factory=lambda: _env("AWS_REGION"))
+    ledger_table: str = field(default_factory=lambda: _env("LEDGER_TABLE"))
+    """The ops module's ledger table (``<prefix>-ledger``)."""
+    ledger_stream: str = field(default_factory=lambda: _env("LEDGER_STREAM"))
+    """The Firehose stream that archives linked ledger records."""
 
     @property
     def app(self) -> str:

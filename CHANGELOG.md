@@ -84,6 +84,11 @@ All notable changes to this project are documented here. The format follows
   logs (without `mediaTailorPath`, `input` and `http`). The channel census puts `Census Changed` on the bus when the
   number of running channels crosses zero. The AppConfig application `<prefix>-fast` and environment `<prefix>` are
   created for the flags and release profiles that later pull requests add.
+- **Ops module, hash-chained ledger**: producers append entries to `<prefix>-ledger` with a conditional put; a writer
+  on the table's stream links each into its chain (sequence number and SHA-256 of the record before, one chain per
+  `chain_id`) and Firehose archives the records in an S3 Object Lock bucket (`modules.ops.ledger_lock`,
+  `ledger_retention_days`) that outlives its stack. `scripts/ledger_verify.py` verifies every chain against its head,
+  writes synthetic records end to end, and purges a destroyed stage's archive. ADR-0022 (ledger part) is proposed.
 
 ## [3.0.0] - 2026-10-16
 

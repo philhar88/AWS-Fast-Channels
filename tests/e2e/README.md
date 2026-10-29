@@ -58,6 +58,7 @@ With a module on, the stage also runs that module's tests (each skipped on a sta
 | Module | Step | Checks |
 |---|---|---|
 | `test_08_ops` (`modules.ops`) | Wait up to 15 minutes for the lake's log copies and 7 minutes for the census | The Ops stack outputs exist. The lake's copies of the ADS logs hold the run's `MAKING_ADS_REQUEST` events, and no ADS record has `requestHeaders` or `rawAdsRequest`, nor any manifest record `mediaTailorPath`, `input` or `http`. `v_breaks` (Athena) returns every break of the run's three programs by its SCTE-35 event id, each seen by a session. The bus log has a `Census Changed` event from 0 to running and one from running to 0. |
+| `test_09_ledger` (`modules.ops`) | Append 20 entries over 2 chains with the producers' client; wait up to 5 minutes for the archive | A repeated append is refused. Every record is archived and the chains verify against their heads (`scripts/ledger_verify.py`). The newest archive object is under Object Lock with a future retain-until date. |
 
 Timing and behaviour worth knowing:
 

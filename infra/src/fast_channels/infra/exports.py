@@ -45,6 +45,10 @@ class DataExports:
     """Namespace template of the Memory's USER_PREFERENCE strategy (the runtime's ``MEMORY_PREFERENCE_NAMESPACE``)."""
     lake_bucket: s3.IBucket | None = None
     """The ops module's lake bucket; ``None`` when ``modules.ops.enabled`` is false."""
+    ledger_table: dynamodb.ITableV2 | None = None
+    """The ops module's ledger table, with its stream; ``None`` when the module is off."""
+    ledger_archive: s3.IBucket | None = None
+    """The ops module's ledger archive (S3 Object Lock); ``None`` when the module is off."""
 
 
 @dataclass(frozen=True, slots=True)

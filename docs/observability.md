@@ -10,6 +10,7 @@ alarms and notifications.
 - [Tracing an id](#tracing-an-id)
 - [Dashboard and alarms](#dashboard-and-alarms)
 - [Lake](#lake)
+- [Ledger](#ledger)
 - [Metrics](#metrics)
 - [What the agent runtime records](#what-the-agent-runtime-records)
 - [Audit trail](#audit-trail)
@@ -176,6 +177,30 @@ SELECT eventtype, count(*) FROM mediatailor_ads
 WHERE datehour >= date_format(current_timestamp - INTERVAL '1' HOUR, '%Y/%m/%d/%H') GROUP BY eventtype;
 ```
 
+## Ledger
+
+With the ops module each stage keeps a hash-chained ledger of the actions that change it unattended: Release
+Controller steps, the own book's money events, runbook actions and envelope versions
+([ADR-0022](adr/0022-delivery-states-billing-and-the-hash-chained-ledger.md)). Producers append entries to the table
+`<prefix>-ledger` (output `LedgerTableName`) with `fast_channels.functions.ops.ledger.append`, a conditional put, so
+an entry is never overwritten. The writer on the table's stream links each entry into its chain (`chain_id`, e.g.
+`release/<channel>`): a sequence number from 1 and the SHA-256 of the record before. The Firehose stream
+`<prefix>-ledger` archives the linked records as gzip JSON lines under `ledger/<yyyy>/<MM>/<dd>/` in the archive
+bucket (`LedgerArchiveBucketName`), with S3 Object Lock in `modules.ops.ledger_lock` mode for
+`ledger_retention_days`. The lake reads the archive as the table `ledger` (partitioned by `day`, `yyyy/MM/dd`).
+
+```bash
+uv run python scripts/ledger_verify.py verify --prefix fastm               # every chain against its head
+uv run python scripts/ledger_verify.py verify --prefix fastm --chain release/fastm-demo
+uv run python scripts/ledger_verify.py write 1000 --prefix fastm           # synthetic end-to-end check
+```
+
+`verify` exits 1 if any record was modified, dropped, inserted, duplicated or reordered, or a chain ends before its
+head. Alarms: `<prefix>-ledger-entries-changed` (an entry changed or removed in the table after it was appended; its
+first version is chained), `<prefix>-ledger-entries-rejected` (an item that is no valid entry), `<prefix>-ledger-lag`
+(the archive more than 10 minutes behind) and `<prefix>-ledger-dead-letters` (records the writer gave up on after
+the stream's 24 hours; redrive them). Records never hold a viewer id.
+
 ## Metrics
 
 Namespace `FastChannels`. A CloudWatch metric is identified by all its dimensions, so alarms and queries must name
@@ -190,6 +215,7 @@ every one: Powertools adds `service`, the function's handler module, to each met
 | `AutopilotSucceeded`, `AutopilotFailed`, `AutopilotPublishes` | `service` = `autopilot`, `channel` | Autopilot runs |
 | `ReapedChannels`, `ReapedPlaybackConfigurations`, `ReapedVodSources`, `ReapedSourceLocations`, `ReapedJobTemplates` | `service` = `custom_resources.reaper` | Runtime-resource reaper (stack deletion) |
 | `RunningChannels` | `App` = `<prefix>` | Channel census |
+| `LedgerRecordsArchived`, `LedgerEntriesChanged`, `LedgerEntriesRejected` | `service` = `ops.ledger_writer` | Ledger writer (ops module) |
 
 Only `RunningChannels` names the deployment. The other metrics carry no prefix, so deployments that share an account
 and region add up in them; tell them apart in the functions' logs (each deployment has its own log groups).

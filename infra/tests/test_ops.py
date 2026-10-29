@@ -45,6 +45,15 @@ def by_name(template: Template, kind: str) -> dict[str, dict[str, Any]]:
     return {r["Properties"][key]: r["Properties"] for r in found}
 
 
+def buckets_logging_to(template: Template, prefix: str) -> list[dict[str, Any]]:
+    """The buckets whose access logs go to ``prefix`` in the logs bucket."""
+    return [
+        r
+        for r in resources(template, "AWS::S3::Bucket").values()
+        if r["Properties"].get("LoggingConfiguration", {}).get("LogFilePrefix") == prefix
+    ]
+
+
 def test_ops_off_deploys_no_ops_stack_and_no_lake(default: Any) -> None:
     assert default.stage.ops is None
     assert default.stage.data.lake is None
@@ -62,7 +71,7 @@ def test_the_ops_stack_follows_data_and_media(ops: Any) -> None:
 
 def test_lake_bucket(ops: Any) -> None:
     data = ops.template(ops.stage.data)
-    [lake] = [r for r in resources(data, "AWS::S3::Bucket").values() if r["Properties"].get("VersioningConfiguration")]
+    [lake] = buckets_logging_to(data, "s3/lake/")
     props = lake["Properties"]
 
     assert props["VersioningConfiguration"] == {"Status": "Enabled"}
@@ -86,7 +95,7 @@ def test_lake_bucket(ops: Any) -> None:
 def test_lake_retention_follows_the_configuration(deployment: GetDeployment) -> None:
     d = deployment({**OPS, "modules.ops.lake_retention_days": 7})
     data = d.template(d.stage.data)
-    [lake] = [r for r in resources(data, "AWS::S3::Bucket").values() if r["Properties"].get("VersioningConfiguration")]
+    [lake] = buckets_logging_to(data, "s3/lake/")
     rules = {rule["Id"]: rule for rule in lake["Properties"]["LifecycleConfiguration"]["Rules"]}
     tables = by_name(d.template(d.stage.ops), "AWS::Glue::Table")
 
