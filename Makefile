@@ -25,7 +25,8 @@ CONTEXT_ARGS := $(if $(PREFIX),-c fast-channels.prefix=$(PREFIX))
 PREFIX_OPT := $(if $(PREFIX),--prefix $(PREFIX))
 endif
 
-.PHONY: help install console check lint typecheck test synth diff deploy destroy seed model-access eval trace
+.PHONY: help install console check lint typecheck test synth diff deploy destroy seed model-access eval trace pbs-test \
+	pbs-contract
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -48,6 +49,7 @@ lint: ## Format check and lint (Python + console)
 typecheck: ## Static type checks (mypy strict + tsc)
 	uv run mypy core/src functions/src agent/src infra/src
 	MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e
+	MYPYPATH=tests/pbs uv run mypy tests/pbs
 	cd console && npm run typecheck
 
 test: ## Unit and infrastructure tests (Python + console)
@@ -79,3 +81,10 @@ eval: ## Run the agent model-conformance suite (MODEL=<bedrock model id>)
 
 trace: ## Find every log line for a correlation id (ID=<asset id, session id or execution name>)
 	uv run python scripts/trace.py $(ID) $(PREFIX_OPT)
+
+pbs-test: ## Build Prebid Server Java with the fast-ctv module, as the guidance's image does, and run its JUnit tests
+	uv run python scripts/pbs_module.py build
+	uv run python scripts/pbs_module.py test
+
+pbs-contract: ## Contract tests against the jar from pbs-test (no-hook matrix, header isolation, wire fields)
+	uv run pytest tests/pbs -m pbs

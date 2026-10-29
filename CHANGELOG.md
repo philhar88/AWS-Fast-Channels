@@ -55,6 +55,15 @@ All notable changes to this project are documented here. The format follows
   (`fast_channels.core.pbs_config`): stored requests per 30/60/90/120 s break (and kids variants) for the own book
   only, the stage's account with the module's execution plan and Activity Controls, and the application
   configuration.
+- **Demand: the fast-ctv Prebid Server module** (`pbs/fast-ctv`, [docs/demand.md](docs/demand.md#the-fast-ctv-module),
+  ADR-0001 amended). A policy hook adds third-party demand only on a positive, in-time `/policy` answer from the Pod
+  Decision Service (schema version 1; never in `SAFE` or `KIDS` breaks), and an exitpoint hook renders the pod
+  `/select` returns as one VAST 4.2 document for MediaTailor ad buffet, with our impression tracker on every ad and a
+  house-only fallback. `scripts/pbs_module.py` builds Prebid Server Java 3.43.0 with the module exactly as the
+  guidance's image does (pinned commit, Corretto 21, Maven 3.9.11) and runs its JUnit tests; `tests/pbs` (marker
+  `pbs`) runs the no-hook contract matrix, header isolation, wire fields and the impression rule against the jar. The
+  call fixtures shared with the Pod Decision Service are in `contracts/fixtures/pds/`. New CI job `pbs-module` and
+  make targets `pbs-test`, `pbs-contract`.
 
 ## [3.0.0] - 2026-10-16
 

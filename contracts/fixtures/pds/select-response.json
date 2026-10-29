@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "pod": [
+    {"impid": "s1", "ref": "b2", "sequence": 1},
+    {"impid": "s2", "ref": "b3", "sequence": 2}
+  ],
+  "standalone": [
+    {"impid": "s1", "ref": "b0"},
+    {"impid": "s2", "ref": "b1"}
+  ],
+  "trackers": {
+    "b2": ["https://verify.example/imp?c=sim1"]
+  },
+  "reason": "OK"
+}

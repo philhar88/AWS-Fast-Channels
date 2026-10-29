@@ -11,6 +11,14 @@ tag = "v1.4.0"
 commit = "0c7e7e714de37d1f56b29219d7ad9e6d17fac6b2"
 license = "Apache-2.0"
 
+# Prebid Server Java releases the image is built from. The guidance's docker-build-config.json names the tag
+# (GIT_TAG_VERSION); scripts/pbs_module.py and the image build refuse a tag that does not resolve to its commit here.
+[pbs_java]
+repository = "https://github.com/prebid/prebid-server-java"
+
+[pbs_java.commits]
+"3.43.0" = "ba7f97e33fe1dcc5e64f926bc8bea5d4d4252fc1"
+
 # Applied in this order. `files` are copied from this directory into the checkout (repository-relative source =
 # checkout-relative destination).
 [[overlays]]

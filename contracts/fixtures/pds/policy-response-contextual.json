@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "decision_id": "0d6a0bd2-5a7e-4c3f-9a1e-2b6f2f0f9c11.820461826",
+  "mode": "CONTEXTUAL",
+  "reason": "missing",
+  "bidders": {"amt": {}},
+  "regs": {"coppa": 0, "gpp": "DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA", "gpp_sid": [7]},
+  "device": {"ip": "198.51.100.7", "devicetype": 3},
+  "app_content": {
+    "id": "tears-of-steel",
+    "title": "Tears of Steel",
+    "genre": "Science Fiction",
+    "cat": ["652", "325"],
+    "cattax": 9,
+    "contentrating": "TV-14",
+    "len": 734,
+    "language": "en",
+    "prodq": 1,
+    "network": {"name": "FAST Channels demo", "domain": "media.example.com"},
+    "channel": {"name": "Demo", "domain": "media.example.com"},
+    "ext": {
+      "genres": ["652", "325"],
+      "gtax": 9,
+      "realtime": 0,
+      "firstbroadcast": 0,
+      "data": [{"name": "media.example.com", "cids": ["tears-of-steel"]}]
+    }
+  },
+  "user": null,
+  "fpd": {"bidders": ["ownbook"]},
+  "deals": []
+}

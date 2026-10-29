@@ -5,13 +5,14 @@ breaks. MediaTailor POSTs a templated OpenRTB request to Prebid Server, deployed
 Prebid Server on AWS](https://github.com/aws-solutions-library-samples/prebid-server-deployment-on-aws), and gets back
 one VAST 4.2 pod. The decision is recorded in [ADR-0020](adr/0020-demand-through-the-prebid-server-guidance.md).
 
-**Status (Phase 1, in progress):** the pinned guidance with its overlays and the Prebid Server configuration
-renderer are in place. The fast-ctv module, the stacks and the deploy and destroy scripts follow; until they land,
+**Status (Phase 1, in progress):** the pinned guidance with its overlays, the Prebid Server configuration renderer
+and the fast-ctv module are in place. The stacks and the deploy and destroy scripts follow; until they land,
 enabling `modules.demand` deploys nothing.
 
 - [How a break is sold](#how-a-break-is-sold)
 - [The guidance and its overlays](#the-guidance-and-its-overlays)
 - [Prebid Server configuration](#prebid-server-configuration)
+- [The fast-ctv module](#the-fast-ctv-module)
 - [Rules the configuration relies on](#rules-the-configuration-relies-on)
 
 ## How a break is sold
@@ -84,6 +85,57 @@ The Pod Decision Service is named `pds.<prefix>.fast.internal`, in the stage's p
 Server VPC. The configuration can therefore be rendered, and deployed, before the service exists. Until then the
 policy hook falls back and every pod is the own book's, or empty. Nothing in the configuration is secret: the origin
 secret lives only in the WAF rule group and the playback configurations.
+
+## The fast-ctv module
+
+`pbs/fast-ctv` is a Prebid Server Java module with two hooks. Each account's execution plan decides which hooks run,
+inside which group timeouts. Overlay O4 compiles it into the guidance's image. It is the only Java in the repository
+(ADR-0001 as amended).
+
+| Hook (stage) | What it does | On any failure |
+|---|---|---|
+| `fast-ctv-policy` (processed-auction-request; HTTP timeout `policy-timeout-ms`, group `policy_group_timeout_ms`) | POSTs the break to `/policy`: the sanitized ticket, the session, the playback configuration and its Function release, `evid`, `upid`, `dur_ms`, the user agent, `X-Forwarded-For`, `CloudFront-Viewer-Address` and the content context (at most 1,000 characters). On HTTP 200 with schema version 1, it applies the patch: it adds the bidders to every imp beside the own book (never in `SAFE` or `KIDS` breaks, whatever the answer says), and sets `regs`, `device`, `app.content`, `user` (`FULL` only), first-party data scoping and deals | No change: non-200, malformed, unknown version, timeout, unreachable. Prebid Server's group timeout covers a hung hook the same way |
+| `fast-ctv-vast` (exitpoint; HTTP timeout `select-timeout-ms`, group `select_group_timeout_ms`) | Sends every usable bid to `/select`, then renders exactly the pod it returns as one VAST 4.2 document (`application/xml`): winners with `sequence` 1..n, then one standalone per winner for ad buffet unless `X-Fast-Buffet: 0`. Every ad gets `burl`/`nurl` as `<Impression>` (with `${AUCTION_PRICE}` replaced), the extra trackers `/select` names, and **our tracker** (`tracker-template`), because MediaTailor drops an inline ad that has no impression | `/select` failing: `SELECT_FALLBACK`, the auction's house ads (`ext.fast.house`) that fit `poddur`, never repeating a `crid` or advertiser domain. Any exception: an empty `<VAST version="4.2"/>`, so the slate plays. Hook absent or timed out: Prebid Server's JSON, which MediaTailor refuses, so the slate plays |
+
+A bid is usable only when its `adm` is a VAST document whose `<Ad>` holds an `<InLine>` or `<Wrapper>`; a document
+type declaration is refused, so there are no XML external entities. No pod rule runs in Java: eligibility,
+separation, durations and value are the Pod Decision Service's (`/select`).
+
+**The two calls** are schema version 1. Example documents of each side are in
+[`contracts/fixtures/pds/`](../contracts/fixtures/pds/README.md); the module's tests read them, and the Pod Decision
+Service's tests must produce and accept the same documents.
+
+- `/policy` request: `{v, t, sid, pc, fv, evid, upid, dur_ms, ua, xff, cfva, ctx, probe}`. Response: `{v,
+  decision_id, mode, reason, bidders, regs, device, app_content, user, fpd: {bidders}, deals, enr}`.
+- `/select` request: `{v, decision_id, sid, pc, evid, dur_ms, mode, policy_fallback, slots: [{impid, poddur,
+  rqddurs}], bids: [{ref, bidder, seat, impid, price, dur, vast_dur_ms, crid, adomain, cat, cattax, dealid, house,
+  has_impression, adm_kind}]}`. `mode` is null when the policy fell back. Response: `{v, pod: [{impid, ref,
+  sequence}], standalone: [{impid, ref}], trackers: {ref: [url]}, reason}`. A response that names an unknown bid, or
+  repeats a sequence, is refused.
+
+**Logs.** With `log-requests: true` the module writes two JSON lines per auction to the Prebid Server log:
+`fast-ctv-request` (header *names*, the ticket's length, the session, the break) and `fast-ctv-pod` (the policy
+outcome and latency, the selection or the fallback reason, the winners and standalones as `seat:crid`). Neither
+ever holds the ticket or the origin secret.
+
+**Build and tests** (Java 21; CI job `pbs-module`):
+
+```bash
+make pbs-test       # Prebid Server Java at the pinned commit + the guidance's modules + ours, as the image builds it; JUnit
+make pbs-contract   # the contract tests against that jar, with local mocks of every endpoint it calls
+```
+
+`scripts/pbs_module.py build` repeats the guidance Dockerfile's build stage natively. It refuses a Prebid Server Java
+tag that does not resolve to the commit in `PIN.toml`, and also writes `prebid-server-stock.jar`, the same jar
+without the module. The contract tests (`tests/pbs`) run the jar with the stage's rendered configuration:
+
+| Contract | Checked |
+|---|---|
+| No-hook | Third-party bidders are called only after a positive, in-time `/policy` answer. Zero calls for: the module disabled host-wide; the stock jar; `/policy` unreachable, slower than the module's timeout, past the account's group timeout, failing, malformed or of another schema version; module execution off for the account; hook ids absent from the plan. Every privacy mode is exercised |
+| Header isolation | No `X-Fast-*`, `User-Agent` or `X-Forwarded-For` header reaches any bidder |
+| Wire fields | `podid`, `slotinpod`, `poddur`, `rqddurs` and `imp.ssai` reach OpenRTB 2.5 and 2.6 bidders intact; the own book gets OpenRTB 2.6; content metadata reaches bidders, the 2.6 fields in `app.content.ext` on 3.43.0; precise geolocation reaches only the own book |
+| Impressions | Every rendered ad has an impression, and ours, even a third-party ad with none of its own |
+| Durations | Every break length on the grid has a pod; 31 s and 300 s are refused with 400 |
 
 ## Rules the configuration relies on
 
