@@ -10,7 +10,7 @@ from aws_cdk import Stack
 from fast_channels.core.demand import NETWORK_CONTEXT
 from fast_channels.core.monetization.validators import validate_bundle
 from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
-from fast_channels.infra.constructs.release.guards import DENIED_ACTIONS
+from fast_channels.infra.constructs.release.guards import DENIED_ACTIONS, LOG_READ_ACTIONS
 
 if TYPE_CHECKING:
     from aws_cdk.assertions import Template
@@ -157,7 +157,10 @@ def test_every_other_role_of_the_stage_is_denied_the_controllers_writes(deployme
             if {"Ref": guards[0] if guards else ""} not in role["Properties"].get("ManagedPolicyArns", []):
                 unguarded.append(f"{stack.stack_name}/{name}")
         for guard in guards:
-            [deny] = template[guard]["Properties"]["PolicyDocument"]["Statement"]
+            deny, logs_deny = template[guard]["Properties"]["PolicyDocument"]["Statement"]
+            assert logs_deny["Effect"] == "Deny" and set(logs_deny["Action"]) == set(LOG_READ_ACTIONS)
+            group = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release"
+            assert logs_deny["Resource"] == [group, f"{group}:*"]
             assert deny["Effect"] == "Deny" and set(deny["Action"]) == set(DENIED_ACTIONS)
             assert set(deny["Resource"]) == {
                 f"{BASE}:playbackConfiguration/fastm-demo-p-*",
@@ -165,8 +168,12 @@ def test_every_other_role_of_the_stage_is_denied_the_controllers_writes(deployme
                 f"{BASE}:channel/fastm-demo",
                 f"{BASE}:function/fastm_*",
             }
-    controller = {n for n in unguarded if "/ControllerApplyRole" in n or "/ControllerReaperRole" in n}
-    assert len(controller) == 2
+    controller = {
+        n
+        for n in unguarded
+        if any(r in n for r in ("/ControllerApplyRole", "/ControllerReaperRole", "/ZeroAdsDetectorRole"))
+    }
+    assert len(controller) == 3  # the controller's writers, and the reader of the siblings' logs
     # The roles of CDK's core custom-resource providers are CfnResources, not iam.Role (the guard's Aspect cannot
     # attach to them): they empty buckets or run a trigger, and none of them may call MediaTailor.
     providers = set(unguarded) - controller

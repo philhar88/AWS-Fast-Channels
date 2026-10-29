@@ -111,8 +111,9 @@ controller changed what it owns. The alarm `<prefix>-release-drift` fires on any
 With the module on, every IAM role of the stage gets an explicit Deny (the managed policy `ReleaseGuard` in each stack)
 of `PutPlaybackConfiguration`, `DeletePlaybackConfiguration`, `PutFunction`, `DeleteFunction`,
 `CreatePrefetchSchedule`, `DeletePrefetchSchedule` and `PutChannelPolicy` on the siblings (`<channel>-p-*`), their
-prefetch schedules, the monetized channels and the deployment's Functions (`<p>_*`). Only the controller's apply and
-reaper functions are exempt. The agent tools can still create and delete their own channels' configurations, but not
+prefetch schedules, the monetized channels and the deployment's Functions (`<p>_*`), and the reading of the
+siblings' log group ([below](#the-siblings-logs)). Only the controller's apply and reaper functions, and the readers of
+that group, are exempt. The agent tools can still create and delete their own channels' configurations, but not
 a monetized one. A break-glass operator acts outside the stage.
 
 ## The siblings' logs
@@ -124,9 +125,12 @@ hold the origin secret or a viewer's ticket (`requestHeaders`, `rawAdsRequest`; 
 `fast_channels.core.mediatailor_logs`).
 
 The log group is encrypted with the module's own KMS key (rotated yearly). Its key policy delegates nothing to IAM:
-the account administers the key, CloudWatch Logs uses it for this log group only, and only the roles the stack names
-may decrypt through CloudWatch Logs (today the zero-ad-sessions detector). To read the group otherwise, an
-administrator adds a statement to the key policy, which CloudTrail records.
+the account administers the key, and CloudWatch Logs uses it for this log group only. The key protects the logs at
+rest and lets them be shredded (disable the key and the group is unreadable), but it does not choose who reads them:
+CloudWatch Logs decrypts for any caller that IAM lets read the group. So the release guard also denies reading the
+group (`GetLogEvents`, `FilterLogEvents`, `StartQuery`, live tail, export, subscription filters) to every role of the
+stage but its named readers (today the zero-ad-sessions detector). An account administrator outside the stage can
+still read it.
 
 The Pod Decision Service counts the siblings' impressions from this group: the subscription filter
 `<prefix>-pds-delivery-release` sends their impression beacons to its delivery function, with the same pattern as its

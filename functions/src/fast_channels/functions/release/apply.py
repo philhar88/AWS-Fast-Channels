@@ -227,6 +227,16 @@ def _deliveries() -> dict[tuple[str, str], str]:
     }
 
 
+def _sources() -> dict[str, list[str]]:
+    """Every delivery source of the account and region: name -> resource ARNs."""
+    logs = aws.client("logs")
+    return {
+        s["name"]: list(s.get("resourceArns", []))
+        for page in logs.get_paginator("describe_delivery_sources").paginate()
+        for s in page["deliverySources"]
+    }
+
+
 def deliver(configuration: str, arn: str, tags: dict[str, str]) -> list[str]:
     """The configuration's vended logs: one delivery source per log type, delivered to the module's encrypted log
     group and (ads and manifest) to the lake, every delivery without the fields that are never stored. Returns the
@@ -235,11 +245,13 @@ def deliver(configuration: str, arn: str, tags: dict[str, str]) -> list[str]:
     config.require("release_log_destination", "lake_deliveries")
     lake = json.loads(config.lake_deliveries)
     logs = aws.client("logs")
-    existing = _deliveries()
+    existing, sources = _deliveries(), _sources()
     created: list[str] = []
     for log_type, suffix in VENDED_LOG_TYPES.items():
         source = f"{configuration}-{suffix}"
-        logs.put_delivery_source(name=source, resourceArn=arn, logType=log_type, tags=tags)
+        if sources.get(source) != [arn]:  # tags can only be given when a source is created ("ConflictException")
+            extra = {} if source in sources else {"tags": tags}
+            logs.put_delivery_source(name=source, resourceArn=arn, logType=log_type, **extra)
         fields = {"recordFields": list(RECORD_FIELDS[log_type])} if log_type in RECORD_FIELDS else {}
         destinations: list[tuple[str, dict[str, Any]]] = [(config.release_log_destination, {})]
         if log_type in lake:

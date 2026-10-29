@@ -9,6 +9,9 @@ a monetized configuration (and its FunctionMapping). The Release Controller's ow
 operator acts outside the stage. CloudFormation creates the channel policy with the deploying role, which is not a
 stage role.
 
+The same policy denies reading the siblings' log group (``LOG_READ_ACTIONS``) to every role of the stage but its named
+readers, which are exempt as the controller's roles are: the group's KMS key does not limit who reads it.
+
 One customer managed policy per stack holds the Deny and is attached to each of the stack's roles: attached policies
 do not count against a role's inline policy size.
 """
@@ -32,6 +35,19 @@ DENIED_ACTIONS: Final = (
     "mediatailor:DeletePrefetchSchedule",
     "mediatailor:PutChannelPolicy",
 )
+
+
+LOG_READ_ACTIONS: Final = (
+    "logs:GetLogEvents",
+    "logs:FilterLogEvents",
+    "logs:StartQuery",
+    "logs:StartLiveTail",
+    "logs:CreateExportTask",
+    "logs:PutSubscriptionFilter",
+    "logs:DisassociateKmsKey",
+)
+"""Ways to read (or copy out) the siblings' log group. Its KMS key does not limit them: CloudWatch Logs decrypts for
+any caller IAM lets read (observed on fastm, 2026-10-29), so the stage's other roles are denied them here."""
 
 
 def owned_resources(*, partition: str, region: str, account: str, prefix: str, channels: Sequence[str]) -> list[str]:
@@ -59,6 +75,17 @@ def deny_statement(
     )
 
 
+def log_deny_statement(*, partition: str, region: str, account: str, prefix: str) -> iam.PolicyStatement:
+    """The Deny of reading the siblings' log group, for every role of the stage but its named readers."""
+    group = f"arn:{partition}:logs:{region}:{account}:log-group:{names.log_group(prefix)}"
+    return iam.PolicyStatement(
+        sid="OnlyNamedReadersReadTheSiblingsLogs",
+        effect=iam.Effect.DENY,
+        actions=list(LOG_READ_ACTIONS),
+        resources=[group, f"{group}:*"],
+    )
+
+
 @jsii.implements(IAspect)
 class ReleaseGuard:
     """Attach the Deny to every :class:`aws_iam.Role` of the stage except ``exempt`` (by node path prefix).
@@ -67,7 +94,8 @@ class ReleaseGuard:
         prefix: deployment prefix.
         channels: the monetized channels.
         region: the deployment's region (the guard's ARNs name it, also in stacks of other regions).
-        exempt: node paths of the constructs whose roles are the controller's (each path and what is under it).
+        exempt: node paths of the constructs whose roles are the controller's or read the siblings' logs (each
+            path and what is under it). None of them may do what the guard denies the others without its own grant.
     """
 
     def __init__(self, *, prefix: str, channels: Sequence[str], region: str, exempt: Iterable[str] = ()) -> None:
@@ -97,7 +125,10 @@ class ReleaseGuard:
                         account=stack.account,
                         prefix=self._prefix,
                         channels=self._channels,
-                    )
+                    ),
+                    log_deny_statement(
+                        partition=stack.partition, region=self._region, account=stack.account, prefix=self._prefix
+                    ),
                 ],
             )
             self._policies[stack.node.path] = policy

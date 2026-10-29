@@ -291,7 +291,7 @@ class ReleaseController(Construct):
             why="delivery ids are generated; the destinations are the module's log group and the lake",
         )
         apply.allow(["logs:TagResource"], [sources, deliveries], why="tags of the siblings' log deliveries")
-        apply.allow(["logs:DescribeDeliveries"], ["*"])
+        apply.allow(["logs:DescribeDeliveries", "logs:DescribeDeliverySources"], ["*"])
         apply.allow(
             ["s3:PutObject"], [f"arn:{Stack.of(self).partition}:s3:::{media_bucket}/plan/playback/*"], why="the plans"
         )

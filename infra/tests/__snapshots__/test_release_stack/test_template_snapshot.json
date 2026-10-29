@@ -219,6 +219,7 @@
             {
               "Action": [
                 "logs:DescribeDeliveries",
+                "logs:DescribeDeliverySources",
                 "xray:PutTelemetryRecords",
                 "xray:PutTraceSegments"
               ],
@@ -2664,6 +2665,23 @@
                 "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*"
               ],
               "Sid": "OnlyTheReleaseControllerChangesMonetization"
+            },
+            {
+              "Action": [
+                "logs:CreateExportTask",
+                "logs:DisassociateKmsKey",
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:PutSubscriptionFilter",
+                "logs:StartLiveTail",
+                "logs:StartQuery"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release",
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release:*"
+              ],
+              "Sid": "OnlyNamedReadersReadTheSiblingsLogs"
             }
           ],
           "Version": "2012-10-17"
@@ -3300,11 +3318,6 @@
           ],
           "Version": "2012-10-17"
         },
-        "ManagedPolicyArns": [
-          {
-            "Ref": "ReleaseGuard3432AE9F"
-          }
-        ],
         "Tags": [
           {
             "Key": "fast:app",

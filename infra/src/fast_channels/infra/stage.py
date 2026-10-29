@@ -214,7 +214,8 @@ class FastChannelsStage(Stage):
         exempt = []
         if self.release is not None:
             controller = self.release.controller
-            exempt = [controller.apply.node.path, controller.reaper.node.path]
+            # The controller's writers, and the readers of the siblings' logs (the zero-ad-sessions detector).
+            exempt = [controller.apply.node.path, controller.reaper.node.path, self.release.zero_ads.function.node.path]
         return ReleaseGuard(
             prefix=config.prefix, channels=config.modules.release.channels, region=region, exempt=exempt
         )

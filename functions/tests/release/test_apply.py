@@ -204,24 +204,31 @@ def test_functions_raise_other_errors(kit: SimpleNamespace, state: Any, stub: St
 # --- configure ------------------------------------------------------------------------------------------------------
 
 
-def expect_deliveries(logs: Stubber, sibling: str, *, existing: list[dict[str, Any]] | None = None) -> None:
-    """The three delivery sources of ``sibling`` and the deliveries not in ``existing``: every log type to the
-    module's encrypted log group, ads and manifest also to the lake and without the never-stored fields."""
+def expect_deliveries(
+    logs: Stubber,
+    sibling: str,
+    *,
+    existing: list[dict[str, Any]] | None = None,
+    sources: list[dict[str, Any]] | None = None,
+) -> None:
+    """The delivery sources of ``sibling`` not in ``sources`` (tagged when new) and the deliveries not in
+    ``existing``: every log type to the module's encrypted log group, ads and manifest also to the lake and without the
+    never-stored fields."""
     tags = release_tags("fastm", release=2, change_id="c2")
     lake = {"s3DeliveryConfiguration": {"suffixPath": "{yyyy}/{MM}/{dd}/{HH}", "enableHiveCompatiblePath": False}}
     made = {(d["deliverySourceName"], d["deliveryDestinationArn"]) for d in existing or []}
+    known = {source["name"]: source["resourceArns"] for source in sources or []}
     logs.add_response("describe_deliveries", {"deliveries": existing or []}, {})
+    logs.add_response("describe_delivery_sources", {"deliverySources": sources or []}, {})
     for log_type, suffix, fields in (
         ("AD_DECISION_SERVER_LOGS", "ads", ADS_LOG_FIELDS),
         ("MANIFEST_SERVICE_LOGS", "manifest", MANIFEST_LOG_FIELDS),
         ("TRANSCODE_LOGS", "transcode", None),
     ):
         source = f"{sibling}-{suffix}"
-        logs.add_response(
-            "put_delivery_source",
-            {},
-            {"name": source, "resourceArn": f"{ARN}{sibling}", "logType": log_type, "tags": tags},
-        )
+        if known.get(source) != [f"{ARN}{sibling}"]:
+            request = {"name": source, "resourceArn": f"{ARN}{sibling}", "logType": log_type}
+            logs.add_response("put_delivery_source", {}, request | ({} if source in known else {"tags": tags}))
         record = {"recordFields": list(fields)} if fields else {}
         destinations: list[tuple[str, dict[str, Any]]] = [(RELEASE_DESTINATION, {})]
         if fields:
@@ -276,7 +283,11 @@ def test_configure_keeps_the_deliveries_a_retry_already_made(kit: SimpleNamespac
         {"id": "d1", "deliverySourceName": f"{sibling.name}-ads", "deliveryDestinationArn": kit.DESTINATION},
         {"id": "d2", "deliverySourceName": f"{sibling.name}-ads", "deliveryDestinationArn": kit.LAKE_ADS},
     ]
-    expect_deliveries(logs, sibling.name, existing=existing)
+    sources = [
+        {"name": f"{sibling.name}-ads", "resourceArns": [f"{ARN}{sibling.name}"]},  # made by the first attempt
+        {"name": f"{sibling.name}-manifest", "resourceArns": ["arn:elsewhere"]},  # put again, without tags
+    ]
+    expect_deliveries(logs, sibling.name, existing=existing, sources=sources)
     apply.configure(key, sibling.name, 2, "c2")
 
 
@@ -411,6 +422,7 @@ def test_the_handler_runs_the_steps_without_touching_the_channel_policy(
         )
         mediatailor.add_response("configure_logs_for_playback_configuration", {"PercentEnabled": 100}, None)
         logs.add_response("describe_deliveries", {"deliveries": []}, {})
+        logs.add_response("describe_delivery_sources", {"deliverySources": []}, {})
         for deliveries in (2, 2, 1):  # ads and manifest to the log group and the lake, transcode to the log group
             logs.add_response("put_delivery_source", {}, None)
             for _ in range(deliveries):

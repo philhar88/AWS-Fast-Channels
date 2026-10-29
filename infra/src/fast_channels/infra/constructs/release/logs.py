@@ -1,11 +1,13 @@
 """The siblings' MediaTailor vended logs: one log group, encrypted with the module's own KMS key (DESIGN §5.7).
 
 The deliveries already leave out every field that can hold the origin secret or the playback ticket
-(``core.mediatailor_logs``), and on top of that only named readers can decrypt the group. The key policy delegates
-nothing to IAM: the account administers the key (and may change the policy, the break-glass path, recorded by
-CloudTrail), CloudWatch Logs encrypts and decrypts for this one log group, and only the principals given to
-:meth:`ReleaseLogs.grant_read` (the Release Controller, the zero-ad-sessions detector) may read it through
-CloudWatch Logs. Readers of an encrypted group need ``kms:Decrypt`` through ``logs.<region>.amazonaws.com``.
+(``core.mediatailor_logs``). The key policy delegates nothing to IAM: the account administers the key (and may change
+the policy, recorded by CloudTrail), and CloudWatch Logs encrypts and decrypts for this one log group. The key protects
+the data at rest and lets it be shredded (disabling the key makes the group unreadable), but it does not choose the
+readers: CloudWatch Logs decrypts for any caller IAM lets read the group (observed on fastm, 2026-10-29, although the
+CloudWatch Logs guide says readers need ``kms:Decrypt``). The release guard denies reading the group to every role of
+the stage but the principals given to :meth:`ReleaseLogs.grant_read`, which also get ``kms:Decrypt`` through
+``logs.<region>.amazonaws.com`` in case CloudWatch Logs enforces it.
 """
 
 from typing import Final
