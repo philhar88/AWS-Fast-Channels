@@ -158,6 +158,10 @@ All notable changes to this project are documented here. The format follows
 
 - The as-run log group allows five subscription filters per log group, not two: at most five `per_stage`
   deployments can exist per account and region (docs/channel-assembly.md).
+- **Demand: several guidance deployments per account and Region.** Overlay O1 now also prefixes the guidance's
+  MetricsEtl Glue database (`<prefix>-prebid-server-<region>-metricsetl-database`). The shipped name ignores the
+  stack, so a second stage's guidance (another lane's e2e leg next to `fastm`) failed with `Database already exists`.
+  It was the only such name in the synthesized templates.
 
 ## [3.0.0] - 2026-10-16
 
