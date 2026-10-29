@@ -157,6 +157,19 @@ def test_the_pod_with_its_line_ad_reserved_and_our_trackers(
     assert select.logger.get_correlation_id() == decision
 
 
+@pytest.mark.parametrize(("holdout", "enr"), [("0", 1), ("100", 0)])
+def test_the_trackers_carry_the_crawl_arm(
+    stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, holdout: str, enr: int
+) -> None:
+    """With the crawl module on, ``enr`` is the break's ``crawl-v1`` arm (every break enriched at 0 %, none at
+    100 %), the same as the ``/policy`` record's."""
+    monkeypatch.setenv("CRAWL_HOLDOUT_PERCENT", holdout)
+    settings.cache_clear()
+    response = select.handler(alb(json.dumps(request())), Context())
+    answer = SelectResponse.model_validate_json(response["body"])
+    assert {url.rsplit("&", 1)[1] for urls in answer.trackers.values() for url in urls} == {f"enr={enr}"}
+
+
 def test_the_contract_examples_are_answered_as_they_say(
     stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:

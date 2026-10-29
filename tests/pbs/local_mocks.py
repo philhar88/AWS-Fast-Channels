@@ -1,7 +1,9 @@
 """Local stand-ins for everything Prebid Server calls in the contract tests, with an exact call ledger.
 
 - ``/policy`` (on its own port, so a test can make it unreachable): the Pod Decision Service's policy, steered by the
-  ticket (``X-Fast-T``) the module forwards; see :data:`POLICY_TICKETS`.
+  ticket (``X-Fast-T``) the module forwards; see :data:`POLICY_TICKETS`. Its ``app_content`` is the crawl module's
+  contributor (``fast_channels.functions.crawl.patch``) on a copy of the sample catalog's context objects
+  (:data:`CRAWL`), so the break's session, UPID and ``x-fast-ctx`` header decide it as they do in the service.
 - ``/select``: the Pod Decision Service's pod rules (``fast_channels.core.pds.pod``), with its trackers, or HTTP 503
   while ``select_fails`` is set.
 
@@ -24,14 +26,20 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import IPv4Address
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
+from pbs_process import PBS_VERSION, PREFIX
 from pydantic import JsonValue, ValidationError
 
+from fast_channels.core.catalog import ContentItem
+from fast_channels.core.crawl.catalog_context import build_context, header
+from fast_channels.core.crawl.ortb_content import app_content, channel_of, from_context, native_2_6
+from fast_channels.core.crawl.taxonomy import default_genre_map, load_taxonomy
 from fast_channels.core.pds.models import (
     OWN_BOOK,
     Device,
@@ -45,34 +53,59 @@ from fast_channels.core.pds.models import (
     SelectRequest,
 )
 from fast_channels.core.pds.pod import select_pod, select_response
+from fast_channels.functions.crawl.patch import CrawlContributor
 
 TRACKER_BASE: Final = "https://cdn.example/ads/b.gif"
 TRACKER_ENR: Final = 1
 """The service's trackers carry ``enr=1`` here and the module's own ``enr=0``, so a test can tell them apart."""
 THIRD_PARTIES: Final = ("/amt", "/echo26")
 """Bidders that are not the own book: the no-hook contract counts calls to these."""
-CONTENT: Final = {
-    "id": "tears-of-steel",
-    "title": "Tears of Steel",
-    "genre": "Science Fiction",
-    "cat": ["652", "325"],
-    "cattax": 9,
-    "contentrating": "TV-14",
-    "len": 734,
-    "language": "en",
-    "ext": {"genres": ["652", "325"], "gtax": 9, "realtime": 0, "firstbroadcast": 0},
+NATIVE: Final = native_2_6(PBS_VERSION)
+"""This release models the OpenRTB 2.6 content fields, so the policy answer sends them natively."""
+PUBLISHER_DOMAIN: Final = "cdn.example"
+"""The stage's publisher domain (``pbs_process.SETTINGS``), the registry of the catalog's content ids."""
+CONTEXTS: Final = {
+    title["content_id"]: build_context(
+        ContentItem.model_validate(title),
+        genre_map=default_genre_map(),
+        publisher_domain=PUBLISHER_DOMAIN,
+        updated=datetime(2026, 10, 28, tzinfo=UTC),
+    )
+    for title in json.loads((Path(__file__).parents[2] / "assets" / "sample-catalog.json").read_text())["titles"]
 }
-"""The ``app_content`` a positive policy answer patches in: OpenRTB 2.5 fields natively, the 2.6 ones in ``ext``."""
-NATIVE_CONTENT: Final = {
-    "id": "tears-of-steel",
-    "genres": ["652", "325"],
-    "gtax": 9,
-    "realtime": 0,
-    "firstbroadcast": 1793210000,
-    "data": [{"id": "fast-catalog", "name": "fast-catalog", "cids": ["tears-of-steel"]}],
-}
-"""The ``app_content`` of ticket ``NATIVE1``: the OpenRTB 2.6 content fields as first-class fields, which Prebid Server
-Java models from 4.x (P0-20 §4.13)."""
+"""The PDS's copy of the catalog: the sample titles' context objects."""
+TITLE: Final = "tears-of-steel"
+"""The title of the contract auctions' break (``upid=``)."""
+LATE_TITLE: Final = "late-title"
+LATE_HEADER: Final = header(LATE_TITLE, genres=["641"], cat=["641"], rating="TV-G", length=60, language="en", prodq=1)
+"""``x-fast-ctx`` of a title the copy does not have yet (catalog publish lag): only the header knows it."""
+ENRICHED_SID: Final = "sid-contract"
+"""The contract auctions' session: its break is on the enriched arm (``crawl-v1`` bucket 96)."""
+HOLDOUT_SID: Final = "sid-holdout-3"
+"""A session whose break is in the ``crawl-v1`` holdout (bucket 0)."""
+CRAWL: Final = CrawlContributor(
+    contexts=lambda: CONTEXTS,
+    holdout_percent=20,
+    native=NATIVE,
+    publisher_domain=PUBLISHER_DOMAIN,
+    genre_names=load_taxonomy(),
+)
+"""The crawl module's contributor, as the service runs it with ``modules.crawl`` on."""
+NATIVE_CONTENT: Final = app_content(
+    from_context(CONTEXTS[TITLE]),
+    mode=Mode.FULL,
+    native=True,
+    channel=channel_of(f"{PREFIX}-demo-p-a", domain=PUBLISHER_DOMAIN),
+)
+"""The ``app_content`` of ticket ``NATIVE1`` on any release: the mapping with the OpenRTB 2.6 content fields as
+first-class fields, as the service sends them to Prebid Server Java 4.4.0 and later (P0-20 §4.13)."""
+
+
+def crawl_content(request: PolicyRequest, mode: Mode) -> dict[str, JsonValue] | None:
+    """The ``app_content`` of a policy answer: the crawl contributor's, None when it adds nothing."""
+    return dict(CRAWL.contribute(request, mode).app_content) or None
+
+
 POSITIVE: Final = {
     "FULL1": "FULL",
     "PSEUDO1": "PSEUDONYMOUS",
@@ -155,7 +188,7 @@ def policy_answer(request: PolicyRequest) -> tuple[int, str, float]:
             bidders=named,
             regs=Regs(coppa=1 if mode is Mode.KIDS else 0),
             device=Device(ip=IPv4Address("198.51.100.7"), devicetype=DeviceType.CONNECTED_TV),
-            app_content=NATIVE_CONTENT if ticket == "NATIVE1" else CONTENT,
+            app_content=NATIVE_CONTENT if ticket == "NATIVE1" else crawl_content(request, mode),
             fpd=Fpd(bidders=[OWN_BOOK]),
         )
         return json.dumps(response.model_dump(mode="json") | {"v": version})

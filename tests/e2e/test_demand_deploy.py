@@ -247,12 +247,12 @@ def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
     }
 
 
+PDS_PARAMETERS = ("config-bucket", "lake-bucket", "media-bucket", "content-base-url", "ladder-version")
+
+
 def test_the_pds_needs_the_parameters_of_the_data_and_media_stacks(stage: _demand.DemandStage, stub: Any) -> None:
     ssm = stub("ssm")
-    names = [
-        f"/fastcix/pds/{p}"
-        for p in ("config-bucket", "lake-bucket", "media-bucket", "content-base-url", "ladder-version")
-    ]
+    names = [f"/fastcix/pds/{p}" for p in (*PDS_PARAMETERS, "catalog-context-bucket")]  # fastci has the crawl module
     ssm.add_response(
         "get_parameters",
         {"Parameters": [], "InvalidParameters": names[3:]},
@@ -263,6 +263,17 @@ def test_the_pds_needs_the_parameters_of_the_data_and_media_stacks(stage: _deman
 
     ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
     stage.check_pds_state()
+
+
+def test_without_the_crawl_module_the_pds_needs_no_catalog_bucket(fastci: Any) -> None:
+    modules = fastci.modules.model_copy(update={"crawl": fastci.modules.crawl.model_copy(update={"enabled": False})})
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    ssm = Stubber(stage.client("ssm"))
+    names = [f"/fastcix/pds/{p}" for p in PDS_PARAMETERS]
+    ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
+    with ssm:
+        stage.check_pds_state()
+    ssm.assert_no_pending_responses()
 
 
 def test_a_pds_stack_the_module_no_longer_has_is_deleted(fastci: Any, stub: Any) -> None:

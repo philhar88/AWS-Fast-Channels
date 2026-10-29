@@ -148,6 +148,14 @@ All notable changes to this project are documented here. The format follows
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a
   change, so it refuses it on a running channel (or stops and restarts the channel with `restart_on_update`),
   because a policy change on a running channel is not session-safe. With the module off the policy is unchanged.
+- **Content metadata in bid requests and the uplift holdout** (`crawl` module): the Pod Decision Service's `/policy`
+  answer fills OpenRTB 2.6 `app.content` from a copy of the catalog context objects (refreshed every 30 s, with the
+  `x-fast-ctx` header for a title the copy lacks): the 2.6 fields in `content.ext` on Prebid Server 3.43.0 and
+  natively from 4.4.0 (`modules.demand.pbs_version`). PSEUDONYMOUS breaks get no field that names the title, SAFE
+  breaks none. A `crawl-v1` holdout (`modules.crawl.holdout_percent`, 20 %) gets no enrichment; the arm (`enr`) and
+  where the metadata was found (`ctx`) are in the `pds.policy` record, and the arm in our impression tracker. The
+  lake view `v_crawl_kpis` reports coverage, bids, fill and price by hour, playback configuration and arm. ADR 0031
+  is accepted.
 - **Cached PRE_ADS content lookup** (`crawl` module, with `modules.crawl.pre_ads`): the release bundle maps a PRE_ADS
   root executor (400 ms) on every general sibling. Its one cached `HTTP_REQUEST` (250 ms, 300 s keyed on the break's
   SCTE-35 UPID) reads the title's catalog context object and sets the `x-fast-ctx` header to its `hdr`, capped at

@@ -15,6 +15,8 @@ whose metadata cannot be read is requested without it.
 - [The catalog context object](#the-catalog-context-object)
 - [Genres and categories](#genres-and-categories)
 - [The PRE_ADS lookup](#the-pre_ads-lookup)
+- [The OpenRTB patch](#the-openrtb-patch)
+- [Measuring the uplift](#measuring-the-uplift)
 - [Limits](#limits)
 - [Privacy](#privacy)
 
@@ -26,13 +28,11 @@ whose metadata cannot be read is requested without it.
    ([Serving and misses](#serving-and-misses)).
 3. On each ad break, a cached PRE_ADS `HTTP_REQUEST` Function reads the object by the break's UPID and passes its
    compact form (`hdr`) to the ad decision server as a header. MediaTailor caches the response for 300 s per content id
-   and playback configuration, so the origin sees about 4 requests per title per playback configuration in each
+   and playback configuration, so the origin sees about 4 or 5 requests per title per playback configuration in each
    300 s window, whatever the audience.
-4. The Pod Decision Service reads the same objects and fills OpenRTB 2.6 `app.content` in each bid request.
-
-The catalog fields, the context object (`fast_channels.core.crawl.catalog_context`), the genre map, the
-[publisher](#the-context-publisher) and the [PRE_ADS lookup](#the-pre_ads-lookup) are in place; the OpenRTB mapping
-is added with the rest of the module.
+4. The Pod Decision Service reads the same objects and fills OpenRTB 2.6 `app.content` in each bid request
+   ([The OpenRTB patch](#the-openrtb-patch)), except on a holdout of 20 % of breaks that measures what the
+   enrichment is worth ([Measuring the uplift](#measuring-the-uplift)).
 
 ## The context publisher
 
@@ -176,9 +176,9 @@ back like every other function.
 | `<p>_pa_root` | `SEQUENTIAL_EXECUTOR`, 400 ms: runs the lookup and commits one value, the `x-fast-ctx` request header |
 | `<p>_pa_meta` | `HTTP_REQUEST` GET `<content base>/catalog/ctx/v1/<content id>.json`, 250 ms, skipped when the break has no UPID. The content id is `scte.segmentation_upid` with its `FST3` prefix removed if MediaTailor left it. `Cache` 300/300 s keyed `meta\|v1\|<UPID>` |
 
-- **Load.** MediaTailor's Function cache is per playback configuration and splits into about 4 partitions that each
-  coalesce concurrent misses, so the CDN sees about 4 requests per title per sibling in each 300 s window, whatever
-  the audience (measured with herds of 100 and 300 sessions). A title missing from the catalog is a cached 404 too
+- **Load.** MediaTailor's Function cache is per playback configuration and splits into about 4 or 5 partitions that
+  each coalesce concurrent misses, so the CDN sees about 4 or 5 requests per title per sibling in each 300 s window,
+  whatever the audience (4 measured with herds of 100 and 300 sessions, 5 with herds of 12 and 40). A title missing from the catalog is a cached 404 too
   ([Serving and misses](#serving-and-misses)).
 - **Output.** `x-fast-ctx` carries the object's `hdr` when the lookup answered 200 with a `v1` object, and is empty
   otherwise. The expression caps it at 1,000 characters, so the release validators can prove the documented output
@@ -193,6 +193,82 @@ back like every other function.
   sends the ad request without the header.
 - `pre_ads: false` leaves PRE_ADS unmapped; the Pod Decision Service still enriches `app.content` from the same
   objects.
+
+## The OpenRTB patch
+
+With the module on, the Pod Decision Service's `/policy` answer carries the break's `app_content`, which the fast-ctv
+Prebid Server module merges into `app.content` before the auction (`fast_channels.functions.crawl.patch`, the
+mapping in `fast_channels.core.crawl.ortb_content`).
+
+- **Where the metadata comes from.** The content id is the break's UPID without `FST3`. The policy function keeps a
+  copy of the context objects: it reads them during its init, then lists `catalog/ctx/v1/` every 30 seconds in the
+  background and reads only the objects whose ETag changed, so no request waits on S3. For a title the copy lacks
+  (a title published in the last 30 seconds), it uses the `x-fast-ctx` header of the PRE_ADS lookup when the header
+  names the same content id. The header has no title, series, producer or keywords, so those breaks carry the
+  genres, categories, rating, length, language and quality only.
+- **The fields**, for Tears of Steel on Prebid Server 3.43.0 (`modules.demand.pbs_version`), with
+  `publisher_domain: example.com`:
+
+  ```json
+  {"id": "tears-of-steel", "title": "Tears of Steel", "genre": "Science Fiction", "contentrating": "TV-14",
+   "len": 734, "language": "en", "prodq": 1, "producer": {"name": "Blender Foundation", "domain": "blender.org"},
+   "kwarray": ["live-action"], "channel": {"id": "fastm-demo", "domain": "example.com"},
+   "cat": ["652", "325"], "cattax": 9,
+   "ext": {"realtime": 0, "firstbroadcast": 0, "genres": ["652", "325"], "gtax": 9,
+           "data": [{"name": "example.com", "cids": ["tears-of-steel"]}]}}
+  ```
+
+  Prebid Server Java 3.43.0 drops `genres`, `gtax`, `realtime`, `firstbroadcast` and `data[].cids` without a warning,
+  so they travel in `ext` there. From 4.4.0 the same fields are native (no `ext`). `livestream: 1`, `context: 1`
+  and `cattax: 9` come from the stored request on every break. `series`, `season` and `episode` appear for
+  episodes; `channel` is the channel of the sibling playback configuration.
+- **By privacy mode** ([pds.md](pds.md#privacy-modes)). FULL, CONTEXTUAL and KIDS (with `regs.coppa`) breaks get the
+  whole object. PSEUDONYMOUS breaks get genres, categories, rating, language, quality and the channel, but nothing
+  that names the title: no `id`, `title`, `series`, `season`, `episode`, `len`, `kwarray`, `producer` or `data`. SAFE
+  breaks get nothing.
+- **Who sees `data`.** From 4.4.0, Prebid Server passes `app.content.data` only to the bidders that the answer's
+  first-party-data rule names (`fpd.bidders`: the own book), so third parties read the content id in `id`. On 3.43.0
+  the `ext` copy reaches every bidder. Either way it holds catalog ids only.
+- **Fail open.** A break without a UPID, a title in neither the copy nor the header, or a contributor failure is
+  served without `app_content`, and the rest of the answer is unchanged.
+- The function reads only the catalog-context bucket's `catalog/ctx/v1/` prefix (list and get), whose name the Media
+  stack publishes as `/<prefix>/pds/catalog-context-bucket`.
+
+## Measuring the uplift
+
+Each session-break is in one of two arms: `SHA-256("crawl-v1" ‖ sid ‖ "." ‖ evid) mod 100` below
+`modules.crawl.holdout_percent` (20 by default) is the **holdout**, every other break is **enriched**. The holdout
+gets no `app_content` beyond the stored request's constants, and its header is ignored. The assignment is
+deterministic, so an audit can recompute it from the records alone.
+
+- The `pds.policy` record of every break lists the `crawl` contributor and its fields: `contributed.enr` (1 enriched,
+  0 holdout) and `contributed.ctx`, where the metadata was found in either arm (`snapshot`, `header` or `none`).
+- `/select` computes the same arm, and our impression tracker carries it (`enr=`), so `pds.delivery` records have it
+  too. MediaTailor's own ad request URL cannot, because a prefetched break's is stale.
+- The lake view `v_crawl_kpis` has one row per hour (`datehour`), playback configuration and arm, without probes:
+
+  | Column | What it counts |
+  |---|---|
+  | `breaks`, `with_upid` | Decisions, and those whose break has a UPID |
+  | `covered`, `from_header`, `coverage` | Breaks whose metadata was found (from the header), and `covered / with_upid` |
+  | `auctions`, `bids`, `bid_rate` | Breaks that reached `/select`, the bids at or above the floor, bids per auction |
+  | `avail_seconds`, `filled_seconds`, `fill_rate` | What the pods filled of the breaks |
+  | `filled_breaks`, `impressions` | Breaks and ads our tracker counted |
+  | `revenue_usd`, `ecpm`, `revenue_per_1000_breaks` | Impressions priced at their bid's CPM (house ads at 0) |
+
+  ```sql
+  SELECT enr, sum(breaks) AS breaks, sum(covered) * 1.0 / sum(with_upid) AS coverage,
+         sum(bids) * 1.0 / sum(auctions) AS bid_rate, sum(filled_seconds) / sum(avail_seconds) AS fill_rate,
+         sum(revenue_usd) * 1000 / sum(impressions) AS ecpm
+  FROM "<prefix>_lake".v_crawl_kpis
+  WHERE datehour >= date_format(current_timestamp - interval '1' day, '%Y/%m/%d/%H')
+  GROUP BY enr
+  ```
+
+- Coverage on the enriched arm should be at least 99 %; a lower value names titles that air without a context
+  object. The bidder simulator in demo mode does not price content, so a demo's price difference between the arms is
+  simulated, null by construction. By a standard power estimate, detecting a 10 % eCPM difference with real demand
+  takes about 1,570 filled breaks per arm, at a per-break coefficient of variation of about 1.
 
 ## Limits
 
@@ -210,3 +286,8 @@ The service does not enforce the output limit, so the context object does:
 The object, the Function's URL, headers and cache key hold only the content id and catalog metadata. The catalog
 origin sees MediaTailor's server-side client, never a viewer. Content ids are written by the schedule into the
 stream, so a player cannot claim to watch a different title.
+
+The bid request is different: it pairs what is watched with the device signals of the demand path, which in the US
+touches video-privacy law. That is why PSEUDONYMOUS breaks carry nothing that names the title and SAFE breaks carry
+nothing ([The OpenRTB patch](#the-openrtb-patch)). Have counsel review the enrichment before you send it to real
+demand. The PDS's copy of the catalog and its decision records hold catalog metadata and outcomes only.

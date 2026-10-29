@@ -6,7 +6,8 @@ Behind the PDS's internal load balancer (Powertools ``ALBResolver``). The answer
 - every own-book line ad in the pod or among its standalones is reserved first (``reservations.reserve``, on the shard
   ``budget.Budgets.shard`` picks), and a line whose price cannot be reserved is left out.
 
-Each ad carries our impression tracker on the CDN (``core.pds.pod.tracker_url``). The module waits 100 ms for the
+Each ad carries our impression tracker on the CDN (``core.pds.pod.tracker_url``), with the break's content-enrichment
+arm (``enr``, ``functions.crawl.patch.arm``: 0 with the crawl module off). The module waits 100 ms for the
 answer (``modules.pds.select_timeout_ms``, 150 ms); anything but a 200 with a known schema makes it render the
 auction's house ads (``SELECT_FALLBACK``). So the reservations get their own DynamoDB client (100 ms timeouts, one
 attempt), which the budget view's background reads keep connected, and stop after :data:`RESERVE_BEFORE_S`: a line
@@ -36,6 +37,7 @@ from fast_channels.core.pds.names import Endpoint
 from fast_channels.core.pds.pod import scheduled_ms, select_response, tracker_url
 from fast_channels.core.pds.records import select_record
 from fast_channels.core.pds.selection import Reserve, pod_context, select
+from fast_channels.functions.crawl.patch import arm
 from fast_channels.functions.pds.budget import Budgets
 from fast_channels.functions.pds.http import json_response, refused_fields
 from fast_channels.functions.pds.reservations import Hold, item_key, reserve
@@ -55,8 +57,6 @@ app = ALBResolver()
 
 store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
-ENR: Final = 0
-"""The content-enrichment arm of every break until the crawl module enriches ``app.content`` (M17-04)."""
 REQUEST_CONFIG: Final = Config(connect_timeout=0.1, read_timeout=0.1, retries={"total_max_attempts": 1})
 """The reservations' client: on the request path, inside the module's 100 ms."""
 RESERVE_BEFORE_S: Final = 0.09
@@ -156,7 +156,8 @@ def _answer(request: SelectRequest, started: float) -> Response[str]:
         snapshot.book, floor_cpm=snapshot.floor_cpm, scheduled=scheduled_ms(request.dur_ms, snapshot.breaks_ms)
     )
     decision, reserved = select(request, rules, snapshot.book, reserve=_reserver(request, started))
-    body = select_response(request, decision, tracker_base=base, enr=ENR).model_dump_json()
+    enr = arm(request.sid, request.evid, settings().crawl_holdout_percent)
+    body = select_response(request, decision, tracker_base=base, enr=enr).model_dump_json()
     record = select_record(
         request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3), reserved=reserved
     )

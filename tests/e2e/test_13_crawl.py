@@ -1,8 +1,11 @@
-"""Content enrichment (``modules.crawl``): the catalog context publisher on a deployed stage.
+"""Content enrichment (``modules.crawl``): the catalog context publisher and the PDS's ``app.content`` patch on a
+deployed stage.
 
-Runs only when the stage has the Crawl stack (for example ``STAGE=fastci``); the v3.0.0 leg skips it. The test
-writes one ``ReferenceCatalog`` item of its own, puts ``Catalog Item Changed`` events on the bus and reads the
-catalog-context bucket and the CDN. It never touches the ingest bucket, and it removes its item and object at the end.
+Runs only when the stage has the Crawl stack (for example ``STAGE=fastci``); the v3.0.0 leg skips it, and the patch
+test needs the Pds stack too. The test writes one ``ReferenceCatalog`` item of its own, puts ``Catalog Item Changed``
+events on the bus, reads the catalog-context bucket and the CDN, and asks the policy function about two breaks of a
+playback configuration of its own (``<prefix>-e2e-p-a``). It never touches the ingest bucket, and it removes its item
+and object at the end.
 """
 
 import json
@@ -18,7 +21,10 @@ from harness import wait_for
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl.catalog_context import CACHE_CONTROL, context_key
+from fast_channels.core.crawl.ortb_content import native_2_6
 from fast_channels.core.events import CatalogItemChanged, put_events_entry
+from fast_channels.core.pds.buckets import bucket
+from fast_channels.core.timeline import UPID_FORMAT_ID
 from fast_channels.functions.tools.catalog import catalog_item
 
 if TYPE_CHECKING:
@@ -28,6 +34,9 @@ pytestmark = pytest.mark.e2e
 
 PUBLISH_TIMEOUT_S: Final = 60
 """Acceptance (BUILD-PLAN M17-02): a Catalog Item Changed event rewrites the object within a minute."""
+COPY_TIMEOUT_S: Final = 120
+"""The policy function's copy of the catalog is refreshed every 30 s (and a cold start reads it)."""
+EVID: Final = "820461826"
 
 
 @pytest.fixture(scope="module")
@@ -79,13 +88,18 @@ def announce(stage: Stage, content_id: str, run_id: str) -> float:
 
 def crawl_outputs(stage: Stage) -> dict[str, str]:
     """The Crawl stack's outputs, or {} when the stage has no Crawl stack."""
+    return module_outputs(stage, "Crawl")
+
+
+def module_outputs(stage: Stage, stack: str) -> dict[str, str]:
+    """The outputs of the stage's ``stack`` (``Crawl``, ``Pds``), or {} when the stage has none."""
     try:
-        [stack] = stage.cloudformation.describe_stacks(StackName=f"{stage_id(stage.prefix)}-Crawl")["Stacks"]
+        [described] = stage.cloudformation.describe_stacks(StackName=f"{stage_id(stage.prefix)}-{stack}")["Stacks"]
     except ClientError as error:
         if "does not exist" in error.response.get("Error", {}).get("Message", ""):
             return {}
         raise
-    return {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+    return {o["OutputKey"]: o["OutputValue"] for o in described.get("Outputs", [])}
 
 
 def head(stage: Stage, content_id: str) -> dict[str, Any] | None:
@@ -165,3 +179,72 @@ def test_a_missing_title_is_a_404_and_the_route_never_lists(crawl: dict[str, str
     for url in (base, root, f"{root}?list-type=2", f"{base}?list-type=2&prefix=catalog/", f"{root}?delimiter=/"):
         response = httpx.get(url, timeout=10)
         assert response.status_code == 404 and "ListBucketResult" not in response.text, (url, response.status_code)
+
+
+def session_in(arm: int, run_id: str, percent: int) -> str:
+    """A session id of the run whose break :data:`EVID` is in ``arm`` (1 enriched, 0 the ``crawl-v1`` holdout)."""
+    for n in range(1000):
+        sid = f"{run_id}-{n}"[-64:]
+        if (bucket("crawl-v1", f"{sid}.{EVID}") >= percent) == bool(arm):
+            return sid
+    raise AssertionError("no such session")
+
+
+def policy(stage: Stage, function: str, sid: str, content_id: str) -> dict[str, Any]:
+    """The policy function's answer for one contextual break of ``content_id``, as the load balancer invokes it."""
+    request = {
+        "v": 1,
+        "sid": sid,
+        "pc": f"{stage.prefix}-e2e-p-a",
+        "evid": EVID,
+        "upid": f"{UPID_FORMAT_ID}{content_id}",
+        "dur_ms": 60060,
+    }
+    event = {
+        "requestContext": {"elb": {"targetGroupArn": "e2e"}},
+        "httpMethod": "POST",
+        "path": "/policy",
+        "queryStringParameters": {},
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps(request),
+        "isBase64Encoded": False,
+    }
+    client = stage.session.client("lambda", region_name=stage.region)
+    response = client.invoke(FunctionName=function, Qualifier="live", Payload=json.dumps(event))
+    result = json.loads(response["Payload"].read())
+    assert "FunctionError" not in response and result["statusCode"] == 200, result
+    answer: dict[str, Any] = json.loads(result["body"])
+    return answer
+
+
+def test_the_pds_patches_app_content_on_the_enriched_arm_only(
+    stage: Stage, crawl: dict[str, str], catalog: Table, title: ContentItem, run_id: str
+) -> None:
+    if not (pds := module_outputs(stage, "Pds")):
+        pytest.skip(f"stage {stage.prefix} has no {stage_id(stage.prefix)}-Pds (modules.pds is off)")
+    lambda_client = stage.session.client("lambda", region_name=stage.region)
+    variables = lambda_client.get_function_configuration(FunctionName=pds["PolicyFunction"], Qualifier="live")[
+        "Environment"
+    ]["Variables"]
+    percent = int(variables["CRAWL_HOLDOUT_PERCENT"])
+    catalog.put_item(Item=catalog_item(title))
+    announce(stage, title.content_id, run_id)
+    wait_for(lambda: head(stage, title.content_id), timeout=PUBLISH_TIMEOUT_S, interval=2, what="the object")
+    enriched, held_out = session_in(1, run_id, percent), session_in(0, run_id, percent)
+
+    def patched() -> dict[str, Any] | None:
+        content = policy(stage, pds["PolicyFunction"], enriched, title.content_id)["app_content"]
+        return content if content else None
+
+    content = wait_for(patched, timeout=COPY_TIMEOUT_S, interval=5, what="the title in the PDS's copy")
+    assert (content["id"], content["title"], content["genre"], content["cat"], content["cattax"]) == (
+        title.content_id,
+        title.title,
+        "Documentary",
+        ["332"],
+        9,
+    )
+    newer = content if native_2_6(variables["PBS_VERSION"]) else content["ext"]
+    assert (newer["genres"], newer["gtax"], newer["realtime"], newer["firstbroadcast"]) == (["332"], 9, 0, 0)
+    assert content["channel"]["id"] == f"{stage.prefix}-e2e"
+    assert policy(stage, pds["PolicyFunction"], held_out, title.content_id)["app_content"] is None

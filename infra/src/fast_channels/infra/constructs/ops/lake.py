@@ -522,42 +522,46 @@ class Lake(Construct):
         self.views = [self._view(view) for view in VIEWS]
 
     def _view(self, view: View) -> glue.CfnTable:
-        """``view`` as Athena stores a ``CREATE VIEW``: a ``VIRTUAL_VIEW`` table whose original text is the
-        base64 Presto view definition."""
-        sql = view.sql.format(db=self.database_name).strip()
-        definition = {
-            "originalSql": sql,
-            "catalog": "awsdatacatalog",
-            "schema": self.database_name,
-            "columns": [{"name": name, "type": kind} for name, kind in view.columns],
-            "runAsInvoker": False,
-            "properties": {},
-        }
-        encoded = base64.b64encode(json.dumps(definition, separators=(",", ":")).encode()).decode()
-        table = glue.CfnTable(
-            self,
-            view.name.title().replace("_", ""),
-            catalog_id=Stack.of(self).account,
-            database_name=self.database_name,
-            table_input=glue.CfnTable.TableInputProperty(
-                name=view.name,
-                description=view.description,
-                table_type="VIRTUAL_VIEW",
-                parameters={"presto_view": "true", "comment": "Presto View"},
-                view_original_text=f"/* Presto View: {encoded} */",
-                view_expanded_text="/* Presto View */",
-                storage_descriptor=glue.CfnTable.StorageDescriptorProperty(
-                    columns=[
-                        glue.CfnTable.ColumnProperty(name=name, type=_HIVE_TYPES[kind]) for name, kind in view.columns
-                    ],
-                    serde_info=glue.CfnTable.SerdeInfoProperty(),
-                ),
-            ),
-        )
+        table = view_table(self, view.name.title().replace("_", ""), view, database_name=self.database_name)
         table.add_resource_dependency(self.database.node.default_child)  # type: ignore[arg-type]
         for source in self.tables.values():
             table.node.add_dependency(source)
         return table
+
+
+def view_table(scope: Construct, id: str, view: View, *, database_name: str) -> glue.CfnTable:
+    """``view`` as Athena stores a ``CREATE VIEW``: a ``VIRTUAL_VIEW`` table in ``database_name`` whose original text
+    is the base64 Presto view definition."""
+    sql = view.sql.format(db=database_name).strip()
+    definition = {
+        "originalSql": sql,
+        "catalog": "awsdatacatalog",
+        "schema": database_name,
+        "columns": [{"name": name, "type": kind} for name, kind in view.columns],
+        "runAsInvoker": False,
+        "properties": {},
+    }
+    encoded = base64.b64encode(json.dumps(definition, separators=(",", ":")).encode()).decode()
+    return glue.CfnTable(
+        scope,
+        id,
+        catalog_id=Stack.of(scope).account,
+        database_name=database_name,
+        table_input=glue.CfnTable.TableInputProperty(
+            name=view.name,
+            description=view.description,
+            table_type="VIRTUAL_VIEW",
+            parameters={"presto_view": "true", "comment": "Presto View"},
+            view_original_text=f"/* Presto View: {encoded} */",
+            view_expanded_text="/* Presto View */",
+            storage_descriptor=glue.CfnTable.StorageDescriptorProperty(
+                columns=[
+                    glue.CfnTable.ColumnProperty(name=name, type=_HIVE_TYPES[kind]) for name, kind in view.columns
+                ],
+                serde_info=glue.CfnTable.SerdeInfoProperty(),
+            ),
+        ),
+    )
 
 
 def _parquet_column(field: str) -> str:

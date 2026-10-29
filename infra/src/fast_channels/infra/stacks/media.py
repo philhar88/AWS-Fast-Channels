@@ -230,10 +230,13 @@ class MediaStack(Stack):
         )
         if config.modules.pds.enabled:
             # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
-            for parameter, value in (
+            parameters = [
                 (PdsParameter.CONTENT_BASE_URL, content_base_url),
                 (PdsParameter.LADDER_VERSION, default_ladder_version),
-            ):
+            ]
+            if self.catalog_contexts is not None:
+                parameters.append((PdsParameter.CATALOG_CONTEXT_BUCKET, self.catalog_contexts.bucket.bucket_name))
+            for parameter, value in parameters:
                 ssm.StringParameter(
                     self,
                     f"Pds{parameter.name.title().replace('_', '')}Parameter",

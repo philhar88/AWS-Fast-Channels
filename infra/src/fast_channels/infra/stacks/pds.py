@@ -8,6 +8,7 @@ from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.crawl.catalog_context import CONTEXT_PREFIX
 from fast_channels.core.ledger import ledger_table
 from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
@@ -17,7 +18,9 @@ from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, SnapshotBase, demo_dem
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.config import DemandMode
 from fast_channels.infra.constructs.alerts import alert_topic_arn, dead_letter_alarm
+from fast_channels.infra.constructs.crawl.kpis import KPIS
 from fast_channels.infra.constructs.observability import census_parameter_name
+from fast_channels.infra.constructs.ops.lake import lake_database_name, view_table
 from fast_channels.infra.constructs.pds import (
     DecisionLog,
     DeliveryCounter,
@@ -146,16 +149,50 @@ class PdsStack(Stack):
         self.service = PdsService(
             self, "Service", prefix=prefix, vpc=vpc, task_security_group_id=network.task_security_group_id, zone=zone
         )
+        crawl = config.modules.crawl
+        # The crawl module's arm (both functions) and its patch contributor (the policy function).
+        arm = {"CRAWL_HOLDOUT_PERCENT": str(crawl.holdout_percent)} if crawl.enabled else {}
+        contexts = (
+            s3.Bucket.from_bucket_name(
+                self,
+                "CatalogContextBucket",
+                ssm.StringParameter.value_for_string_parameter(
+                    self, names.parameter_name(prefix, names.Parameter.CATALOG_CONTEXT_BUCKET)
+                ),
+            )
+            if crawl.enabled
+            else None
+        )
+        patch = (
+            {
+                **arm,
+                "CATALOG_CONTEXT_BUCKET": contexts.bucket_name,
+                "PBS_VERSION": config.modules.demand.pbs_version.value,
+                **({"PUBLISHER_DOMAIN": crawl.publisher_domain} if crawl.publisher_domain else {}),
+            }
+            if contexts is not None
+            else {}
+        )
         self.policy = PdsFunction(
             self,
             "Policy",
             handler=POLICY_HANDLER,
             description="PDS POST /policy: the privacy mode and the bid-request patch of one break",
-            environment={"FAST_PREFIX": prefix, "PDS_CONFIG_BUCKET": bucket.bucket_name},
+            environment={"FAST_PREFIX": prefix, "PDS_CONFIG_BUCKET": bucket.bucket_name, **patch},
             log_retention=retention,
             removal_policy=removal,
         )
         self.policy.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
+        if contexts is not None:
+            # The copy of the catalog: list the context objects' prefix and read the objects, nothing else.
+            self.policy.function.allow(
+                ["s3:ListBucket"], [contexts.bucket_arn], conditions={"StringEquals": {"s3:prefix": CONTEXT_PREFIX}}
+            )
+            self.policy.function.allow(
+                ["s3:GetObject"],
+                [contexts.arn_for_objects(f"{CONTEXT_PREFIX}*")],
+                why="One object per catalog title, under the context objects' prefix",
+            )
         self.service.add_endpoint(names.Endpoint.POLICY, self.policy)
         self.own_book = PdsFunction(
             self,
@@ -184,6 +221,7 @@ class PdsStack(Stack):
                 "PDS_TABLE": names.table_name(prefix),
                 "LEDGER_TABLE": ledger_table(prefix),
                 "CONTENT_BASE_URL": content_base_url,
+                **arm,
             },
             log_retention=retention,
             removal_policy=removal,
@@ -259,6 +297,12 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        self.crawl_kpis = None
+        if crawl.enabled:
+            # The crawl module's KPIs, a view over the three tables of decision records.
+            self.crawl_kpis = view_table(self, "CrawlKpis", KPIS, database_name=lake_database_name(prefix))
+            for records in (self.policy_records, self.select_records, self.delivery_records):
+                self.crawl_kpis.node.add_dependency(records.table)
         self.sweeper = ReleaseSweeper(
             self,
             "Sweeper",

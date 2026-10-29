@@ -1,6 +1,6 @@
 # 0031 — Show-level content metadata in ad requests, looked up by the break's UPID
 
-**Status:** Proposed (the `crawl` module; accepted with the module's last change)
+**Status:** Accepted
 
 ## Context
 Buyers of connected-TV supply value programme-level signals: title, series, season, episode, genre, content category,
@@ -51,22 +51,28 @@ Measurements made in an AWS account in October 2026 set the rules for using that
   has no UPID. Its URL, headers and cache key hold only the UPID. It writes one output, the `x-fast-ctx` header from
   `hdr`, and nothing into `player_params`. `modules.crawl.pre_ads: false` turns the lookup off without losing the
   OpenRTB fields.
-- **OpenRTB.** The Pod Decision Service fills `app.content` from the same objects through its policy patch: the 2.6
-  fields in `content.ext` on Prebid Server 3.43.0 and natively from 4.4.0. Pseudonymous sessions get genres and
-  categories but never the title. Neither catalog nor player values enter the POST body template.
+- **OpenRTB.** The Pod Decision Service fills `app.content` from the same objects through its policy patch. Its
+  policy function keeps a copy of the objects (a list and the changed objects every 30 s) and falls back to the
+  `x-fast-ctx` header for a title the copy lacks. The 2.6 fields travel in `content.ext` on Prebid Server 3.43.0 and
+  natively from 4.4.0 (`modules.demand.pbs_version`). Pseudonymous sessions get genres and categories but nothing
+  that names the title; SAFE breaks get nothing. Neither catalog nor player values enter the POST body template.
 - **Measurement.** A `crawl-v1` holdout (`modules.crawl.holdout_percent`, 20 by default) assigns each session-break to
-  an arm by `SHA-256("crawl-v1" ‖ sid ‖ "." ‖ evid) mod 100`. The arm is in the decision record and our tracker, and
-  an Athena view reports coverage, fill and price by arm.
+  an arm by `SHA-256("crawl-v1" ‖ sid ‖ "." ‖ evid) mod 100`; holdout breaks get no `app.content` beyond the stored
+  request's constants. The arm (`enr`) is in the decision record and our tracker, and the lake view `v_crawl_kpis`
+  reports coverage, bids, fill and price by arm.
 - **Failure.** Enrichment fails open: an unknown id (a cached 404), an origin error or timeout, a missing UPID or an
   exhausted budget sends the request unenriched.
 
 ## Consequences
-- The catalog origin sees about 4 requests per title per playback configuration in each 300 s window in which the
-  title airs, not one per viewer. Metadata can be up to 300 s plus the CDN TTL stale.
+- The catalog origin sees about 4 or 5 requests per title per playback configuration in each 300 s window in which
+  the title airs (4 and 5 were measured), not one per viewer. Metadata can be up to 300 s plus the CDN TTL stale.
 - PRE_ADS time comes out of the ad request's budget, so the release validators require
   `LiveMaximumAdsPersonalizationTimeMilliseconds` ≥ the executor timeout + `AdsRequestTimeoutMilliseconds`.
 - The lookup and the objects carry no viewer data. The bid request still pairs what is watched with the device
   signals of the demand path, which is why pseudonymous sessions send no title; real demand needs a legal review first.
+- From 4.4.0, Prebid Server passes `app.content.data` (the registry ids, `cids`) only to the bidders the patch's
+  first-party-data rule names, today the own book alone; third parties see the content id in `content.id`. On
+  3.43.0 the `content.ext` copy reaches every bidder.
 - A taxonomy update is a data change: regenerate `ct31-ids.txt` as `ATTRIBUTION.md` describes and review the map.
 - Ad servers that take metadata as URL parameters are a later recipe variant that writes `player_params.content_*`
   (the key names of the public MediaTailor Functions sample recipes' content outputs) from the precomputed `*_q`

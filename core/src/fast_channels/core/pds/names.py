@@ -77,6 +77,9 @@ class Parameter(StrEnum):
     """The CDN's content base URL, our tracker's host (Media stack)."""
     LADDER_VERSION = "ladder-version"
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
+    CATALOG_CONTEXT_BUCKET = "catalog-context-bucket"
+    """The crawl module's catalog-context bucket, whose objects the policy function copies (Media stack, with the
+    module on)."""
 
 
 class Published(StrEnum):
@@ -85,6 +88,11 @@ class Published(StrEnum):
     DELIVERY_FUNCTION = "delivery-function"
     """The delivery function's ARN (with the release module on): the Release stack subscribes it to the siblings' log
     group, so their impressions are counted too."""
+
+
+def stack_parameters(*, crawl: bool) -> tuple[Parameter, ...]:
+    """The parameters the Pds stack reads: every one, but the catalog-context bucket's only with the crawl module."""
+    return tuple(p for p in Parameter if crawl or p is not Parameter.CATALOG_CONTEXT_BUCKET)
 
 
 def parameter_name(prefix: str, parameter: Parameter | Published) -> str:
