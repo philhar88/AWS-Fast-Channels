@@ -2,14 +2,20 @@
 
 The tests that take the ``dynamodb`` fixture run against ``amazon/dynamodb-local`` in Docker (in memory), so the
 conditions and transactions are DynamoDB's own, not a mock's. Without Docker they are skipped.
+
+The session removes its container when it ends. A session that is killed cannot, so every container carries
+``dynamodb_local.LABEL``, and a session first removes the labelled ones older than ``dynamodb_local.STALE``.
 """
 
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Final
 
 import boto3
@@ -18,6 +24,10 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from fast_channels.core.pds.names import PENDING_INDEX
+
+sys.path.append(str(Path(__file__).parent))
+
+from dynamodb_local import LABEL, stale
 
 IMAGE: Final = "amazon/dynamodb-local:3.3.2"
 STARTUP_SECONDS: Final = 60
@@ -33,8 +43,21 @@ def dynamodb_endpoint() -> Iterator[str]:
     if shutil.which("docker") is None:
         pytest.skip("DynamoDB Local needs Docker")
     try:
+        listing = _docker("ps", "-a", "--filter", f"label={LABEL}", "--format", "{{.ID}} {{.CreatedAt}}")
+        for container in stale(listing, datetime.now(UTC)):
+            _docker("rm", "-f", container, timeout=60)
         container = _docker(
-            "run", "-d", "--rm", "-p", "127.0.0.1::8000", IMAGE, "-jar", "DynamoDBLocal.jar", "-inMemory"
+            "run",
+            "-d",
+            "--rm",
+            "--label",
+            LABEL,
+            "-p",
+            "127.0.0.1::8000",
+            IMAGE,
+            "-jar",
+            "DynamoDBLocal.jar",
+            "-inMemory",
         )
     except (subprocess.SubprocessError, OSError) as error:
         pytest.skip(f"DynamoDB Local could not start: {error}")
