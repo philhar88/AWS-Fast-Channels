@@ -444,6 +444,24 @@ def test_auto_stop_role_may_only_stop_channels_and_is_passed_by_the_channels_too
     assert pass_role["Condition"] == {"StringEquals": {"iam:PassedToService": "scheduler.amazonaws.com"}}
 
 
+def test_only_the_channels_tool_may_create_mediatailors_service_linked_role(template: Template) -> None:
+    # Logging of an agent channel and its playback configuration fails without it, even when the role exists
+    # (ForbiddenException "Cannot create the service-linked role", fastm 2026-10-29).
+    found = [s for s in statements(template) if "iam:CreateServiceLinkedRole" in as_list(s["Action"])]
+    [grant] = [
+        s
+        for s in role_statements(template, "ToolsChannelsRoleDefaultPolicy")
+        if s["Action"] == "iam:CreateServiceLinkedRole"
+    ]
+
+    assert found == [grant]
+    assert grant["Effect"] == "Allow"
+    assert grant["Condition"] == {"StringEquals": {"iam:AWSServiceName": "mediatailor.amazonaws.com"}}
+    assert grant["Resource"] == (
+        f"arn:aws:iam::{ACCOUNT}:role/aws-service-role/mediatailor.amazonaws.com/AWSServiceRoleForMediaTailor"
+    )
+
+
 def test_origins_tools_reach_only_this_deployments_source_locations(template: Template) -> None:
     origins = json.dumps(role_statements(template, "ToolsOriginsRoleDefaultPolicy"))
 

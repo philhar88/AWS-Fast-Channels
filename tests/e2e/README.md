@@ -27,8 +27,10 @@ given. The report header prints the run id. That id is the correlation id of the
   - read the stacks (`cloudformation:DescribeStacks`);
   - put objects into the ingest bucket, and read the media bucket and the media library table;
   - call `states:DescribeExecution`, `lambda:InvokeFunction` on the tool functions,
-    `mediatailor:Describe*`/`ListAlerts`, `cognito-idp:DescribeUserPoolClient`, and `logs:FilterLogEvents` on
-    Channel Assembly's as-run log group `MediaTailor/Channel/AsRunLog`.
+    `mediatailor:Describe*`/`Get*`/`ListAlerts`, `cognito-idp:DescribeUserPoolClient`, `logs:FilterLogEvents` on
+    Channel Assembly's as-run log group `MediaTailor/Channel/AsRunLog`, `logs:GetDeliverySource`,
+    `logs:DescribeDeliveries` and `logs:ListTagsForResource`, and `lambda:GetFunctionConfiguration` on the
+    channels tool function.
 
   The deploying role has all of these.
 - `ffmpeg` on the `PATH`, to render the synthetic source.
@@ -52,6 +54,7 @@ Session fixtures (`conftest.py`) do each slow step once, when a test first needs
 | `test_05_agent` | Get a client-credentials token for the autopilot app client. Send one AG-UI `RunAgentInput`, "List the channels.", to the runtime. | `RUN_STARTED` … `RUN_FINISHED`, a `channels___list_channels` tool call, and no `RUN_ERROR`. |
 | `test_06_stop` | `channels___stop_channel` | The channel is STOPPED. The session teardown stops it again, whatever failed before. |
 | `test_07_late_start` | With the channel stopped, publish two programs starting in 3 minutes, with one 2-minute break each. Start the channel 30 s after the first program's start. Stop it at the end of the module. | `channels___start_channel` reports the first program in `skipped` (and only programs whose start had passed), the media library marks it `SKIPPED`, and the as-run log shows the second program starting at its planned time, within one segment, and no start of the first. |
+| `test_08_agent_channel` | With the IaC channel left alone, `channels___create_channel` creates an agent channel `<prefix>-agent-e2e-<hex>` on the IaC channel's ladder. It is never started. Then `channels___delete_channel` deletes it. | The channel is `STOPPED` with AS_RUN logs; its `STITCHED_ONLY` playback configuration logs with `VENDED_LOGS` at the deployment's percentage; the channel policy admits only that configuration. Every log type has its delivery source and exactly one delivery to the deployment's destination. The channel, the configuration, the sources and the deliveries carry `fast:app`, `fast:owner=agent`, the ladder and the run's correlation id. After the delete, none of them, no media library item, no EPG feed and no listing remains. |
 
 Timing and behaviour worth knowing:
 
