@@ -50,8 +50,8 @@ def test_every_sibling_posts_to_prebid_server_with_the_monetized_settings(siblin
         assert configuration["PersonalizationThresholdSeconds"] == PERSONALIZATION_THRESHOLD_SECONDS, name
         assert configuration["AvailSuppression"]["Mode"] == "BEHIND_LIVE_EDGE", name
         assert configuration["Tags"]["fast:owner"] == RELEASE_OWNER, name
-        [root] = configuration["FunctionMapping"].values()
-        assert root.endswith(configuration["Tags"]["fast:release"]), (name, root)
+        roots = configuration["FunctionMapping"]  # one root per hook (PRE_SESSION, and PRE_ADS with the crawl)
+        assert roots and all(r.endswith(configuration["Tags"]["fast:release"]) for r in roots.values()), (name, roots)
 
 
 def test_the_mapped_functions_exist(release: Stage, siblings: dict[str, Any]) -> None:
