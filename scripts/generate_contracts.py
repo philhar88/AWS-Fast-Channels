@@ -3,11 +3,12 @@
     uv run python scripts/generate_contracts.py          # write the files
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
-Outputs: ``ingest-request.schema.json``, ``events.schema.json`` and ``model-registry.schema.json`` (JSON Schema
-2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json``
-(the same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
-targets: every schema is inline, optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/
-``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
+Outputs: ``ingest-request.schema.json``, ``events.schema.json``, ``model-registry.schema.json`` and
+``catalog-context.schema.json`` (JSON Schema 2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS
+contract) and ``catalog.gateway.openapi.json`` (the same contract as an AgentCore Gateway OpenAPI target reads it).
+The OpenAPI documents are flattened for Gateway targets: every schema is inline, optional fields drop their ``null``
+branch, and no ``$ref``/``anyOf``/``oneOf``/``allOf`` remains (agentcore.md §5.2); operationIds become the tool
+names.
 """
 
 import argparse
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic.json_schema import models_json_schema
 
 from fast_channels.core.catalog import CONTENT_ID_PATTERN, ContentItem, ContentPage, ContentQuery
+from fast_channels.core.crawl.catalog_context import CatalogContext
 from fast_channels.core.events import DETAIL_TYPES
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.model_registry import SCHEDULER_TASK, TaskEntry
@@ -36,6 +38,11 @@ VERSION = "3.0.0"
 def ingest_request_schema() -> dict[str, Any]:
     """JSON Schema of the IngestPipeline input (S3 sidecar, ``Ingest Requested`` event or StartExecution)."""
     return {"$schema": JSON_SCHEMA, **IngestRequest.model_json_schema()}
+
+
+def catalog_context_schema() -> dict[str, Any]:
+    """JSON Schema of the catalog context object ``catalog/ctx/v1/<content_id>.json`` (immutable: v2 is a new file)."""
+    return {"$schema": JSON_SCHEMA, **CatalogContext.model_json_schema(mode="serialization")}
 
 
 def events_schema() -> dict[str, Any]:
@@ -98,8 +105,9 @@ def _flatten(schema: Any, definitions: dict[str, Any]) -> Any:
         return [_flatten(item, definitions) for item in schema]
     if not isinstance(schema, dict):
         return schema
-    if "$ref" in schema:
-        return _flatten(definitions[schema["$ref"].rsplit("/", 1)[-1]], definitions)
+    if "$ref" in schema:  # the referencing schema's own keywords (a property's description) win
+        siblings = {k: v for k, v in schema.items() if k != "$ref"}
+        return _flatten(definitions[schema["$ref"].rsplit("/", 1)[-1]] | siblings, definitions)
     if "anyOf" in schema:  # only ``X | None`` unions exist in the catalog models
         (branch,) = [s for s in schema["anyOf"] if s != {"type": "null"}]
         return _flatten(branch | {k: v for k, v in schema.items() if k != "anyOf"}, definitions)
@@ -217,6 +225,7 @@ def render() -> dict[str, str]:
         "ingest-request.schema.json": as_json(ingest_request_schema()),
         "events.schema.json": as_json(events_schema()),
         "model-registry.schema.json": as_json(model_registry_schema()),
+        "catalog-context.schema.json": as_json(catalog_context_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
     }

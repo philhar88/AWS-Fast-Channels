@@ -23,3 +23,4 @@ new record that supersedes the old one rather than editing history.
 | [0015](0015-pluggable-captioner-elemental-inference.md) | Missing captions come from a pluggable captioner: AWS Elemental Inference smart subtitles | Superseded by 0016 |
 | [0016](0016-plain-hls-ts-avc-aac-basic-tier.md) | Plain HLS MPEG-TS, AVC + AAC muxed, Basic tier | Accepted, amended by 0017 |
 | [0017](0017-ssai-only-frame-accurate-cues-with-esam.md) | SSAI only; frame-accurate ad cues with ESAM | Accepted |
+| [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Proposed |

@@ -22,6 +22,13 @@ All notable changes to this project are documented here. The format follows
   profile. The scheduler agent reads its `scheduler.plan` entry first (60 s cache), then the ModelSpec, then the code
   default, and logs the task, model and source of every run. A spec or entry may set `thinking` (`adaptive` or
   `disabled`).
+- **Show-level content metadata** (the `crawl` module, first part): optional catalog fields for series, season,
+  episode, content type, language, producer, keywords, production quality and external ids (existing catalogs are
+  unchanged); the catalog context object `catalog/ctx/v1/<content_id>.json` that ad requests will carry, with its
+  contract `contracts/catalog-context.schema.json` and the documented Functions limits enforced; and catalog genre
+  tags mapped to IAB Tech Lab Content Taxonomy 3.1 through the IAB CTV Genre Mapping (`genre-map.toml`, unknown ids
+  refused). The sample catalog names each title's producer, language and type. See
+  [docs/content-enrichment.md](docs/content-enrichment.md) and ADR 0031 (proposed).
 
 ## [3.0.0] - 2026-10-16
 

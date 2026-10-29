@@ -1,0 +1,755 @@
+# IAB Tech Lab Content Taxonomy 3.1 (AdCOM cattax 9): unique id, a tab, the name. Generated; do not edit.
+# Source, licence (CC BY 3.0, IAB Technology Laboratory, Inc.) and how to regenerate: ATTRIBUTION.md.
+# Categories (Content Taxonomies/Content Taxonomy 3.1.tsv)
+150	Attractions
+151	Amusement and Theme Parks
+179	Bars & Restaurants
+181	Casinos & Gambling
+153	Historic Site and Landmark Tours
+154	Malls & Shopping Centers
+155	Museums & Galleries
+158	Nightclubs
+159	Outdoor Activities
+160	Parks & Nature
+177	Theater Venues
+178	Zoos & Aquariums
+1	Automotive
+2	Auto Body Styles
+3	Commercial Trucks
+8	Convertible
+9	Coupe
+10	Crossover
+11	Hatchback
+12	Microcar
+13	Minivan
+14	Off-Road Vehicles
+15	Pickup Trucks
+4	Sedan
+5	Station Wagon
+6	SUV
+7	Van
+30	Auto Buying and Selling
+31	Auto Insurance
+32	Auto Parts
+33	Auto Recalls
+41	Auto Rentals
+34	Auto Repair
+35	Auto Safety
+36	Auto Shows
+37	Auto Technology
+38	Auto Infotainment Technologies
+39	Auto Navigation Systems
+40	Auto Safety Technologies
+16	Auto Type
+17	Budget Cars
+18	Certified Pre-Owned Cars
+19	Classic Cars
+20	Concept Cars
+21	Driverless Cars
+22	Green Vehicles
+23	Luxury Cars
+24	Performance Cars
+25	Car Culture
+26	Dash Cam Videos
+27	Motorcycles
+28	Road-Side Assistance
+29	Scooters
+42	Books and Literature
+43	Art and Photography
+46	Comics and Graphic Novels
+48	Fiction
+49	Poetry
+52	Business and Finance
+53	Business
+54	Business Accounting & Finance
+62	Business Administration
+63	Business Banking & Finance
+64	Angel Investment
+65	Bankruptcy
+66	Business Loans
+67	Debt Factoring & Invoice Discounting
+68	Mergers and Acquisitions
+69	Private Equity
+70	Sale & Lease Back
+71	Venture Capital
+72	Business I.T.
+73	Business Operations
+79	Business Utilities
+74	Consumer Issues
+75	Recalls
+76	Executive Leadership & Management
+77	Government Business
+78	Green Solutions
+55	Human Resources
+56	Large Business
+57	Logistics
+58	Marketing and Advertising
+59	Sales
+60	Small and Medium-sized Business
+61	Startups
+80	Economy
+81	Commodities
+82	Currencies
+83	Financial Crisis
+84	Financial Reform
+85	Financial Regulation
+86	Gasoline Prices
+87	Housing Market
+88	Interest Rates
+89	Job Market
+90	Industries
+91	Advertising Industry
+102	Agriculture
+113	Apparel Industry
+117	Automotive Industry
+118	Aviation Industry
+119	Biotech and Biomedical Industry
+120	Civil Engineering Industry
+121	Construction Industry
+122	Defense Industry
+92	Education industry
+93	Entertainment Industry
+94	Environmental Services Industry
+95	Financial Industry
+96	Food Industry
+97	Healthcare Industry
+98	Hospitality Industry
+99	Information Services Industry
+100	Legal Services Industry
+101	Logistics and Transportation Industry
+103	Management Consulting Industry
+104	Manufacturing Industry
+105	Mechanical and Industrial Engineering Industry
+106	Media Industry
+107	Metals Industry
+108	Non-Profit Organizations
+109	Pharmaceutical Industry
+110	Power and Energy Industry
+111	Publishing Industry
+112	Real Estate Industry
+114	Retail Industry
+115	Technology Industry
+116	Telecommunications Industry
+123	Careers
+124	Apprenticeships
+125	Career Advice
+126	Career Planning
+127	Job Search
+128	Job Fairs
+129	Resume Writing and Advice
+130	Remote Working
+131	Vocational Training
+80DV8O	Communication
+380	Crime
+381	Disasters
+132	Education
+133	Adult Education
+137	College Education
+138	College Planning
+139	Postgraduate Education
+140	Professional School
+141	Undergraduate Education
+142	Early Childhood Education
+143	Educational Assessment
+144	Standardized Testing
+145	Homeschooling
+146	Homework and Study
+147	Language Learning
+148	Online Education
+149	Primary Education
+134	Private School
+135	Secondary Education
+136	Special Education
+JLBCU7	Entertainment
+324	Movies
+338	Music
+640	Television
+8VZQHL	Events
+162	Awards Shows
+180	Business Expos & Conferences
+185	Fan Conventions
+186	Family and Relationships
+187	Bereavement
+188	Dating
+189	Divorce
+190	Eldercare
+191	Marriage and Civil Unions
+192	Parenting
+193	Adoption and Fostering
+194	Daycare and Pre-School
+195	Internet Safety
+196	Parenting Babies and Toddlers
+197	Parenting Children Aged 4-11
+198	Parenting Teens
+199	Special Needs Kids
+200	Single Life
+201	Fine Art
+202	Costume
+203	Dance
+204	Design
+205	Digital Arts
+206	Fine Art Photography
+207	Modern Art
+208	Opera
+209	Theater
+210	Food & Drink
+211	Alcoholic Beverages
+215	Barbecues and Grilling
+216	Cooking
+217	Desserts and Baking
+218	Dining Out
+219	Food Allergies
+220	Food Movements
+221	Healthy Cooking and Eating
+222	Non-Alcoholic Beverages
+212	Vegan Diets
+213	Vegetarian Diets
+214	World Cuisines
+SPSHQ5	Genres
+VKIV56	Nature
+325	Action/Adventure
+641	Animation & Anime
+44	Biographies
+646	Comedy
+332	Documentary
+647	Drama
+648	Factual
+645	Family/Children
+335	Fantasy
+EZWB7V	History
+649	Holiday
+336	Horror
+TIFQA5	Lifestyle
+650	Music Video
+156	Musical
+331	Mystery
+651	Reality TV
+326	Romance
+652	Science Fiction
+642	Soap Opera
+643	Special Interest (Indie/Art House)
+370	Sports Radio
+371	Talk Radio
+376	Public Radio
+A0AH3G	Talk Show
+KHPC5A	True Crime
+KHPC6A	Western
+51	Young Adult
+700	Thriller
+223	Healthy Living
+224	Children's Health
+225	Fitness and Exercise
+226	Participant Sports
+227	Running and Jogging
+228	Men's Health
+229	Nutrition
+230	Senior Health
+231	Weight Loss
+232	Wellness
+233	Alternative Medicine
+234	Herbs and Supplements
+235	Holistic Health
+236	Physical Therapy
+237	Smoking Cessation
+238	Women's Health
+239	Hobbies & Interests
+240	Antiquing and Antiques
+248	Arts and Crafts
+249	Beadwork
+250	Candle and Soap Making
+251	Drawing and Sketching
+252	Jewelry Making
+253	Needlework
+254	Painting
+255	Photography
+256	Scrapbooking
+257	Woodworking
+258	Beekeeping
+259	Birdwatching
+260	Cigars
+261	Collecting
+262	Comic Books
+263	Stamps and Coins
+264	Content Production
+265	Audio Production
+266	Freelance Writing
+267	Screenwriting
+268	Video Production
+269	Games and Puzzles
+270	Board Games and Puzzles
+271	Card Games
+272	Roleplaying Games
+273	Genealogy and Ancestry
+241	Magic and Illusion
+242	Model Toys
+243	Musical Instruments
+244	Paranormal Phenomena
+245	Radio Control
+246	Sci-fi and Fantasy
+247	Workshops and Classes
+1KXCLD	Holidays
+157	National & Civic Holidays
+274	Home & Garden
+275	Gardening
+278	Home Appliances
+279	Home Entertaining
+280	Home Improvement
+281	Home Security
+282	Indoor Environmental Quality
+283	Interior Decorating
+284	Landscaping
+285	Outdoor Decorating
+276	Remodeling & Construction
+277	Smart Home
+383	Law
+286	Medical Health
+323	Cosmetic Medical Services
+287	Diseases and Conditions
+288	Allergies
+306	Blood Disorders
+312	Bone and Joint Conditions
+313	Brain and Nervous System Disorders
+314	Cancer
+315	Cold and Flu
+316	Dental Health
+317	Diabetes
+318	Digestive Disorders
+289	Ear, Nose and Throat Conditions
+290	Endocrine and Metabolic Diseases
+291	Hormonal Disorders
+292	Menopause
+293	Thyroid Disorders
+294	Eye and Vision Conditions
+295	Foot Health
+296	Heart and Cardiovascular Diseases
+297	Infectious Diseases
+298	Injuries
+299	First Aid
+300	Lung and Respiratory Health
+301	Mental Health
+302	Reproductive Health
+303	Birth Control
+304	Infertility
+305	Pregnancy
+307	Sexual Health
+308	Sexual Conditions
+309	Skin and Dermatology
+310	Sleep Disorders
+311	Substance Abuse
+319	Medical Tests
+320	Pharmaceutical Drugs
+321	Surgery
+322	Vaccines
+342	Adult Album Alternative
+339	Adult Contemporary Music
+340	Soft AC Music
+341	Urban AC Music
+343	Alternative Music
+360	Blues
+344	Children's Music
+345	Classic Hits
+346	Classical Music
+347	College Radio
+348	Comedy (Music and Audio)
+349	Contemporary Hits/Pop/Top 40
+350	Country Music
+351	Dance and Electronic Music
+354	Gospel Music
+355	Hip Hop Music
+356	Inspirational/New Age Music
+357	Jazz
+358	Oldies/Adult Standards
+362	R&B/Soul/Funk
+359	Reggae
+361	Religious (Music and Audio)
+363	Rock Music
+364	Album-oriented Rock
+365	Alternative Rock
+366	Classic Rock
+367	Hard Rock
+368	Soft Rock
+353	Songwriters/Folk
+369	Soundtracks, TV and Showtunes
+352	World/International Music
+377	Urban Contemporary Music
+378	Variety (Music and Audio)
+163	Personal Celebrations & Life Events
+164	Anniversary
+166	Baby Shower
+167	Bachelor Party
+168	Bachelorette Party
+169	Birth
+170	Birthday
+171	Funeral
+172	Graduation
+173	Prom
+165	Wedding
+391	Personal Finance
+392	Consumer Banking
+393	Financial Assistance
+394	Government Support and Welfare
+395	Student Financial Aid
+396	Financial Planning
+397	Frugal Living
+417	Home Utilities
+418	Gas and Electric
+419	Internet Service Providers
+420	Phone Services
+421	Water Services
+398	Insurance
+399	Health Insurance
+400	Home Insurance
+401	Life Insurance
+402	Motor Insurance
+403	Pet Insurance
+404	Travel Insurance
+405	Personal Debt
+406	Credit Cards
+407	Home Financing
+408	Personal Loans
+409	Student Loans
+410	Personal Investing
+411	Hedge Funds
+412	Mutual Funds
+413	Options
+414	Stocks and Bonds
+415	Personal Taxes
+416	Retirement Planning
+422	Pets
+423	Birds
+424	Cats
+425	Dogs
+426	Fish and Aquariums
+427	Large Animals
+428	Pet Adoptions
+431	Pet Supplies
+429	Reptiles
+430	Veterinary Medicine
+386	Politics
+8YPBBL	Civic affairs
+387	Elections
+388	Political Issues & Policy
+432	Pop Culture
+433	Celebrity Deaths
+434	Celebrity Families
+435	Celebrity Homes
+436	Celebrity Pregnancy
+437	Celebrity Relationships
+438	Celebrity Scandal
+439	Celebrity Style
+440	Humor and Satire
+W3CW2J	Productivity
+441	Real Estate
+442	Apartments
+445	Developmental Sites
+446	Hotel Properties
+447	Houses
+448	Industrial Property
+449	Land and Farms
+450	Office Property
+451	Real Estate Buying and Selling
+452	Real Estate Renting and Leasing
+443	Retail Property
+444	Vacation Properties
+453	Religion & Spirituality
+454	Agnosticism
+456	Astrology
+457	Atheism
+458	Buddhism
+459	Christianity
+460	Hinduism
+461	Islam
+462	Judaism
+463	Sikhism
+455	Spirituality
+464	Science
+465	Biological Sciences
+466	Chemistry
+467	Environment
+468	Genetics
+469	Geography
+470	Geology
+471	Physics
+472	Space and Astronomy
+390	Weather
+v9i3On	Sensitive Topics
+Rm3SiT	Adult & Explicit Sexual Content
+avbNf2	Arms & Ammunition
+XtODT3	Crime & Harmful Acts to Individuals, Society & Human Right Violations
+I4GWl6	Death, Injury, or Military Conflict
+Z7rJBM	Debated Sensitive Social Issues
+HxqYV1	Hate Speech and Acts of Aggression
+pg0WhF	Illegal Drugs, Tobacco, eCigarettes, Vaping, Alcohol
+j9PaO9	Obscenity and Profanity
+mm3UXx	Online Piracy
+6i4dB6	Spam or Harmful Content
+8FD8nI	Terrorism
+473	Shopping
+482	Children's Games and Toys
+474	Coupons and Discounts
+475	Flower Shopping
+476	Gifts and Greetings Cards
+477	Grocery Shopping
+478	Holiday Shopping
+479	Household Supplies
+480	Lotteries and Scratchcards
+161	Party Supplies and Decorations
+481	Sales and Promotions
+483	Sports
+484	American Football
+507	Australian Rules Football
+518	Auto Racing
+519	Motorcycle Sports
+534	Badminton
+545	Baseball
+547	Basketball
+548	Beach Volleyball
+549	Bodybuilding
+550	Bowling
+485	Boxing
+486	Cheerleading
+487	College Sports
+490	College Baseball
+489	College Basketball
+488	College Football
+491	Cricket
+492	Cycling
+493	Darts
+494	Disabled Sports
+495	Diving
+496	Equine Sports
+497	Horse Racing
+498	Extreme Sports
+499	Canoeing and Kayaking
+500	Climbing
+501	Paintball
+502	Scuba Diving
+503	Skateboarding
+504	Snowboarding
+505	Surfing and Bodyboarding
+506	Waterskiing and Wakeboarding
+508	Fantasy Sports
+509	Field Hockey
+510	Figure Skating
+511	Fishing Sports
+512	Golf
+513	Gymnastics
+514	Hunting and Shooting
+515	Ice Hockey
+516	Inline Skating
+517	Lacrosse
+520	Martial Arts
+521	Olympic Sports
+522	Summer Olympic Sports
+523	Winter Olympic Sports
+524	Poker and Professional Gambling
+525	Rodeo
+526	Rowing
+527	Rugby
+528	Rugby League
+529	Rugby Union
+530	Sailing
+531	Skiing
+532	Snooker/Pool/Billiards
+533	Soccer
+535	Softball
+551	Sports Equipment
+536	Squash
+537	Swimming
+538	Table Tennis
+539	Tennis
+540	Track and Field
+541	Volleyball
+542	Walking
+543	Water Polo
+544	Weightlifting
+546	Wrestling
+552	Style & Fashion
+553	Beauty
+554	Hair Care
+555	Makeup and Accessories
+556	Nail Care
+557	Natural and Organic Beauty
+558	Perfume and Fragrance
+559	Skin Care
+574	Body Art
+575	Children's Clothing
+576	Designer Clothing
+577	Fashion Trends
+578	High Fashion
+579	Men's Fashion
+580	Men's Accessories
+581	Men's Jewelry and Watches
+582	Men's Clothing
+583	Men's Business Wear
+584	Men's Casual Wear
+585	Men's Formal Wear
+586	Men's Outerwear
+587	Men's Sportswear
+588	Men's Underwear and Sleepwear
+589	Men's Shoes and Footwear
+590	Personal Care
+591	Bath and Shower
+592	Deodorant and Antiperspirant
+593	Oral care
+594	Shaving
+595	Street Style
+560	Women's Fashion
+561	Women's Accessories
+562	Women's Glasses
+563	Women's Handbags and Wallets
+564	Women's Hats and Scarves
+565	Women's Jewelry and Watches
+566	Women's Clothing
+567	Women's Business Wear
+568	Women's Casual Wear
+569	Women's Formal Wear
+570	Women's Intimates and Sleepwear
+571	Women's Outerwear
+572	Women's Sportswear
+573	Women's Shoes and Footwear
+596	Technology & Computing
+597	Artificial Intelligence
+598	Augmented Reality
+599	Computing
+600	Computer Networking
+601	Computer Peripherals
+602	Computer Software and Applications
+603	3-D Graphics
+608	Antivirus Software
+609	Browsers
+610	Computer Animation
+611	Databases
+612	Desktop Publishing
+613	Digital Audio
+WQC6HR	Maps & Navigation
+614	Graphics Software
+615	Operating Systems
+604	Photo Editing Software
+605	Shareware and Freeware
+606	Video Software
+607	Web Conferencing
+616	Data Storage and Warehousing
+617	Desktops
+618	Information and Network Security
+619	Internet
+620	Cloud Computing
+623	Email
+624	Internet for Beginners
+625	Internet of Things
+626	IT and Internet Support
+627	Search
+628	Social Networking
+629	Web Design and HTML
+621	Web Development
+622	Web Hosting
+630	Laptops
+631	Programming Languages
+632	Consumer Electronics
+633	Cameras and Camcorders
+634	Home Entertainment Systems
+635	Smartphones
+636	Tablets and E-readers
+637	Wearable Technology
+638	Robotics
+639	Virtual Reality
+653	Travel
+654	Travel Accessories
+655	Travel Locations
+656	Africa Travel
+657	Asia Travel
+658	Australia and Oceania Travel
+659	Europe Travel
+660	North America Travel
+661	Polar Travel
+662	South America Travel
+663	Travel Preparation and Advice
+664	Travel Type
+665	Adventure Travel
+672	Air Travel
+673	Beach Travel
+674	Bed & Breakfasts
+675	Budget Travel
+676	Business Travel
+677	Camping
+678	Cruises
+679	Day Trips
+666	Family Travel
+667	Honeymoons and Getaways
+668	Hotels and Motels
+669	Rail Travel
+670	Road Trips
+671	Spas
+680	Video Gaming
+681	Console Games
+682	eSports
+683	Mobile Games
+684	PC Games
+685	Video Game Genres
+686	Action Video Games
+691	Action-Adventure Video Games
+MQ2XML	Adult Video Games
+692	Adventure Video Games
+ZJG29S	Casino and Gambling Video Games
+693	Casual Games
+694	Educational Video Games
+695	Exercise and Fitness Video Games
+VWGKS7	Family Video Games
+II436J	Horror Video Games
+696	MMOs
+697	Music and Party Video Games
+698	Puzzle Video Games
+VK7KD0	Racing Video Games
+687	Role-Playing Video Games
+688	Simulation Video Games
+689	Sports Video Games
+690	Strategy Video Games
+389	War and Conflicts
+# Descriptive vectors (Content Taxonomies/Content Taxonomy 3.0 Descriptive Vectors.tsv)
+1000	Content Environment
+1002	Email
+1003	Forum/Community
+1005	Marketplace/eCommerce
+1006	Search Engine/Listings
+1007	Social
+1008	Utility/Online Tool
+1009	Voice Activated Channels
+092QD4	General
+1010	Content Purpose
+1012	Conversational
+1014	Entertainment Content
+5S2VRK	Informational
+1011	Academic/Research Content
+1013	Educational Content
+1017	Instructional Content
+1020	News
+BEZLLC	Opinion & Op-Ed
+1021	Review
+1019	Commerce
+1215	Content Source
+1216	Professionally Produced
+1217	User Generated
+1218	Aggregated/Curated
+1022	Content Form Factor
+1023	Audio
+REJJOG	Podcast
+7OCXIZ	Radio
+MJDJZY	Event
+1024	Images/Galleries
+1026	Mixed
+1027	Textual
+1028	Video
+C2UKBG	Show
+3927X6	Episodic Show
+Y2MK22	Event
+O3EQZQ	Clip
+20L2OV	Movie
+1004	Game
+1029	VR/AR
+MRkz4Q	Brand Suitability and Risk
+bsr001	Floor
+bsr002	High Risk
+bsr003	Medium Risk
+bsr004	Low Risk
+1030	*Content Language Extension
+1219	*Content Source Geo Extension
