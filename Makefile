@@ -25,13 +25,13 @@ CONTEXT_ARGS := $(if $(PREFIX),-c fast-channels.prefix=$(PREFIX))
 PREFIX_OPT := $(if $(PREFIX),--prefix $(PREFIX))
 endif
 
-.PHONY: help install console check lint typecheck test synth diff deploy destroy as-run-router seed model-access eval \
-	trace pbs-test pbs-contract deploy-demand destroy-demand
+.PHONY: help install console check lint typecheck test synth diff deploy destroy as-run-router account-baseline seed \
+	model-access eval trace pbs-test pbs-contract deploy-demand destroy-demand
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@echo "  STAGE=<name> (stages/<name>.json) or PREFIX=<name> selects the deployment of synth, diff, deploy,"
-	@echo "  destroy, as-run-router, seed and trace."
+	@echo "  destroy, as-run-router, account-baseline, seed and trace."
 
 install: ## Install Python (uv), CDK CLI and console dependencies
 	uv sync --all-packages
@@ -72,6 +72,9 @@ destroy: ## Delete every stack and the runtime resources the pipeline and agent 
 
 as-run-router: console ## Deploy the account's as-run router for stages with observability.as_run shared (ADR-0032)
 	$(CDK) deploy '*/AsRun' --exclusively --require-approval never -c as-run-router=true $(CONTEXT_ARGS)
+
+account-baseline: console ## Turn CloudWatch Transaction Search on for the account (transaction_search: enable)
+	$(CDK) deploy '*/AccountBaseline' --exclusively --require-approval never -c account-baseline=true $(CONTEXT_ARGS)
 
 model-access: ## Check (and optionally request) Amazon Bedrock model access for the agent
 	uv run python scripts/check_model_access.py

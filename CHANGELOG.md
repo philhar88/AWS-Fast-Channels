@@ -169,6 +169,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **`make destroy` with `observability.transaction_search: enable`** no longer stops part-way. `cdk destroy '**'`
+  selected the termination-protected `FastChannels-AccountBaseline` stack, which CloudFormation refuses to delete, so
+  the destroy failed after the Operator stack and left the stacks below it. The baseline now has its own target,
+  `make account-baseline` (context `account-baseline=true`; refused unless `transaction_search` is `enable`), like the
+  as-run router. `make deploy` and `make destroy` never select it. With `enable`, run `make account-baseline` once per
+  account and region before `make deploy`. With `transaction_search` off (the default) every template is unchanged.
 - The as-run log group allows five subscription filters per log group, not two: at most five `per_stage`
   deployments can exist per account and region (docs/channel-assembly.md).
 - **Demand: several guidance deployments per account and Region.** Overlay O1 now also prefixes the guidance's

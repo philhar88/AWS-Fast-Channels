@@ -60,7 +60,7 @@ it costs.
 | `agent.admin_email` | str or null | `null` | Email of the first `fast-admins` user (invited by Cognito). Omit to create users yourself. |
 | `agent.machine_client` | bool | `false` | Create the confidential machine client (Cognito `client_credentials`) that integrations and the end-to-end tests use to call the agent and the Gateway; always created when a channel has an `autopilot_cron`. Anyone allowed `cognito-idp:DescribeUserPoolClient` can read its secret, so it is off by default. |
 | `agent.console_dev_url` | str or null | `null` | Local console dev server (`http://localhost:5173/`) to accept as a sign-in and sign-out redirect, for `npm run dev` against this deployment. Off by default: with it, any process listening on that port of an operator's machine can receive their authorization codes. |
-| `observability.transaction_search` | `off` or `enable` or `existing` | `"off"` | `enable` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans are then billed as CloudWatch Logs); `existing` if it is already on in this account and region. |
+| `observability.transaction_search` | `off` or `enable` or `existing` | `"off"` | `enable`: `make account-baseline` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans are then billed as CloudWatch Logs), once per account and region before `make deploy`; `existing` if it is already on in this account and region. Both turn on the agent's traces. `make deploy` and `make destroy` never touch the baseline stack. |
 | `observability.log_retention_days` | int | `7` | Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs). |
 | `observability.mediatailor_log_percent` | int | `100` | Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production). |
 | `observability.as_run` | `per_stage` or `shared` | `"per_stage"` | `per_stage`: the stage subscribes to the as-run log itself (CloudWatch Logs allows five subscriptions per log group, so at most five such stages per account and region); `shared`: the stage reads as-run events from the account's `FastChannels-AsRun` router through EventBridge, which `make as-run-router` deploys once per account and region (ADR-0032). |
@@ -332,6 +332,17 @@ make as-run-router STAGE=fastm   # the stack FastChannels-AsRun, with fastm's lo
 `make deploy` and `make destroy` never select the router stack. It is termination protected. Delete it only once no
 deployment in the account and region is `shared`: turn termination protection off and delete the stack.
 
+The account baseline (`FastChannels-AccountBaseline`, CloudWatch Transaction Search) works the same way. With
+`observability.transaction_search: enable`, deploy it once per account and region before the deployment, whose
+trace deliveries need it ([observability.md](observability.md#transaction-search)):
+
+```bash
+make account-baseline STAGE=fastm   # refused unless the stage's transaction_search is enable
+```
+
+`make deploy` and `make destroy` never select it either, so its termination protection never stops a teardown
+part-way.
+
 A module with merged code adds its own stack after the ones it builds on, and may change theirs
 ([deploy and destroy order](modules.md#deploy-and-destroy-order)):
 
@@ -395,10 +406,10 @@ and reports what is left; the next poll, or the next `make destroy`, resumes whe
   reaper does nothing, so runtime resources stay too. To delete such a deployment, turn termination protection
   off, run `make destroy` (the Media stack stops at `DELETE_FAILED` while its source location still holds VOD
   sources), then `scripts/cleanup.py --apply` and `make destroy` again.
-- Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search), the
-  `FastChannels-AsRun` stack (the as-run router of `make as-run-router`), the account-shared as-run log
-  group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops module, a
-  locked ledger archive (above) and the probe canary's function logs `/aws/lambda/cwsyn-<prefix>-probe-*`
+- Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search, of `make
+  account-baseline`), the `FastChannels-AsRun` stack (the as-run router of `make as-run-router`), the account-shared
+  as-run log group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops
+  module, a locked ledger archive (above) and the probe canary's function logs `/aws/lambda/cwsyn-<prefix>-probe-*`
   (Synthetics creates them at the canary's first run and deletes only the function; delete the group by hand).
 - Left after every `make destroy`, modules or not: two log groups of CDK's log-retention provider, which deleting the
   Operator stack recreates and no stack owns, one of them without retention:
@@ -612,7 +623,7 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | `RUN_ERROR GATEWAY_UNAVAILABLE`: the gateway lists no tools for this caller | The user is in no group (Cedar permits nothing), or the Gateway was deployed seconds ago | Add the user to a group; otherwise retry in a minute |
 | `FORBIDDEN` (retryable) from `register_vod_source` | The BYO bucket policy is not applied or has not propagated | Apply the statements `create_source_location` returned; retry |
 | The first autopilot run after a deploy failed | A `rate()` schedule fires at creation, when the new Gateway may not list tools yet | It is retried once; the next scheduled run works |
-| Trace deliveries fail to deploy | X-Ray trace delivery needs Transaction Search | Set `observability.transaction_search` to `enable` or `existing` |
+| Trace deliveries fail to deploy | X-Ray trace delivery needs Transaction Search, which is off in the account and region | With `observability.transaction_search: enable`, run `make account-baseline` first; with `existing`, turn Transaction Search on (or use `enable`); or set it to `off` |
 | Console sign-in fails locally (`redirect_mismatch`) | The console client accepts a local dev server only when the deployment allows it | Deploy with `-c fast-channels.agent.console_dev_url=http://localhost:5173/` and use `npm run dev` on port 5173 |
 | A tool call shows "Declined" (`DECLINED`) or "Failed" (`TOOL_ERROR`) | The operator rejected the approval, or the call never reached a tool (Cedar denial, Gateway or MCP error) | The result's message says which; a Cedar denial names the policy (`<prefix>_tools_<policy>`) |
 | Invitation emails do not arrive | Cognito's default sender quota | Use SES, or create users with a known temporary password |

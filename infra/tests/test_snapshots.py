@@ -27,7 +27,7 @@ SHIPPED_STACKS = {
 def test_template_snapshot(
     deployment: Callable[..., Any], normalized: Callable[..., Any], snapshot_json: SnapshotAssertion, stack: str
 ) -> None:
-    d = deployment({"observability.transaction_search": "enable"})
+    d = deployment({"observability.transaction_search": "enable", "account-baseline": True})
 
     assert normalized(d.template(getattr(d.stage, stack))) == snapshot_json
 

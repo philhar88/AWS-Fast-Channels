@@ -30,6 +30,8 @@ GLOBAL_MODELS = {
     "agent.allowed_models": ["global.anthropic.claude-haiku-5-5"],
 }
 EVERYTHING = {**GLOBAL_MODELS, "observability.transaction_search": "enable"}
+WITH_BASELINE = {**EVERYTHING, "account-baseline": True}
+"""What ``make account-baseline`` synthesizes (``-c account-baseline=true``)."""
 
 
 def names(deployment: Any) -> dict[str, str]:
@@ -63,17 +65,51 @@ def test_edge_stacks_of_one_prefix_in_two_regions_do_not_collide(deployment: Get
     assert [edge.stack_name for edge in edges] == ["FastChannels-Edge-eu-west-1", "FastChannels-Edge-ap-northeast-1"]
 
 
-def test_account_baseline_only_when_enabling_transaction_search(deployment: GetDeployment) -> None:
-    for mode in ("off", "existing"):
-        assert deployment({"observability.transaction_search": mode}).stage.baseline is None
-    baseline = deployment({"observability.transaction_search": "enable"}).stage.baseline
+@pytest.mark.parametrize("mode", ["off", "existing", "enable"])
+def test_no_account_baseline_without_the_context_flag(deployment: GetDeployment, mode: str) -> None:
+    """`make deploy` and `make destroy` never select the account baseline, whose termination protection would stop
+    `cdk destroy '**'` part-way."""
+    assert deployment({"observability.transaction_search": mode}).stage.baseline is None
+
+
+@pytest.mark.parametrize("flag", [True, "true", "TRUE"])
+def test_only_the_context_flag_adds_the_account_baseline(deployment: GetDeployment, flag: object) -> None:
+    enable = {"observability.transaction_search": "enable"}
+    baseline = deployment({**enable, "account-baseline": flag}).stage.baseline
 
     assert baseline is not None
     assert (baseline.stack_name, baseline.termination_protection) == ("FastChannels-AccountBaseline", True)
+    assert deployment({**enable, "account-baseline": "false"}).stage.baseline is None
+
+
+@pytest.mark.parametrize("mode", ["off", "existing"])
+def test_the_account_baseline_needs_transaction_search_enable(fresh_deployment: GetDeployment, mode: str) -> None:
+    with pytest.raises(ConfigError, match=f"transaction_search is '{mode}': set it to 'enable'"):
+        fresh_deployment({"observability.transaction_search": mode, "account-baseline": True})
+
+
+@pytest.mark.parametrize("overrides", [{}, EVERYTHING], ids=["default", "transaction-search-enable"])
+def test_make_destroy_selects_no_termination_protected_stack(
+    fresh_deployment: GetDeployment, tmp_path: Path, overrides: dict[str, Any]
+) -> None:
+    """The cloud assembly that `make deploy` and `make destroy` select (`'**'`, no account-level flag): with
+    `removal: destroy` no stack in it is termination protected, so `cdk destroy` can delete every one."""
+    fresh_deployment(overrides, region="eu-west-1", outdir=tmp_path).app.synth()
+    [manifest] = tmp_path.glob("assembly-*/manifest.json")
+    artifacts = json.loads(manifest.read_text())["artifacts"].values()
+    protection = {
+        a["properties"]["stackName"]: a["properties"].get("terminationProtection", False)
+        for a in artifacts
+        if a["type"] == "aws:cloudformation:stack"
+    }
+
+    assert "FastChannels-AccountBaseline" not in protection
+    assert not any(protection.values()), protection
 
 
 def test_stack_dependencies(deployment: GetDeployment) -> None:
     stage = deployment(EVERYTHING, region="eu-west-1").stage
+    with_baseline = deployment(WITH_BASELINE, region="eu-west-1").stage
     with_models = deployment({"modules.models.enabled": True}).stage
 
     def deps(stack: Stack) -> set[str]:
@@ -81,7 +117,8 @@ def test_stack_dependencies(deployment: GetDeployment) -> None:
 
     assert deps(stage.data) == set()
     assert deps(stage.media) == {"Data"}
-    assert deps(stage.operator) == {"Data", "Media", "AccountBaseline"}
+    assert deps(stage.operator) == {"Data", "Media"}
+    assert deps(with_baseline.operator) == {"Data", "Media", "AccountBaseline"}
     assert deps(stage.edge) == {"Data", "Media"}
     assert deps(with_models.models) == set()
     assert deps(with_models.operator) == {"Data", "Media", "Models"}
@@ -94,7 +131,7 @@ def test_memory_is_created_before_any_operator_resource(default: Any) -> None:
 
 @pytest.mark.parametrize(("removal", "protected"), [("destroy", False), ("retain", True)])
 def test_termination_protection_follows_removal(deployment: GetDeployment, removal: str, protected: bool) -> None:
-    d = deployment({**EVERYTHING, "removal": removal}, region="eu-west-1")
+    d = deployment({**WITH_BASELINE, "removal": removal}, region="eu-west-1")
 
     assert {s.node.id: s.termination_protection for s in d.stacks} == {
         "Data": protected,
@@ -146,7 +183,7 @@ def test_consumers_get_weak_references_also_across_regions(fresh_deployment: Cal
     assert "BucketPolicy" not in media  # grants never touch DataStack's resource policies
 
 
-TOPOLOGIES = {"us-east-1": ({}, "us-east-1"), "everything-elsewhere": (EVERYTHING, "eu-west-1")}
+TOPOLOGIES = {"us-east-1": ({}, "us-east-1"), "everything-elsewhere": (WITH_BASELINE, "eu-west-1")}
 
 
 @pytest.mark.parametrize(("overrides", "region"), TOPOLOGIES.values(), ids=TOPOLOGIES.keys())

@@ -8,7 +8,8 @@ from aws_cdk.assertions import Template
 
 @pytest.fixture(scope="module")
 def baseline(deployment: Callable[..., Any]) -> Template:
-    return Template.from_stack(deployment({"observability.transaction_search": "enable"}).stage.baseline)
+    stage = deployment({"observability.transaction_search": "enable", "account-baseline": True}).stage
+    return Template.from_stack(stage.baseline)
 
 
 def test_transaction_search_indexes_one_percent_after_the_spans_policy(baseline: Template) -> None:
