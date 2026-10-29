@@ -54,6 +54,7 @@ Rules behind the table:
 | `media` | the media bucket | `S3BucketOrigin.with_origin_access_control` (read). The bucket is private |
 | `mediatailor-manifests` | `manifests.mediatailor.<region>.amazonaws.com` | Public MediaTailor endpoint; HTTPS only, TLS 1.2, 10 s read timeout, 3 connection attempts |
 | `mediatailor-segments` | `segments.mediatailor.<region>.amazonaws.com` | Same |
+| `catalog` (only with `modules.crawl`) | the catalog-context bucket | OAC read of `catalog/ctx/*` and list, for this distribution only; route `/catalog/ctx/*`, GET and HEAD ([content-enrichment.md](content-enrichment.md#serving-and-misses)) |
 
 The Data stack's bucket policy admits CloudFront distributions of this account and **denies them `assets/*.m3u8`**:
 content manifests are for Channel Assembly only, so an asset cannot simply be played from the CDN by

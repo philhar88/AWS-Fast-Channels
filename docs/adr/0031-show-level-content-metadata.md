@@ -36,8 +36,12 @@ Measurements made in an AWS account in October 2026 set the rules for using that
   Tech Lab's CTV Genre Mapping (`core/crawl/taxonomy/genre-map.toml`; the id list includes the 3.x descriptive vectors,
   since the mapping uses one). Loading the map rejects unknown ids. A title gets at most three genres, most apt first;
   `cat` equals `genres`, `gtax` and `cattax` are always 9 explicitly, and tags with no CTV genre go to `kwarray`.
-- **Catalog context object.** One JSON object per title, `catalog/ctx/v1/<content_id>.json` in the media bucket,
-  served by the existing default CDN route with `Cache-Control: max-age=300`, never in the ingest bucket. Its `v1`
+- **Catalog context object.** One JSON object per title, `catalog/ctx/v1/<content_id>.json` in a catalog-context
+  bucket that the Media stack creates with the module, never in the media or the ingest bucket. CloudFront serves it
+  on a `/catalog/ctx/*` route with `Cache-Control: max-age=300`. The bucket's policy lets that distribution list
+  it, so a missing object is a 404, which the Functions cache stores (a 403 it does not, and CloudFront runs no
+  viewer-response function on an origin 4xx); the route forwards no query string and only paths under
+  `/catalog/ctx/`, so it can never return a listing. Its `v1`
   schema (`contracts/catalog-context.schema.json`) never changes: a new schema is `v2` under a new prefix with a new
   cache key, because cached Function responses cannot be invalidated. The builder enforces the limits itself: free
   text 200 characters, every value a Function may output (`hdr`, `title_q`, `series_q`) 1,000 characters, the object

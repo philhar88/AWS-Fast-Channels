@@ -21,6 +21,7 @@ from fast_channels.infra.constructs.channel_assembly import (
     RuntimeResourceReaper,
     playback_configuration_template,
 )
+from fast_channels.infra.constructs.crawl.store import CatalogContextBucket
 from fast_channels.infra.constructs.delivery import CdnAccessLogs, MediaDistribution
 from fast_channels.infra.constructs.encoding import EncodingLadder, IngestPipeline, LadderKit, LadderProvisioner
 from fast_channels.infra.constructs.events import FastEventBus
@@ -62,6 +63,8 @@ class MediaStack(Stack):
         access_logs: its standard-logs-v2 delivery when this stack is in us-east-1, else ``None``.
         events, delivery, origin, vended_logs, pipeline, ladders, provisioner, kits, reaper, as_run, channels,
         observability: the media-plane constructs (``ladders`` and ``kits`` by built-in ladder name).
+        catalog_contexts: the ``crawl`` module's catalog-context bucket (and its ``/catalog/ctx/*`` route), or
+        ``None`` when the module is off.
     """
 
     def __init__(
@@ -80,15 +83,22 @@ class MediaStack(Stack):
             archive_retention=Duration.days(config.observability.log_retention_days),
             removal_policy=removal,
         )
+        # The crawl module's catalog contexts: a bucket of their own, so that a miss is a cacheable 404.
+        self.catalog_contexts: CatalogContextBucket | None = None
+        if config.modules.crawl.enabled:
+            self.catalog_contexts = CatalogContextBucket(self, "CatalogContexts", removal_policy=removal)
         self.delivery = MediaDistribution(
             self,
             "Delivery",
             media_bucket=data.media_bucket,
+            catalog_bucket=self.catalog_contexts.reference if self.catalog_contexts else None,
             content_domain=config.delivery.content_domain,
             certificate_arn=config.delivery.certificate_arn,
             price_class=_PRICE_CLASSES[config.delivery.price_class],
         )
         self.distribution = self.delivery.distribution
+        if self.catalog_contexts is not None:
+            self.catalog_contexts.admit(self.distribution)
         self.access_logs: CdnAccessLogs | None = None
         if self.region == CLOUDFRONT_REGION:
             self.access_logs = CdnAccessLogs(
@@ -213,6 +223,7 @@ class MediaStack(Stack):
                 sibling_policy=config.modules.release.enabled,
             ),
             mediatailor_log_destination_arn=self.vended_logs.destination_arn,
+            catalog_context_bucket=self.catalog_contexts.reference if self.catalog_contexts else None,
         )
         if config.modules.pds.enabled:
             # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).

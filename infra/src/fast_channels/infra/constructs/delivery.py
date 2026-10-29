@@ -45,6 +45,9 @@ class Origin(StrEnum):
     """MediaTailor playback endpoint: sessions, personalised manifests, tracking, beacon redirects."""
     SEGMENTS = "mediatailor-segments"
     """MediaTailor segment endpoint: ad segments MediaTailor transcoded (``/tm/*``)."""
+    CATALOG = "catalog"
+    """The catalog-context bucket of the ``crawl`` module through OAC. Its policy lets this distribution list the
+    bucket, so S3 answers 404 for a missing object, which MediaTailor's Function cache stores (a 403 it does not)."""
 
 
 class Methods(StrEnum):
@@ -54,15 +57,19 @@ class Methods(StrEnum):
     """GET, HEAD and OPTIONS (GET, HEAD and OPTIONS responses cached)."""
     ALL = "all"
     """Every method; MediaTailor's explicit session initialisation is a POST (GET and HEAD cached)."""
+    GET_HEAD = "get-head"
+    """GET and HEAD only (both cached): server-to-server reads that no browser preflights."""
 
 
 _ALLOWED_METHODS: Final[Mapping[Methods, cf.AllowedMethods]] = {
     Methods.READ: cf.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
     Methods.ALL: cf.AllowedMethods.ALLOW_ALL,
+    Methods.GET_HEAD: cf.AllowedMethods.ALLOW_GET_HEAD,
 }
 _CACHED_METHODS: Final[Mapping[Methods, cf.CachedMethods]] = {
     Methods.READ: cf.CachedMethods.CACHE_GET_HEAD_OPTIONS,
     Methods.ALL: cf.CachedMethods.CACHE_GET_HEAD,
+    Methods.GET_HEAD: cf.CachedMethods.CACHE_GET_HEAD,
 }
 _PREFLIGHT_HEADERS: Final = cf.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT_AND_SECURITY_HEADERS
 
@@ -222,14 +229,51 @@ ROUTES: Final[tuple[Route, ...]] = (
 )
 """Routes in precedence order (first match wins); MediaTailor paths precede any S3 glob (cdn.md §10.1)."""
 
+CATALOG_CONTEXT_PATH: Final = "/catalog/ctx/*"
+CATALOG_CONTEXT_ROUTE: Final = Route(
+    CATALOG_CONTEXT_PATH,
+    Origin.CATALOG,
+    CACHING_OPTIMIZED_UNCOMPRESSED,  # no query string, header or cookie in the key, so none reaches the bucket
+    None,
+    Cors.MEDIA,
+    compress=False,
+    methods=Methods.GET_HEAD,
+    purpose=(
+        "Catalog context objects of the crawl module (/catalog/ctx/v1/<content id>.json), read by MediaTailor's "
+        "PRE_ADS lookup; a missing object is a 404, which the Functions cache stores"
+    ),
+)
+"""The ``crawl`` module's route. Every request it forwards has a path under ``/catalog/ctx/`` and no query string,
+so S3 sees a ``GetObject`` of a key under ``catalog/ctx/``: never the bucket root, never a listing."""
 
-def path_contract(*, region: str, media_host: str) -> dict[str, Any]:
+
+def routes(*, catalog_context: bool = False) -> tuple[Route, ...]:
+    """The routing table of a deployment: :data:`ROUTES`, with the catalog-context route before the default one when
+    the ``crawl`` module is on."""
+    if not catalog_context:
+        return ROUTES
+    return (*ROUTES[:-1], CATALOG_CONTEXT_ROUTE, ROUTES[-1])
+
+
+def path_contract(*, region: str, media_host: str, table: tuple[Route, ...] = ROUTES) -> dict[str, Any]:
     """The routing table as CDN-neutral JSON, for configuring another CDN in front of the same origins.
 
     Args:
         region: AWS region of the MediaTailor endpoints.
-        media_host: host other CDNs fetch ``media`` routes from: the CloudFront distribution's own domain.
+        media_host: host other CDNs fetch ``media`` (and ``catalog``) routes from: the CloudFront distribution's own
+            domain.
+        table: the deployment's routes (:func:`routes`).
     """
+    catalog = (
+        {
+            Origin.CATALOG: {
+                "host": media_host,
+                "note": "Chain to CloudFront: the catalog-context bucket only admits this distribution.",
+            }
+        }
+        if any(route.origin is Origin.CATALOG for route in table)
+        else {}
+    )
     return {
         "version": CONTRACT_VERSION,
         "description": (
@@ -244,8 +288,9 @@ def path_contract(*, region: str, media_host: str) -> dict[str, Any]:
             },
             Origin.MANIFESTS: {"host": MANIFESTS_HOST.format(region=region)},
             Origin.SEGMENTS: {"host": SEGMENTS_HOST.format(region=region)},
+            **catalog,
         },
-        "rules": [route.contract() for route in ROUTES],
+        "rules": [route.contract() for route in table],
         "cors": {
             Cors.MEDIA: {
                 "access-control-allow-origin": "*",
@@ -289,6 +334,8 @@ class MediaDistribution(Construct):
 
     Args:
         media_bucket: bucket holding ``assets/``, ``ads/`` and ``epg/``.
+        catalog_bucket: the ``crawl`` module's catalog-context bucket; adds :data:`CATALOG_CONTEXT_ROUTE` to it. Pass
+            an imported reference: its owner writes the policy, which must name this distribution (CDK adds none).
         content_domain: CDN-neutral host name of content and ad segments (e.g. ``media.example.com``), served as
             an alternate domain name of this distribution. Requires ``certificate_arn``.
         certificate_arn: ACM certificate in us-east-1 covering ``content_domain``.
@@ -302,6 +349,7 @@ class MediaDistribution(Construct):
         content_base_url: ``https://<domain_name>``: Channel Assembly's default segment delivery, the ad segment
             prefix and VAST/ADS URLs. Identical to ``cdn_base_url`` in v3.0; the names keep the playback CDN and the
             CDN-neutral content host apart, as ``MediaExports`` does.
+        routes: the distribution's routing table (:func:`routes`).
         path_contract: :func:`path_contract` for this distribution (``MediaStack`` outputs it as ``PathContract``).
     """
 
@@ -311,6 +359,7 @@ class MediaDistribution(Construct):
         id: str,
         *,
         media_bucket: s3.IBucket,
+        catalog_bucket: s3.IBucket | None = None,
         content_domain: str | None = None,
         certificate_arn: str | None = None,
         price_class: cf.PriceClass = cf.PriceClass.PRICE_CLASS_ALL,
@@ -338,8 +387,9 @@ class MediaDistribution(Construct):
             ),
             server_timing_sampling_rate=100,
         )
-        targets = _origins(media_bucket, region=stack.region)
-        behaviours = {route.path: self._behaviour(route, targets) for route in ROUTES}
+        targets = _origins(media_bucket, region=stack.region, catalog_bucket=catalog_bucket)
+        self.routes = routes(catalog_context=catalog_bucket is not None)
+        behaviours = {route.path: self._behaviour(route, targets) for route in self.routes}
         self.distribution = cf.Distribution(
             self,
             "Distribution",
@@ -368,7 +418,9 @@ class MediaDistribution(Construct):
         self.domain_name: str = content_domain or self.distribution.distribution_domain_name
         self.cdn_base_url = f"https://{self.domain_name}"
         self.content_base_url = self.cdn_base_url
-        self.path_contract = path_contract(region=stack.region, media_host=self.distribution.distribution_domain_name)
+        self.path_contract = path_contract(
+            region=stack.region, media_host=self.distribution.distribution_domain_name, table=self.routes
+        )
 
     def _behaviour(self, route: Route, targets: Mapping[Origin, cf.IOrigin]) -> cf.BehaviorOptions:
         cors = self.cors_policy if route.cors is Cors.MEDIA else _PREFLIGHT_HEADERS
@@ -384,7 +436,7 @@ class MediaDistribution(Construct):
         )
 
 
-def _origins(bucket: s3.IBucket, *, region: str) -> dict[Origin, cf.IOrigin]:
+def _origins(bucket: s3.IBucket, *, region: str, catalog_bucket: s3.IBucket | None) -> dict[Origin, cf.IOrigin]:
     def mediatailor(origin: Origin, host: str) -> cf.IOrigin:
         # Timeouts and retries as deployed in e2e.md §2.3.
         return origins.HttpOrigin(
@@ -404,6 +456,15 @@ def _origins(bucket: s3.IBucket, *, region: str) -> dict[Origin, cf.IOrigin]:
         ),
         Origin.MANIFESTS: mediatailor(Origin.MANIFESTS, MANIFESTS_HOST),
         Origin.SEGMENTS: mediatailor(Origin.SEGMENTS, SEGMENTS_HOST),
+        **(
+            {
+                Origin.CATALOG: origins.S3BucketOrigin.with_origin_access_control(
+                    catalog_bucket, origin_id=Origin.CATALOG.value, origin_access_levels=[cf.AccessLevel.READ]
+                )
+            }
+            if catalog_bucket is not None
+            else {}
+        ),
     }
 
 
