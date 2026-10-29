@@ -16,6 +16,16 @@
         "Ref": "LakeBucketB1D32E10"
       }
     },
+    "LedgerArchiveBucketName": {
+      "Value": {
+        "Ref": "LedgerArchive3B47A332"
+      }
+    },
+    "LedgerTableName": {
+      "Value": {
+        "Ref": "LedgerTable9343E4AA"
+      }
+    },
     "LibraryTableName": {
       "Value": {
         "Ref": "Library9A29C343"
@@ -44,6 +54,22 @@
         "Fn::GetAtt": [
           "LakeBucketB1D32E10",
           "Arn"
+        ]
+      }
+    },
+    "PublishOutputFnGetAttLedgerArchive3B47A332Arn2FD2DD2D": {
+      "Value": {
+        "Fn::GetAtt": [
+          "LedgerArchive3B47A332",
+          "Arn"
+        ]
+      }
+    },
+    "PublishOutputFnGetAttLedgerTable9343E4AAStreamArn71D6E909": {
+      "Value": {
+        "Fn::GetAtt": [
+          "LedgerTable9343E4AA",
+          "StreamArn"
         ]
       }
     },
@@ -87,6 +113,16 @@
     "PublishOutputRefLakeBucketB1D32E103B48AD28": {
       "Value": {
         "Ref": "LakeBucketB1D32E10"
+      }
+    },
+    "PublishOutputRefLedgerArchive3B47A3326BA99E64": {
+      "Value": {
+        "Ref": "LedgerArchive3B47A332"
+      }
+    },
+    "PublishOutputRefLedgerTable9343E4AA1381E625": {
+      "Value": {
+        "Ref": "LedgerTable9343E4AA"
       }
     },
     "PublishOutputRefLibrary9A29C343BD63F0CC": {
@@ -546,6 +582,216 @@
         }
       },
       "Type": "AWS::S3::BucketPolicy"
+    },
+    "LedgerArchive3B47A332": {
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              },
+              "Id": "abort-incomplete-uploads",
+              "Status": "Enabled"
+            }
+          ]
+        },
+        "LoggingConfiguration": {
+          "DestinationBucketName": {
+            "Ref": "StorageLogs2A2D4D26"
+          },
+          "LogFilePrefix": "s3/ledger/",
+          "TargetObjectKeyFormat": {
+            "PartitionedPrefix": {
+              "PartitionDateSource": "EventTime"
+            }
+          }
+        },
+        "ObjectLockConfiguration": {
+          "ObjectLockEnabled": "Enabled",
+          "Rule": {
+            "DefaultRetention": {
+              "Days": 30,
+              "Mode": "GOVERNANCE"
+            }
+          }
+        },
+        "ObjectLockEnabled": true,
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:ledger-archive",
+            "Value": "true"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "LedgerArchivePolicy7B8750CE": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "LedgerArchive3B47A332"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "LedgerArchive3B47A332",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "LedgerArchive3B47A332",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": 1.2
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "LedgerArchive3B47A332",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "LedgerArchive3B47A332",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::S3::BucketPolicy"
+    },
+    "LedgerTable9343E4AA": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "sk",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "sk",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Replicas": [
+          {
+            "DeletionProtectionEnabled": false,
+            "PointInTimeRecoverySpecification": {
+              "PointInTimeRecoveryEnabled": true
+            },
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fast"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "StreamSpecification": {
+          "StreamViewType": "NEW_AND_OLD_IMAGES"
+        },
+        "TableName": "fast-ledger"
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
     },
     "Library9A29C343": {
       "DeletionPolicy": "Delete",
@@ -1257,6 +1503,40 @@
                       ]
                     },
                     "/s3/lake/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:PutObject",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "LedgerArchive3B47A332",
+                      "Arn"
+                    ]
+                  }
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "logging.s3.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "StorageLogs2A2D4D26",
+                        "Arn"
+                      ]
+                    },
+                    "/s3/ledger/*"
                   ]
                 ]
               }

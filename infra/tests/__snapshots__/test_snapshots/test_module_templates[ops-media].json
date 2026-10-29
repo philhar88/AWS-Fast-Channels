@@ -243,6 +243,11 @@
         "Ref": "KitsStateMachineA99F6CEE"
       }
     },
+    "PublishOutputRefObservabilityTopicFFC7823B457E5C0B": {
+      "Value": {
+        "Ref": "ObservabilityTopicFFC7823B"
+      }
+    },
     "SourceLocationName": {
       "Value": "fast-media"
     }

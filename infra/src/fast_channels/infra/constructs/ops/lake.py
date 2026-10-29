@@ -144,6 +144,23 @@ ADS_LOG_FIELDS: Final = tuple(f for f in _ADS_DEFAULT_FIELDS if f not in EXCLUDE
 MANIFEST_LOG_FIELDS: Final = tuple(f for f in _MANIFEST_DEFAULT_FIELDS if f not in EXCLUDED_MANIFEST_LOG_FIELDS)
 """Record fields of the lake's copy of the manifest logs."""
 
+LEDGER_PREFIX: Final = "ledger/"
+"""Key prefix of the ledger archive's records (``constructs.ops.ledger.ARCHIVE_PREFIX``)."""
+LEDGER_COLUMNS: Final = (
+    ("chain_id", glue.Schema.STRING),
+    ("record_id", glue.Schema.STRING),
+    ("kind", glue.Schema.STRING),
+    ("at", glue.Schema.STRING),
+    ("principal", glue.Schema.STRING),
+    ("action", glue.Schema.STRING),
+    ("subject", glue.Schema.STRING),
+    ("correlation_id", glue.Schema.STRING),
+    ("detail", glue.Schema.STRING),
+    ("seq", glue.Schema.BIG_INT),
+    ("prev_hash", glue.Schema.STRING),
+    ("hash", glue.Schema.STRING),
+)
+"""``core.ledger.ChainedRecord``'s fields; ``detail`` is JSON text with lower-case keys (OpenX SerDe)."""
 QUERY_SCAN_LIMIT_BYTES: Final = 10 * 1024**3
 """Athena cancels a lake query that would scan more than this (10 GiB, about 5 US cents)."""
 MEDIATAILOR_PREFIX: Final = "mediatailor"
@@ -413,6 +430,7 @@ class Lake(Construct):
         playback_configurations: names of the IaC playback configurations whose logs are copied (their delivery
             sources ``<name>-ads`` and ``<name>-manifest`` exist in the Media stack).
         retention_days: lake retention, which bounds the projected partitions.
+        ledger_archive: the ledger archive, read as the table ``ledger`` (partitioned by ``day``, ``yyyy/MM/dd``).
         removal_policy: what happens to the database and tables when the stack is deleted.
 
     Attributes:
@@ -431,6 +449,7 @@ class Lake(Construct):
         distribution_id: str,
         playback_configurations: Sequence[str],
         retention_days: int,
+        ledger_archive: s3.IBucket | None = None,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
@@ -527,6 +546,28 @@ class Lake(Construct):
                     )
                 },
                 parameters={"storage.location.template": f"{location}${{datehour}}/"},
+            )
+        if ledger_archive is not None:
+            self.tables["ledger"] = glue.S3Table(
+                self,
+                "Ledger",
+                database=self.database,
+                table_name="ledger",
+                description="The hash-chained ledger's archived records (verify them with scripts/ledger_verify.py)",
+                storage=glue.S3TableStorage.from_bucket(ledger_archive),
+                s3_prefix=LEDGER_PREFIX,
+                data_format=glue.DataFormat.JSON,
+                columns=[glue.Column(name=name, type=kind) for name, kind in LEDGER_COLUMNS],
+                partition_keys=[glue.Column(name="day", type=glue.Schema.STRING)],
+                partition_projection={
+                    "day": glue.PartitionProjectionConfiguration.date(
+                        format="yyyy/MM/dd",
+                        min="2026/01/01",
+                        max="NOW",
+                        step=glue.DateProjectionStep(interval=1, interval_unit=glue.DateIntervalUnit.DAYS),
+                    )
+                },
+                parameters={"storage.location.template": f"s3://{ledger_archive.bucket_name}/{LEDGER_PREFIX}${{day}}/"},
             )
         self.workgroup = athena.CfnWorkGroup(
             self,
