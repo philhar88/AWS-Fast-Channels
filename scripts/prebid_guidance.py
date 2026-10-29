@@ -280,6 +280,7 @@ STAGE_COMMANDS: Final = {
     "outputs": "write the SSM contract /<prefix>/demand/* from the deployed guidance",
     "upload-config": "upload the rendered configuration and roll the tasks (full capacity throughout)",
     "smoke": "synthetic MediaTailor POSTs through the guidance's CloudFront and WAF",
+    "herd": "a break herd of probe auctions through the guidance's CloudFront (the warm-up project)",
     "destroy": "destroy the demand module, including what the guidance's templates retain",
     "inventory": "list what is left of the stage's demand module",
 }
@@ -324,6 +325,7 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.deploy_guidance(image)
             stage.write_parameters(stage.discover(image))
             stage.deploy_demand_stack(demo, base)
+            stage.start_census_gate()
             if not args.no_smoke:
                 return report_smoke(stage)
         case "outputs":
@@ -332,6 +334,8 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.upload_config(content_base_url(args, stage.prefix))
         case "smoke":
             return report_smoke(stage)
+        case "herd":
+            print(json.dumps(stage.herd(args.rate, args.seconds), indent=2))
         case "destroy":
             stage.destroy()
             return report_inventory(stage)
@@ -378,6 +382,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command.add_argument("--content-base-url", help="the stage's ContentBaseUrl (default: its Media stack output)")
     rendering.add_argument("--out", type=Path, help="output directory (default build/prebid-guidance/<prefix>-config)")
     commands.choices["deploy"].add_argument("--no-smoke", action="store_true", help="skip the synthetic POSTs")
+    commands.choices["herd"].add_argument("--rate", type=int, default=400, help="auctions per second (default 400)")
+    commands.choices["herd"].add_argument("--seconds", type=int, default=6, help="duration (default 6 s)")
     args = parser.parse_args(argv)
     try:
         pin = Pin.load()

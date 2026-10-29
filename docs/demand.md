@@ -7,13 +7,14 @@ one VAST 4.2 pod. The decision is recorded in [ADR-0020](adr/0020-demand-through
 
 **Status (Phase 1, in progress):** the pinned guidance with its overlays, the Prebid Server configuration renderer,
 the fast-ctv module, the origin gate, the image build, the deploy and destroy scripts, the bidder simulator and the
-demo creatives are in place. The census-gated scaling and the Pod Decision Service follow.
+demo creatives, and the census-gated scaling with its warm-up are in place. The Pod Decision Service follows.
 
 - [How a break is sold](#how-a-break-is-sold)
 - [The guidance and its overlays](#the-guidance-and-its-overlays)
 - [Prebid Server configuration](#prebid-server-configuration)
 - [The fast-ctv module](#the-fast-ctv-module)
 - [Demo demand and the bidder simulator](#demo-demand-and-the-bidder-simulator)
+- [Scaling: the census gate, dayparts and warm-up](#scaling-the-census-gate-dayparts-and-warm-up)
 - [Deploy and destroy](#deploy-and-destroy)
 - [Rules the configuration relies on](#rules-the-configuration-relies-on)
 
@@ -196,6 +197,33 @@ uploaded to the guidance's assets bucket under its content hash (`simulator/<has
 - **The demo creatives:** each multivariant on the CDN has the ladder's variants in order: codec, size, frame rate
   and the nominal `BANDWIDTH`.
 
+## Scaling: the census gate, dayparts and warm-up
+
+Prebid Server runs only while the stage airs. The `Demand` stack adds three parts to the guidance's ECS service and
+its target tracking (CPU, memory, requests per target):
+
+| Part | Trigger | What it does |
+|---|---|---|
+| **Census gate** (`<prefix>-demand-census-gate`, Step Functions with JSONata, SDK calls only) | The channel census's `Census Changed` event on the stage's bus (the ops module: the running-channel count crossed zero) | **First channel starts:** the scalable target's minimum goes to `tasks.min` (the tier minimum) and the desired count to at least that. **Last channel stops:** it waits 15 minutes, reads the census's last count (`/<prefix>/ops/running-channels`) again, and if no channel runs sets the minimum and the desired count to 0. A restart within the 15 minutes keeps Prebid Server up |
+| **Dayparts** (`modules.demand.dayparts`) | Application Auto Scaling scheduled actions `<prefix>-daypart-<n>` at their `cron` (UTC) | Raise the minimum ahead of a busy daypart (fire at least 10 minutes before its first break); target tracking covers the time between them |
+| **Warm-up** (`<prefix>-pbs-warmup`, CodeBuild on arm64) | Every task of the service that reaches `RUNNING` (`ECS Task State Change`): census, daypart or target-tracking scale-outs alike | Waits until the task is a healthy target of the guidance's load balancer (up to 10 minutes; a draining task is skipped), then replays MediaTailor's POST through the guidance's CloudFront with origin secret A, at `WARMUP_RATE_PER_TASK` (50) auctions/s per healthy target, so the new task gets about 50/s, for `WARMUP_SECONDS` (150 s), with vegeta 12.13.0 (download checksum-verified). Every request is a probe (`X-Fast-Probe: 1`) without a ticket: own book and house only, no partner sees it |
+
+Undeliverable events of both rules go to the dead-letter queue `<prefix>-demand-dead-letters`, which alarms to the
+stage's alert topic.
+
+`deploy-demand` starts the gate once with the census's current count, so a stage with no channel running scales to
+zero 15 minutes after its deploy. A later guidance deploy resets the minimum to `ECSTaskMinCapacity` (= `tasks.min`)
+until the next census change. P0-21 measured scale-from-zero at about 3 minutes to all-healthy and the JIT warm-up at
+2–3 minutes: open a daypart at least 10 minutes before its first break.
+
+The warm-up waits for the target's health because load on a task that is not yet listening, or is still being
+checked, fails the guidance's health checks (`/status` every 60 s, unhealthy after 2 failures, healthy after 5
+successes) and ECS replaces the task. Scaling from zero, the load balancer has no healthy target and fails open: it
+sends requests to tasks still starting, which refuse them (HTTP 502).
+
+`scripts/prebid_guidance.py herd --rate 400 --seconds 6` replays a break herd with the warm-up project and prints
+vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s on 2 tasks.
+
 ## Deploy and destroy
 
 ```bash
@@ -230,8 +258,10 @@ order (DESIGN §4.3):
 5. **The SSM contract** `/<prefix>/demand/`: `cloudfront-domain`, `settings-bucket`, `stored-requests-bucket`,
    `cluster-arn`, `service-arn`, `task-security-group-id`, `vpc-id`, `private-subnet-ids`, `alb-arn`, `web-acl-arn`,
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
-6. **`FastChannels-<prefix>-Demand`**, with the guidance's network as context: the private zone, and in `lambda` mode
-   the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)).
+6. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
+   `lambda` mode the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)), the census
+   gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)); then one run
+   of the census gate with the current count.
 7. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
    VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs
    `POLICY_UNAVAILABLE`); the same POST without the secret, and a request to another path, are blocked at the edge

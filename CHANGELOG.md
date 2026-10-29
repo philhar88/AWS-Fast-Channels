@@ -87,6 +87,14 @@ All notable changes to this project are documented here. The format follows
   `<prefix>.fast.internal` and the `lambda` simulator. `deploy-demand` deploys it once the guidance is up, and
   `destroy-demand` deletes it first. The smoke test also sends the simulator a 4-slot request and checks every demo
   creative's renditions against the ladder.
+- **Demand: census-gated scaling and warm-up** ([docs/demand.md](docs/demand.md#scaling-the-census-gate-dayparts-and-warm-up)).
+  Prebid Server runs only while the stage airs. The census gate (Step Functions, SDK calls only) raises the guidance's
+  ECS service to `tasks.min` when the census's `Census Changed` event reports the first running channel, and scales it
+  to zero 15 minutes after the last one stopped, unless a channel started again. `modules.demand.dayparts` become
+  Application Auto Scaling scheduled actions. Every new task, from any scale-out, gets a warm-up once it is a healthy
+  target: probe auctions without a ticket through the guidance's CloudFront, at 50/s per healthy target for 150 s,
+  with a pinned, checksum-verified vegeta on CodeBuild. Undeliverable events go to a dead-letter queue that alarms. `prebid_guidance.py herd` replays a break
+  herd.
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a

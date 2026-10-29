@@ -4,11 +4,17 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack, Tags
 from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_sns as sns
 
 from fast_channels.core.demand import MODULE, MODULE_TAG, DemandNetwork
 from fast_channels.infra.config import DemandMode, Simulator
+from fast_channels.infra.constructs.alerts import alert_topic_arn, dead_letter_alarm
 from fast_channels.infra.constructs.demand.private_dns import PrivateDns
+from fast_channels.infra.constructs.demand.scaling import CensusGate, Dayparts
 from fast_channels.infra.constructs.demand.simulator import LambdaSimulator
+from fast_channels.infra.constructs.demand.warmup import WarmUp
+from fast_channels.infra.constructs.observability import census_parameter_name
+from fast_channels.infra.constructs.queues import dead_letter_queue
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -17,8 +23,9 @@ if TYPE_CHECKING:
 
 
 class DemandStack(Stack):
-    """The private zone ``<prefix>.fast.internal`` in the guidance's VPC, and in ``lambda`` mode the bidder simulator
-    behind an internal load balancer at ``sim.<prefix>.fast.internal``.
+    """What runs beside the guidance: the private zone ``<prefix>.fast.internal`` in its VPC, in ``lambda`` mode the
+    bidder simulator behind an internal load balancer at ``sim.<prefix>.fast.internal``, the census gate, the daypart
+    scheduled actions and the warm-up of new Prebid Server tasks.
 
     The stage holds it only with the CDK context ``fast-channels:demand-network``, which ``scripts/prebid_guidance.py
     deploy`` passes once the guidance is up (from ``/<prefix>/demand/*``): ``make deploy`` leaves it alone, and
@@ -72,3 +79,56 @@ class DemandStack(Stack):
                 value=self.simulator.function.function_name,
                 description="The bidder simulator (lambda mode)",
             )
+        self.dead_letters = dead_letter_queue(self, "DeadLetters")
+        dead_letter_alarm(
+            self,
+            "DeadLettersAlarm",
+            queue=self.dead_letters,
+            name=f"{config.prefix}-demand-dead-letters",
+            description="A Census Changed or new-task event could not reach the census gate or the warm-up: Prebid "
+            "Server may run without channels, or a new task may stay cold",
+            topic=sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, config.prefix)),
+        )
+        self.census_gate = CensusGate(
+            self,
+            "CensusGate",
+            prefix=config.prefix,
+            cluster_arn=network.cluster_arn,
+            service_arn=network.service_arn,
+            census_parameter=census_parameter_name(config.prefix),
+            tasks=demand.tasks,
+            log_retention=config.observability.log_retention,
+            dead_letters=self.dead_letters,
+        )
+        self.dayparts = Dayparts(
+            self,
+            "Dayparts",
+            prefix=config.prefix,
+            cluster_arn=network.cluster_arn,
+            service_arn=network.service_arn,
+            dayparts=demand.dayparts,
+            tasks=demand.tasks,
+        )
+        self.warmup = WarmUp(
+            self,
+            "WarmUp",
+            prefix=config.prefix,
+            cluster_arn=network.cluster_arn,
+            service_arn=network.service_arn,
+            cloudfront_domain=network.cloudfront_domain,
+            target_group_arn=network.target_group_arn,
+            log_retention=config.observability.log_retention,
+            dead_letters=self.dead_letters,
+        )
+        CfnOutput(
+            self,
+            "CensusGateArn",
+            value=self.census_gate.state_machine.state_machine_arn,
+            description="Scales Prebid Server with the running channels",
+        )
+        CfnOutput(
+            self,
+            "WarmUpProjectName",
+            value=self.warmup.project.project_name,
+            description="Warms every new Prebid Server task",
+        )
