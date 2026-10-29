@@ -71,6 +71,23 @@ class Overlay:
 
 
 @dataclass(frozen=True)
+class PbsBuild:
+    """How to build a Prebid Server Java release the guidance does not (``[pbs_java.builds."<release>"]``)."""
+
+    jdk: str
+    """The Corretto major version (overlay O6's ``JDK`` build argument)."""
+    mvn_options: str
+
+
+@dataclass(frozen=True)
+class Jdk:
+    """A JDK archive scripts/pbs_module.py may download (``[jdks."<major>".<os>-<arch>]``)."""
+
+    url: str
+    sha256: str
+
+
+@dataclass(frozen=True)
 class Pin:
     """``PIN.toml``: the pinned guidance, its overlays in order and the upstream file hashes."""
 
@@ -85,6 +102,10 @@ class Pin:
     pbs_java_repository: str = "https://github.com/prebid/prebid-server-java"
     pbs_java_commits: Mapping[str, str] = field(default_factory=dict)
     """Prebid Server Java release -> the commit its tag must resolve to."""
+    pbs_java_builds: Mapping[str, PbsBuild] = field(default_factory=dict)
+    """Releases the guidance does not build -> their JDK and Maven options."""
+    jdks: Mapping[str, Mapping[str, Jdk]] = field(default_factory=dict)
+    """JDK major version -> ``<os>-<arch>`` -> its pinned archive."""
 
     @classmethod
     def load(cls, path: Path = PIN_FILE) -> Pin:
@@ -107,6 +128,14 @@ class Pin:
             vendor=path.parent,
             pbs_java_repository=data["pbs_java"]["repository"],
             pbs_java_commits=dict(data["pbs_java"]["commits"]),
+            pbs_java_builds={
+                release: PbsBuild(jdk=str(build["jdk"]), mvn_options=str(build["mvn_options"]))
+                for release, build in data["pbs_java"].get("builds", {}).items()
+            },
+            jdks={
+                major: {platform: Jdk(url=entry["url"], sha256=entry["sha256"]) for platform, entry in archives.items()}
+                for major, archives in data.get("jdks", {}).items()
+            },
         )
 
     @property
@@ -248,6 +277,7 @@ def pbs_settings(config: FastChannelsConfig, content_base_url: str) -> PbsSettin
         policy_group_timeout_ms=pds.policy_group_timeout_ms,
         select_timeout_ms=pds.select_timeout_ms,
         select_group_timeout_ms=pds.select_group_timeout_ms,
+        pbs_version=demand.pbs_version.value,
     )
 
 

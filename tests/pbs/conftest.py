@@ -28,14 +28,21 @@ def mocks(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mocks]:
     servers.stop()
 
 
-def _launch(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory, jar_name: str, *, module: bool) -> Iterator[Pbs]:
+def _launch(
+    mocks: Mocks,
+    tmp_path_factory: pytest.TempPathFactory,
+    jar_name: str,
+    *,
+    module: bool,
+    analytics: bool = False,
+) -> Iterator[Pbs]:
     try:
         jar = find_jar(jar_name)
     except MissingPrerequisiteError as missing:
         pytest.skip(str(missing))
     out = tmp_path_factory.mktemp(jar_name.removesuffix(".jar"))
     port = free_port()
-    yield from start(jar, local_config(mocks, out, port=port, module=module), port, mocks)
+    yield from start(jar, local_config(mocks, out, port=port, module=module, analytics=analytics), port, mocks)
 
 
 @pytest.fixture(scope="session")
@@ -48,6 +55,12 @@ def pbs(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pbs]
 def pbs_module_disabled(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pbs]:
     """The module's jar with ``hooks.fast-ctv.enabled: false``."""
     yield from _launch(mocks, tmp_path_factory, "prebid-server.jar", module=False)
+
+
+@pytest.fixture(scope="session")
+def pbs_analytics(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pbs]:
+    """The module's jar with the guidance's log analytics reporter on (``EnableLogAnalytics``, off in every stage)."""
+    yield from _launch(mocks, tmp_path_factory, "prebid-server.jar", module=True, analytics=True)
 
 
 @pytest.fixture(scope="session")

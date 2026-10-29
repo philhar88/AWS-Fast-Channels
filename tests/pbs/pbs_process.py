@@ -1,5 +1,8 @@
 """A local Prebid Server for the contract tests: the jar from ``scripts/pbs_module.py build``, run with the stage's
-rendered configuration (``fast_channels.core.pbs_config``) pointed at :mod:`local_mocks`."""
+rendered configuration (``fast_channels.core.pbs_config``) pointed at :mod:`local_mocks`.
+
+``FAST_PBS_VERSION`` picks the release (default 3.43.0, the guidance's): ``build/pbs/<version>/``, run with the JDK
+its build recorded (``JAVA_HOME`` there) and the configuration rendered for that release."""
 
 import copy
 import json
@@ -24,12 +27,14 @@ REPO: Final = Path(__file__).resolve().parents[2]
 BUILD: Final = REPO / "build" / "pbs"
 CHECKOUT: Final = REPO / "build" / "prebid-guidance" / "checkout"
 PREFIX: Final = "fastpbs"
+PBS_VERSION: Final = os.environ.get("FAST_PBS_VERSION", "3.43.0")
 SETTINGS: Final = PbsSettings(
     prefix=PREFIX,
     simulator=True,
     server_instances=2,
     tracker_base_url="https://cdn.example",
     publisher_domain="cdn.example",
+    pbs_version=PBS_VERSION,
 )
 ACCOUNTS: Final = {
     "shipped": PREFIX,
@@ -48,12 +53,21 @@ class MissingPrerequisiteError(RuntimeError):
 
 
 def find_jar(name: str) -> Path:
-    jars = sorted(BUILD.glob(f"*/{name}"))
-    if not jars:
-        raise MissingPrerequisiteError(f"no {name}: run `uv run python scripts/pbs_module.py build`")
-    if shutil.which("java") is None:
-        raise MissingPrerequisiteError("no java on PATH (Prebid Server Java 3.43.0 needs Java 21)")
-    return jars[-1]
+    jar = BUILD / PBS_VERSION / name
+    if not jar.is_file():
+        raise MissingPrerequisiteError(
+            f"no {name}: run `uv run python scripts/pbs_module.py build --pbs-version {PBS_VERSION}`"
+        )
+    if java() == "java" and shutil.which("java") is None:
+        raise MissingPrerequisiteError(f"no java on PATH for Prebid Server Java {PBS_VERSION}")
+    return jar
+
+
+def java() -> str:
+    """The ``java`` of the JDK the build used (``build/pbs/<version>/JAVA_HOME``), else the one on PATH."""
+    recorded = BUILD / PBS_VERSION / "JAVA_HOME"
+    home = recorded.read_text().strip() if recorded.is_file() else ""
+    return str(Path(home) / "bin" / "java") if home else "java"
 
 
 def free_port() -> int:
@@ -77,9 +91,10 @@ def contract_accounts() -> list[dict[str, Any]]:
     return [shipped, off, absent, cut]
 
 
-def local_config(mocks: Mocks, out: Path, *, port: int, module: bool) -> Path:
+def local_config(mocks: Mocks, out: Path, *, port: int, module: bool, analytics: bool = False) -> Path:
     """The stage's rendered configuration with what a local run needs instead of the guidance's environment: plain
-    HTTP, file-system settings, the mocks' endpoints and a test-only OpenRTB 2.6 bidder (``echo26``)."""
+    HTTP, file-system settings, the mocks' endpoints and a test-only OpenRTB 2.6 bidder (``echo26``). ``analytics``
+    turns the guidance's log analytics reporter on (stages deploy it off)."""
     for rel, content in render(SETTINGS).items():
         if rel.startswith("stored_requests/"):
             (out / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +110,8 @@ def local_config(mocks: Mocks, out: Path, *, port: int, module: bool) -> Path:
     aliases = adapters["generic"]["aliases"]
     aliases["ownbook"]["endpoint"] = f"{mocks.base_url}/ownbook/openrtb"
     aliases["echo26"] = {"enabled": True, "endpoint": f"{mocks.base_url}/echo26", "ortb-version": "ORTB_2_6"}
+    if SETTINGS.pbs_major >= 4:  # 4.x needs a vendor id on every configured generic alias
+        aliases["echo26"]["meta-info"] = {"vendor-id": 0}
     config["hooks"]["fast-ctv"] |= {
         "enabled": module,
         "policy-url": mocks.policy_url,
@@ -115,8 +132,9 @@ def local_config(mocks: Mocks, out: Path, *, port: int, module: bool) -> Path:
     config["gdpr"]["vendorlist"] = {
         "v2": {"cache-dir": str(out / "vendor2")},
         "v3": {"cache-dir": str(out / "vendor3")},
+        **({"live": {"startup-cache-dir": str(out / "vendor-live")}} if SETTINGS.pbs_major >= 4 else {}),
     }
-    config["analytics"]["psdoa"] = {"enabled": False}
+    config["analytics"]["psdoa"] = {"enabled": analytics}
     path = out / "local-config.yaml"
     path.write_text(to_yaml(config))
     return path
@@ -165,7 +183,7 @@ def start(jar: Path, config: Path, port: int, mocks: Mocks) -> Iterator[Pbs]:
     environment = {**os.environ, "AMT_BIDDING_SERVER_SIMULATOR_ENDPOINT": f"{mocks.base_url}/amt"}
     with log.open("w") as out:
         process = subprocess.Popen(
-            ["java", "-jar", str(jar), f"--spring.config.additional-location={config}"],
+            [java(), "-jar", str(jar), f"--spring.config.additional-location={config}"],
             stdout=out,
             stderr=subprocess.STDOUT,
             env=environment,

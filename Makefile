@@ -96,9 +96,11 @@ deploy-demand: console ## Deploy the demand module of STAGE: its stacks, the gui
 destroy-demand: ## Destroy the demand module of STAGE, with what the guidance retains; then list what is left
 	uv run python scripts/prebid_guidance.py destroy $(DEMAND_ARGS) $(DEMAND_OPTS)
 
-pbs-test: ## Build Prebid Server Java with the fast-ctv module, as the guidance's image does, and run its JUnit tests
-	uv run python scripts/pbs_module.py build
-	uv run python scripts/pbs_module.py test
+PBS_VERSION ?= 3.43.0
+
+pbs-test: ## Build Prebid Server Java (PBS_VERSION, default 3.43.0) with the fast-ctv module and run its JUnit tests
+	uv run python scripts/pbs_module.py build --pbs-version $(PBS_VERSION)
+	uv run python scripts/pbs_module.py test --pbs-version $(PBS_VERSION)
 
 pbs-contract: ## Contract tests against the jar from pbs-test (no-hook matrix, header isolation, wire fields)
-	uv run pytest tests/pbs -m pbs
+	FAST_PBS_VERSION=$(PBS_VERSION) uv run pytest tests/pbs -m pbs

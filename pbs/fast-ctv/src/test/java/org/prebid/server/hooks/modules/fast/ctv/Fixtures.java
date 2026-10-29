@@ -122,7 +122,7 @@ public final class Fixtures {
             final List<Integer> rqddurs = new ArrayList<>();
             slot.path("rqddurs").forEach(dur -> rqddurs.add(dur.asInt()));
             imps.add(Imp.builder().id(slot.path("impid").asText())
-                    .video(Video.builder().poddur(slot.path("poddur").asInt()).rqddurs(rqddurs).podid(1).build())
+                    .video(Video.builder().poddur(slot.path("poddur").asInt()).rqddurs(rqddurs).build())
                     .build());
         }
         return imps;
@@ -164,7 +164,7 @@ public final class Fixtures {
     public static BidRequest pod(int slots) {
         final List<Imp> imps = IntStream.rangeClosed(1, slots).mapToObj(n -> Imp.builder()
                 .id("s" + n)
-                .video(Video.builder().poddur(30 * slots).rqddurs(List.of(30)).podid(1).build())
+                .video(Video.builder().poddur(30 * slots).rqddurs(List.of(30)).build())
                 .ext(MAPPER.createObjectNode().set("prebid", MAPPER.createObjectNode()
                         .set("bidder", MAPPER.createObjectNode().set("ownbook", MAPPER.createObjectNode()))))
                 .build()).toList();

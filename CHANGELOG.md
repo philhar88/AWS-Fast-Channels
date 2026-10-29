@@ -136,6 +136,13 @@ All notable changes to this project are documented here. The format follows
   (`stage_args.py --modules`, `prebid_guidance.py --modules`) keeps only those modules of a stage on.
   `deploy-demand` now also warms the running tasks no warm-up build has named (a first deploy starts them before the
   warm-up rule exists) and waits for them.
+- **Demand: Prebid Server Java 4.4.0** (`modules.demand.pbs_version: 4.4.0`): the image builds 4.4.0 on Corretto 25
+  (guidance overlay O6 makes the JDK a build argument; O4 ports the guidance's `amt` adapter configuration to 4.x),
+  and the rendered configuration adds the two settings 4.x requires. CI builds and tests the module and the contract
+  on both releases (`make pbs-test pbs-contract PBS_VERSION=4.4.0`). On 4.4.0 the OpenRTB 2.6 content fields reach
+  bidders first-class; 3.43.0 drops them. The `fastm` and `fastci` stages run 4.4.0; rolling back is
+  `pbs_version: 3.43.0` and a redeploy. The guidance's log analytics stays off: its reporter logs every request
+  header, the ticket and the origin secret included. See [docs/demand.md](docs/demand.md#the-fast-ctv-module).
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a
@@ -221,6 +228,9 @@ All notable changes to this project are documented here. The format follows
   MetricsEtl Glue database (`<prefix>-prebid-server-<region>-metricsetl-database`). The shipped name ignores the
   stack, so a second stage's guidance (another lane's e2e leg next to `fastm`) failed with `Database already exists`.
   It was the only such name in the synthesized templates.
+- **Demand: a redeploy with a new Prebid Server image now runs it.** The guidance takes the image as the default of its
+  `ContainerImage` parameter, and `cdk deploy` kept the parameter's previous value, so a changed image (a module change
+  or a release switch) left the old one running. The guidance deploy no longer reuses previous parameter values.
 
 ## [3.0.0] - 2026-10-16
 

@@ -81,6 +81,25 @@ def test_golden_files(path: str, snapshot: SnapshotAssertion) -> None:
         assert content == snapshot.use_extension(YamlSnapshot)
 
 
+def test_golden_4_x_config(snapshot: SnapshotAssertion) -> None:
+    content = render(SETTINGS.model_copy(update={"pbs_version": "4.4.0"}))["current-config/prebid-config.yaml"]
+    assert content == snapshot.use_extension(YamlSnapshot)
+
+
+def test_4_x_adds_only_the_two_settings_it_requires() -> None:
+    """Prebid Server Java 4.x refuses to start without them (P0-20 §4.13); nothing else changes, and the stored
+    requests and the account are the same for both releases."""
+    v3, v4 = prebid_config(SETTINGS), prebid_config(SETTINGS.model_copy(update={"pbs_version": "4.4.0"}))
+    own_book = v4["adapters"]["generic"]["aliases"][OWN_BOOK]
+    assert own_book.pop("meta-info") == {"vendor-id": 0}
+    assert v4["gdpr"]["vendorlist"].pop("live") == {"startup-cache-dir": "/var/tmp/vendor-live"}
+    assert v4 == v3
+    rendered = render(SETTINGS.model_copy(update={"pbs_version": "4.4.0"}))
+    assert {path: content for path, content in rendered.items() if not path.startswith("current-config/")} == {
+        path: content for path, content in render(SETTINGS).items() if not path.startswith("current-config/")
+    }
+
+
 @pytest.mark.parametrize("seconds", POD_SECONDS)
 def test_stored_request_is_one_pod_of_30_s_slots_for_the_own_book_only(seconds: int) -> None:
     request = stored_request(SETTINGS, seconds)
@@ -249,6 +268,7 @@ def test_tracker_host() -> None:
         {"tracker_base_url": "http://d1.cloudfront.net"},
         {"tracker_base_url": "https://d1.cloudfront.net/"},
         {"publisher_domain": "not a domain"},
+        {"pbs_version": "4.4"},
         {"unknown": 1},
     ],
 )

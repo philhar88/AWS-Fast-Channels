@@ -98,7 +98,9 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
   CSP).
 - **Prebid Server module** (demand module, Java 21): `make pbs-test` builds Prebid Server Java with the fast-ctv
   module exactly as the guidance's image does and runs the module's JUnit tests; `make pbs-contract` then runs the
-  contract tests (marker `pbs`) against that jar with local mocks. CI runs both in the `pbs-module` job.
+  contract tests (marker `pbs`) against that jar with local mocks. `PBS_VERSION=4.4.0` does the same on 4.4.0 (Java
+  25, downloaded and checksum-verified when the `java` on PATH is another version). CI runs both releases in the
+  `pbs-module` job.
 - **Model conformance**: `make eval MODEL=<bedrock model id>` before proposing a model for `agent.allowed_models`.
   For a model-registry task, `make eval TASK=<task> MODEL=<id>` writes its eval record to `evals/records/`; commit it
   with the entry that names it (synth refuses an entry without a passing record).

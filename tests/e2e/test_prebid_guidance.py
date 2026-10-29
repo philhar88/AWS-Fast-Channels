@@ -5,11 +5,14 @@ The tests that need the real, patched guidance (the overlays' own behaviour) run
 filled ``build/prebid-guidance/checkout``, as the CI job ``guidance-overlays`` does; otherwise they are skipped.
 """
 
+import ast
 import importlib.util
 import json
 import logging
+import shutil
 import subprocess
 import sys
+import warnings
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -89,7 +92,7 @@ def test_the_shipped_pin_covers_every_file_its_overlays_patch() -> None:
     pin = guidance.Pin.load()
 
     assert (pin.tag, pin.commit) == ("v1.4.0", "0c7e7e714de37d1f56b29219d7ad9e6d17fac6b2")
-    assert [overlay.id for overlay in pin.overlays] == ["O1", "O2", "O4", "O5", "O7"]
+    assert [overlay.id for overlay in pin.overlays] == ["O1", "O2", "O4", "O5", "O6", "O7"]
     assert pin.unpinned_patch_targets() == set()
     assert set(pin.patched) == {path for overlay in pin.overlays for path in overlay.patched_paths()}
     for overlay in pin.overlays:
@@ -218,6 +221,7 @@ def test_pbs_settings_follow_the_stage(tmp_path: Path) -> None:
     assert (settings.tracker_base_url, settings.publisher_domain) == ("https://media.example.com", "media.example.com")
     assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (50, 80)
     assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (150, 200)
+    assert settings.pbs_version == config.modules.demand.pbs_version.value
 
 
 def test_render_config_refuses_a_stage_without_demand(capsys: pytest.CaptureFixture[str]) -> None:
@@ -237,12 +241,86 @@ def test_the_applied_checkout_is_the_pinned_guidance_with_every_overlay() -> Non
 
 
 @applied
+def test_o6_the_jdk_is_a_build_argument_defaulting_to_the_guidances() -> None:
+    dockerfile = (CHECKOUT / "deployment/ecr/prebid-server/Dockerfile").read_text()
+
+    assert "ARG JDK=21" in dockerfile
+    assert "amazon-corretto-${JDK} \\" in dockerfile
+    assert "ENV JAVA_HOME=/usr/lib/jvm/java-${JDK}-amazon-corretto" in dockerfile
+    assert "amazon-corretto-21" not in dockerfile
+
+
+@pytest.mark.parametrize(("version", "ported"), [("3.43.0", False), ("4.4.0", True)])
+def test_o4_copies_the_module_and_on_4_x_the_ported_amt_configuration(
+    tmp_path: Path, version: str, ported: bool
+) -> None:
+    tree = tmp_path / "prebid-server-java"
+    amt = tree / "amt-bidder"
+    shutil.copytree(guidance.VENDOR / "amt-bidder", amt)
+    module = amt / "fast-ctv/src/main/java/org/prebid/server/hooks/modules/fast/ctv/v1"
+    module.mkdir(parents=True)
+    (module / "FastCtvModule.java").write_text("final class FastCtvModule {}\n")
+    configuration = tree / "src/main/java/org/prebid/server/spring/config/bidder/AmtConfiguration.java"
+    configuration.parent.mkdir(parents=True)
+    configuration.write_text("// the guidance's\n")
+    (tree / "pom.xml").write_text(
+        "<project>\n    <groupId>org.prebid</groupId>\n    <artifactId>prebid-server</artifactId>\n"
+        f"    <version>{version}</version>\n    <dependencies>\n        <version>4.0.6</version>\n"
+        "    </dependencies>\n</project>\n"
+    )
+
+    subprocess.run(["bash", str(amt / "copy-fast-ctv.sh")], cwd=tree, check=True, capture_output=True)
+
+    assert (tree / "src/main/java/org/prebid/server/hooks/modules/fast/ctv/v1/FastCtvModule.java").is_file()
+    port = (guidance.VENDOR / "amt-bidder/pbs-4/AmtConfiguration.java").read_text()
+    assert (configuration.read_text() == port) is ported
+
+
+def test_o4_copy_script_has_no_pipe_a_reader_can_close() -> None:
+    """Under pipefail, ``producer | head`` fails when head exits first and the producer gets SIGPIPE (exit 141): the
+    4.4.0 image build failed so on CodeBuild."""
+    script = (guidance.VENDOR / "amt-bidder/copy-fast-ctv.sh").read_text()
+
+    assert "set -euo pipefail" in script
+    assert "| head" not in script.replace("`| head`", "")
+
+
+@applied
 def test_o1_prefixes_the_glue_database_the_only_name_unique_per_account() -> None:
     """Without the prefix, two stages' guidance stacks in one account and Region collide on the database name."""
     source = (CHECKOUT / "source/infrastructure/prebid_server/prebid_glue_constructs.py").read_text()
 
     assert 'stack_prefix = self.node.try_get_context("stackPrefix")' in source
     assert 'self.GLUE_DATABASE_NAME = f"{stack_prefix.lower()}-{self.GLUE_DATABASE_NAME}"' in source
+
+
+def _declared_parameters(checkout: Path) -> set[str]:
+    """Every CfnParameter id in the guidance's sources (both stacks)."""
+    found: set[str] = set()
+    for path in (checkout / "source").rglob("*.py"):
+        if "cdk.out" in path.parts or "tests" in path.parts or path.name.startswith("test_"):
+            continue
+        with warnings.catch_warnings():  # upstream sources may hold invalid escapes (a SyntaxWarning)
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            name = getattr(getattr(node, "func", None), "id", getattr(getattr(node, "func", None), "attr", ""))
+            if isinstance(node, ast.Call) and name == "CfnParameter":
+                keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+                ident = node.args[1] if len(node.args) > 1 else keywords["id"]
+                assert isinstance(ident, ast.Constant), f"{path}: a computed parameter id"
+                found.add(str(ident.value))
+    return found
+
+
+@applied
+def test_every_guidance_parameter_is_passed_on_each_deploy_or_left_at_its_default() -> None:
+    """Guidance deploys do not reuse previous parameter values, so a parameter the deploy does not pass is reset to
+    its default: a guidance bump that adds one must classify it here."""
+    demand = _load("_demand")
+
+    assert _declared_parameters(CHECKOUT) == demand.GUIDANCE_PARAMETERS | set(demand.GUIDANCE_DEFAULTS)
+    assert not demand.GUIDANCE_PARAMETERS & set(demand.GUIDANCE_DEFAULTS)
 
 
 @applied

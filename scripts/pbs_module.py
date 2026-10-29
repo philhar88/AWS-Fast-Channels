@@ -3,6 +3,7 @@
 
     uv run python scripts/pbs_module.py build      # build/pbs/<version>/prebid-server.jar (+ -stock.jar)
     uv run python scripts/pbs_module.py test       # the module's JUnit tests against that build
+    uv run python scripts/pbs_module.py build --pbs-version 4.4.0   # another release (PIN.toml [pbs_java.builds])
 
 ``build`` applies the guidance overlays (``prebid_guidance.apply``), checks Prebid Server Java out at the tag the
 guidance's ``docker-build-config.json`` names, refusing it unless the tag resolves to the commit
@@ -11,6 +12,11 @@ its ``amt`` adapter (whose copy script, overlay O4, also copies the module), the
 guidance's Maven options. ``prebid-server-stock.jar`` is the same jar without the module's classes, for the no-hook
 contract's "module absent" case. Needs Java 21 and Maven 3.9.11 (downloaded and checksum-verified into
 ``build/tools`` when ``mvn`` is not that version).
+
+``--pbs-version`` builds a release the guidance does not, with the JDK and Maven options ``PIN.toml`` gives it
+(``[pbs_java.builds]``); on a 4.x tree overlay O4 also ports the ``amt`` adapter's configuration. When the ``java``
+on PATH is another major version, the pinned Corretto (``[jdks]``) is downloaded, checksum-verified, into
+``build/tools``. ``build/pbs/<version>/JAVA_HOME`` records the JDK a build used, for the tests and ``tests/pbs``.
 """
 
 import argparse
@@ -46,16 +52,18 @@ MAVEN_SHA512: Final = (
     "b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978"
 )
 _JUNIT_PLATFORM: Final = re.compile(r"junit-platform-engine-(\d+\.\d+\.\d+)\.jar")
+GUIDANCE_JDK: Final = "21"
+"""The Corretto major version of the guidance's own build (its Dockerfile, before overlay O6)."""
 
 
 class BuildError(RuntimeError):
     """The toolchain, the pin or the build failed."""
 
 
-def run(argv: Sequence[str | Path], cwd: Path, *, quiet: bool = False) -> str:
+def run(argv: Sequence[str | Path], cwd: Path, *, quiet: bool = False, env: dict[str, str] | None = None) -> str:
     """Run a build tool; raise BuildError with its output's tail on failure."""
     result = subprocess.run(  # noqa: S603 - fixed argv built here, no shell
-        [str(arg) for arg in argv], cwd=cwd, capture_output=True, text=True, check=False
+        [str(arg) for arg in argv], cwd=cwd, capture_output=True, text=True, check=False, env=env
     )
     if result.returncode != 0:
         tail = "\n".join((result.stdout + result.stderr).splitlines()[-40:])
@@ -83,6 +91,61 @@ def maven() -> Path:
     return home / "bin" / "mvn"
 
 
+def java_major(java: str = "java") -> str | None:
+    """The major version of ``java``, or None when there is none."""
+    try:
+        out = subprocess.run([java, "-version"], capture_output=True, text=True, check=False)  # noqa: S603
+    except FileNotFoundError:
+        return None
+    match = re.search(r'version "(\d+)', out.stderr + out.stdout)
+    return match.group(1) if match else None
+
+
+def jdk(pin: guidance.Pin, major: str) -> Path | None:
+    """JAVA_HOME of a JDK ``major``: None for the ``java`` on PATH when it is that version, else the pinned Corretto
+    (``PIN.toml [jdks]``), downloaded and checksum-verified into build/tools."""
+    if java_major() == major:
+        return None
+    machine = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}[os.uname().machine]
+    archive = pin.jdks.get(major, {}).get(f"linux-{machine}")
+    if archive is None:
+        raise BuildError(f"PIN.toml [jdks] has no JDK {major} for linux-{machine}, and java on PATH is not {major}")
+    home = TOOLS / f"jdk-{major}"
+    if not (home / "bin" / "java").is_file():
+        TOOLS.mkdir(parents=True, exist_ok=True)
+        target = TOOLS / f"jdk-{major}.tar.gz"
+        if not archive.url.startswith("https://"):
+            raise BuildError(f"PIN.toml [jdks]: {archive.url} is not an https URL")
+        with urllib.request.urlopen(archive.url, timeout=300) as response:  # noqa: S310 - https only, checked above
+            target.write_bytes(response.read())
+        if (digest := hashlib.sha256(target.read_bytes()).hexdigest()) != archive.sha256:
+            target.unlink()
+            raise BuildError(f"{archive.url}: SHA-256 {digest} is not the pinned {archive.sha256}")
+        with tarfile.open(target) as tar:
+            top = tar.getnames()[0].split("/", 1)[0]
+            tar.extractall(TOOLS, filter="data")
+        target.unlink()
+        (TOOLS / top).rename(home)
+    return home
+
+
+def java_environment(home: Path | None) -> dict[str, str]:
+    """The environment that puts ``home``'s ``java`` first (the current one when ``home`` is None)."""
+    if home is None:
+        return dict(os.environ)
+    return {**os.environ, "JAVA_HOME": str(home), "PATH": f"{home / 'bin'}{os.pathsep}{os.environ['PATH']}"}
+
+
+def release(pin: guidance.Pin, checkout: Path, version: str | None) -> tuple[str, str, str]:
+    """(version, Maven options, JDK major) of the guidance's own build, or of ``version`` from ``[pbs_java.builds]``."""
+    config = build_config(checkout)
+    if version is None or version == config["GIT_TAG_VERSION"]:
+        return config["GIT_TAG_VERSION"], config["MVN_CLI_OPTIONS"], GUIDANCE_JDK
+    if (spec := pin.pbs_java_builds.get(version)) is None:
+        raise BuildError(f"PIN.toml [pbs_java.builds] has no build of Prebid Server Java {version}")
+    return version, spec.mvn_options, spec.jdk
+
+
 def build_config(checkout: Path) -> dict[str, str]:
     """The guidance's ``docker-build-config.json``: the Prebid Server Java tag and the Maven options."""
     config: dict[str, str] = json.loads(
@@ -91,11 +154,10 @@ def build_config(checkout: Path) -> dict[str, str]:
     return config
 
 
-def prepare(pin: guidance.Pin, checkout: Path) -> tuple[Path, str]:
-    """The Prebid Server Java tree with the guidance's extra modules and ours, as the Dockerfile's build stage
-    prepares it; returns the tree and the Maven options."""
+def prepare(pin: guidance.Pin, checkout: Path, version: str) -> Path:
+    """The Prebid Server Java ``version`` tree with the guidance's extra modules and ours, as the Dockerfile's build
+    stage prepares it."""
     config = build_config(checkout)
-    version = config["GIT_TAG_VERSION"]
     if (commit := pin.pbs_java_commits.get(version)) is None:
         raise BuildError(f"PIN.toml [pbs_java.commits] has no commit for Prebid Server Java {version}")
     tree = BUILD / version / "prebid-server-java"
@@ -119,7 +181,7 @@ def prepare(pin: guidance.Pin, checkout: Path) -> tuple[Path, str]:
     run(["bash", "./amt-bidder/copy-bidder-files.sh"], tree, quiet=True)
     if not (tree / "src/main/java/org/prebid/server/hooks/modules/fast/ctv").is_dir():
         raise BuildError("overlay O4 did not copy the fast-ctv module into the Prebid Server tree")
-    return tree, config["MVN_CLI_OPTIONS"]
+    return tree
 
 
 def strip_module(jar: Path, stock: Path) -> None:
@@ -130,15 +192,18 @@ def strip_module(jar: Path, stock: Path) -> None:
                 target.writestr(item, source.read(item), compress_type=item.compress_type)
 
 
-def build(repository: Path | None) -> Path:
+def build(repository: Path | None, pbs_version: str | None = None) -> Path:
     pin = guidance.Pin.load()
     checkout = guidance.DEFAULT_CHECKOUT
     guidance.apply(pin, checkout)
-    tree, options = prepare(pin, checkout)
+    version, options, major = release(pin, checkout, pbs_version)
+    tree = prepare(pin, checkout, version)
+    home = jdk(pin, major)
     mvn = maven()
     local = [f"-Dmaven.repo.local={repository}"] if repository else []
-    run([mvn, "-B", "-q", *local, "clean", "package", *options.split()], tree)
+    run([mvn, "-B", "-q", *local, "clean", "package", *options.split()], tree, env=java_environment(home))
     out = tree.parent
+    (out / "JAVA_HOME").write_text(f"{home or ''}\n")
     jar = out / "prebid-server.jar"
     shutil.copy2(tree / "target" / "prebid-server.jar", jar)
     strip_module(jar, out / "prebid-server-stock.jar")
@@ -146,17 +211,28 @@ def build(repository: Path | None) -> Path:
     return jar
 
 
-def javac() -> list[str]:
-    """``javac``, or the JDK's compiler module where only ``java`` is on PATH."""
+def javac(home: Path | None = None) -> list[str]:
+    """``javac`` (of ``home`` when given), or the JDK's compiler module where only ``java`` is on PATH."""
+    if home is not None:
+        return [str(home / "bin" / "javac")]
     if found := shutil.which("javac"):
         return [found]
     return ["java", "-m", "jdk.compiler/com.sun.tools.javac.Main"]
+
+
+def build_java_home(version: str) -> Path | None:
+    """The JDK a build of ``version`` used (``build/pbs/<version>/JAVA_HOME``; None: the ``java`` on PATH)."""
+    recorded = BUILD / version / "JAVA_HOME"
+    value = recorded.read_text().strip() if recorded.is_file() else ""
+    return Path(value) if value else None
 
 
 def test(version: str, repository: Path | None) -> int:
     tree = BUILD / version / "prebid-server-java"
     if not (tree / "target" / "classes").is_dir():
         raise BuildError(f"no build of Prebid Server Java {version}: run `pbs_module.py build` first")
+    home = build_java_home(version)
+    env = java_environment(home)
     mvn = maven()
     local = [f"-Dmaven.repo.local={repository}"] if repository else []
     classpath_file = tree.parent / "test-classpath.txt"
@@ -171,6 +247,7 @@ def test(version: str, repository: Path | None) -> int:
             f"-Dmdep.outputFile={classpath_file}",
         ],
         tree,
+        env=env,
     )
     classpath = classpath_file.read_text().strip()
     if not (match := _JUNIT_PLATFORM.search(classpath)):
@@ -188,19 +265,20 @@ def test(version: str, repository: Path | None) -> int:
             "-Dmdep.stripVersion=true",
         ],
         tree,
+        env=env,
     )
     classes = tree.parent / "test-classes"
     shutil.rmtree(classes, ignore_errors=True)
     sources = sorted(str(path) for path in (MODULE / "src" / "test" / "java").rglob("*.java"))
     full = f"{tree / 'target' / 'classes'}{os.pathsep}{classpath}"
-    run([*javac(), "-proc:none", "-nowarn", "-d", classes, "-cp", full, *sources], tree)
+    run([*javac(home), "-proc:none", "-nowarn", "-d", classes, "-cp", full, *sources], tree, env=env)
     resources = MODULE / "src" / "test" / "resources"
     if resources.is_dir():
         shutil.copytree(resources, classes, dirs_exist_ok=True)
     reports = tree.parent / "test-reports"
     result = subprocess.run(  # noqa: S603 - fixed argv built here, no shell
-        [  # noqa: S607 - the JDK on PATH, as Maven uses it
-            "java",
+        [
+            str(home / "bin" / "java") if home else "java",
             f"-Dfast.ctv.fixtures={FIXTURES}",
             "-jar",
             str(tree.parent / "junit-platform-console-standalone.jar"),
@@ -217,6 +295,7 @@ def test(version: str, repository: Path | None) -> int:
         ],
         cwd=tree,
         check=False,
+        env=env,
     )
     return result.returncode
 
@@ -225,13 +304,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=("build", "test"))
     parser.add_argument("--maven-repository", type=Path, help="Maven local repository (default ~/.m2/repository)")
+    parser.add_argument("--pbs-version", help="Prebid Server Java release (default: the guidance's, 3.43.0)")
     args = parser.parse_args(argv)
     try:
         match args.command:
             case "build":
-                build(args.maven_repository)
+                build(args.maven_repository, args.pbs_version)
             case "test":
-                version = build_config(guidance.DEFAULT_CHECKOUT)["GIT_TAG_VERSION"]
+                version = args.pbs_version or build_config(guidance.DEFAULT_CHECKOUT)["GIT_TAG_VERSION"]
                 return test(version, args.maven_repository)
     except (BuildError, guidance.GuidanceError) as error:
         print(f"error: {error}", file=sys.stderr)
