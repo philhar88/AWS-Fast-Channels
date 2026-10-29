@@ -370,6 +370,14 @@ end-to-end traceability. v2 deployments are not upgraded in place; see
   actually binds, MediaTailor's Ad Insertion requests, at about 37,000 concurrent viewers per account at 70 % of default
   quotas. Updated: ADR-0007 and ADR-0017 consequences, the operations quota table, and the ad-insertion and
   Channel Assembly references.
+- **The agent can create channels again.** `channels___create_channel` failed every time with
+  `ForbiddenException: Cannot create the service-linked role`, and rolled back what it had created. MediaTailor's
+  `ConfigureLogsForChannel` and `ConfigureLogsForPlaybackConfiguration` refuse a caller that may not create
+  MediaTailor's service-linked role, even when `AWSServiceRoleForMediaTailor` exists, and the channels tool role
+  could not. It now may create only that role (`iam:CreateServiceLinkedRole`, condition
+  `iam:AWSServiceName = mediatailor.amazonaws.com`). IaC channels were not affected, because CloudFormation configures
+  their logs with the deploying role. The end-to-end suite now creates and deletes an agent channel
+  (`test_08_agent_channel`).
 
 ### Known issues
 

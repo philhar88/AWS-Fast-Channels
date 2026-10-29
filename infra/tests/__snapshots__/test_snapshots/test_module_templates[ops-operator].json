@@ -4641,6 +4641,16 @@
               "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fast-agent-*"
             },
             {
+              "Action": "iam:CreateServiceLinkedRole",
+              "Condition": {
+                "StringEquals": {
+                  "iam:AWSServiceName": "mediatailor.amazonaws.com"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:iam::123456789012:role/aws-service-role/mediatailor.amazonaws.com/AWSServiceRoleForMediaTailor"
+            },
+            {
               "Action": "mediatailor:DeleteProgram",
               "Effect": "Allow",
               "Resource": "arn:aws:mediatailor:us-east-1:123456789012:program/fast-*/*"
