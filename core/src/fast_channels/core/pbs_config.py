@@ -32,11 +32,13 @@ POD_SECONDS: Final = (30, 60, 90, 120)
 SLOT_SECONDS: Final = 30
 TMAX_MS: Final = 500
 OWN_BOOK: Final = "ownbook"
-OWN_BOOK_MAXBIDS: Final = 9
-"""Bids per slot that Prebid Server keeps from the own book (``ext.prebid.multibid``; 9 is its most). Without it,
-Prebid Server keeps one bid per bidder and slot, the best: the house ads, which ``/select`` uses as fillers and
-standalones and the module's fallback renders, would never reach the module."""
 """Bidder code of the own book: a ``generic`` alias on the Pod Decision Service's ``/ownbook/openrtb``."""
+OWN_BOOK_MAXBIDS: Final = 9
+"""Bids per slot that Prebid Server keeps from the own book (``ext.prebid.multibid``). Without it, Prebid Server keeps
+one bid per bidder and slot, the best, and the house ads would never reach the module. Per slot ``/select`` needs the
+own book's winner, a standalone for MediaTailor's ad buffet and the house fillers; the own book bids each house ad of
+the kit (2) and each line's creative that fits (one per line: 2 in demo mode), 4 today. 9, Prebid Server's most,
+keeps every bid of up to 7 lines; beyond that the lowest-priced bids, the house ads first, are cut."""
 SIMULATOR: Final = "amt"
 """Bidder code of the guidance's bidder simulator (its ``amt`` adapter)."""
 SHIPPED_ADAPTERS: Final = ("appnexus", "ix", "openx", "pubmatic", "rubicon")

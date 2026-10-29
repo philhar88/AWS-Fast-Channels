@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger, Metrics
 from aws_lambda_powertools.metrics import MetricUnit
+from botocore.exceptions import ClientError
 
 from fast_channels.core.pds.delivery import PENDING, RELEASE_AFTER
 from fast_channels.core.pds.names import PENDING_INDEX
@@ -57,13 +58,24 @@ def sweep(table: str, ledger_table: str, *, now: datetime, time_left: Callable[[
     """Release what is due; returns how many were released, and found no longer open."""
     client = aws.client("dynamodb")
     totals = {"released": 0, "skipped": 0}
-    for decision, crid in due(client, table, before=now - RELEASE_AFTER):
-        if time_left() < MARGIN_MS:
-            logger.info("stopping before the timeout; the next run carries on")
-            break
-        item = release(client, table=table, ledger_table=ledger_table, decision=decision, crid=crid, now=now)
-        totals["released" if item is not None else "skipped"] += 1
+    try:
+        for decision, crid in due(client, table, before=now - RELEASE_AFTER):
+            if time_left() < MARGIN_MS:
+                logger.info("stopping before the timeout; the next run carries on")
+                break
+            item = release(client, table=table, ledger_table=ledger_table, decision=decision, crid=crid, now=now)
+            totals["released" if item is not None else "skipped"] += 1
+    except ClientError as error:
+        if not _backfilling(error):
+            raise
+        # A new index is backfilling (the first minutes after the deploy that added it): the next run reads it.
+        logger.warning("the pending index is still backfilling; the next run carries on")
     return totals
+
+
+def _backfilling(error: ClientError) -> bool:
+    details = error.response.get("Error", {})
+    return details.get("Code") == "ValidationException" and "backfilling" in str(details.get("Message", ""))
 
 
 @logger.inject_lambda_context(clear_state=True)

@@ -226,3 +226,19 @@ def test_a_failed_count_fails_the_batch(monkeypatch: pytest.MonkeyPatch) -> None
         stubber.add_client_error("put_item", service_error_code="ProvisionedThroughputExceededException")
         with pytest.raises(ClientError):
             delivery._first("t", impression_key(f"{S1}.1", "c"), RESERVED_AT)
+
+
+@pytest.mark.parametrize(
+    ("message", "raised"),
+    [("Cannot read from backfilling global secondary index: pending", False), ("Some other problem", True)],
+)
+def test_the_sweeper_waits_for_a_backfilling_index(monkeypatch: pytest.MonkeyPatch, message: str, raised: bool) -> None:
+    client = boto3.client("dynamodb", region_name="us-east-1", aws_access_key_id="x", aws_secret_access_key="x")
+    monkeypatch.setattr(aws, "client", lambda service: client)
+    with Stubber(client) as stubber:
+        stubber.add_client_error("query", service_error_code="ValidationException", service_message=message)
+        if raised:
+            with pytest.raises(ClientError):
+                sweeper.sweep("t", "l", now=RESERVED_AT, time_left=lambda: 60_000)
+        else:
+            assert sweeper.sweep("t", "l", now=RESERVED_AT, time_left=lambda: 60_000) == {"released": 0, "skipped": 0}
