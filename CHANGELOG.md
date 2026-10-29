@@ -104,11 +104,12 @@ All notable changes to this project are documented here. The format follows
   the as-run reconciler also reads `AdBreakStart` events and marks the scheduled break `AIRED` with its `aired_at`,
   and a sweep every 15 minutes marks the breaks that never aired `UNAIRED`. Without the module the feed and the
   reconciler are v3.0's.
-
-### Fixed
-
-- The as-run log group allows five subscription filters per log group, not two: at most five deployments can exist
-  per account and region (docs/channel-assembly.md).
+- **Shared as-run router** (`observability.as_run`, ADR-0032): `shared` deployments read their channels' as-run
+  events from the account's default event bus instead of subscribing to the as-run log themselves.
+  `make as-run-router` deploys the account's router stack `FastChannels-AsRun` once per account and region: one
+  subscription, every event to the bus with its `as_run_id`, alarms and a dead-letter queue, termination protected.
+  `make deploy` and `make destroy` never select it. The default `per_stage` is v3.0's. The `fastm` and `fastci`
+  stages are `shared`, so development and test stages no longer use the log group's five subscriptions.
 - **Per-task inference profiles and caps** (`modules.models`): each task gets an application inference profile
   `<prefix>-<task>` (tagged `fast:task`, its own `AWS/Bedrock` metrics and cost line), named in its registry entry;
   the scheduler agent invokes only its profile, and its role may invoke nothing else. A deterministic daily spend
@@ -121,6 +122,11 @@ All notable changes to this project are documented here. The format follows
   settings; the `scheduler.plan` record of Claude Haiku 5.5 is committed. The recommender's record format, with its
   deterministic faithfulness check, is defined. With the registry on, the scheduler's ModelSpec parameter is retired:
   the agent falls back to its entry as deployed.
+
+### Fixed
+
+- The as-run log group allows five subscription filters per log group, not two: at most five `per_stage`
+  deployments can exist per account and region (docs/channel-assembly.md).
 
 ## [3.0.0] - 2026-10-16
 

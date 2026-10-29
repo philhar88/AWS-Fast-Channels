@@ -243,8 +243,11 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   the millisecond. The reconciler sets that break's `status` to `AIRED` and its `aired_at` on the `PROGRAM#` item.
   Every 15 minutes a sweep marks `UNAIRED` the breaks whose time ended more than 10 minutes ago without a start, and
   the breaks of `SKIPPED` programs: Channel Assembly logs nothing for a break it skips, for example after the
-  channel stopped. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as in the HLS
-  `DATERANGE` and the ad request, so guides and buyers can join on them.
+  channel stopped. Channel Assembly writes as-run events in batches, 13–50 s after they happen (observed), and a
+  break that started less than about a minute before a `StopChannel` can be missing from the log. In one test a
+  session saw ads in a break that the channel stopped 25 s into, and the log has no `AdBreakStart` for it. The sweep
+  then marks such a break `UNAIRED`. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as
+  in the HLS `DATERANGE` and the ad request, so guides and buyers can join on them.
 - Programs removed unaired when a channel starts late are `SKIPPED` ([Starting a channel late](#starting-a-channel-late)):
   listed with that status in the JSON feed, left out of the XMLTV feed.
 - `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow
@@ -263,9 +266,15 @@ With the ops module a break in the JSON feed reads
 
 The as-run log group is shared by every channel in the account and region, and each deployment's Media stack adds one
 subscription filter to it. CloudWatch Logs allows five subscription filters per log group (quota `L-87E7D306`, not
-adjustable), so **at most five deployments can exist per account and region**: a sixth one fails to create its
-filter. The log group's retention is set to the last deploying stack's `observability.log_retention_days`, and
-deleting a stack leaves the group.
+adjustable), so **at most five such deployments can exist per account and region**: a sixth one fails to create
+its filter. `observability.as_run` lifts the limit
+([ADR-0032](adr/0032-shared-as-run-router.md)): with `shared`, a deployment reads its channels' as-run events from
+the account's default event bus instead, through a rule on `detail.channelName`. The account's router stack
+`FastChannels-AsRun` holds the only filter and puts every event there (source `fast-channels.as-run`, the event type
+as detail-type, the event and its `as_run_id` as detail). `make as-run-router` deploys that stack once per account
+and region; `make deploy` and `make destroy` never select it. It is termination protected and must stay while any
+deployment reads the shared log. The log group's retention is set to the last deploying stack's
+`observability.log_retention_days`, and deleting a stack leaves the group.
 
 ## Alerts
 

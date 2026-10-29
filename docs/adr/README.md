@@ -27,3 +27,4 @@ new record that supersedes the old one rather than editing history.
 | [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Proposed (ledger part) |
 | [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Proposed |
+| [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |

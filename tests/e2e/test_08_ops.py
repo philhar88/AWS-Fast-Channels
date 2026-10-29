@@ -1,6 +1,6 @@
 """The ops module, on stages that enable it (skipped otherwise): its stack outputs, the lake's MediaTailor log copies
-without the excluded fields, ``v_breaks`` returning the breaks this run aired, and ``Census Changed`` events for the
-channel's start and stop.
+without the excluded fields, ``v_breaks`` returning the breaks this run aired, the as-run reconciler marking the
+breaks of the as-run log ``AIRED``, and ``Census Changed`` events for the channel's start and stop.
 
 Runs after the channel tests, which aired the breaks and stopped the channel. The log copies reach S3 a few minutes
 after the events, and the census runs every five minutes, so these tests wait up to about ten minutes.
@@ -15,12 +15,15 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 from _stack import MODULE_OUTPUT_KEYS, Module, Plane, Stage
+from boto3.dynamodb.conditions import Key
 from harness import wait_for
 
 from fast_channels.core.timeline import scte_event_id
+from fast_channels.functions.tools.library_store import GSI1
 
 if TYPE_CHECKING:
-    from harness import Observation
+    from harness import Channel, Observation
+    from mypy_boto3_dynamodb.service_resource import Table
 
 pytestmark = pytest.mark.e2e
 
@@ -31,6 +34,8 @@ EXCLUDED: Final = {
 """Fields the lake's copies never hold (``infra.constructs.ops.lake``)."""
 DELIVERY_TIMEOUT_S: Final = 900
 CENSUS_TIMEOUT_S: Final = 420
+AS_RUN_TIMEOUT_S: Final = 300
+AS_RUN_LOG_GROUP: Final = "MediaTailor/Channel/AsRunLog"
 
 
 @pytest.fixture(scope="module")
@@ -140,6 +145,55 @@ def test_v_breaks_returns_every_aired_break_with_its_event_id(
 
     assert {int(row["evid"] or 0) for row in rows} == set(aired_breaks)
     assert all(int(row["sessions"] or 0) >= 1 for row in rows), rows
+
+
+def _break_starts(ops: Stage, channel: str, since: datetime) -> set[tuple[str, str]]:
+    """``(programName, timeStamp)`` of every ``AdBreakStart`` of ``channel`` since ``since`` (any output), from the
+    as-run log."""
+    logs = ops.session.client("logs", region_name=ops.region)
+    pages = logs.get_paginator("filter_log_events").paginate(
+        logGroupName=AS_RUN_LOG_GROUP,
+        logStreamNamePrefix=f"{channel}-",  # one stream per output: <channel>-<source group>
+        startTime=int(since.timestamp() * 1000),
+        filterPattern=f'{{ $.channelName = "{channel}" && $.eventType = "AdBreakStart" }}',
+    )
+    entries = [json.loads(event["message"]) for page in pages for event in page.get("events", [])]
+    return {(entry["programName"], entry["timeStamp"]) for entry in entries}
+
+
+def test_the_as_run_reconciler_marks_every_logged_break_aired(
+    ops: Stage, library: Table, channel: Channel, published: dict[str, Any], observation: Observation
+) -> None:
+    """Every ``AdBreakStart`` that Channel Assembly logged for the channel during the run marks its break ``AIRED``
+    on the ``PROGRAM`` item, with the event's time as ``aired_at``: from the stage's own as-run subscription or, with
+    ``observability.as_run`` ``shared``, through the account's as-run router. The expectation is the as-run log's:
+    a break that starts less than about a minute before the channel stops can be missing from it."""
+    since = datetime.fromisoformat(published["programs"][0]["start"]) - timedelta(minutes=5)
+    starts = wait_for(
+        lambda: _break_starts(ops, channel.name, since) or None,
+        timeout=AS_RUN_TIMEOUT_S,
+        interval=15,
+        what=f"AdBreakStart events of {channel.name} in the as-run log",
+    )
+
+    def marked() -> set[tuple[str, str]]:
+        aired: set[tuple[str, str]] = set()
+        for program in {name for name, _ in starts}:
+            key = Key("gsi1pk").eq(f"PROGRAM#{program}")
+            for item in library.query(IndexName=GSI1, KeyConditionExpression=key)["Items"]:
+                breaks = item.get("breaks")
+                for brk in breaks if isinstance(breaks, list) else []:
+                    if isinstance(brk, dict) and brk.get("status") == "AIRED":
+                        aired.add((program, str(brk.get("aired_at"))))
+        return aired
+
+    wait_for(
+        lambda: starts if starts <= marked() else None,
+        timeout=AS_RUN_TIMEOUT_S,
+        interval=15,
+        what=f"AIRED breaks for the as-run starts {sorted(starts)}",
+        state=marked,
+    )
 
 
 def _census_changes(ops: Stage, since: datetime) -> list[dict[str, Any]]:

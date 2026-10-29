@@ -342,7 +342,13 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
     stage = stage_args.load("fastm")
     fastm = deployment(stage_overrides("fastm"))
     on = (*NEEDED_MODULES, *MERGED_MODULES)
-    merged = deployment({"prefix": "fastm", **{f"modules.{name}": stage["modules"][name] for name in on}})
+    merged = deployment(
+        {
+            "prefix": "fastm",
+            "observability": stage["observability"],  # the stage reads the shared as-run router (not a module)
+            **{f"modules.{name}": stage["modules"][name] for name in on},
+        }
+    )
 
     merged_modules = FastChannelsConfig.from_context(merged.app.node).modules
     assert FastChannelsConfig.from_context(fastm.app.node).modules != merged_modules
