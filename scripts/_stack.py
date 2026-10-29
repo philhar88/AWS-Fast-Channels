@@ -44,6 +44,7 @@ class Module(StrEnum):
     """Stacks of optional modules (``modules.<name>.enabled``); a deployment has them only with the module on."""
 
     OPS = "Ops"
+    RELEASE = "Release"
 
 
 type StackKind = Plane | Module
@@ -84,6 +85,14 @@ MODULE_OUTPUT_KEYS: Final[dict[Module, tuple[str, ...]]] = {
         "AppConfigApplicationId",
         "AppConfigEnvironmentId",
         "LedgerStreamName",
+    ),
+    Module.RELEASE: (
+        "StateMachineArn",
+        "BundleBucketName",
+        "StateTableName",
+        "DriftFunction",
+        "SiblingLogGroup",
+        "Siblings",
     ),
 }
 """Outputs of each module stack."""

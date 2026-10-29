@@ -293,6 +293,16 @@
               "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
             },
             {
+              "Action": "iam:CreateServiceLinkedRole",
+              "Condition": {
+                "StringEquals": {
+                  "iam:AWSServiceName": "mediatailor.amazonaws.com"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:iam::123456789012:role/aws-service-role/mediatailor.amazonaws.com/*"
+            },
+            {
               "Action": "logs:PutDeliverySource",
               "Effect": "Allow",
               "Resource": "arn:aws:logs:us-east-1:123456789012:delivery-source:fastm-*"

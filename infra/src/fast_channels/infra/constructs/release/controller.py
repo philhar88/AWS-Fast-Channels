@@ -268,6 +268,16 @@ class ReleaseController(Construct):
             siblings,
             why="the monetized channels' siblings (<channel>-p-*)",
         )
+        # ConfigureLogsForPlaybackConfiguration refuses a caller that may not create MediaTailor's service-linked
+        # role, even when the role exists ("Cannot create the service-linked role ... add the
+        # iam:CreateServiceLinkedRole permission", observed on fastm 2026-10-29).
+        stack = Stack.of(self)
+        apply.allow(
+            ["iam:CreateServiceLinkedRole"],
+            [f"arn:{stack.partition}:iam::{stack.account}:role/aws-service-role/mediatailor.amazonaws.com/*"],
+            why="MediaTailor's service-linked role, which logging needs",
+            conditions={"StringEquals": {"iam:AWSServiceName": "mediatailor.amazonaws.com"}},
+        )
         sources = arn(self, "logs", "delivery-source", f"{self._prefix}-*", colon=True)
         deliveries = arn(self, "logs", "delivery", "*", colon=True)
         destinations = [
