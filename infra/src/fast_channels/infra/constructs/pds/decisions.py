@@ -1,11 +1,13 @@
 """``DecisionLog``: one kind of PDS decision record, from its function's log group into the lake.
 
 The function logs each record as a Powertools JSON line (``"record": "pds.<kind>"``). A subscription filter on that
-field sends the lines to a Firehose stream, which decompresses the CloudWatch Logs batches, keeps each message (a
-function's log message ends with its newline, so no delimiter is added: that would make every other line empty) and
+field sends the lines to a Firehose stream, which decompresses the CloudWatch Logs batches, keeps each message and
 writes gzip JSON lines under ``pds/<kind>/<yyyy>/<MM>/<dd>/<HH>/`` in the lake bucket (within a minute or 5 MiB).
 The table ``pds_<kind>`` in the lake's Glue database reads them, partitioned by ``datehour`` (partition projection
 over the lake's retention, as the other lake tables are).
+
+A function's log message keeps its trailing newline and Firehose's message extraction adds one, so every other line of
+the objects is empty and reads as a row of nulls (seen live): query with ``record = 'pds.<kind>'``.
 """
 
 import types

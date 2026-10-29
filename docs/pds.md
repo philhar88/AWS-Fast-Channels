@@ -203,6 +203,9 @@ connections were cold.
 ```sql
 SELECT mode, reason, ip_rule, count(*) AS breaks, approx_percentile(latency_ms, 0.99) AS p99_ms
 FROM "<prefix>_lake".pds_policy
-WHERE datehour >= date_format(current_timestamp - interval '1' hour, '%Y/%m/%d/%H')
+WHERE datehour >= date_format(current_timestamp - interval '1' hour, '%Y/%m/%d/%H') AND record = 'pds.policy'
 GROUP BY 1, 2, 3
 ```
+
+Filter on `record`: each function log message keeps its trailing newline and Firehose's message extraction adds one,
+so every other line of the lake objects is empty, and Athena reads it as a row of nulls.
