@@ -300,3 +300,24 @@ def test_a_bad_tracker_base_fails_before_anything_is_reserved(
 
     assert response["statusCode"] == 500
     assert stubbed == [], "no reservation for an answer that cannot be made"
+
+
+def test_init_opens_the_reservations_connection(environment: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Client:
+        def batch_get_item(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            if len(calls) > 1:
+                raise ClientError({"Error": {"Code": "ThrottlingException"}}, "BatchGetItem")
+            return {}
+
+    monkeypatch.setattr(select, "dynamodb", Client)
+    monkeypatch.setattr(select, "store", lambda: Store(snapshot_of(DIRECT1)))
+    select.warm()
+    select.warm()  # a failure is only logged
+    monkeypatch.setattr(select, "store", lambda: Store(snapshot_of()))
+    select.warm()  # no line: nothing to reserve, nothing to open
+
+    assert len(calls) == 2
+    assert calls[0]["RequestItems"]["fastm-pds"]["Keys"] == [{"pk": {"S": "BUDGET#direct-1"}, "sk": {"S": "S#0"}}]

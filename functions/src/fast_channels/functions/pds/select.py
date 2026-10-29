@@ -29,6 +29,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 
 from fast_channels.core.pbs_config import TRACKER_PATH
+from fast_channels.core.pds.delivery import budget_key
 from fast_channels.core.pds.models import SelectRequest
 from fast_channels.core.pds.names import Endpoint
 from fast_channels.core.pds.pod import scheduled_ms, select_response, tracker_url
@@ -36,7 +37,7 @@ from fast_channels.core.pds.records import select_record
 from fast_channels.core.pds.selection import Reserve, pod_context, select
 from fast_channels.functions.pds.budget import budget_view
 from fast_channels.functions.pds.http import json_response, refused_fields
-from fast_channels.functions.pds.reservations import Hold, reserve
+from fast_channels.functions.pds.reservations import Hold, item_key, reserve
 from fast_channels.functions.pds.store import snapshot_store
 from fast_channels.functions.settings import settings
 
@@ -168,6 +169,23 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     return app.resolve(event, context)
 
 
-if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):  # pragma: no cover - read both during init, not on a request
+def warm() -> None:
+    """Open the reservations' connection to DynamoDB during init: a first request would otherwise pay its DNS, TCP
+    and TLS set-up inside the module's 100 ms (seen live: reservations refused on new execution environments)."""
+    if not (lines := store().current.lines):
+        return
+    settings().require("pds_table")
+    try:
+        dynamodb().batch_get_item(
+            RequestItems={
+                settings().pds_table: {"Keys": [item_key(budget_key(lines[0].id, 0))], "ProjectionExpression": "pk"}
+            }
+        )
+    except (BotoCoreError, ClientError) as error:
+        logger.warning("the reservations' connection is not open", extra={"error": type(error).__name__})
+
+
+if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):  # pragma: no cover - read and connect during init, not on a request
     store().load()
     budgets().load()
+    warm()
