@@ -324,11 +324,11 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-MERGED_MODULES = ("models", "ops", "release")
+MERGED_MODULES = ("models", "ops", "release", "demand")
 """Modules whose code is merged; a module's pull request adds it here, with tests of what it synthesizes."""
-NEEDED_MODULES = ("demand", "pds")
-"""Modules a merged one needs on (``release`` needs ``demand`` and ``pds``) whose code is not merged yet:
-they add nothing, so the comparison below still isolates the merged code."""
+NEEDED_MODULES = ("pds",)
+"""Modules a merged one needs on (``release`` needs ``pds``) whose code is not merged yet: they add nothing, so the
+comparison below still isolates the merged code."""
 MODULE_STACKS = {"Crawl": "FastChannels-fastm-Crawl"}
 """Stacks of merged modules that add only stacks of their own (``crawl``); they stay off in the comparison, and
 their own tests snapshot what they synthesize (``test_crawl.py``)."""
@@ -338,7 +338,7 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
     """Enabling a module changes nothing until its code is merged: the ``fastm`` stage, with every module on,
     synthesizes exactly what the shipped configuration does with only the merged modules (and those they need) on,
     plus the stacks of the modules that add only stacks. What the merged modules add has its own tests
-    (``test_release_policy.py``, ``test_crawl.py``)."""
+    (``test_release_policy.py``, ``test_crawl.py``, ``test_demand_stacks.py``)."""
     stage = stage_args.load("fastm")
     fastm = deployment(stage_overrides("fastm"))
     on = (*NEEDED_MODULES, *MERGED_MODULES)
@@ -353,6 +353,8 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         "Models": "FastChannels-fastm-Models",
         "Ops": "FastChannels-fastm-Ops",
         "Operator": "FastChannels-fastm-Operator",
+        "DemandEdge": "FastChannels-fastm-DemandEdge",
+        "DemandBuild": "FastChannels-fastm-DemandBuild",
     }
     assert names(fastm) == names(merged) | MODULE_STACKS
     modules_on = {stack.node.id: stack for stack in fastm.stacks}

@@ -319,6 +319,14 @@ A module with merged code adds its own stack after the ones it builds on, and ma
 |---|---|---|
 | `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, and the AppConfig application `<prefix>-fast` with environment `<prefix>` ([observability.md](observability.md#lake), [ledger](observability.md#ledger)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
 
+At most five stages can exist per account and region: each Media stack subscribes its as-run reconciler to the
+account-shared log group `MediaTailor/Channel/AsRunLog`, and CloudWatch Logs allows five subscription filters per log
+group (quota `L-87E7D306`, not adjustable).
+
+With `modules.demand` on, `make deploy` deploys the repository's stacks only. The Prebid Server guidance, its own CDK
+bootstrap and image follow with `make deploy-demand STAGE=<name>` ([demand.md](demand.md#deploy-and-destroy)), and
+`make destroy-demand` removes them before `make destroy`.
+
 ### Updates
 
 - Redeploying with an unchanged ladder and brand stills takes seconds for the kit: it is idempotent by fingerprint.
@@ -430,7 +438,7 @@ Defaults per account and region; request increases in Service Quotas before you 
 | AgentCore Runtime | New sessions; active sessions | 25 TPS; 5,000 (us-east-1) | |
 | Amazon Bedrock | Tokens and requests per minute per model | Account specific | Check before running many autopilots |
 | CloudFront | Custom cache and response headers policies | 20 each per account | The distribution uses no custom cache policy and one response headers policy |
-| CloudWatch Logs | Subscription filters per log group | 2 | At most two deployments per account and region reconcile the shared as-run log |
+| CloudWatch Logs | Subscription filters per log group | 5 (`L-87E7D306`, not adjustable) | At most five deployments per account and region reconcile the shared as-run log |
 | Cognito | Emails with the default sender | Low daily limit | Configure Amazon SES for production |
 
 ## Costs

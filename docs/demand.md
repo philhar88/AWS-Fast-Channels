@@ -5,14 +5,15 @@ breaks. MediaTailor POSTs a templated OpenRTB request to Prebid Server, deployed
 Prebid Server on AWS](https://github.com/aws-solutions-library-samples/prebid-server-deployment-on-aws), and gets back
 one VAST 4.2 pod. The decision is recorded in [ADR-0020](adr/0020-demand-through-the-prebid-server-guidance.md).
 
-**Status (Phase 1, in progress):** the pinned guidance with its overlays, the Prebid Server configuration renderer
-and the fast-ctv module are in place. The stacks and the deploy and destroy scripts follow; until they land,
-enabling `modules.demand` deploys nothing.
+**Status (Phase 1, in progress):** the pinned guidance with its overlays, the Prebid Server configuration renderer,
+the fast-ctv module, the origin gate, the image build and the deploy and destroy scripts are in place. The simulator,
+the census-gated scaling and the Pod Decision Service follow.
 
 - [How a break is sold](#how-a-break-is-sold)
 - [The guidance and its overlays](#the-guidance-and-its-overlays)
 - [Prebid Server configuration](#prebid-server-configuration)
 - [The fast-ctv module](#the-fast-ctv-module)
+- [Deploy and destroy](#deploy-and-destroy)
 - [Rules the configuration relies on](#rules-the-configuration-relies-on)
 
 ## How a break is sold
@@ -139,8 +140,62 @@ without the module. The contract tests (`tests/pbs`) run the jar with the stage'
 | No-hook | Third-party bidders are called only after a positive, in-time `/policy` answer. Zero calls for: the module disabled host-wide; the stock jar; `/policy` unreachable, slower than the module's timeout, past the account's group timeout, failing, malformed or of another schema version; module execution off for the account; hook ids absent from the plan. Every privacy mode is exercised |
 | Header isolation | No `X-Fast-*`, `User-Agent` or `X-Forwarded-For` header reaches any bidder |
 | Wire fields | `podid`, `slotinpod`, `poddur`, `rqddurs` and `imp.ssai` reach OpenRTB 2.5 and 2.6 bidders intact; the own book gets OpenRTB 2.6; content metadata reaches bidders, the 2.6 fields in `app.content.ext` on 3.43.0; precise geolocation reaches only the own book |
-| Impressions | Every rendered ad has an impression, and ours, even a third-party ad with none of its own |
+| Impressions | Every rendered ad has an impression, and ours, even a third-party ad with none of its own: the service's tracker, or the module's own on the house fallback |
+| PDS contract | Every `/policy` and `/select` call validates against the contract's strict models, and `/select` is answered by the Pod Decision Service's own pod rules; a break without an event id asks neither |
 | Durations | Every break length on the grid has a pod; 31 s and 300 s are refused with 400 |
+
+## Deploy and destroy
+
+```bash
+make deploy STAGE=fastm            # the repository's stacks, DemandEdge and DemandBuild among them
+make deploy-demand STAGE=fastm     # the rest, in order, then the smoke test (about 30 minutes)
+make destroy-demand STAGE=fastm    # everything deploy-demand created, then the inventory
+```
+
+`scripts/prebid_guidance.py` runs each step on its own as well (`doctor`, `bootstrap`, `build-image`, `outputs`,
+`upload-config`, `smoke`, `destroy`, `inventory`; `--stage`, `--prefix`, `--content-base-url`). `deploy` runs, in
+order (DESIGN §4.3):
+
+1. **The repository's stacks** `FastChannels-<prefix>-DemandEdge` (us-east-1: origin secrets A and B, the rule group)
+   and `-DemandBuild` (the image repository `<prefix>-pbs`, the x86 build project `<prefix>-pbs-image`, the policy
+   `<prefix>-guidance-cfn-exec`).
+2. **A CDK bootstrap of the guidance's own** (stack `<prefix>-cdk-bootstrap`, qualifier = the prefix, bucket
+   `<prefix>-cdk-assets-<account>-<region>`, repository `<prefix>-cdk-images-<account>-<region>`, the AWS managed S3
+   key). Its CloudFormation execution role has `<prefix>-guidance-cfn-exec` instead of AdministratorAccess: per-service
+   permissions for the guidance's resources; S3, Lambda and IAM roles only on the guidance's names (`<prefix>-pbs*`);
+   managed-policy attachment only for the two Lambda execution policies the guidance uses; KMS without data access.
+   The guidance never touches the account's shared `hnb659fds` bootstrap.
+3. **The image**: the guidance's unmodified Dockerfile with `INCLUDE_AMT_BIDDER=true`, the overlays and the fast-ctv
+   module, built by CodeBuild on x86 and tagged `<pbs version>-<context hash>` (an unchanged context reuses its image).
+   The build refuses a Prebid Server Java tag that no longer resolves to the pinned commit.
+4. **The guidance**, with the rendered configuration in its checkout (it uploads it at create time) and these
+   parameters on the renamed stack's key (`<prefix>-pbs:<Name>`): `SpotInstanceWeight=0` (Fargate only),
+   `ECSTaskMinCapacity`/`ECSTaskMaxCapacity` = `modules.demand.tasks`, `EnableLogAnalytics=false`,
+   `ExtraWafRuleGroupArn` = the rule group, and the simulator: `SimulatorEndpoint=http://sim.<prefix>.fast.internal/`
+   in `lambda` mode; in `guidance_stack` mode the guidance's simulator stack `<prefix>-pbs-sim` is deployed first
+   (`EnableRtbFabric=false`) and its outputs become the VPC-peering parameters. Every stack is tagged `fast:app`,
+   `fast:owner=iac` and `fast:module=demand`.
+5. **The SSM contract** `/<prefix>/demand/`: `cloudfront-domain`, `settings-bucket`, `stored-requests-bucket`,
+   `cluster-arn`, `service-arn`, `task-security-group-id`, `vpc-id`, `private-subnet-ids`, `alb-arn`, `web-acl-arn`,
+   `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
+6. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
+   VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs
+   `POLICY_UNAVAILABLE`); the same POST without the secret, and a request to another path, are blocked at the edge
+   (403); an off-grid duration is refused (400).
+
+`upload-config` uploads a changed configuration to the guidance's `current/` prefix and stored-data bucket and forces
+a new ECS deployment, which overlay O7 runs at full capacity.
+
+`destroy` deletes the guidance's stacks, then what their templates retain (the S3 buckets with every object version,
+the container, DataSync, Lambda and Container Insights log groups, inactive task definitions), the SSM contract, the
+bootstrap (its retained bucket and repository too) and the repository's two stacks. It records what the templates
+retain (`build/prebid-guidance/<prefix>-retained.json`) before it deletes anything, so an interrupted destroy picks up
+where it stopped when run again. The guidance's six KMS keys are scheduled for deletion with the 7-day minimum; they
+are the only residue. `inventory` lists anything else tagged `fast:module=demand` for the prefix, or named for it,
+and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
+
+A stage with Prebid Server deployed costs about $120–150 a month while idle (two NAT gateways, the load balancers, the
+web ACL, the Valkey cache minimum). Destroy throwaway stages right after use.
 
 ## Rules the configuration relies on
 

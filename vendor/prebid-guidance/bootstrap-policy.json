@@ -1,0 +1,159 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GuidanceServices",
+      "Effect": "Allow",
+      "Action": [
+        "application-autoscaling:*",
+        "cloudfront:*",
+        "cloudtrail:*",
+        "cloudwatch:*",
+        "datasync:*",
+        "ec2:*",
+        "ecs:*",
+        "elasticache:*",
+        "elasticfilesystem:*",
+        "elasticloadbalancing:*",
+        "events:*",
+        "glue:*",
+        "logs:*",
+        "wafv2:Get*",
+        "wafv2:List*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GuidanceKeysWithoutTheirData",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CancelKeyDeletion",
+        "kms:CreateAlias",
+        "kms:CreateGrant",
+        "kms:CreateKey",
+        "kms:DeleteAlias",
+        "kms:DescribeKey",
+        "kms:DisableKey",
+        "kms:DisableKeyRotation",
+        "kms:EnableKey",
+        "kms:EnableKeyRotation",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListAliases",
+        "kms:ListKeys",
+        "kms:ListResourceTags",
+        "kms:PutKeyPolicy",
+        "kms:ScheduleKeyDeletion",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:UpdateAlias",
+        "kms:UpdateKeyDescription"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GuidanceBucketsAndAssetsOnly",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:${AWS::Partition}:s3:::${Prefix}-pbs*",
+        "arn:${AWS::Partition}:s3:::${Prefix}-pbs*/*",
+        "arn:${AWS::Partition}:s3:::${Prefix}-cdk-assets-*",
+        "arn:${AWS::Partition}:s3:::${Prefix}-cdk-assets-*/*"
+      ]
+    },
+    {
+      "Sid": "ListBuckets",
+      "Effect": "Allow",
+      "Action": ["s3:ListAllMyBuckets", "s3:GetBucketLocation"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GuidanceFunctionsOnly",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": [
+        "arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:${Prefix}-pbs*",
+        "arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:layer:*"
+      ]
+    },
+    {
+      "Sid": "LambdaReads",
+      "Effect": "Allow",
+      "Action": ["lambda:GetAccountSettings", "lambda:ListFunctions", "lambda:ListLayers", "lambda:ListLayerVersions"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GuidanceRolesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:PassRole",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription"
+      ],
+      "Resource": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Prefix}-pbs*"
+    },
+    {
+      "Sid": "OnlyTheLambdaManagedPolicies",
+      "Effect": "Allow",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Prefix}-pbs*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": [
+            "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "datasync.amazonaws.com",
+            "ecs.amazonaws.com",
+            "ecs.application-autoscaling.amazonaws.com",
+            "elasticache.amazonaws.com",
+            "elasticfilesystem.amazonaws.com",
+            "elasticloadbalancing.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "IamReads",
+      "Effect": "Allow",
+      "Action": ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListRoles"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TemplateTransforms",
+      "Effect": "Allow",
+      "Action": "cloudformation:CreateChangeSet",
+      "Resource": "arn:${AWS::Partition}:cloudformation:*:aws:transform/*"
+    },
+    {
+      "Sid": "BootstrapVersion",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+      "Resource": "arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter/cdk-bootstrap/${Qualifier}/*"
+    }
+  ]
+}

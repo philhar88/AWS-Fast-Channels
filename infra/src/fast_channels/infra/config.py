@@ -20,6 +20,7 @@ from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
+from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings
 from fast_channels.core.naming import is_agent_owned
@@ -799,6 +800,11 @@ class FastChannelsConfig(_Section):
             problems.append(
                 f"{where}.release.lab_channel: {lab!r} is the release lab channel; rename the IaC channel or set "
                 "lab_channel=false"
+            )
+        if modules.demand.enabled and len(self.prefix) > QUALIFIER_MAX:
+            problems.append(
+                f"{where}.demand: the Prebid Server guidance deploys onto a CDK bootstrap qualified by the prefix, "
+                f"at most {QUALIFIER_MAX} characters; {self.prefix!r} is {len(self.prefix)}"
             )
         if modules.ops.enabled and modules.ops.ledger_lock is LedgerLock.COMPLIANCE and self.removal is Removal.DESTROY:
             problems.append(

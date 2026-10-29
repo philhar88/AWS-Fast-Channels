@@ -465,6 +465,11 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ),
         ({"modules.ops.ledger_retention_days": 0}, "greater than or equal to 1"),
         (
+            {**modules_on("ops", "demand"), "prefix": "fast-demand-xyz"},
+            "fast-channels.modules.demand: the Prebid Server guidance deploys onto a CDK bootstrap qualified by the "
+            "prefix, at most 10 characters; 'fast-demand-xyz' is 15",
+        ),
+        (
             {
                 **modules_on("models"),
                 "modules.models.tasks": {"scheduler.plan": {"model": "us.anthropic.claude-opus-5-5"}},
