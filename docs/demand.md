@@ -94,24 +94,29 @@ inside which group timeouts. Overlay O4 compiles it into the guidance's image. I
 
 | Hook (stage) | What it does | On any failure |
 |---|---|---|
-| `fast-ctv-policy` (processed-auction-request; HTTP timeout `policy-timeout-ms`, group `policy_group_timeout_ms`) | POSTs the break to `/policy`: the sanitized ticket, the session, the playback configuration and its Function release, `evid`, `upid`, `dur_ms`, the user agent, `X-Forwarded-For`, `CloudFront-Viewer-Address` and the content context (at most 1,000 characters). On HTTP 200 with schema version 1, it applies the patch: it adds the bidders to every imp beside the own book (never in `SAFE` or `KIDS` breaks, whatever the answer says), and sets `regs`, `device`, `app.content`, `user` (`FULL` only), first-party data scoping and deals | No change: non-200, malformed, unknown version, timeout, unreachable. Prebid Server's group timeout covers a hung hook the same way |
-| `fast-ctv-vast` (exitpoint; HTTP timeout `select-timeout-ms`, group `select_group_timeout_ms`) | Sends every usable bid to `/select`, then renders exactly the pod it returns as one VAST 4.2 document (`application/xml`): winners with `sequence` 1..n, then one standalone per winner for ad buffet unless `X-Fast-Buffet: 0`. Every ad gets `burl`/`nurl` as `<Impression>` (with `${AUCTION_PRICE}` replaced), the extra trackers `/select` names, and **our tracker** (`tracker-template`), because MediaTailor drops an inline ad that has no impression | `/select` failing: `SELECT_FALLBACK`, the auction's house ads (`ext.fast.house`) that fit `poddur`, never repeating a `crid` or advertiser domain. Any exception: an empty `<VAST version="4.2"/>`, so the slate plays. Hook absent or timed out: Prebid Server's JSON, which MediaTailor refuses, so the slate plays |
+| `fast-ctv-policy` (processed-auction-request; HTTP timeout `policy-timeout-ms`, group `policy_group_timeout_ms`) | POSTs the break to `/policy`: the ticket (only its `[A-Za-z0-9_-]` characters, at most 22), the session, the playback configuration and its Function release, `evid`, `upid`, `dur_ms`, the user agent, `X-Forwarded-For`, `CloudFront-Viewer-Address` and the content context (at most 1,000 characters). On HTTP 200 with an answer the contract accepts for this break's `decision_id`, it applies the patch: it adds the bidders to every imp beside the own book (never in `SAFE` or `KIDS` breaks, whatever the answer says), and sets `regs`, `device` (a null `ip` or `ipv6` removes the address Prebid Server took from the client-settable `X-Forwarded-For`), `app.content`, `user` (`FULL` only), first-party data scoping and deals | No change: a break without a valid session, configuration, event id or duration is not asked about (`POLICY_SKIPPED`); non-200, an answer the contract refuses, another break's `decision_id`, timeout, unreachable. Prebid Server's group timeout covers a hung hook the same way |
+| `fast-ctv-vast` (exitpoint; HTTP timeout `select-timeout-ms`, group `select_group_timeout_ms`) | Sends every bid to `/select` (one whose `adm` is not usable VAST with `adm_kind` null, so it is recorded but never placed), then renders exactly the pod it returns as one VAST 4.2 document (`application/xml`): winners with `sequence` 1..n, then one standalone per winner for ad buffet unless `X-Fast-Buffet: 0`. Every ad gets `burl`/`nurl` as `<Impression>` (with `${AUCTION_PRICE}` replaced) and **our impression tracker**: the ones `/select` lists for it, or the module's own (`tracker-template`, `enr=0`) where it lists none, because MediaTailor drops an inline ad that has no impression and the tracker is how delivery is counted | `/select` failing or not askable: `SELECT_FALLBACK`, the auction's house ads (`ext.fast.house`) that fit `poddur`, never repeating a `crid` or advertiser domain, each with the module's own tracker. Any exception: an empty `<VAST version="4.2"/>`, so the slate plays. Hook absent or timed out: Prebid Server's JSON, which MediaTailor refuses, so the slate plays |
 
 A bid is usable only when its `adm` is a VAST document whose `<Ad>` holds an `<InLine>` or `<Wrapper>`; a document
 type declaration is refused, so there are no XML external entities. No pod rule runs in Java: eligibility,
 separation, durations and value are the Pod Decision Service's (`/select`).
 
-**The two calls** are schema version 1. Example documents of each side are in
-[`contracts/fixtures/pds/`](../contracts/fixtures/pds/README.md); the module's tests read them, and the Pod Decision
-Service's tests must produce and accept the same documents.
+**The two calls** are the Pod Decision Service contract, version 1
+([docs/pds.md](pds.md#contract): `contracts/pds-policy.schema.json`, `contracts/pds-select.schema.json`). Both sides
+refuse unknown fields. The module's JUnit tests read every example in `contracts/fixtures/pds/{policy,select}/`: the
+module must ask exactly each example's request (from the same headers and query) and render each example's response.
+The contract tests validate every call the real jar makes against the contract's models.
 
 - `/policy` request: `{v, t, sid, pc, fv, evid, upid, dur_ms, ua, xff, cfva, ctx, probe}`. Response: `{v,
-  decision_id, mode, reason, bidders, regs, device, app_content, user, fpd: {bidders}, deals, enr}`.
-- `/select` request: `{v, decision_id, sid, pc, evid, dur_ms, mode, policy_fallback, slots: [{impid, poddur,
-  rqddurs}], bids: [{ref, bidder, seat, impid, price, dur, vast_dur_ms, crid, adomain, cat, cattax, dealid, house,
-  has_impression, adm_kind}]}`. `mode` is null when the policy fell back. Response: `{v, pod: [{impid, ref,
-  sequence}], standalone: [{impid, ref}], trackers: {ref: [url]}, reason}`. A response that names an unknown bid, or
-  repeats a sequence, is refused.
+  decision_id, mode, reason, bidders, regs: {coppa, gpp, gpp_sid}, device: {ip, ipv6, devicetype}, app_content,
+  user, fpd: {bidders}, deals: [{id, bidfloor, at, wseat}]}`.
+- `/select` request: `{v, decision_id, sid, pc, evid, dur_ms, mode, probe, slots: [{impid, poddur, rqddurs}], bids:
+  [{ref, bidder, seat, impid, price, dur, vast_dur_ms, crid, adomain, cat, cattax, dealid, house, has_impression,
+  adm_kind}]}`. `decision_id` is `<sid>.<evid>`; `mode` is null when no patch was applied; `bidder` is the request's
+  bidder code (`ownbook`), which Prebid Server's seat carries (its `adaptercode` names the adapter behind an alias,
+  `generic`). Bids the schema cannot carry (an invalid bidder name, no price) are left out. Response: `{v, pod:
+  [{impid, ref, sequence}], standalone: [{impid, ref}], trackers: {ref: [url]}, reason}`. A response that names an
+  unknown or unusable bid, places a bid in another slot or repeats a sequence is refused.
 
 **Logs.** With `log-requests: true` the module writes two JSON lines per auction to the Prebid Server log:
 `fast-ctv-request` (header *names*, the ticket's length, the session, the break) and `fast-ctv-pod` (the policy

@@ -36,9 +36,10 @@ import java.util.function.Consumer;
 /**
  * Replaces the OpenRTB response with one VAST 4.2 pod, {@code Content-Type: application/xml}.
  * <p>
- * Every usable bid goes to the Pod Decision Service's {@code /select}, and the module renders exactly the pod it
- * returns, with our tracker on every ad. When {@code /select} fails ({@code SELECT_FALLBACK}), the pod is the
- * auction's house ads that fit. Any exception renders an empty VAST, so the Channel Assembly slate plays. If this hook
+ * Every bid goes to the Pod Decision Service's {@code /select}, and the module renders exactly the pod it returns,
+ * with our impression tracker on every ad: the trackers the answer lists for it, or the module's own
+ * ({@code tracker-template}) when it lists none. When {@code /select} fails or cannot be asked
+ * ({@code SELECT_FALLBACK}), the pod is the auction's house ads that fit, each with the module's own tracker. Any exception renders an empty VAST, so the Channel Assembly slate plays. If this hook
  * is absent or times out, Prebid Server answers with its JSON, which MediaTailor refuses: the slate plays then too.
  * {@code X-Fast-Buffet: 0} omits the standalone ads, for {@code IGNORE_AD_SEQUENCE} playback configurations.
  */
@@ -76,8 +77,9 @@ public class FastCtvVastHook implements ExitpointHook {
             final List<Candidate> candidates = renderer.candidates(auction.getBidResponse(), imps);
             final Map<String, Candidate> byRef = new LinkedHashMap<>();
             candidates.forEach(candidate -> byRef.put(candidate.ref(), candidate));
-            final ObjectNode request = selectClient.request(signals, policy, imps, candidates);
-            return selectClient.select(request, byRef, context.timeout().remaining())
+            final String problem = SelectClient.problem(signals, imps);
+            final ObjectNode request = problem == null ? selectClient.request(signals, policy, imps, candidates) : null;
+            return selectClient.select(request, problem, byRef, context.timeout().remaining())
                     .map(outcome -> respond(payload, signals, policy, imps, candidates, byRef, outcome))
                     .otherwise(error -> empty(payload, error));
         } catch (RuntimeException e) {
@@ -93,11 +95,14 @@ public class FastCtvVastHook implements ExitpointHook {
         final Selection selection = outcome.selection() != null
                 ? outcome.selection()
                 : renderer.houseFallback(imps, candidates, signals.buffet(), outcome.failure());
-        final int enr = policy != null && policy.patch() != null ? policy.patch().enr() : 0;
         final String vast = renderer.render(selection, byRef, signals.buffet(), candidate -> {
             final List<String> urls = new ArrayList<>(PodRenderer.noticeUrls(candidate.bid()));
-            urls.addAll(selection.trackers().getOrDefault(candidate.ref(), List.of()));
-            urls.add(tracker.impression(signals.sid(), signals.evid(), candidate.crid(), enr));
+            final List<String> ours = selection.trackers().getOrDefault(candidate.ref(), List.of());
+            if (ours.isEmpty()) {
+                urls.add(tracker.impression(signals.sid(), signals.evid(), candidate.crid(), 0));
+            } else {
+                urls.addAll(ours);
+            }
             return urls;
         });
         if (log != null) {

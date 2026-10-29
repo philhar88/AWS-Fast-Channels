@@ -7,7 +7,10 @@
 - **Header isolation:** no ``X-Fast-*`` header and no ``User-Agent`` reaches a bidder.
 - **Wire fields:** the pod fields reach OpenRTB 2.5 and 2.6 bidders intact; content metadata in ``app.content``,
   OpenRTB 2.6 fields in ``app.content.ext`` on Prebid Server 3.43.0.
-- **The impression rule:** every rendered inline ad has an impression; ours is on every ad.
+- **The impression rule:** every rendered inline ad has an impression; ours is on every ad: the service's tracker,
+  or the module's own on the house fallback.
+- **The PDS contract:** every ``/policy`` and ``/select`` call the module makes validates against the contract's
+  strict models; a break the module cannot identify is never asked about.
 """
 
 import re
@@ -16,7 +19,7 @@ import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from local_mocks import CONTENT, POLICY_TICKETS, POSITIVE, THIRD_PARTIES, Mocks
+from local_mocks import CONTENT, POLICY_TICKETS, POSITIVE, THIRD_PARTIES, TRACKER_ENR, Mocks
 from pbs_process import ACCOUNTS, Pbs
 
 from fast_channels.core.pbs_config import POD_SECONDS
@@ -28,6 +31,12 @@ pytestmark = pytest.mark.pbs
 
 FALLBACK_TICKETS = [ticket for ticket in POLICY_TICKETS if ticket not in POSITIVE]
 ALL_TICKETS = list(POLICY_TICKETS)
+DECISION = "sid-contract.820461826"
+
+
+def tracker(crid: str, enr: int) -> str:
+    """Our impression tracker of ``crid`` in the contract auctions' break."""
+    return f"https://cdn.example/ads/b.gif?d={DECISION}&c={crid}&e=impression&enr={enr}"
 
 
 def third_party_calls(mocks: Mocks, pbs: Pbs, ticket: str, **kwargs: Any) -> tuple[httpx.Response, int]:
@@ -165,9 +174,9 @@ def test_every_inline_ad_has_an_impression_and_ours(mocks: Mocks, pbs: Pbs) -> N
     assert pod
     for ad in pod:
         impressions = [i.text or "" for i in ad.findall("InLine/Impression")]
-        assert impressions, ad.findtext("InLine/AdTitle")
-        crid = ad.findtext("InLine/AdTitle")
-        assert f"https://cdn.example/ads/b.gif?d=sid-contract.820461826&c={crid}&e=impression&enr=0" in impressions
+        crid = ad.findtext("InLine/AdTitle") or ""
+        assert tracker(crid, TRACKER_ENR) in impressions, "the service's tracker"
+        assert tracker(crid, 0) not in impressions, "the module's own only where the service lists none"
     [sim1] = [ad for ad in pod if ad.findtext("InLine/AdTitle") == "sim1"]
     assert len(sim1.findall("InLine/Impression")) == 1, "sim1 has no impression of its own and no notices"
 
@@ -179,9 +188,12 @@ def test_when_select_fails_the_pod_is_house_ads(mocks: Mocks, pbs: Pbs) -> None:
     finally:
         mocks.select_fails = False
 
-    titles = [ad.findtext("InLine/AdTitle") for ad in ads(response.text)]
+    pod = ads(response.text)
+    titles = [ad.findtext("InLine/AdTitle") or "" for ad in pod]
     assert titles
-    assert all(title is not None and title.startswith("house") for title in titles)
+    assert all(title.startswith("house") for title in titles)
+    for ad, crid in zip(pod, titles, strict=True):
+        assert tracker(crid, 0) in [i.text for i in ad.findall("InLine/Impression")], "the module's own tracker"
 
 
 @pytest.mark.parametrize("seconds", POD_SECONDS)
@@ -219,3 +231,30 @@ def test_2_6_bidders_get_native_2_6_fields_and_2_5_bidders_the_down_conversion(m
     [simulator] = mocks.calls_to("/amt", started)
     assert "schain" not in simulator.body["source"]
     assert simulator.body["source"]["ext"]["schain"]["nodes"][0]["sid"] == "fastpbs"
+
+
+def test_a_break_without_an_event_id_asks_the_service_nothing(mocks: Mocks, pbs: Pbs) -> None:
+    started = time.time()
+    response = pbs.auction("FULL1", query="upid=tears-of-steel&dur=120120")
+    time.sleep(0.05)
+
+    assert response.status_code == 200
+    assert not mocks.calls_to("/policy", started)
+    assert not mocks.calls_to("/select", started)
+    assert not mocks.third_party_calls(started)
+    titles = [ad.findtext("InLine/AdTitle") or "" for ad in ads(response.text)]
+    assert titles
+    assert all(title.startswith("house") for title in titles), "the house fallback"
+
+
+def test_every_service_call_is_the_contract(mocks: Mocks, pbs: Pbs) -> None:
+    """Runs last: every /policy and /select call of the session (and of these auctions) validated."""
+    started = time.time()
+    for ticket in ALL_TICKETS:
+        pbs.auction(ticket)
+    pbs.auction("CTX1", headers={"X-Fast-Probe": "1", "x-fast-ctx": "c" * 100})
+    pbs.auction("not a ticket!", seconds=30)
+
+    assert len(mocks.calls_to("/policy", started)) == len(ALL_TICKETS) + 2
+    assert len(mocks.calls_to("/select", started)) == len(ALL_TICKETS) + 2
+    assert mocks.contract_errors == []

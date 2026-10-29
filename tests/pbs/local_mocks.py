@@ -2,8 +2,12 @@
 
 - ``/policy`` (on its own port, so a test can make it unreachable): the Pod Decision Service's policy, steered by the
   ticket (``X-Fast-T``) the module forwards; see :data:`POLICY_TICKETS`.
-- ``/select``: a deterministic pod selection (best price per slot within ``poddur``, no repeated ``crid`` or
-  advertiser domain, one standalone per winner), or HTTP 503 while ``select_fails`` is set.
+- ``/select``: the Pod Decision Service's pod rules (``fast_channels.core.pds.pod``), with its trackers, or HTTP 503
+  while ``select_fails`` is set.
+
+Both service calls are validated against the contract's models (``fast_channels.core.pds.models``, strict, version
+1), as the service validates them: a request that does not match is answered 422 and recorded in
+``Mocks.contract_errors``.
 - ``/ownbook/openrtb``: the own book, one house ad per slot (``ext.fast.house``).
 - ``/amt``: the guidance's bidder simulator, ``handler.py`` from the applied checkout with overlay O5 and
   :data:`SIMULATOR_CREATIVES`.
@@ -21,10 +25,30 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import IPv4Address
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
+from pydantic import JsonValue, ValidationError
+
+from fast_channels.core.pds.models import (
+    OWN_BOOK,
+    Device,
+    DeviceType,
+    Fpd,
+    Mode,
+    PolicyRequest,
+    PolicyResponse,
+    Reason,
+    Regs,
+    SelectRequest,
+)
+from fast_channels.core.pds.pod import select_pod, select_response
+
+TRACKER_BASE: Final = "https://cdn.example/ads/b.gif"
+TRACKER_ENR: Final = 1
+"""The service's trackers carry ``enr=1`` here and the module's own ``enr=0``, so a test can tell them apart."""
 THIRD_PARTIES: Final = ("/amt", "/echo26")
 """Bidders that are not the own book: the no-hook contract counts calls to these."""
 CONTENT: Final = {
@@ -99,69 +123,52 @@ def simulator_creatives() -> list[dict[str, Any]]:
     ]
 
 
-def policy_answer(ticket: str) -> tuple[int, str, float]:
-    """``/policy``'s status, body and delay for a forwarded ticket."""
-    bidders: dict[str, dict[str, Any]] = {"amt": {}, "echo26": {}}
-    patch: dict[str, Any] = {
-        "v": 1,
-        "reason": "test",
-        "regs": {"coppa": 0},
-        "device": {"ip": "198.51.100.7", "devicetype": 3},
-        "app_content": CONTENT,
-        "fpd": {"bidders": ["ownbook"]},
-        "deals": [],
-    }
+def policy_answer(request: PolicyRequest) -> tuple[int, str, float]:
+    """``/policy``'s status, body and delay for a request, steered by its ticket (:data:`POLICY_TICKETS`); every
+    answer is built from the contract's models, so it is one the Pod Decision Service could send."""
+    ticket = request.t
+    bidders: dict[str, dict[str, JsonValue]] = {"amt": {}, "echo26": {}}
+
+    def answer(mode: Mode, reason: Reason, named: dict[str, dict[str, JsonValue]], *, version: int = 1) -> str:
+        response = PolicyResponse(
+            decision_id=request.decision_id,
+            mode=mode,
+            reason=reason,
+            bidders=named,
+            regs=Regs(coppa=1 if mode is Mode.KIDS else 0),
+            device=Device(ip=IPv4Address("198.51.100.7"), devicetype=DeviceType.CONNECTED_TV),
+            app_content=CONTENT,
+            fpd=Fpd(bidders=[OWN_BOOK]),
+        )
+        return json.dumps(response.model_dump(mode="json") | {"v": version})
+
     match ticket:
         case _ if ticket in POSITIVE:
-            return (
-                200,
-                json.dumps(patch | {"mode": POSITIVE[ticket], "bidders": bidders}),
-                0.025 if ticket == "late1" else 0,
-            )
-        case "SAFE1" | "KIDS1":
-            return 200, json.dumps(patch | {"mode": ticket[:-1], "bidders": {}}), 0
-        case "SAFEbad1" | "KIDSbad1":
-            return 200, json.dumps(patch | {"mode": ticket[:4], "bidders": bidders}), 0
+            mode = Mode(POSITIVE[ticket])
+            reason = Reason.MISSING if mode is Mode.CONTEXTUAL else Reason.BOUND
+            return 200, answer(mode, reason, bidders), 0.025 if ticket == "late1" else 0
+        case "SAFE1":
+            return 200, answer(Mode.SAFE, Reason.CONSENT_UNAVAILABLE, {}), 0
+        case "KIDS1":
+            return 200, answer(Mode.KIDS, Reason.KIDS, {}), 0
+        case "SAFEbad1":
+            return 200, answer(Mode.SAFE, Reason.CONSENT_UNAVAILABLE, bidders), 0
+        case "KIDSbad1":
+            return 200, answer(Mode.KIDS, Reason.KIDS, bidders), 0
         case "slow1":
-            return 200, json.dumps(patch | {"mode": "FULL", "bidders": bidders}), 0.2
+            return 200, answer(Mode.FULL, Reason.BOUND, bidders), 0.2
         case "err1":
             return 500, "{}", 0
         case "junk1":
             return 200, "not json", 0
         case "v2x1":
-            return 200, json.dumps(patch | {"v": 2, "mode": "FULL", "bidders": bidders}), 0
-    return 200, json.dumps(patch | {"mode": "CONTEXTUAL", "bidders": bidders}), 0
+            return 200, answer(Mode.FULL, Reason.BOUND, bidders, version=2), 0
+    return 200, answer(Mode.CONTEXTUAL, Reason.MISSING, bidders), 0
 
 
-def select(request: dict[str, Any]) -> dict[str, Any]:
-    """A deterministic stand-in for the Pod Decision Service's pod rules."""
-    slots = request["slots"]
-    limit = next((s["poddur"] for s in slots if s.get("poddur")), 30 * len(slots))
-    bids = sorted(request["bids"], key=lambda b: (b["house"], -b["price"], b["ref"]))
-    claimed: set[str] = set()
-
-    def free(bid: dict[str, Any]) -> bool:
-        keys = {f"crid:{bid['crid']}", *(f"adomain:{d}" for d in bid["adomain"])}
-        if keys & claimed:
-            return False
-        claimed.update(keys)
-        return True
-
-    pod: list[dict[str, Any]] = []
-    standalone: list[dict[str, Any]] = []
-    used = 0
-    for slot in slots:
-        for bid in bids:
-            if bid["impid"] == slot["impid"] and used + bid["dur"] <= limit and free(bid):
-                pod.append({"impid": slot["impid"], "ref": bid["ref"], "sequence": len(pod) + 1})
-                used += bid["dur"]
-                break
-    for winner in pod:
-        for bid in bids:
-            if bid["impid"] == winner["impid"] and free(bid):
-                standalone.append({"impid": winner["impid"], "ref": bid["ref"]})
-                break
-    return {"v": 1, "pod": pod, "standalone": standalone, "trackers": {}, "reason": "OK"}
+def select(request: SelectRequest) -> str:
+    """The Pod Decision Service's own pod rules and trackers (:mod:`fast_channels.core.pds.pod`)."""
+    return select_response(request, select_pod(request), tracker_base=TRACKER_BASE, enr=TRACKER_ENR).model_dump_json()
 
 
 def own_book(request: dict[str, Any]) -> dict[str, Any]:
@@ -201,6 +208,8 @@ class Mocks:
     work: Path
     calls: list[Call] = field(default_factory=list)
     select_fails: bool = False
+    contract_errors: list[str] = field(default_factory=list)
+    """Service calls the contract refuses (path and the validation error)."""
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _servers: dict[str, ThreadingHTTPServer] = field(default_factory=dict)
     _simulator: ModuleType | None = None
@@ -286,7 +295,7 @@ class Mocks:
                 except ValueError:
                     body = raw
                 mocks._record(path, headers, body)
-                status, payload, delay = mocks._answer(path, body, headers)
+                status, payload, delay = mocks._answer(path, body, raw, headers)
                 time.sleep(delay)
                 data = payload.encode()
                 self.send_response(status)
@@ -304,12 +313,20 @@ class Mocks:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
-    def _answer(self, path: str, body: Any, headers: dict[str, str]) -> tuple[int, str, float]:
+    def _answer(self, path: str, body: Any, raw: str, headers: dict[str, str]) -> tuple[int, str, float]:
         match path:
             case "/policy":
-                return policy_answer((body or {}).get("t", ""))
+                try:
+                    policy = PolicyRequest.model_validate_json(raw)
+                except ValidationError as error:
+                    return self._refused(path, error)
+                return policy_answer(policy)
             case "/select":
-                return (503, "{}", 0) if self.select_fails else (200, json.dumps(select(body)), 0)
+                try:
+                    request = SelectRequest.model_validate_json(raw)
+                except ValidationError as error:
+                    return self._refused(path, error)
+                return (503, "{}", 0) if self.select_fails else (200, select(request), 0)
             case "/ownbook/openrtb":
                 return 200, json.dumps(own_book(body)), 0
             case "/amt":
@@ -319,3 +336,8 @@ class Mocks:
             case "/echo26":
                 return 200, json.dumps({"id": (body or {}).get("id", ""), "seatbid": []}), 0
         return 404, "{}", 0
+
+    def _refused(self, path: str, error: ValidationError) -> tuple[int, str, float]:
+        with self._lock:
+            self.contract_errors.append(f"{path}: {error}")
+        return 422, "{}", 0

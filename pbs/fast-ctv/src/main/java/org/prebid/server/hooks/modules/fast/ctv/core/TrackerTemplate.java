@@ -5,8 +5,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * Our impression tracker, added to every rendered ad: MediaTailor drops an inline ad that has no
- * {@code <Impression>}, without a skip reason, and the tracker is how delivery is counted.
+ * The module's own impression tracker: MediaTailor drops an inline ad that has no {@code <Impression>}, without a
+ * skip reason, and our tracker is how delivery is counted. Every rendered ad carries ours: the Pod Decision Service's
+ * trackers when {@code /select} lists them (they know the break's content-enrichment arm), else this template's,
+ * with {@code enr} 0 (the house fallback, or an answer that lists none for the ad).
  * <p>
  * The template is a URL with the placeholders {@code {sid}}, {@code {evid}}, {@code {crid}}, {@code {event}} and
  * {@code {enr}}, for example {@code https://cdn.example/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}}. Each

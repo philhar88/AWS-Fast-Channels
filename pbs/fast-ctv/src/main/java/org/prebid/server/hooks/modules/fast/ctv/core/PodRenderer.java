@@ -47,9 +47,10 @@ import java.util.regex.Pattern;
  * A bid is a candidate only when its {@code adm} is a VAST document whose first {@code <Ad>} holds an
  * {@code <InLine>} or a {@code <Wrapper>}; a document type declaration is refused (no XML external entities). Every
  * rendered ad gets {@code burl} and {@code nurl} as {@code <Impression>} elements, with {@code ${AUCTION_PRICE}}
- * replaced, then the selection's extra trackers, then our own tracker: MediaTailor drops an inline ad that has no
- * impression. No price or deal decision is made here: pods are selected by the Pod Decision Service, and
- * {@link #houseFallback} only fills slots with the own book's house ads when it cannot be asked.
+ * replaced, then our impression trackers (the Pod Decision Service's, or the module's own when it listed none):
+ * MediaTailor drops an inline ad that has no impression. No price or deal decision is made here: pods are selected
+ * by the Pod Decision Service, and {@link #houseFallback} only fills slots with the own book's house ads when it
+ * cannot be asked.
  */
 public class PodRenderer {
 
@@ -65,8 +66,8 @@ public class PodRenderer {
     private static final ThreadLocal<Transformer> WRITER = ThreadLocal.withInitial(PodRenderer::newWriter);
 
     /**
-     * The usable bids of {@code response} for {@code imps}, in seat and bid order, with references
-     * {@code b0, b1, ...}.
+     * The bids of {@code response} for {@code imps}, in seat and bid order, with references {@code b0, b1, ...};
+     * those whose {@code adm} is not usable VAST are kept, unusable, for the Pod Decision Service's record.
      */
     public List<Candidate> candidates(BidResponse response, List<Imp> imps) {
         final Set<String> impIds = new HashSet<>();
@@ -75,10 +76,7 @@ public class PodRenderer {
         for (SeatBid seatBid : response != null && response.getSeatbid() != null ? response.getSeatbid() : List.<SeatBid>of()) {
             for (Bid bid : seatBid.getBid() != null ? seatBid.getBid() : List.<Bid>of()) {
                 if (impIds.contains(bid.getImpid())) {
-                    final Candidate candidate = parse("b" + candidates.size(), seatBid.getSeat(), bid);
-                    if (candidate != null) {
-                        candidates.add(candidate);
-                    }
+                    candidates.add(parse("b" + candidates.size(), seatBid.getSeat(), bid));
                 }
             }
         }
@@ -86,12 +84,12 @@ public class PodRenderer {
     }
 
     /**
-     * {@code bid} as a candidate, or null when its {@code adm} is not a usable VAST ad.
+     * {@code bid} as a candidate, {@link Candidate#unusable unusable} when its {@code adm} is not a VAST ad.
      */
     public Candidate parse(String ref, String seat, Bid bid) {
         final String adm = bid.getAdm();
         if (adm == null || adm.isBlank() || adm.length() > MAX_ADM_CHARS) {
-            return null;
+            return Candidate.unusable(ref, seat, bid, isHouse(bid));
         }
         final Element ad;
         try {
@@ -102,12 +100,12 @@ public class PodRenderer {
             final Element root = doc.getDocumentElement();
             ad = "VAST".equals(root.getLocalName()) ? firstChild(root, "Ad") : null;
         } catch (Exception e) {
-            return null;
+            return Candidate.unusable(ref, seat, bid, isHouse(bid));
         }
         final Element inline = ad != null ? firstChild(ad, "InLine") : null;
         final Element body = inline != null ? inline : ad != null ? firstChild(ad, "Wrapper") : null;
         if (body == null) {
-            return null;
+            return Candidate.unusable(ref, seat, bid, isHouse(bid));
         }
         return new Candidate(ref, seat, bid, ad, inline != null ? Candidate.Kind.INLINE : Candidate.Kind.WRAPPER,
                 inline != null ? durationMs(inline) : null, hasImpression(body), isHouse(bid));
@@ -120,7 +118,7 @@ public class PodRenderer {
      */
     public Selection houseFallback(List<Imp> imps, List<Candidate> candidates, boolean buffet, String reason) {
         final Map<String, List<Candidate>> houseBySlot = new HashMap<>();
-        candidates.stream().filter(Candidate::house)
+        candidates.stream().filter(c -> c.usable() && c.house())
                 .forEach(c -> houseBySlot.computeIfAbsent(c.impid(), id -> new ArrayList<>()).add(c));
         final int limit = podLimit(imps);
         final Set<String> claimed = new HashSet<>();
@@ -151,7 +149,7 @@ public class PodRenderer {
      * {@code selection} as VAST 4.2: winners in {@code sequence} order, then the standalones unless {@code buffet} is
      * off. {@code impressions} gives each ad's impression URLs in order; duplicates are dropped.
      *
-     * @throws IllegalArgumentException when the selection names a bid that is not a candidate
+     * @throws IllegalArgumentException when the selection names a bid that is not a usable candidate
      */
     public String render(Selection selection, Map<String, Candidate> byRef, boolean buffet,
                          Function<Candidate, List<String>> impressions) {
@@ -185,8 +183,8 @@ public class PodRenderer {
 
     private static Candidate candidate(Map<String, Candidate> byRef, Pick pick) {
         final Candidate candidate = byRef.get(pick.ref());
-        if (candidate == null) {
-            throw new IllegalArgumentException("unknown bid reference " + pick.ref());
+        if (candidate == null || !candidate.usable()) {
+            throw new IllegalArgumentException("not a usable bid " + pick.ref());
         }
         return candidate;
     }

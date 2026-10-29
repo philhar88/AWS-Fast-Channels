@@ -20,14 +20,17 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The Pod Decision Service's answer to {@code /policy}, schema version 1, and how it changes the bid request.
+ * The Pod Decision Service's answer to {@code /policy} ({@code contracts/pds-policy.schema.json}, version 1), and how
+ * it changes the bid request.
  * <p>
  * The module applies the patch verbatim and only adds: the returned bidders join every imp beside the stored
  * request's own book, which is never removed. {@code regs}, {@code device} and {@code app_content} fields are set
- * over the request's; {@code user} only in {@code FULL} mode; first-party data is scoped to {@code fpd.bidders};
- * {@code deals} join every imp's private marketplace. {@code SAFE} and {@code KIDS} breaks never gain a bidder, whatever
- * the answer says. A response that does not match the schema is refused as a whole ({@link #parse} throws), and the
- * request stays as stored.
+ * over the request's, a null one removing the request's value (a null {@code device.ip} removes the address Prebid
+ * Server took from the client-settable {@code X-Forwarded-For}); {@code user} only in {@code FULL} mode; first-party
+ * data is scoped to {@code fpd.bidders}; {@code deals} join every imp's private marketplace. {@code SAFE} and
+ * {@code KIDS} breaks never gain a bidder, whatever the answer says. The contract is strict both ways: an answer
+ * with an unknown field, a field of the wrong shape or another break's {@code decision_id} is refused as a whole
+ * ({@link #parse} throws), and the request stays as stored.
  *
  * @param decisionId the break's decision id ({@code <sid>.<evid>})
  * @param mode       the privacy mode of the break
@@ -39,11 +42,10 @@ import java.util.Set;
  * @param user       fields set on {@code user} in {@code FULL} mode, or null
  * @param fpdBidders bidders that may receive first-party data ({@code ext.prebid.data.bidders}), or empty
  * @param deals      OpenRTB deals added to every imp's {@code pmp}, or empty
- * @param enr        1 when the break's request carries content enrichment, else 0 (the tracker's {@code enr})
  */
 public record PolicyPatch(String decisionId, Mode mode, String reason, ObjectNode bidders, ObjectNode regs,
                           ObjectNode device, ObjectNode appContent, ObjectNode user, List<String> fpdBidders,
-                          ArrayNode deals, int enr) {
+                          ArrayNode deals) {
 
     public static final int VERSION = 1;
 
@@ -61,60 +63,94 @@ public record PolicyPatch(String decisionId, Mode mode, String reason, ObjectNod
         }
     }
 
+    private static final Set<String> FIELDS = Set.of("v", "decision_id", "mode", "reason", "bidders", "regs",
+            "device", "app_content", "user", "fpd", "deals");
     private static final Set<String> MODES = Set.of("FULL", "PSEUDONYMOUS", "CONTEXTUAL", "SAFE", "KIDS");
+    private static final Set<String> REASONS = Set.of("bound", "missing", "invalid", "unknown", "replay",
+            "pc_mismatch", "expired_or_raced", "opted_out", "consent_unavailable", "probe", "kids");
+    private static final Set<String> REGS = Set.of("coppa", "gpp", "gpp_sid");
+    private static final Set<String> DEVICE = Set.of("ip", "ipv6", "devicetype");
+    private static final Set<String> FPD = Set.of("bidders");
+    private static final Set<String> DEAL = Set.of("id", "bidfloor", "at", "wseat");
 
     /**
-     * Reads a {@code /policy} response body.
+     * Reads a {@code /policy} response body for the break {@code decisionId}.
      *
-     * @throws IllegalArgumentException when it is not schema version 1 or a field has the wrong shape
+     * @throws IllegalArgumentException when it is not schema version 1, has a field the schema does not, a field of
+     *                                  the wrong shape, or another decision id
      */
-    public static PolicyPatch parse(JsonNode answer) {
-        if (answer == null || !answer.isObject() || answer.path("v").asInt(-1) != VERSION) {
+    public static PolicyPatch parse(JsonNode answer, String decisionId) {
+        if (answer == null || !answer.isObject() || !answer.path("v").isInt() || answer.path("v").asInt() != VERSION) {
             throw new IllegalArgumentException("unknown schema version " + (answer != null ? answer.path("v") : null));
         }
+        only(answer, FIELDS, "");
+        final JsonNode id = answer.path("decision_id");
+        require(id.isTextual() && id.asText().equals(decisionId), "decision_id");
         final String mode = answer.path("mode").asText("");
-        if (!MODES.contains(mode)) {
-            throw new IllegalArgumentException("unknown mode " + mode);
-        }
+        require(answer.path("mode").isTextual() && MODES.contains(mode), "mode");
+        require(answer.path("reason").isTextual() && REASONS.contains(answer.path("reason").asText()), "reason");
+
         final ObjectNode bidders = optionalObject(answer, "bidders");
         if (bidders != null) {
             bidders.properties().forEach(entry -> require(entry.getValue().isObject(), "bidders." + entry.getKey()));
         }
+        final ObjectNode regs = optionalObject(answer, "regs");
+        if (regs != null) {
+            only(regs, REGS, "regs.");
+            final JsonNode coppa = regs.path("coppa");
+            require(coppa.isMissingNode() || coppa.isInt() && (coppa.asInt() == 0 || coppa.asInt() == 1),
+                    "regs.coppa");
+            require(nullOr(regs.path("gpp"), JsonNode::isTextual), "regs.gpp");
+            require(nullOr(regs.path("gpp_sid"), node -> allOf(node, JsonNode::isInt)), "regs.gpp_sid");
+        }
+        final ObjectNode device = optionalObject(answer, "device");
+        if (device != null) {
+            only(device, DEVICE, "device.");
+            require(nullOr(device.path("ip"), JsonNode::isTextual), "device.ip");
+            require(nullOr(device.path("ipv6"), JsonNode::isTextual), "device.ipv6");
+            require(nullOr(device.path("devicetype"), node -> node.isInt() && node.asInt() >= 1 && node.asInt() <= 8),
+                    "device.devicetype");
+        }
         final List<String> fpdBidders = new ArrayList<>();
-        final JsonNode fpd = answer.path("fpd").path("bidders");
-        if (!fpd.isMissingNode() && !fpd.isNull()) {
-            require(fpd.isArray(), "fpd.bidders");
-            fpd.forEach(node -> {
-                require(node.isTextual(), "fpd.bidders[]");
-                fpdBidders.add(node.asText());
-            });
+        final ObjectNode fpd = optionalObject(answer, "fpd");
+        if (fpd != null) {
+            only(fpd, FPD, "fpd.");
+            final JsonNode names = fpd.path("bidders");
+            require(names.isMissingNode() || allOf(names, JsonNode::isTextual), "fpd.bidders");
+            names.forEach(node -> fpdBidders.add(node.asText()));
         }
         final JsonNode deals = answer.path("deals");
-        require(deals.isMissingNode() || deals.isNull() || deals.isArray(), "deals");
-        final JsonNode enr = answer.path("enr");
-        require(enr.isMissingNode() || enr.isNull() || enr.isInt() && (enr.asInt() == 0 || enr.asInt() == 1), "enr");
-        final JsonNode decisionId = answer.path("decision_id");
-        require(decisionId.isMissingNode() || decisionId.isTextual(), "decision_id");
+        require(deals.isMissingNode() || deals.isArray(), "deals");
+        deals.forEach(deal -> {
+            require(deal.isObject(), "deals[]");
+            only(deal, DEAL, "deals[].");
+            require(deal.path("id").isTextual() && !deal.path("id").asText().isEmpty(), "deals[].id");
+            require(nullOr(deal.path("bidfloor"), node -> node.isNumber() && node.asDouble() >= 0), "deals[].bidfloor");
+            require(nullOr(deal.path("at"), node -> node.isInt() && node.asInt() >= 1 && node.asInt() <= 3),
+                    "deals[].at");
+            require(deal.path("wseat").isMissingNode() || allOf(deal.path("wseat"), JsonNode::isTextual),
+                    "deals[].wseat");
+        });
         return new PolicyPatch(
-                decisionId.asText(null),
+                id.asText(),
                 Mode.valueOf(mode),
-                answer.path("reason").asText(null),
+                answer.path("reason").asText(),
                 bidders,
-                optionalObject(answer, "regs"),
-                optionalObject(answer, "device"),
+                regs,
+                device,
                 optionalObject(answer, "app_content"),
                 optionalObject(answer, "user"),
                 List.copyOf(fpdBidders),
-                deals.isArray() ? (ArrayNode) deals : null,
-                enr.asInt(0));
+                deals.isArray() ? (ArrayNode) deals : null);
     }
 
     /**
      * Whether applying the patch changes the request at all.
      */
     public boolean changesRequest() {
-        return !addedBidders().isEmpty() || regs != null || device != null || appContent != null
-                || mode == Mode.FULL && user != null || !fpdBidders.isEmpty() || deals != null && !deals.isEmpty();
+        return !addedBidders().isEmpty() || regs != null && !regs.isEmpty() || device != null && !device.isEmpty()
+                || appContent != null || mode == Mode.FULL && user != null || !fpdBidders.isEmpty()
+                || deals != null && !deals.isEmpty();
     }
 
     /**
@@ -133,10 +169,10 @@ public record PolicyPatch(String decisionId, Mode mode, String reason, ObjectNod
     public BidRequest apply(BidRequest request, ObjectMapper mapper) {
         final BidRequest.BidRequestBuilder builder = request.toBuilder()
                 .imp(request.getImp().stream().map(imp -> patchImp(imp, mapper)).toList());
-        if (regs != null) {
+        if (regs != null && !regs.isEmpty()) {
             builder.regs(merge(mapper, request.getRegs(), regs, Regs.class));
         }
-        if (device != null) {
+        if (device != null && !device.isEmpty()) {
             builder.device(merge(mapper, request.getDevice(), device, Device.class));
         }
         if (appContent != null) {
@@ -170,26 +206,34 @@ public record PolicyPatch(String decisionId, Mode mode, String reason, ObjectNod
         if (deals != null && !deals.isEmpty()) {
             final ObjectNode pmp = imp.getPmp() != null ? mapper.valueToTree(imp.getPmp()) : mapper.createObjectNode();
             final ArrayNode merged = pmp.get("deals") instanceof ArrayNode existing ? existing : pmp.putArray("deals");
-            deals.forEach(deal -> merged.add(deal.deepCopy()));
+            deals.forEach(deal -> merged.add(withoutNulls((ObjectNode) deal)));
             builder.pmp(mapper.convertValue(pmp, Pmp.class));
         }
         return builder.build();
     }
 
     /**
-     * {@code current} with every field of {@code patch} set over it; nested objects of the patch replace whole
-     * objects except {@code ext}, whose fields are set one by one.
+     * {@code current} with every field of {@code patch} set over it (a null removes the field); nested objects of
+     * the patch replace whole objects except {@code ext}, whose fields are set one by one.
      */
     private static <T> T merge(ObjectMapper mapper, T current, ObjectNode patch, Class<T> type) {
         final ObjectNode tree = current != null ? mapper.valueToTree(current) : mapper.createObjectNode();
         for (Map.Entry<String, JsonNode> field : patch.properties()) {
-            if ("ext".equals(field.getKey()) && field.getValue().isObject() && tree.path("ext").isObject()) {
+            if (field.getValue().isNull()) {
+                tree.remove(field.getKey());
+            } else if ("ext".equals(field.getKey()) && field.getValue().isObject() && tree.path("ext").isObject()) {
                 ((ObjectNode) tree.get("ext")).setAll((ObjectNode) field.getValue().deepCopy());
             } else {
                 tree.set(field.getKey(), field.getValue().deepCopy());
             }
         }
         return mapper.convertValue(tree, type);
+    }
+
+    private static ObjectNode withoutNulls(ObjectNode node) {
+        final ObjectNode copy = node.deepCopy();
+        copy.properties().removeIf(field -> field.getValue().isNull());
+        return copy;
     }
 
     private static ObjectNode optionalObject(JsonNode answer, String field) {
@@ -199,6 +243,26 @@ public record PolicyPatch(String decisionId, Mode mode, String reason, ObjectNod
         }
         require(node.isObject(), field);
         return (ObjectNode) node;
+    }
+
+    private static void only(JsonNode node, Set<String> fields, String prefix) {
+        node.fieldNames().forEachRemaining(name -> require(fields.contains(name), prefix + name + " (unknown field)"));
+    }
+
+    private static boolean nullOr(JsonNode node, java.util.function.Predicate<JsonNode> test) {
+        return node.isMissingNode() || node.isNull() || test.test(node);
+    }
+
+    private static boolean allOf(JsonNode node, java.util.function.Predicate<JsonNode> test) {
+        if (!node.isArray()) {
+            return false;
+        }
+        for (JsonNode item : node) {
+            if (!test.test(item)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static ObjectNode child(ObjectNode parent, String name) {

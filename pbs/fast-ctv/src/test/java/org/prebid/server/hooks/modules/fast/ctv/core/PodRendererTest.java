@@ -28,7 +28,7 @@ public class PodRendererTest {
     private final PodRenderer target = new PodRenderer();
 
     @Test
-    public void candidatesShouldKeepOnlyVastAdsForTheRequestsSlots() {
+    public void candidatesAreTheBidsForTheRequestsSlotsAndOnlyVastAdsAreUsable() {
         final BidResponse response = response(
                 seat("amt", bid("a1", "s1", "sim1", "brand-a.example", 12.5),
                         bid("a2", "s1", "banner", "brand-x.example", 3.0).toBuilder().adm("<a href='x'>ad</a>").build(),
@@ -38,9 +38,12 @@ public class PodRendererTest {
 
         final List<Candidate> candidates = target.candidates(response, pod(2).getImp());
 
-        assertThat(candidates).extracting(Candidate::ref, Candidate::crid, Candidate::house)
-                .containsExactly(org.assertj.core.groups.Tuple.tuple("b0", "sim1", false),
-                        org.assertj.core.groups.Tuple.tuple("b1", "house1", true));
+        assertThat(candidates).extracting(Candidate::ref, Candidate::crid, Candidate::house, Candidate::usable)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("b0", "sim1", false, true),
+                        org.assertj.core.groups.Tuple.tuple("b1", "banner", false, false),
+                        org.assertj.core.groups.Tuple.tuple("b2", "empty", false, false),
+                        org.assertj.core.groups.Tuple.tuple("b3", "house1", true, true));
+        assertThat(candidates.get(1).kind()).isNull();
         assertThat(candidates.getFirst().vastDurMs()).isEqualTo(30030);
         assertThat(candidates.getFirst().kind()).isEqualTo(Candidate.Kind.INLINE);
         assertThat(candidates.getFirst().hasImpression()).isFalse();
@@ -51,8 +54,8 @@ public class PodRendererTest {
         final String xxe = "<?xml version=\"1.0\"?><!DOCTYPE VAST [<!ENTITY x SYSTEM \"file:///etc/passwd\">]>"
                 + "<VAST version=\"4.2\"><Ad id=\"x\"><InLine><AdTitle>&x;</AdTitle></InLine></Ad></VAST>";
 
-        assertThat(target.parse("b0", "amt", bid("a1", "s1", "x", "x.example", 1).toBuilder().adm(xxe).build()))
-                .isNull();
+        assertThat(target.parse("b0", "amt", bid("a1", "s1", "x", "x.example", 1).toBuilder().adm(xxe).build())
+                .usable()).isFalse();
     }
 
     @Test
