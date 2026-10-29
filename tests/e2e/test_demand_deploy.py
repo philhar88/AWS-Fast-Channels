@@ -465,8 +465,18 @@ def test_the_simulator_package_holds_the_handler_and_the_creatives(
 
 
 def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.DemandStage, stub: Any) -> None:
-    ssm, ec2 = stub("ssm"), stub("ec2")
-    values = {"vpc-id": "vpc-1", "private-subnet-ids": "subnet-a,subnet-b", "task-security-group-id": "sg-1"}
+    ssm, ec2, elb = stub("ssm"), stub("ec2"), stub("elbv2")
+    alb = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fastcix-alb/0123456789abcdef"
+    pbs = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-pbs/0123456789abcdef"
+    values = {
+        "vpc-id": "vpc-1",
+        "alb-arn": alb,
+        "private-subnet-ids": "subnet-a,subnet-b",
+        "task-security-group-id": "sg-1",
+        "cluster-arn": "arn:aws:ecs:us-east-1:123456789012:cluster/c",
+        "service-arn": "arn:aws:ecs:us-east-1:123456789012:service/c/s",
+        "cloudfront-domain": "d1.cloudfront.net",
+    }
     page = {"Parameters": [{"Name": f"/fastcix/demand/{k}", "Value": v} for k, v in values.items()]}
     ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
     ec2.add_response(
@@ -489,6 +499,17 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
         },
         {"Filters": [{"Name": "vpc-id", "Values": ["vpc-1"]}]},
     )
+    cache = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-cache/0123456789abcdef"
+    elb.add_response(
+        "describe_target_groups",
+        {
+            "TargetGroups": [
+                {"TargetGroupArn": cache, "TargetType": "lambda"},
+                {"TargetGroupArn": pbs, "TargetType": "ip"},
+            ]
+        },
+        {"LoadBalancerArn": alb},
+    )
 
     network = stage.network("simulator/0123456789abcdef.zip")
 
@@ -497,6 +518,7 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
         ("subnet-b", "us-east-1b", "rtb-0b"),
     ]
     assert (network.vpc_id, network.task_security_group_id) == ("vpc-1", "sg-1")
+    assert network.target_group_arn == pbs, "the Prebid Server targets, not the cache's Lambda"
 
 
 def test_the_simulator_smoke_wants_one_demo_bid_per_slot(stage: _demand.DemandStage, stub: Any) -> None:

@@ -633,10 +633,16 @@ class DemandStage:
                     main = table["RouteTableId"]
                 elif subnet := association.get("SubnetId"):
                     tables[subnet] = table["RouteTableId"]
+        groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
+        [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
         return DemandNetwork(
             vpc_id=parameters[Parameter.VPC_ID],
             private_subnets=tuple(Subnet(id=i, az=zones[i], route_table=tables.get(i, main)) for i in ids),
             task_security_group_id=parameters[Parameter.TASK_SECURITY_GROUP],
+            cluster_arn=parameters[Parameter.CLUSTER_ARN],
+            service_arn=parameters[Parameter.SERVICE_ARN],
+            cloudfront_domain=parameters[Parameter.CLOUDFRONT_DOMAIN],
+            target_group_arn=target_group,
             simulator_code_key=simulator_code_key,
         )
 
@@ -663,6 +669,55 @@ class DemandStage:
             env=self.cdk_environment(),
             stream=True,
         )
+
+    def start_census_gate(self) -> str:
+        """Run the census gate once with the census's last count, so a stage deployed without running channels
+        scales to zero (after the gate's 15 minutes) and one with channels keeps the tier minimum."""
+        running = int(
+            self.client("ssm").get_parameter(Name=f"/{self.prefix}/ops/running-channels")["Parameter"]["Value"]
+        )
+        arn = self.stack_outputs(self.demand_stack)["CensusGateArn"]
+        detail = {"running": running, "previous": running, "correlation_id": "deploy-demand"}
+        execution = self.client("stepfunctions").start_execution(
+            stateMachineArn=arn, input=json.dumps({"detail": detail})
+        )["executionArn"]
+        log(f"census gate started with running={running}: {execution}")
+        return str(execution)
+
+    def herd(self, rate: int, seconds: int) -> dict[str, Any]:
+        """A break herd through the guidance's CloudFront (the warm-up project with another rate and duration):
+        vegeta's JSON report (status codes, latency percentiles in nanoseconds)."""
+        codebuild, logs = self.client("codebuild"), self.client("logs")
+        project = names.warmup_project(self.prefix)
+        build = codebuild.start_build(
+            projectName=project,
+            environmentVariablesOverride=[
+                {"name": "RATE", "value": str(rate), "type": "PLAINTEXT"},
+                {"name": "SECONDS_TO_RUN", "value": str(seconds), "type": "PLAINTEXT"},
+            ],
+        )["build"]
+        log(f"herd {rate}/s x {seconds} s: build {build['id']}")
+        while (state := codebuild.batch_get_builds(ids=[build["id"]])["builds"][0])["buildStatus"] == "IN_PROGRESS":
+            time.sleep(10)
+        stream = state["logs"]["streamName"]
+        events = logs.get_log_events(logGroupName=f"/aws/codebuild/{project}", logStreamName=stream, startFromHead=True)
+        line = next((e["message"] for e in events["events"] if e["message"].startswith("VEGETA_JSON ")), None)
+        if line is None:
+            raise DemandError(f"herd build {build['id']} ended {state['buildStatus']} without a vegeta report")
+        report: dict[str, Any] = json.loads(line.removeprefix("VEGETA_JSON "))
+        codes = {str(k): int(v) for k, v in report.get("status_codes", {}).items()}
+        total = sum(codes.values())
+        latencies = report.get("latencies", {})
+        return {
+            "rate": rate,
+            "seconds": seconds,
+            "requests": total,
+            "status_codes": codes,
+            "non_200_ratio": (total - codes.get("200", 0)) / total if total else 1.0,
+            "p50_ms": round(latencies.get("50th", 0) / 1e6, 1),
+            "p99_ms": round(latencies.get("99th", 0) / 1e6, 1),
+            "max_ms": round(latencies.get("max", 0) / 1e6, 1),
+        }
 
     def simulator_function(self) -> str | None:
         """The simulator's function name for the mode, or None (no simulator)."""

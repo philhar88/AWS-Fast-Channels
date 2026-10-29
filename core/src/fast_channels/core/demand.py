@@ -142,12 +142,52 @@ class Subnet(BaseModel):
 
 
 class DemandNetwork(BaseModel):
-    """The guidance's network as the deploy script reads it from ``/<prefix>/demand/*`` and EC2."""
+    """The guidance as the deploy script reads it from ``/<prefix>/demand/*`` and EC2: its network, its Prebid Server
+    service and its CloudFront domain."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     vpc_id: str = Field(pattern=r"^vpc-[0-9a-f]+$")
     private_subnets: tuple[Subnet, ...] = Field(min_length=2)
     task_security_group_id: str = Field(pattern=r"^sg-[0-9a-f]+$")
+    cluster_arn: str = Field(pattern=r"^arn:aws[a-z-]*:ecs:[a-z0-9-]+:\d{12}:cluster/[A-Za-z0-9_-]+$")
+    service_arn: str = Field(pattern=r"^arn:aws[a-z-]*:ecs:[a-z0-9-]+:\d{12}:service/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$")
+    cloudfront_domain: str = Field(pattern=r"^[a-z0-9]+\.cloudfront\.net$")
+    target_group_arn: str = Field(
+        pattern=r"^arn:aws[a-z-]*:elasticloadbalancing:[a-z0-9-]+:\d{12}:targetgroup/[A-Za-z0-9-]+/[0-9a-f]+$",
+        description="The guidance's Prebid Server target group (the ALB's IP target group).",
+    )
     simulator_code_key: str | None = Field(default=None, pattern=rf"^{SIMULATOR_CODE_PREFIX}[0-9a-f]{{16}}\.zip$")
     """Key of the ``lambda`` simulator's code package in the guidance's assets bucket."""
+
+
+def census_gate(prefix: str) -> str:
+    """The state machine that scales Prebid Server with the stage's running channels."""
+    return f"{prefix}-demand-census-gate"
+
+
+def warmup_project(prefix: str) -> str:
+    """The CodeBuild project that replays synthetic auctions against new Prebid Server tasks."""
+    return f"{prefix}-pbs-warmup"
+
+
+def daypart_action(prefix: str, index: int) -> str:
+    """The Application Auto Scaling scheduled action of the stage's ``index``-th daypart."""
+    return f"{prefix}-daypart-{index}"
+
+
+SCALE_IN_AFTER_SECONDS: Final = 900
+"""How long no channel must run before Prebid Server scales to zero (15 minutes: a stop and restart keeps it)."""
+VEGETA: Final = {
+    "version": "12.13.0",
+    "url": "https://github.com/tsenart/vegeta/releases/download/v12.13.0/vegeta_12.13.0_linux_arm64.tar.gz",
+    "sha256": "950381173a5575e25e8e086f36fc03bf65d61a2433329b48e41e1cb5e4133bba",
+}
+"""The warm-up's load generator, pinned and checksum-verified (``vegeta_12.13.0_checksums.txt`` of the release)."""
+WARMUP_RATE_PER_TASK: Final = 50
+"""Synthetic auctions per second per healthy target when a new task's warm-up starts (P0-21: 50-100/s per task for
+2-3 minutes warms a JVM's JIT). The replay goes through the load balancer, which spreads it over every healthy target,
+so the new task gets about this rate."""
+WARMUP_HEALTHY_WAIT_SECONDS: Final = 600
+"""How long a warm-up waits for its task to become a healthy target before it gives up (and fails)."""
+WARMUP_SECONDS: Final = 150

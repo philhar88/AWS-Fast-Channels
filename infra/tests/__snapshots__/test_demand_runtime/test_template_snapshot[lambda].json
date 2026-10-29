@@ -1,6 +1,12 @@
 {
   "Description": "FAST Channels (fastm): demand beside the guidance",
   "Outputs": {
+    "CensusGateArn": {
+      "Description": "Scales Prebid Server with the running channels",
+      "Value": {
+        "Ref": "CensusGateStateMachine76333E59"
+      }
+    },
     "PrivateZoneId": {
       "Description": "The stage's private zone",
       "Value": {
@@ -12,6 +18,12 @@
       "Value": {
         "Ref": "SimulatorFunction16C62942"
       }
+    },
+    "WarmUpProjectName": {
+      "Description": "Warms every new Prebid Server task",
+      "Value": {
+        "Ref": "WarmUpProjectE9DB5D33"
+      }
     }
   },
   "Parameters": {
@@ -22,6 +34,439 @@
     }
   },
   "Resources": {
+    "CensusGateCensusChanged67B71B7D": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): the census gate scales Prebid Server with the running channels",
+        "EventBusName": "fastm-fast-channels",
+        "EventPattern": {
+          "detail-type": [
+            "Census Changed"
+          ],
+          "source": [
+            "fast-channels.fastm"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "CensusGateStateMachine76333E59"
+            },
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "DeadLettersBBF8BAAB",
+                  "Arn"
+                ]
+              }
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 8
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "CensusGateStateMachineEventsRole1D5D0110",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "CensusGateLogs9F5791BD": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/fastm-demand-census-gate",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "CensusGateStateMachine76333E59": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "CensusGateStateMachineRoleDefaultPolicy3CB63F56",
+        "CensusGateStateMachineRoleC30159BB"
+      ],
+      "Properties": {
+        "DefinitionString": "{\"Comment\": \"Scale Prebid Server with the stage's running channels\", \"QueryLanguage\": \"JSONata\", \"StartAt\": \"AnyChannel\", \"States\": {\"AnyChannel\": {\"Type\": \"Choice\", \"Choices\": [{\"Condition\": \"{% $states.input.detail.running > 0 %}\", \"Next\": \"CurrentMinimum\"}], \"Default\": \"WaitBeforeScaleIn\"}, \"CurrentMinimum\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:applicationautoscaling:describeScalableTargets\", \"Arguments\": {\"ServiceNamespace\": \"ecs\", \"ResourceIds\": [\"service/fastm-pbs-PrebidCluster/fastm-pbs-Service\"], \"ScalableDimension\": \"ecs:service:DesiredCount\"}, \"Assign\": {\"floor\": \"{% $max([$states.result.ScalableTargets[0].MinCapacity, 2]) %}\"}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"RaiseMinimum\"}, \"RaiseMinimum\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:applicationautoscaling:registerScalableTarget\", \"Arguments\": {\"ServiceNamespace\": \"ecs\", \"ResourceId\": \"service/fastm-pbs-PrebidCluster/fastm-pbs-Service\", \"ScalableDimension\": \"ecs:service:DesiredCount\", \"MinCapacity\": \"{% $floor %}\", \"MaxCapacity\": 4}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"CurrentCount\"}, \"CurrentCount\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:ecs:describeServices\", \"Arguments\": {\"Cluster\": \"fastm-pbs-PrebidCluster\", \"Services\": [\"fastm-pbs-Service\"]}, \"Assign\": {\"desired\": \"{% $states.result.Services[0].DesiredCount %}\"}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"ScaleOut\"}, \"ScaleOut\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:ecs:updateService\", \"Arguments\": {\"Cluster\": \"fastm-pbs-PrebidCluster\", \"Service\": \"fastm-pbs-Service\", \"DesiredCount\": \"{% $max([$desired, $floor]) %}\"}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"WaitBeforeScaleIn\": {\"Type\": \"Wait\", \"Seconds\": 900, \"Next\": \"StillNoChannel\"}, \"StillNoChannel\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:ssm:getParameter\", \"Arguments\": {\"Name\": \"/fastm/ops/running-channels\"}, \"Assign\": {\"running\": \"{% $number($states.result.Parameter.Value) %}\"}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"NoneRunning\"}, \"NoneRunning\": {\"Type\": \"Choice\", \"Choices\": [{\"Condition\": \"{% $running = 0 %}\", \"Next\": \"LowerMinimum\"}], \"Default\": \"ChannelsBack\"}, \"ChannelsBack\": {\"Type\": \"Succeed\"}, \"LowerMinimum\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:applicationautoscaling:registerScalableTarget\", \"Arguments\": {\"ServiceNamespace\": \"ecs\", \"ResourceId\": \"service/fastm-pbs-PrebidCluster/fastm-pbs-Service\", \"ScalableDimension\": \"ecs:service:DesiredCount\", \"MinCapacity\": 0, \"MaxCapacity\": 4}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"ScaleIn\"}, \"ScaleIn\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:ecs:updateService\", \"Arguments\": {\"Cluster\": \"fastm-pbs-PrebidCluster\", \"Service\": \"fastm-pbs-Service\", \"DesiredCount\": 0}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}}}",
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "CensusGateLogs9F5791BD",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "CensusGateStateMachineRoleC30159BB",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fastm-demand-census-gate",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "CensusGateStateMachineEventsRole1D5D0110": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "CensusGateStateMachineEventsRoleDefaultPolicy709419FF": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "CensusGateStateMachine76333E59"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "CensusGateStateMachineEventsRoleDefaultPolicy709419FF",
+        "Roles": [
+          {
+            "Ref": "CensusGateStateMachineEventsRole1D5D0110"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "CensusGateStateMachineRoleC30159BB": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "CensusGateStateMachineRoleDefaultPolicy3CB63F56": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "application-autoscaling:DescribeScalableTargets",
+                "application-autoscaling:RegisterScalableTarget"
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "application-autoscaling:service-namespace": "ecs"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "ecs:DescribeServices",
+                "ecs:UpdateService"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ecs:us-east-1:123456789012:service/fastm-pbs-PrebidCluster/fastm-pbs-Service"
+            },
+            {
+              "Action": "ssm:GetParameter",
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/fastm/ops/running-channels"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "CensusGateStateMachineRoleDefaultPolicy3CB63F56",
+        "Roles": [
+          {
+            "Ref": "CensusGateStateMachineRoleC30159BB"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "DeadLettersAlarm3F8DE0AC": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A Census Changed or new-task event could not reach the census gate or the warm-up: Prebid Server may run without channels, or a new task may stay cold",
+        "AlarmName": "fastm-demand-dead-letters",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "DeadLettersBBF8BAAB",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "DeadLettersBBF8BAAB": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "DeadLettersPolicy05322138": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeadLettersBBF8BAAB",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "CensusGateCensusChanged67B71B7D",
+                      "Arn"
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeadLettersBBF8BAAB",
+                  "Arn"
+                ]
+              },
+              "Sid": "AllowEventRuleFastChannelsfastmDemandCensusGateCensusChanged449C6932"
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "WarmUpNewTaskA4BBEB2D",
+                      "Arn"
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeadLettersBBF8BAAB",
+                  "Arn"
+                ]
+              },
+              "Sid": "AllowEventRuleFastChannelsfastmDemandWarmUpNewTask155B4A8A"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Queues": [
+          {
+            "Ref": "DeadLettersBBF8BAAB"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::QueuePolicy"
+    },
     "DnsZone1A7256CF": {
       "Properties": {
         "HostedZoneConfig": {
@@ -400,6 +845,347 @@
         "Roles": [
           {
             "Ref": "SimulatorRole87397A10"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "WarmUpLogsF1D2B44C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/codebuild/fastm-pbs-warmup",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "WarmUpNewTaskA4BBEB2D": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): warm every new Prebid Server task",
+        "EventPattern": {
+          "detail": {
+            "clusterArn": [
+              "arn:aws:ecs:us-east-1:123456789012:cluster/fastm-pbs-PrebidCluster"
+            ],
+            "desiredStatus": [
+              "RUNNING"
+            ],
+            "group": [
+              "service:fastm-pbs-Service"
+            ],
+            "lastStatus": [
+              "RUNNING"
+            ]
+          },
+          "detail-type": [
+            "ECS Task State Change"
+          ],
+          "source": [
+            "aws.ecs"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "WarmUpProjectE9DB5D33",
+                "Arn"
+              ]
+            },
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "DeadLettersBBF8BAAB",
+                  "Arn"
+                ]
+              }
+            },
+            "Id": "Target0",
+            "InputTransformer": {
+              "InputPathsMap": {
+                "detail-taskArn": "$.detail.taskArn"
+              },
+              "InputTemplate": "{\"environmentVariablesOverride\":[{\"name\":\"TASK_ARN\",\"value\":<detail-taskArn>,\"type\":\"PLAINTEXT\"}]}"
+            },
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 2
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "WarmUpProjectEventsRoleE540DDA4",
+                "Arn"
+              ]
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "WarmUpProjectE9DB5D33": {
+      "Properties": {
+        "Artifacts": {
+          "Type": "NO_ARTIFACTS"
+        },
+        "Cache": {
+          "Type": "NO_CACHE"
+        },
+        "Description": "FAST Channels (fastm): synthetic probe auctions that warm new Prebid Server tasks",
+        "EncryptionKey": "alias/aws/s3",
+        "Environment": {
+          "ComputeType": "BUILD_GENERAL1_SMALL",
+          "Image": "aws/codebuild/amazonlinux-aarch64-standard:3.0",
+          "ImagePullCredentialsType": "CODEBUILD",
+          "PrivilegedMode": false,
+          "Type": "ARM_CONTAINER"
+        },
+        "LogsConfig": {
+          "CloudWatchLogs": {
+            "GroupName": {
+              "Ref": "WarmUpLogsF1D2B44C"
+            },
+            "Status": "ENABLED"
+          }
+        },
+        "Name": "fastm-pbs-warmup",
+        "ServiceRole": {
+          "Fn::GetAtt": [
+            "WarmUpProjectRole9583194A",
+            "Arn"
+          ]
+        },
+        "Source": {
+          "BuildSpec": "{\n  \"version\": \"0.2\",\n  \"env\": {\n    \"shell\": \"bash\"\n  },\n  \"phases\": {\n    \"install\": {\n      \"commands\": [\n        \"curl -fsSL -o vegeta.tar.gz \\\"https://github.com/tsenart/vegeta/releases/download/v12.13.0/vegeta_12.13.0_linux_arm64.tar.gz\\\"\",\n        \"echo \\\"<asset-hash>  vegeta.tar.gz\\\" | sha256sum -c -\",\n        \"tar -xzf vegeta.tar.gz vegeta && ./vegeta -version\"\n      ]\n    },\n    \"pre_build\": {\n      \"commands\": [\n        \"if [ -n \\\"${TASK_ARN:-}\\\" ]; then IP=$(aws ecs describe-tasks --cluster arn:aws:ecs:us-east-1:123456789012:cluster/fastm-pbs-PrebidCluster --tasks \\\"$TASK_ARN\\\" --query \\\"tasks[0].attachments[0].details[?name=='privateIPv4Address'].value | [0]\\\" --output text); for i in $(seq 1 60); do STATE=$(aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pbs/0123456789abcd --query \\\"TargetHealthDescriptions[?Target.Id=='$IP'].TargetHealth.State | [0]\\\" --output text); [ \\\"$STATE\\\" = healthy ] && break; [ \\\"$STATE\\\" = draining ] && { echo \\\"task $TASK_ARN is draining: no warm-up\\\"; SKIP=1; break; }; sleep 10; done; [ \\\"$STATE\\\" = healthy ] || [ \\\"${SKIP:-0}\\\" = 1 ] || { echo \\\"task $TASK_ARN ($IP) is $STATE after 600 s\\\"; exit 1; }; fi\",\n        \"HEALTHY=$(aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pbs/0123456789abcd --query \\\"length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])\\\" --output text)\",\n        \"RATE=${RATE:-$(( 50 * (HEALTHY > 0 ? HEALTHY : 1) ))}; echo \\\"replaying $RATE/s over $HEALTHY healthy targets\\\"\"\n      ]\n    },\n    \"build\": {\n      \"commands\": [\n        \"SECRET=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id fastm/demand/origin-a --query SecretString --output text)\",\n        \"printf '%s' '{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-120s\\\"}}}}' > body.json\",\n        \"{ echo \\\"POST https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=1&upid=warmup&dur=120120\\\"; echo \\\"x-fast-origin: $SECRET\\\"; echo \\\"Content-Type: application/json\\\"; echo \\\"X-Fast-Probe: 1\\\"; echo \\\"X-Fast-Sid: warmup-$CODEBUILD_BUILD_NUMBER\\\"; echo \\\"X-Fast-Pc: fastm-warmup\\\"; echo \\\"@body.json\\\"; } > targets.txt\",\n        \"if [ \\\"${SKIP:-0}\\\" != 1 ]; then ./vegeta attack -targets=targets.txt -rate=${RATE}/s -duration=${SECONDS_TO_RUN:-150}s -timeout=5s > results.bin && ./vegeta report results.bin && echo \\\"VEGETA_JSON $(./vegeta report -type=json results.bin)\\\"; fi\"\n      ]\n    }\n  }\n}",
+          "Type": "NO_SOURCE"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TimeoutInMinutes": 20
+      },
+      "Type": "AWS::CodeBuild::Project"
+    },
+    "WarmUpProjectEventsRoleDefaultPolicy9A4158B8": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "codebuild:StartBuild",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "WarmUpProjectE9DB5D33",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "WarmUpProjectEventsRoleDefaultPolicy9A4158B8",
+        "Roles": [
+          {
+            "Ref": "WarmUpProjectEventsRoleE540DDA4"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "WarmUpProjectEventsRoleE540DDA4": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "WarmUpProjectRole9583194A": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "codebuild.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "WarmUpProjectRoleDefaultPolicy184E3CF2": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "WarmUpLogsF1D2B44C",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:logs:us-east-1:123456789012:log-group:/aws/codebuild/",
+                      {
+                        "Ref": "WarmUpProjectE9DB5D33"
+                      },
+                      ":*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:logs:us-east-1:123456789012:log-group:/aws/codebuild/",
+                      {
+                        "Ref": "WarmUpProjectE9DB5D33"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "codebuild:BatchPutCodeCoverages",
+                "codebuild:BatchPutTestCases",
+                "codebuild:CreateReport",
+                "codebuild:CreateReportGroup",
+                "codebuild:UpdateReport"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:codebuild:us-east-1:123456789012:report-group/",
+                    {
+                      "Ref": "WarmUpProjectE9DB5D33"
+                    },
+                    "-*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "secretsmanager:GetSecretValue",
+              "Effect": "Allow",
+              "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:fastm/demand/origin-a-*"
+            },
+            {
+              "Action": "ecs:DescribeTasks",
+              "Effect": "Allow",
+              "Resource": "arn:aws:ecs:us-east-1:123456789012:task/fastm-pbs-PrebidCluster/*"
+            },
+            {
+              "Action": "elasticloadbalancing:DescribeTargetHealth",
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "WarmUpProjectRoleDefaultPolicy184E3CF2",
+        "Roles": [
+          {
+            "Ref": "WarmUpProjectRole9583194A"
           }
         ]
       },
