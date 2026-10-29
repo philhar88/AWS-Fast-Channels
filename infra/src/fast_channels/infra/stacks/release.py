@@ -11,6 +11,7 @@ from aws_cdk import aws_logs_destinations as logs_destinations
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.monetization import names
 from fast_channels.core.pds import names as pds_names
 from fast_channels.infra.arns import arn
@@ -27,7 +28,15 @@ if TYPE_CHECKING:
     from constructs import Construct
 
     from fast_channels.core.demand import DemandNetwork
+    from fast_channels.core.monetization.bundle import BundleContribution
     from fast_channels.infra.config import FastChannelsConfig
+
+
+def contributions(config: FastChannelsConfig) -> list[BundleContribution]:
+    """The other modules' function trees in the bundle: the crawl module's PRE_ADS content lookup when
+    ``modules.crawl.enabled`` and ``pre_ads``."""
+    crawl = config.modules.crawl
+    return [CrawlContribution()] if crawl.enabled and crawl.pre_ads else []
 
 
 class ReleaseStack(Stack):
@@ -59,6 +68,7 @@ class ReleaseStack(Stack):
             pbs_origin=f"https://{network.cloudfront_domain}",
             content_base_url=parameter(names.parameter_name(prefix, names.Parameter.CONTENT_BASE_URL)),
             channel_urls={c: parameter(names.channel_parameter_name(prefix, c)) for c in release.channels},
+            contributions=contributions(config),
         )
         topic = sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, prefix))
         self.logs = ReleaseLogs(self, "Logs", prefix=prefix, retention=retention, removal_policy=removal)
