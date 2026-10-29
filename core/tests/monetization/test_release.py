@@ -14,6 +14,7 @@ from fast_channels.core.monetization.release import (
     SiblingRecord,
     applied,
     differences,
+    mapped_functions,
     playback_plan,
     targets,
 )
@@ -119,6 +120,18 @@ def test_a_new_channel_is_bootstrapped_beside_released_ones(kit: SimpleNamespace
         "fastm-news-p-a",
         "fastm-news-p-b",
     ]
+
+
+def test_a_release_creates_the_trees_its_siblings_map(kit: SimpleNamespace) -> None:
+    bundle = kit.make_bundle(contributions=[kit.redeem()])
+    a, b, z = bundle.siblings
+    assert [f.function_id for f in mapped_functions(bundle, [b])] == [
+        "fastm_demo_p_b_ps_redeem",
+        "fastm_ps_ctl",
+        "fastm_demo_p_b_ps_root",
+    ]
+    assert {f.function_id for f in mapped_functions(bundle, [a, b, z])} >= {"fastm_demo_p_a_ps_redeem"}
+    assert mapped_functions(bundle, []) == []
 
 
 def test_differences_report_paths_never_values() -> None:

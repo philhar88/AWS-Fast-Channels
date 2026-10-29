@@ -250,6 +250,43 @@ def test_every_sibling_has_the_hook_alarms_and_the_zero_ad_sessions_detector(dep
     assert "/aws/vendedlogs/mediatailor/fastm-release" in json.dumps(variables)
 
 
+def _definition(template: Template) -> dict[str, Any]:
+    [machine] = resources(template, "AWS::StepFunctions::StateMachine").values()
+    parts = machine["DefinitionString"]["Fn::Join"][1]
+    return dict(json.loads("".join(p if isinstance(p, str) else "TOKEN" for p in parts)))
+
+
+def test_the_apply_path_applies_one_release_at_a_time(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    states = _definition(template)["States"]
+
+    assert states["Prepare"]["Next"] == "AlreadyReleased?"
+    assert [c["ErrorEquals"] for c in states["Prepare"]["Catch"]] == [["InvalidBundleError"], ["States.ALL"]]
+    assert states["Prepare"]["Catch"][0]["Next"] == "BundleRejected"
+    assert states["AlreadyReleased?"]["Default"] == "Accept"
+    [busy] = [r for r in states["Accept"]["Retry"] if r["ErrorEquals"] == ["ReleaseBusyError"]]
+    assert (busy["IntervalSeconds"], busy["MaxAttempts"], busy["BackoffRate"]) == (30, 40, 1)
+    for step in ("Accept", "Functions", "Configure", "Publish"):
+        assert states[step]["Catch"][-1] == {
+            "ErrorEquals": ["States.ALL"],
+            "Next": "RecordFailure",
+            "Output": "{% $states.errorOutput %}",
+        }
+    assert states["Configure"]["MaxConcurrency"] == 1
+    assert states["Publish"]["Next"] == "CheckDrift"
+    resources_ = template.to_json()["Resources"]
+    [bundle] = [k for k, r in resources_.items() if r["Type"] == "Custom::DesiredState"]
+    [rule] = [k for k, r in resources_.items() if r["Type"] == "AWS::Events::Rule"]
+    assert rule in resources_[bundle]["DependsOn"], "the rule exists before the first event"
+    [target] = resources(template, "AWS::Events::Rule")[rule]["Targets"]
+    assert set(target["InputTransformer"]["InputPathsMap"].values()) == {
+        "$.detail.bundle_key",
+        "$.detail.digest",
+        "$.detail.correlation_id",
+    }
+
+
 def test_template_snapshot(
     deployment: GetDeployment, normalized: Callable[..., Any], snapshot_json: SnapshotAssertion
 ) -> None:

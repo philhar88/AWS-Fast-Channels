@@ -25,9 +25,14 @@ logger = Logger()
 
 
 def _digest(properties: dict[str, Any] | None) -> str | None:
+    """The digest of the bundle in ``properties``; None without one, or for one this code no longer reads (a schema
+    change: the bundle counts as changed)."""
     if not properties or "Bundle" not in properties:
         return None
-    return Bundle.model_validate(json.loads(properties["Bundle"])).digest
+    try:
+        return Bundle.model_validate(json.loads(properties["Bundle"])).digest
+    except ValueError:  # pydantic.ValidationError and json.JSONDecodeError are ValueErrors
+        return None
 
 
 def publish(event: dict[str, Any]) -> dict[str, Any]:

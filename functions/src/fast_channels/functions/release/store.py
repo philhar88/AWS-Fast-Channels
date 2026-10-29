@@ -9,10 +9,12 @@ conversion:
   CloudFormation request): a redelivered event gets the same release, a deployment of an earlier bundle a new one;
 - ``RELEASE#rNNNN``: :class:`~fast_channels.core.monetization.release.ReleaseStatus`;
 - ``CHANNEL#<channel>``: :class:`~fast_channels.core.monetization.release.ChannelState`, written with a version check;
-- ``ORIGIN``: the slot (``a`` or ``b``) of the origin secret the siblings send (rotated by M3-05).
+- ``ORIGIN``: the slot (``a`` or ``b``) of the origin secret the siblings send (rotated by M3-05);
+- ``LOCK``: the release applying now, until ``expires`` (epoch seconds): releases apply one at a time.
 """
 
 import json
+import time
 from functools import cache
 from typing import TYPE_CHECKING, Any, Final
 
@@ -33,10 +35,17 @@ if TYPE_CHECKING:
 
 COUNTER: Final = "COUNTER"
 ORIGIN: Final = "ORIGIN"
+LOCK: Final = "LOCK"
+LOCK_SECONDS: Final = 5400
+"""How long a lock outlives an execution that died holding it: the state machine's timeout (90 minutes)."""
 
 
 class StaleStateError(RuntimeError):
     """A channel's state changed between read and write (another execution); the step is retried."""
+
+
+class ReleaseBusyError(RuntimeError):
+    """Another release holds the lock; the step is retried until it gives the lock back (or its lock expires)."""
 
 
 def _table() -> Table:
@@ -143,6 +152,40 @@ def put_channel(state: ChannelState, *, version: int) -> None:
         if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise StaleStateError(f"{state.channel} changed while it was being released") from None
         raise
+
+
+def lock(release: int) -> None:
+    """Hold the controller's lock for ``release`` (again, when it already does).
+
+    Raises:
+        ReleaseBusyError: another release holds it and its lock has not expired.
+    """
+    now = int(time.time())
+    try:
+        _table().put_item(
+            Item={"pk": LOCK, "release": release, "expires": now + LOCK_SECONDS},
+            ConditionExpression="attribute_not_exists(pk) OR #release = :release OR #expires < :now",
+            ExpressionAttributeNames={"#release": "release", "#expires": "expires"},
+            ExpressionAttributeValues={":release": release, ":now": now},
+        )
+    except ClientError as error:
+        if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise ReleaseBusyError(f"another release is applying; {release_tag(release)} waits") from None
+        raise
+
+
+def unlock(release: int) -> None:
+    """Give the lock back if ``release`` holds it."""
+    try:
+        _table().delete_item(
+            Key={"pk": LOCK},
+            ConditionExpression="#release = :release",
+            ExpressionAttributeNames={"#release": "release"},
+            ExpressionAttributeValues={":release": release},
+        )
+    except ClientError as error:
+        if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
 
 
 def origin_slot() -> str:

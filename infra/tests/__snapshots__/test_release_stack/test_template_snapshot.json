@@ -91,6 +91,7 @@
             "RELEASE_BUCKET": {
               "Ref": "ControllerBundlesC4F66A3B"
             },
+            "RELEASE_CHANNELS": "fastm-demo",
             "RELEASE_LOG_DESTINATION": {
               "Fn::GetAtt": [
                 "LogsDestination64C85DDD",
@@ -222,6 +223,7 @@
             },
             {
               "Action": [
+                "dynamodb:DeleteItem",
                 "dynamodb:GetItem",
                 "dynamodb:PutItem",
                 "dynamodb:Scan",
@@ -352,6 +354,7 @@
         "ControllerBundlesAutoDeleteObjectsCustomResourceB98896F0",
         "ControllerBundlesPolicyDE245A37",
         "ControllerBundlesC4F66A3B",
+        "ControllerOnDesiredState63791D37",
         "ControllerStateMachineEventsRoleDefaultPolicy7C5C0637",
         "ControllerStateMachineEventsRoleCE35CC84",
         "ControllerStateMachine0A1D2014",
@@ -635,7 +638,7 @@
         "AlarmActions": [
           "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
         ],
-        "AlarmDescription": "A Desired State Rendered event could not start the Release Controller: the bundle is not applied (redeploy the Release stack, or start the state machine with the event's detail)",
+        "AlarmDescription": "A Desired State Rendered event could not start the Release Controller: the bundle is not applied. Start the state machine with the event's detail (bundle_key, digest, correlation_id) as input",
         "AlarmName": "fastm-release-dead-letters",
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "Dimensions": [
@@ -1135,6 +1138,7 @@
             "RELEASE_BUCKET": {
               "Ref": "ControllerBundlesC4F66A3B"
             },
+            "RELEASE_CHANNELS": "fastm-demo",
             "RELEASE_LOG_DESTINATION": {
               "Fn::GetAtt": [
                 "LogsDestination64C85DDD",
@@ -1916,7 +1920,7 @@
             {
               "Action": "mediatailor:DeletePlaybackConfiguration",
               "Effect": "Allow",
-              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*"
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/*-p-?"
             },
             {
               "Action": "mediatailor:DeleteFunction",
@@ -1930,7 +1934,7 @@
               ],
               "Effect": "Allow",
               "Resource": [
-                "arn:aws:logs:us-east-1:123456789012:delivery-source:fastm-*",
+                "arn:aws:logs:us-east-1:123456789012:delivery-source:*-p-?-*",
                 "arn:aws:logs:us-east-1:123456789012:delivery:*"
               ]
             },
@@ -2016,7 +2020,7 @@
           "Fn::Join": [
             "",
             [
-              "{\"StartAt\":\"Prepare\",\"States\":{\"Prepare\":{\"Next\":\"AlreadyReleased?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              "{\"StartAt\":\"Prepare\",\"States\":{\"Prepare\":{\"Next\":\"AlreadyReleased?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"InvalidBundleError\"],\"Next\":\"BundleRejected\"},{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerApply033D6DE8",
@@ -2027,14 +2031,25 @@
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"AlreadyReleased?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $plan.skip %}\",\"Next\":\"NothingToDo\"}],\"Default\":\"Functions\"},\"Functions\":{\"Next\":\"Configure\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              ":states:::lambda:invoke\"},\"AlreadyReleased?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $plan.skip %}\",\"Next\":\"NothingToDo\"}],\"Default\":\"Accept\"},\"Accept\":{\"Next\":\"Functions\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":30,\"MaxAttempts\":40,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerApply033D6DE8",
                   "Arn"
                 ]
               },
-              "\",\"Payload\":{\"step\":\"functions\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              "\",\"Payload\":{\"step\":\"accept\",\"request\":\"{% $plan.request %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"plan\":\"{% $merge([$plan, $states.result.Payload]) %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Functions\":{\"Next\":\"Configure\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerApply033D6DE8",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"functions\",\"siblings\":\"{% $plan.siblings %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
               {
                 "Ref": "AWS::Partition"
               },
@@ -2078,11 +2093,11 @@
                   "Arn"
                 ]
               },
-              "\",\"Payload\":{\"step\":\"fail\",\"release\":\"{% $exists($plan) ? $plan.release : null %}\",\"change_id\":\"{% $exists($plan) ? $plan.change_id : null %}\",\"error\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              "\",\"Payload\":{\"step\":\"fail\",\"release\":\"{% $exists($plan.release) ? $plan.release : null %}\",\"change_id\":\"{% $exists($plan.change_id) ? $plan.change_id : null %}\",\"error\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"ReleaseFailed\":{\"Type\":\"Fail\",\"Error\":\"ReleaseFailed\",\"Cause\":\"See the ledger's release.fail record\"},\"NothingToDo\":{\"Type\":\"Succeed\"}},\"TimeoutSeconds\":1800,\"Comment\":\"Release Controller: validate the bundle, create its Functions, configure the idle siblings, publish the plans and ledger the release (DESIGN §8.3)\",\"QueryLanguage\":\"JSONata\"}"
+              ":states:::lambda:invoke\"},\"ReleaseFailed\":{\"Type\":\"Fail\",\"Error\":\"ReleaseFailed\",\"Cause\":\"See the ledger's release.fail record\"},\"NothingToDo\":{\"Type\":\"Succeed\"},\"BundleRejected\":{\"Type\":\"Fail\",\"Error\":\"BundleRejected\",\"Cause\":\"See the ledger's release.reject record\"}},\"TimeoutSeconds\":5400,\"Comment\":\"Release Controller: validate the bundle, take the lock, create its Functions, configure the idle siblings, publish the plans and ledger the release (DESIGN §8.3)\",\"QueryLanguage\":\"JSONata\"}"
             ]
           ]
         },

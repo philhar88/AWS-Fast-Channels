@@ -172,7 +172,7 @@ class ZeroAdsDetector(Construct):
         name: str = "zero-ads-sessions",
     ) -> None:
         super().__init__(scope, id)
-        service = "ops.zero_ads_sessions" if name == "zero-ads-sessions" else f"ops.{name.replace('-', '_')}"
+        service = f"ops.{name.replace('-', '_')}"
         self.function = FastFunction(
             self,
             "Detector",

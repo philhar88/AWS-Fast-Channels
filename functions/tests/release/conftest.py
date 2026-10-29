@@ -61,6 +61,8 @@ class FakeStore:
     requests: dict[str, int] = field(default_factory=dict)
     states: dict[str, tuple[ChannelState, int]] = field(default_factory=dict)
     slot: str = "a"
+    holder: int | None = None
+    """The release holding the lock."""
 
     def add(self, bundle: Bundle) -> str:
         key = f"release/{bundle.digest}/bundle.json"
@@ -99,6 +101,15 @@ class FakeStore:
     def origin_slot(self) -> str:
         return self.slot
 
+    def lock(self, release: int) -> None:
+        if self.holder not in (None, release):
+            raise store.ReleaseBusyError(f"r{self.holder:04d} applies")
+        self.holder = release
+
+    def unlock(self, release: int) -> None:
+        if self.holder == release:
+            self.holder = None
+
     def secret(self, slot: str) -> SecretStr:
         return SecretStr({"a": SECRET_A, "b": SECRET_B}[slot])
 
@@ -117,6 +128,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "RELEASE_LOG_DESTINATION": DESTINATION,
         "LAKE_DELIVERIES": json.dumps(LAKE),
         "ORIGIN_SECRET_REGION": "us-east-1",
+        "RELEASE_CHANNELS": CHANNEL,
     }.items():
         monkeypatch.setenv(name, value)
     cached = store.bundle  # the state fixture replaces it before this teardown runs
@@ -142,6 +154,8 @@ def state(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
         "put_channel",
         "origin_slot",
         "secret",
+        "lock",
+        "unlock",
     ):
         monkeypatch.setattr(store, name, getattr(fake, name))
     return fake

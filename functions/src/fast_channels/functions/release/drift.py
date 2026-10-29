@@ -23,7 +23,7 @@ from fast_channels.core.monetization.playback import render
 from fast_channels.core.monetization.release import ChannelState, differences
 from fast_channels.core.monetization.validators import check_channel_policy
 from fast_channels.functions import aws
-from fast_channels.functions.channel_ops import MISSING, error_code
+from fast_channels.functions.channel_ops import is_missing
 from fast_channels.functions.release import store
 from fast_channels.functions.settings import settings
 
@@ -41,14 +41,14 @@ def _get(operation: Any, **request: Any) -> dict[str, Any] | None:
     try:
         found: dict[str, Any] = operation(**request)
     except ClientError as error:
-        if error_code(error) in MISSING:
+        if is_missing(error):
             return None
         raise
     return found
 
 
 def states() -> list[ChannelState]:
-    """Every channel state the controller recorded."""
+    """The recorded states of the channels the module monetizes now (one taken out keeps its item, unchecked)."""
     config = settings()
     config.require("release_table")
     table = aws.table(config.release_table)
@@ -60,7 +60,8 @@ def states() -> list[ChannelState]:
         if "LastEvaluatedKey" not in page:
             break
         request["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-    return [ChannelState.model_validate_json(item["doc"]) for item in items]
+    found = [ChannelState.model_validate_json(item["doc"]) for item in items]
+    return [state for state in found if state.channel in config.release_channels]
 
 
 def sibling_drift(sibling: Sibling, bundle: Bundle, *, release: int, change_id: str, secret: SecretStr) -> list[str]:

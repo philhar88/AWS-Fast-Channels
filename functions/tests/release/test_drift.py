@@ -110,10 +110,13 @@ def test_states_reads_every_channel_page(stub: Stub) -> None:
     state = applied(
         None, channel="fastm-demo", siblings=["fastm-demo-p-a"], release=1, digest="a" * 64, change_id="c", at=AT
     )
+    removed = state.model_copy(update={"channel": "fastm-news"})  # taken out of the module: not checked
     dynamodb = stub("dynamodb")
     item = {"pk": {"S": "CHANNEL#fastm-demo"}, "doc": {"S": state.model_dump_json()}}
     dynamodb.add_response("scan", {"Items": [item], "LastEvaluatedKey": {"pk": {"S": "CHANNEL#fastm-demo"}}})
-    dynamodb.add_response("scan", {"Items": []})
+    dynamodb.add_response(
+        "scan", {"Items": [{"pk": {"S": "CHANNEL#fastm-news"}, "doc": {"S": removed.model_dump_json()}}]}
+    )
     assert drift.states() == [state]
 
 

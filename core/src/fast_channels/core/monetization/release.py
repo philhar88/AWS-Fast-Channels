@@ -7,9 +7,9 @@ about 3 s, fleet-wide, which makes it the rollback primitive and never a canary 
 channel configures every sibling (``a`` becomes stable, ``b`` idle). A sibling added later is configured by the next
 release. Promotion (M3-04) swaps the pair and re-points the probe.
 
-:func:`targets` picks the siblings a release configures, :func:`applied` records it, :func:`differences` compares
-what a configuration should be with what the service returns (drift), and :class:`PlaybackPlan` is the document
-players without a ticket read.
+:func:`targets` picks the siblings a release configures, :func:`mapped_functions` the Functions it creates for
+them, :func:`applied` records it, :func:`differences` compares what a configuration should be with what the service
+returns (drift), and :class:`PlaybackPlan` is the document players without a ticket read.
 """
 
 from collections.abc import Mapping, Sequence
@@ -24,6 +24,7 @@ from fast_channels.core.monetization.playback import ROLE_LETTERS, SiblingRole
 
 if TYPE_CHECKING:
     from fast_channels.core.monetization.bundle import Bundle, Sibling
+    from fast_channels.core.monetization.functions import Function
 
 STABLE_LETTER, IDLE_LETTER = ROLE_LETTERS[SiblingRole.GENERAL]
 PLAN_VERSION: Final = 1
@@ -78,6 +79,20 @@ def targets(bundle: Bundle, state: Mapping[str, ChannelState]) -> list[Sibling]:
         if idle is None or sibling.name == idle or sibling.name not in configured:
             chosen.append(sibling)
     return chosen
+
+
+def mapped_functions(bundle: Bundle, siblings: Sequence[Sibling]) -> list[Function]:
+    """The functions the ``siblings`` run: each mapped root and the steps under it, in the bundle's order (children
+    before the executors that run them). A release creates only these: the other siblings keep the ids they have."""
+    wanted: set[str] = set()
+    pending = [stem for sibling in siblings for stem in (sibling.playback.function_mapping or {}).values()]
+    while pending:
+        stem = pending.pop()
+        if stem in wanted or (function := bundle.function(stem)) is None:
+            continue
+        wanted.add(stem)
+        pending += [ref.function_id for ref in function.steps]
+    return [f for f in bundle.functions if f.function_id in wanted]
 
 
 def applied(

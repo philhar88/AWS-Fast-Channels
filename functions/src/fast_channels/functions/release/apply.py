@@ -1,20 +1,24 @@
 """The Release Controller's apply path: the steps of the state machine ``<prefix>-release`` (DESIGN §8.3).
 
-``Desired State Rendered`` starts an execution with the bundle's key and digest. The steps, each one invocation of
-this handler (``step``):
+``Desired State Rendered`` starts an execution with the bundle's key, its digest and the event's ``correlation_id``
+(the deployment's CloudFormation request). The steps, each one invocation of this handler (``step``):
 
 1. ``prepare``: load the bundle and run every validator (R-F1 … R-S1, R-A1) and the secret check; a bundle that breaks
-   any is refused and ledgered. Otherwise allocate the event's release (a redelivered event gets the same one; a
-   deployment that brings an earlier bundle back gets a new one) and choose the
-   siblings it configures: a channel's idle sibling, or all of a channel never released.
-2. ``functions``: create the release's FunctionId tree, children first. An id is never updated: an existing id with
-   the same definition is left alone (a retried step), one with another definition stops the release.
-3. ``configure`` (one per chosen sibling): ``PutPlaybackConfiguration`` with the origin secret read now from Secrets
+   any is refused and ledgered. Otherwise allocate the event's release: a redelivered event gets the same one (and is
+   skipped once applied), a deployment that brings an earlier bundle back gets a new one.
+2. ``accept``: take the controller's lock, so releases apply one at a time (another one holding it makes the step
+   retry); then record the release as applying, choose the siblings it configures (a channel's idle sibling, all
+   of a channel never released, any sibling not configured yet) and ledger the acceptance.
+3. ``functions``: create the Function trees those siblings map, children first. An id is never updated: an existing
+   id with the same definition is left alone (a retried step), one with another definition stops the release.
+4. ``configure`` (one per chosen sibling): ``PutPlaybackConfiguration`` with the origin secret read now from Secrets
    Manager, its logging, and its vended-log deliveries without the fields that may hold the secret or the ticket,
    into the module's KMS-encrypted log group and into the lake.
-4. ``publish``: record each channel's siblings, rewrite ``/plan/playback/<channel>.json`` for its stable sibling and
-   ledger the release.
-5. ``fail`` (on any error after ``prepare``): mark the release failed and ledger why.
+5. ``publish``: record each channel's siblings, rewrite ``/plan/playback/<channel>.json`` for its stable sibling,
+   ledger the release and give the lock back. A channel this release already recorded is not published again (a
+   retried step).
+6. ``fail`` (on any error after a bundle is accepted as valid): mark the release failed, give the lock back and ledger
+   why.
 
 Nothing here calls ``PutChannelPolicy``: the channel policy is the static pattern set with the channel (P0-08).
 """
@@ -32,8 +36,16 @@ from fast_channels.core.demand import ORIGIN_SECRET_SLOTS
 from fast_channels.core.ledger import LedgerKind, new_record_id
 from fast_channels.core.mediatailor_logs import RECORD_FIELDS, VENDED_LOG_TYPES
 from fast_channels.core.monetization import names
+from fast_channels.core.monetization.functions import release_tag
 from fast_channels.core.monetization.playback import release_tags, render
-from fast_channels.core.monetization.release import ReleaseStatus, applied, differences, playback_plan, targets
+from fast_channels.core.monetization.release import (
+    ReleaseStatus,
+    applied,
+    differences,
+    mapped_functions,
+    playback_plan,
+    targets,
+)
 from fast_channels.core.monetization.validators import (
     Rule,
     Violation,
@@ -42,7 +54,7 @@ from fast_channels.core.monetization.validators import (
     require_valid,
 )
 from fast_channels.functions import aws
-from fast_channels.functions.channel_ops import MISSING, error_code
+from fast_channels.functions.channel_ops import is_missing
 from fast_channels.functions.ops.ledger import append, entry
 from fast_channels.functions.release import store
 from fast_channels.functions.settings import settings
@@ -80,11 +92,15 @@ def _ledger(chain: str, action: str, subject: str, *, correlation_id: str, detai
     )
 
 
-# --- prepare --------------------------------------------------------------------------------------------------------
+# --- prepare and accept ---------------------------------------------------------------------------------------------
 
 
 def prepare(bundle_key: str, digest: str, request: str, execution: str) -> dict[str, Any]:
-    """Validate the bundle, allocate the release of event ``request`` and choose the siblings it configures."""
+    """Validate the bundle and allocate the release of event ``request``.
+
+    Raises:
+        InvalidBundleError: the bundle breaks a rule (ledgered as ``release.reject``; nothing is allocated).
+    """
     bundle, violations, text = store.load(bundle_key)
     violations += check_secret_free(
         text, secrets=[store.secret(slot) for slot in ORIGIN_SECRET_SLOTS], where=f"bundle {bundle_key}"
@@ -106,18 +122,38 @@ def prepare(bundle_key: str, digest: str, request: str, execution: str) -> dict[
             },
         )
         require_valid(violations)
-    assert bundle is not None  # a document that is not a bundle has violations
     release = store.allocate(request)
     previous = store.status(release)
     if previous is not None and previous.status == "APPLIED":
         logger.info("bundle already released", extra={"release": release, "digest": digest})
         return {"skip": True, "release": release}
     change_id = previous.change_id if previous else new_record_id(_now(), os.urandom(10))
+    logger.info("release allocated", extra={"release": release, "change_id": change_id, "request": request})
+    return {
+        "skip": False,
+        "release": release,
+        "change_id": change_id,
+        "bundle_key": bundle_key,
+        "digest": digest,
+        "request": request,
+    }
+
+
+def accept(
+    bundle_key: str, digest: str, release: int, change_id: str, *, request: str, execution: str
+) -> dict[str, Any]:
+    """Take the lock, record the release as applying and choose the siblings it configures.
+
+    Raises:
+        ReleaseBusyError: another release holds the lock (the state machine retries the step).
+    """
+    store.lock(release)
     store.put_status(
         ReleaseStatus(
             release=release, digest=digest, bundle_key=bundle_key, change_id=change_id, status="APPLYING", at=_now()
         )
     )
+    bundle = store.bundle(bundle_key)
     chosen = [s.name for s in targets(bundle, store.channels([c.name for c in bundle.channels]))]
     _ledger(
         names.BUNDLE_CHAIN,
@@ -126,15 +162,8 @@ def prepare(bundle_key: str, digest: str, request: str, execution: str) -> dict[
         correlation_id=change_id,
         detail={"digest": digest, "release": release, "siblings": chosen, "request": request, "execution": execution},
     )
-    logger.info("release prepared", extra={"release": release, "siblings": chosen, "change_id": change_id})
-    return {
-        "skip": False,
-        "release": release,
-        "change_id": change_id,
-        "bundle_key": bundle_key,
-        "digest": digest,
-        "siblings": chosen,
-    }
+    logger.info("release accepted", extra={"release": release, "siblings": chosen, "change_id": change_id})
+    return {"siblings": chosen}
 
 
 # --- functions ------------------------------------------------------------------------------------------------------
@@ -144,7 +173,7 @@ def _existing(function_id: str) -> dict[str, Any] | None:
     try:
         found: dict[str, Any] = aws.client("mediatailor").get_function(FunctionId=function_id)
     except ClientError as error:
-        if error_code(error) in MISSING:
+        if is_missing(error):
             return None
         raise
     return found
@@ -156,25 +185,27 @@ def put_function(function: Function) -> bool:
     Raises:
         ImmutableFunctionError: the id exists with another definition.
     """
-    request = function.put_request()
     existing = _existing(function.function_id)
     if existing is None:
-        aws.client("mediatailor").put_function(**request)
+        aws.client("mediatailor").put_function(**function.put_request())
         return True
     if changed := differences(function.put_request(tags=False), existing):
         raise ImmutableFunctionError(f"{function.function_id} exists with another definition ({', '.join(changed)})")
     return False
 
 
-def put_functions(bundle_key: str, release: int, change_id: str) -> dict[str, Any]:
-    """Every function of the release, children before the executors that run them."""
+def put_functions(bundle_key: str, release: int, change_id: str, siblings: list[str]) -> dict[str, Any]:
+    """The Function trees ``siblings`` map, with the ids of ``release``, children before the executors that run
+    them."""
     config = settings()
     config.require("prefix")
     tags = release_tags(config.prefix, release=release, change_id=change_id)
+    bundle = store.bundle(bundle_key)
     created: list[str] = []
     existing: list[str] = []
-    for function in store.bundle(bundle_key).released_functions(release, tags=tags):
-        (created if put_function(function) else existing).append(function.function_id)
+    for function in mapped_functions(bundle, [_sibling(bundle, name) for name in siblings]):
+        released = function.released(release, tags=tags)
+        (created if put_function(released) else existing).append(released.function_id)
     logger.info("functions in place", extra={"release": release, "new": created, "existing": existing})
     return {"created": created, "existing": existing}
 
@@ -258,7 +289,8 @@ def _hls_prefix(configuration: str, configured: dict[str, str]) -> str:
 def publish(
     bundle_key: str, digest: str, release: int, change_id: str, results: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Record each channel's configured siblings, rewrite its playback plan and ledger the release."""
+    """Record each channel's configured siblings, rewrite its playback plan, ledger the release and give the lock
+    back."""
     config = settings()
     config.require("media_bucket", "cdn_base_url")
     bundle = store.bundle(bundle_key)
@@ -270,6 +302,12 @@ def publish(
         if not siblings:
             continue
         state, version = store.channel(channel.name)
+        if state is not None and all(
+            (record := state.siblings.get(s)) is not None and (record.release, record.change_id) == (release, change_id)
+            for s in siblings
+        ):
+            logger.info("channel already published", extra={"channel": channel.name, "release": release})
+            continue  # a retried step: its state, plan and ledger record were written
         state = applied(
             state, channel=channel.name, siblings=siblings, release=release, digest=digest, change_id=change_id, at=at
         )
@@ -318,19 +356,22 @@ def publish(
             at=previous.at if previous else at,
         )
     )
+    store.unlock(release)
     logger.info("release applied", extra={"release": release, "plans": plans})
     return {"release": release, "plans": plans}
 
 
 def fail(release: int | None, change_id: str | None, error: dict[str, Any], execution: str) -> dict[str, Any]:
-    """Mark the release failed and ledger the error (the execution then fails)."""
+    """Mark the release failed, give its lock back and ledger the error (the execution then fails)."""
     message = f"{error.get('Error', 'Error')}: {str(error.get('Cause', ''))[:1000]}"
-    if release is not None and (previous := store.status(release)) is not None:
-        store.put_status(previous.model_copy(update={"status": "FAILED", "at": _now()}))
+    if release is not None:
+        if (previous := store.status(release)) is not None:
+            store.put_status(previous.model_copy(update={"status": "FAILED", "at": _now()}))
+        store.unlock(release)
     _ledger(
         names.BUNDLE_CHAIN,
         "release.fail",
-        f"r{release:04d}" if release else "unallocated",
+        release_tag(release) if release else "unallocated",
         correlation_id=change_id or execution,
         detail={"release": release, "error": message, "execution": execution},
     )
@@ -345,8 +386,17 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     match event["step"]:
         case "prepare":
             return prepare(event["bundle_key"], event["digest"], event["request"], event["execution"])
+        case "accept":
+            return accept(
+                event["bundle_key"],
+                event["digest"],
+                event["release"],
+                event["change_id"],
+                request=event["request"],
+                execution=event["execution"],
+            )
         case "functions":
-            return put_functions(event["bundle_key"], event["release"], event["change_id"])
+            return put_functions(event["bundle_key"], event["release"], event["change_id"], event["siblings"])
         case "configure":
             return configure(event["bundle_key"], event["sibling"], event["release"], event["change_id"])
         case "publish":

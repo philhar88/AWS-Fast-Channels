@@ -54,9 +54,9 @@ All notable changes to this project are documented here. The format follows
 - **Release Controller: the apply path** (`modules.release`, `FastChannels-<prefix>-Release`,
   [docs/release-controller.md](docs/release-controller.md)). CDK renders and validates the release bundle;
   `Custom::DesiredState` stores it by digest and puts `Desired State Rendered` on the bus; the state machine
-  `<prefix>-release` validates it again, creates its MediaTailor Functions (an id is never updated), configures
-  the idle sibling `<channel>-p-<s>` (all siblings on a channel's first release) with the origin secret read at
-  apply, creates its vended-log deliveries without the fields that may hold the secret or a ticket, rewrites
+  `<prefix>-release` validates it again and, one release at a time, creates the MediaTailor Functions its siblings
+  map (an id is never updated), configures the idle sibling `<channel>-p-<s>` (all siblings on a channel's first
+  release) with the origin secret read at apply, creates its vended-log deliveries without the fields that may hold the secret or a ticket, rewrites
   `/plan/playback/<channel>.json` and ledgers the release. The siblings' log group has its own KMS key, whose
   policy lets only named roles decrypt. An hourly drift check (alarm `<prefix>-release-drift`), per-sibling hook
   alarms and a zero-ad-sessions detector watch the siblings. With the module on, every other role of the stage is

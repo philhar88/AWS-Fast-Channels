@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 from botocore.stub import ANY, Stubber
 
 from fast_channels.core.monetization.bundle import bundle_document
@@ -16,6 +17,7 @@ from fast_channels.functions.release import desired_state, reaper
 
 type Stub = Callable[[str], Stubber]
 OWNED = release_tags("fastm", release=1, change_id="c1")
+PC = "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/"
 
 
 def as_property(bundle: Any) -> str:
@@ -107,6 +109,17 @@ def test_desired_state_fails_the_deployment_for_an_invalid_bundle_or_a_lost_even
         desired_state.handler(event("Create", bundle), context)
 
 
+def test_an_old_bundle_this_code_no_longer_reads_counts_as_changed(
+    kit: SimpleNamespace, stub: Stub, context: Any
+) -> None:
+    bundle = kit.make_bundle()
+    update = event("Update", bundle, old=bundle)
+    update["OldResourceProperties"]["Bundle"] = json.dumps({"v": 0, "renamed": True})  # an earlier schema
+    key = expect_put(stub("s3"), bundle)
+    expect_event(stub("events"), bundle, key, "update-1")
+    desired_state.handler(update, context)
+
+
 def test_desired_state_delete_leaves_the_bundles(context: Any) -> None:
     assert desired_state.handler(event("Delete"), context) == {"PhysicalResourceId": "fastm-desired-state"}
 
@@ -114,12 +127,45 @@ def test_desired_state_delete_leaves_the_bundles(context: Any) -> None:
 # --- reaper ---------------------------------------------------------------------------------------------------------
 
 
-def reaper_event(request: str) -> dict[str, Any]:
-    return {
-        "RequestType": request,
-        "RequestId": "r-1",
-        "ResourceProperties": {"Prefix": "fastm", "Channels": ["fastm-demo"], "MediaBucket": "fastm-media"},
-    }
+def reaper_event(request: str, *, old: list[str] | None = None) -> dict[str, Any]:
+    properties = {"Prefix": "fastm", "Channels": ["fastm-demo"], "MediaBucket": "fastm-media"}
+    event: dict[str, Any] = {"RequestType": request, "RequestId": "r-1", "ResourceProperties": properties}
+    if old is not None:
+        event["OldResourceProperties"] = properties | {"Channels": old}
+    return event
+
+
+def pc(name: str, tags: dict[str, str]) -> dict[str, Any]:
+    return {"Name": name, "PlaybackConfigurationArn": f"{PC}{name}", "Tags": tags}
+
+
+def expect_sibling_deleted(mediatailor: Stubber, logs: Stubber, sibling: str) -> None:
+    """``channel_ops.delete_deliveries`` (by the sources' resource ARN), then the configuration."""
+    logs.add_response(
+        "describe_delivery_sources",
+        {
+            "deliverySources": [
+                {"name": f"{sibling}-ads", "resourceArns": [f"{PC}{sibling}"]},
+                {"name": f"{sibling}-manifest", "resourceArns": [f"{PC}{sibling}"]},
+                {"name": f"{sibling}-x-ads", "resourceArns": [f"{PC}{sibling}-x"]},  # a name that only looks alike
+            ]
+        },
+    )
+    logs.add_response(
+        "describe_deliveries",
+        {
+            "deliveries": [
+                {"id": f"{sibling}-1", "deliverySourceName": f"{sibling}-ads"},
+                {"id": f"{sibling}-2", "deliverySourceName": f"{sibling}-manifest"},
+                {"id": "other", "deliverySourceName": f"{sibling}-x-ads"},
+            ]
+        },
+    )
+    logs.add_response("delete_delivery", {}, {"id": f"{sibling}-1"})
+    logs.add_client_error("delete_delivery", service_error_code="ResourceNotFoundException")  # already gone
+    logs.add_response("delete_delivery_source", {}, {"name": f"{sibling}-ads"})
+    logs.add_response("delete_delivery_source", {}, {"name": f"{sibling}-manifest"})
+    mediatailor.add_response("delete_playback_configuration", {}, {"Name": sibling})
 
 
 def test_the_reaper_deletes_only_what_the_controller_owns_in_dependency_order(stub: Stub, context: Any) -> None:
@@ -128,35 +174,18 @@ def test_the_reaper_deletes_only_what_the_controller_owns_in_dependency_order(st
         "list_playback_configurations",
         {
             "Items": [
-                {"Name": "fastm-demo", "Tags": {"fast:app": "fastm"}},  # the v3.0.0 configuration
-                {"Name": "fastm-demo-p-a", "Tags": OWNED},
-                {"Name": "fastm-demo-p-b", "Tags": OWNED},
-                {"Name": "fastm-demo-p-q", "Tags": {"fast:app": "fastm"}},  # not the controller's
-                {"Name": "fastm-news-p-a", "Tags": OWNED},  # not a channel of this stack
-                {"Name": "fastm-demo-p-ab", "Tags": OWNED},
+                pc("fastm-demo", {"fast:app": "fastm"}),  # the v3.0.0 configuration
+                pc("fastm-demo-p-a", OWNED),
+                pc("fastm-demo-p-b", OWNED),
+                pc("fastm-demo-p-q", {"fast:app": "fastm"}),  # not the controller's
+                pc("fastm-news-p-a", OWNED),  # not a channel of this stack
+                pc("fastm-demo-p-ab", OWNED),
             ]
         },
     )
     for sibling in ("fastm-demo-p-a", "fastm-demo-p-b"):
-        logs.add_response(
-            "describe_delivery_sources",
-            {"deliverySources": [{"name": f"{sibling}-ads"}, {"name": f"{sibling}-manifest"}, {"name": "other-ads"}]},
-        )
-        logs.add_response(
-            "describe_deliveries",
-            {
-                "deliveries": [
-                    {"id": f"{sibling}-1", "deliverySourceName": f"{sibling}-ads"},
-                    {"id": f"{sibling}-2", "deliverySourceName": f"{sibling}-manifest"},
-                    {"id": "other", "deliverySourceName": "other-ads"},
-                ]
-            },
-        )
-        logs.add_response("delete_delivery", {}, {"id": f"{sibling}-1"})
-        logs.add_client_error("delete_delivery", service_error_code="ResourceNotFoundException")  # already gone
-        logs.add_response("delete_delivery_source", {}, {"name": f"{sibling}-ads"})
-        logs.add_response("delete_delivery_source", {}, {"name": f"{sibling}-manifest"})
-        mediatailor.add_response("delete_playback_configuration", {}, {"Name": sibling})
+        expect_sibling_deleted(mediatailor, logs, sibling)
+    s3.add_response("delete_object", {}, {"Bucket": "fastm-media", "Key": "plan/playback/fastm-demo.json"})
     mediatailor.add_response(
         "list_functions",
         {
@@ -170,18 +199,30 @@ def test_the_reaper_deletes_only_what_the_controller_owns_in_dependency_order(st
     )
     mediatailor.add_response("delete_function", {}, {"FunctionId": "fastm_ps_root_r0001"})
     mediatailor.add_response("delete_function", {}, {"FunctionId": "fastm_ps_ctl_r0001"})
-    s3.add_response("delete_object", {}, {"Bucket": "fastm-media", "Key": "plan/playback/fastm-demo.json"})
     assert reaper.handler(reaper_event("Delete"), context) == {"PhysicalResourceId": "fastm-release-reaper"}
 
 
-def test_the_reaper_raises_other_errors_and_ignores_create_and_update(stub: Stub, context: Any) -> None:
+def test_an_update_reaps_the_siblings_of_channels_taken_out_of_the_module(stub: Stub, context: Any) -> None:
+    mediatailor, logs, s3 = stub("mediatailor"), stub("logs"), stub("s3")
+    assert reaper.handler(reaper_event("Update", old=["fastm-demo"]), context)  # no channel removed: nothing
+    mediatailor.add_response(
+        "list_playback_configurations", {"Items": [pc("fastm-news-p-a", OWNED), pc("fastm-demo-p-a", OWNED)]}
+    )
+    expect_sibling_deleted(mediatailor, logs, "fastm-news-p-a")
+    s3.add_response("delete_object", {}, {"Bucket": "fastm-media", "Key": "plan/playback/fastm-news.json"})
+    reaper.handler(reaper_event("Update", old=["fastm-demo", "fastm-news"]), context)  # the Functions stay
+
+
+def test_the_reaper_raises_other_errors_and_ignores_create(stub: Stub, context: Any) -> None:
     assert reaper.handler(reaper_event("Create"), context) == {"PhysicalResourceId": "fastm-release-reaper"}
-    assert reaper.handler(reaper_event("Update"), context) == {"PhysicalResourceId": "fastm-release-reaper"}
     mediatailor, logs = stub("mediatailor"), stub("logs")
-    mediatailor.add_response("list_playback_configurations", {"Items": [{"Name": "fastm-demo-p-a", "Tags": OWNED}]})
-    logs.add_response("describe_delivery_sources", {"deliverySources": [{"name": "fastm-demo-p-a-ads"}]})
+    mediatailor.add_response("list_playback_configurations", {"Items": [pc("fastm-demo-p-a", OWNED)]})
+    logs.add_response(
+        "describe_delivery_sources",
+        {"deliverySources": [{"name": "fastm-demo-p-a-ads", "resourceArns": [f"{PC}fastm-demo-p-a"]}]},
+    )
     logs.add_response("describe_deliveries", {"deliveries": []})
     logs.add_client_error("delete_delivery_source", service_error_code="AccessDeniedException")
-    with pytest.raises(reaper.ClientError):
+    with pytest.raises(ClientError):
         reaper.handler(reaper_event("Delete"), context)
-    assert reaper.siblings("fastm", []) == []
+    assert reaper.siblings("fastm", []) == {}

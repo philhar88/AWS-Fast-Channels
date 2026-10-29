@@ -100,6 +100,8 @@ class Settings:
     """The Pod Decision Service's table (``<prefix>-pds``: budgets, caps, reservations, delivery)."""
     release_bucket: str = field(default_factory=lambda: _env("RELEASE_BUCKET"))
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
+    release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
+    """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
     release_table: str = field(default_factory=lambda: _env("RELEASE_TABLE"))
     """The Release Controller's state table (``<prefix>-release``)."""
     release_log_destination: str = field(default_factory=lambda: _env("RELEASE_LOG_DESTINATION"))

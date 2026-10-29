@@ -137,6 +137,43 @@ def test_put_channel_checks_the_version(stub: Stub) -> None:
         store.put_channel(state, version=3)
 
 
+def test_one_release_holds_the_lock_at_a_time(stub: Stub, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store.time, "time", lambda: 1_000.5)
+    dynamodb = stub("dynamodb")
+    dynamodb.add_response(
+        "put_item",
+        {},
+        {
+            "TableName": TABLE,
+            "Item": {"pk": "LOCK", "release": 3, "expires": 1_000 + store.LOCK_SECONDS},
+            "ConditionExpression": "attribute_not_exists(pk) OR #release = :release OR #expires < :now",
+            "ExpressionAttributeNames": {"#release": "release", "#expires": "expires"},
+            "ExpressionAttributeValues": {":release": 3, ":now": 1_000},
+        },
+    )
+    store.lock(3)
+    conditional_failure(dynamodb, "put_item")
+    with pytest.raises(store.ReleaseBusyError, match="r0004 waits"):
+        store.lock(4)
+    dynamodb.add_client_error("put_item", service_error_code="InternalServerError", http_status_code=500)
+    with pytest.raises(store.ClientError):
+        store.lock(4)
+    unlock = {
+        "TableName": TABLE,
+        "Key": {"pk": "LOCK"},
+        "ConditionExpression": "#release = :release",
+        "ExpressionAttributeNames": {"#release": "release"},
+        "ExpressionAttributeValues": {":release": 3},
+    }
+    dynamodb.add_response("delete_item", {}, unlock)
+    store.unlock(3)
+    conditional_failure(dynamodb, "delete_item")  # another release holds it, or nobody: left as it is
+    store.unlock(3)
+    dynamodb.add_client_error("delete_item", service_error_code="InternalServerError", http_status_code=500)
+    with pytest.raises(store.ClientError):
+        store.unlock(3)
+
+
 def test_the_origin_slot_and_its_secret(stub: Stub) -> None:
     dynamodb = stub("dynamodb")
     dynamodb.add_response("get_item", {}, get("ORIGIN"))

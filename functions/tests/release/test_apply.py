@@ -14,10 +14,11 @@ from pydantic import SecretStr
 
 from fast_channels.core import specs
 from fast_channels.core.mediatailor_logs import ADS_LOG_FIELDS, MANIFEST_LOG_FIELDS
+from fast_channels.core.monetization.bundle import Bundle, bundle_document
 from fast_channels.core.monetization.playback import release_tags, render
 from fast_channels.core.monetization.release import ReleaseStatus, applied, playback_plan
 from fast_channels.core.monetization.validators import InvalidBundleError
-from fast_channels.functions.release import apply
+from fast_channels.functions.release import apply, store
 
 type Stub = Callable[[str], Stubber]
 AT = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
@@ -49,26 +50,47 @@ def test_the_controller_never_changes_a_channel_policy() -> None:
         ), path.name
 
 
-# --- prepare --------------------------------------------------------------------------------------------------------
+# --- prepare and accept --------------------------------------------------------------------------------------------
+
+SIBLINGS = ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"]
 
 
-def test_prepare_accepts_a_valid_bundle_and_chooses_every_sibling_of_a_new_channel(
+def test_prepare_allocates_and_accept_chooses_every_sibling_of_a_new_channel(
     kit: SimpleNamespace, state: Any, ledger: Any
 ) -> None:
     bundle = kit.make_bundle()
     key = state.add(bundle)
-    result = apply.prepare(key, bundle.digest, "deploy-1", "exec-1")
-    assert result == {
+    plan = apply.prepare(key, bundle.digest, "deploy-1", "exec-1")
+    assert plan == {
         "skip": False,
         "release": 1,
         "change_id": ANY,
         "bundle_key": key,
         "digest": bundle.digest,
-        "siblings": ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"],
+        "request": "deploy-1",
     }
-    assert state.statuses[1].status == "APPLYING" and state.statuses[1].change_id == result["change_id"]
+    assert state.statuses == {} and ledger.entries == []  # nothing recorded before the lock
+    accepted = apply.accept(key, bundle.digest, 1, plan["change_id"], request="deploy-1", execution="exec-1")
+    assert accepted == {"siblings": SIBLINGS}
+    assert state.holder == 1
+    assert state.statuses[1].status == "APPLYING" and state.statuses[1].change_id == plan["change_id"]
     assert ledger.actions() == [("release/bundle", "release.accept")]
-    assert ledger.entries[0].detail["release"] == 1
+    assert ledger.entries[0].detail | {"execution": "exec-1"} == {
+        "digest": bundle.digest,
+        "release": 1,
+        "siblings": SIBLINGS,
+        "request": "deploy-1",
+        "execution": "exec-1",
+    }
+
+
+def test_accept_waits_for_the_release_holding_the_lock(kit: SimpleNamespace, state: Any, ledger: Any) -> None:
+    bundle = kit.make_bundle()
+    key = state.add(bundle)
+    state.holder = 4
+    with pytest.raises(store.ReleaseBusyError):
+        apply.accept(key, bundle.digest, 5, "c5", request="deploy-5", execution="exec-5")
+    assert state.statuses == {} and ledger.entries == []
 
 
 def test_prepare_skips_an_event_already_applied_and_keeps_the_change_id_of_a_retry(
@@ -77,11 +99,11 @@ def test_prepare_skips_an_event_already_applied_and_keeps_the_change_id_of_a_ret
     bundle = kit.make_bundle()
     key = state.add(bundle)
     first = apply.prepare(key, bundle.digest, "deploy-1", "exec-1")
+    apply.accept(key, bundle.digest, 1, first["change_id"], request="deploy-1", execution="exec-1")
     again = apply.prepare(key, bundle.digest, "deploy-1", "exec-2")  # delivered twice, the first execution failed
     assert again["release"] == 1 and again["change_id"] == first["change_id"]
     state.statuses[1] = state.statuses[1].model_copy(update={"status": "APPLIED"})
     assert apply.prepare(key, bundle.digest, "deploy-1", "exec-3") == {"skip": True, "release": 1}
-    assert ledger.actions() == [("release/bundle", "release.accept")] * 2
     # A later deployment that brings the same bundle back (after another one) is a new release.
     back = apply.prepare(key, bundle.digest, "deploy-3", "exec-4")
     assert back["release"] == 2 and back["change_id"] != first["change_id"]
@@ -122,7 +144,9 @@ def test_prepare_refuses_an_event_whose_digest_is_not_the_bundles(
 # --- functions ------------------------------------------------------------------------------------------------------
 
 
-def test_functions_creates_the_tree_children_first_with_tags(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
+def test_functions_creates_the_trees_of_the_chosen_siblings_children_first_with_tags(
+    kit: SimpleNamespace, state: Any, stub: Stub
+) -> None:
     bundle = kit.make_bundle()
     key = state.add(bundle)
     tags = release_tags("fastm", release=3, change_id="c3")
@@ -136,10 +160,17 @@ def test_functions_creates_the_tree_children_first_with_tags(kit: SimpleNamespac
             {"FunctionId": function.function_id, "FunctionType": function.function_type.value},
             request,
         )
-    assert apply.put_functions(key, 3, "c3") == {
+    assert apply.put_functions(key, 3, "c3", ["fastm-demo-p-b"]) == {
         "created": ["fastm_ps_ctl_r0003", "fastm_ps_root_r0003"],
         "existing": [],
     }
+
+
+def test_functions_creates_nothing_for_siblings_without_a_mapping(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
+    document = bundle_document(kit.make_bundle())["bundle"]
+    del document["siblings"][1]["playback"]["FunctionMapping"]
+    key = state.add(Bundle.model_validate(document))
+    assert apply.put_functions(key, 3, "c3", ["fastm-demo-p-b"]) == {"created": [], "existing": []}
 
 
 def test_functions_leaves_an_unchanged_id_and_never_updates_one(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
@@ -152,19 +183,22 @@ def test_functions_leaves_an_unchanged_id_and_never_updates_one(kit: SimpleNames
         mediatailor.add_response(
             "get_function", function.put_request() | {"Arn": f"arn:{function.function_id}"}, {"FunctionId": ANY}
         )
-    assert apply.put_functions(key, 3, "c3") == {"created": [], "existing": [leaf.function_id, root.function_id]}
+    assert apply.put_functions(key, 3, "c3", SIBLINGS) == {
+        "created": [],
+        "existing": [leaf.function_id, root.function_id],
+    }
 
     changed = leaf.put_request(tags=False) | {"Description": "edited in the console"}
     mediatailor.add_response("get_function", changed, {"FunctionId": leaf.function_id})
     with pytest.raises(apply.ImmutableFunctionError, match=r"fastm_ps_ctl_r0003 exists with another definition"):
-        apply.put_functions(key, 3, "c3")
+        apply.put_functions(key, 3, "c3", SIBLINGS)
 
 
 def test_functions_raise_other_errors(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
     key = state.add(kit.make_bundle())
     stub("mediatailor").add_client_error("get_function", service_error_code="AccessDeniedException")
     with pytest.raises(apply.ClientError):
-        apply.put_functions(key, 1, "c1")
+        apply.put_functions(key, 1, "c1", SIBLINGS)
 
 
 # --- configure ------------------------------------------------------------------------------------------------------
@@ -282,11 +316,13 @@ def test_publish_records_the_first_release_and_writes_the_stable_siblings_plan(
     state.statuses[1] = ReleaseStatus(
         release=1, digest=bundle.digest, bundle_key=key, change_id="c1", status="APPLYING", at=AT
     )
+    state.holder = 1
     expect_plan(stub("s3"), configuration="fastm-demo-p-a", release=1)
     assert apply.publish(key, bundle.digest, 1, "c1", results("a", "b", "z")) == {
         "release": 1,
         "plans": {"fastm-demo": "fastm-demo-p-a"},
     }
+    assert state.holder is None
     channel, version = state.states["fastm-demo"]
     assert (channel.stable, channel.idle, version) == ("fastm-demo-p-a", "fastm-demo-p-b", 1)
     assert state.statuses[1].status == "APPLIED"
@@ -298,6 +334,9 @@ def test_publish_records_the_first_release_and_writes_the_stable_siblings_plan(
         "stable": "fastm-demo-p-a",
         "idle": "fastm-demo-p-b",
     }
+    # A retried step (after a StaleStateError on another channel) writes nothing twice: no plan is queued.
+    assert apply.publish(key, bundle.digest, 1, "c1", results("a", "b", "z"))["plans"] == {}
+    assert state.states["fastm-demo"][1] == 1 and len(ledger.entries) == 1
 
 
 def test_publish_of_a_later_release_keeps_the_plan_on_the_stable_sibling(
@@ -331,13 +370,18 @@ def test_fail_marks_the_release_and_ledgers_the_error(kit: SimpleNamespace, stat
         release=4, digest=bundle.digest, bundle_key="k", change_id="c4", status="APPLYING", at=AT
     )
     error = {"Error": "ImmutableFunctionError", "Cause": "x" * 5000}
+    state.holder = 4
     result = apply.fail(4, "c4", error, "exec-4")
-    assert state.statuses[4].status == "FAILED"
+    assert state.statuses[4].status == "FAILED" and state.holder is None
     assert len(result["error"]) < 1100
     assert ledger.actions() == [("release/bundle", "release.fail")]
     assert ledger.entries[0].subject == "r0004" and ledger.entries[0].correlation_id == "c4"
+    state.holder = 6  # another release's lock stays
     apply.fail(None, None, {"Error": "States.Timeout"}, "exec-5")
+    apply.fail(5, "c5", {"Error": "States.Timeout"}, "exec-5")
+    assert state.holder == 6
     assert ledger.entries[1].subject == "unallocated" and ledger.entries[1].correlation_id == "exec-5"
+    assert ledger.entries[2].subject == "r0005"
 
 
 def test_the_handler_runs_the_steps_without_touching_the_channel_policy(
@@ -348,7 +392,8 @@ def test_the_handler_runs_the_steps_without_touching_the_channel_policy(
     key = state.add(bundle)
     start = {"step": "prepare", "bundle_key": key, "digest": bundle.digest, "request": "deploy-1", "execution": "e"}
     prepared = apply.handler(start, context)
-    common = {"bundle_key": key, "release": 1, "change_id": prepared["change_id"]}
+    common = {"bundle_key": key, "digest": bundle.digest, "release": 1, "change_id": prepared["change_id"]}
+    accepted = apply.handler({"step": "accept", "request": "deploy-1", "execution": "e", **common}, context)
     mediatailor, logs = stub("mediatailor"), stub("logs")
     tags = release_tags("fastm", release=1, change_id=prepared["change_id"])
     for function in bundle.released_functions(1, tags=tags):
@@ -356,9 +401,9 @@ def test_the_handler_runs_the_steps_without_touching_the_channel_policy(
         mediatailor.add_response(
             "put_function", {"FunctionId": function.function_id, "FunctionType": "CUSTOM_OUTPUT"}, None
         )
-    apply.handler({"step": "functions", **common}, context)
+    apply.handler({"step": "functions", "siblings": accepted["siblings"], **common}, context)
     configured = []
-    for name in prepared["siblings"]:
+    for name in accepted["siblings"]:
         mediatailor.add_response(
             "put_playback_configuration",
             {"PlaybackConfigurationArn": f"{ARN}{name}", "HlsConfiguration": {"ManifestEndpointPrefix": HLS}},
@@ -372,7 +417,7 @@ def test_the_handler_runs_the_steps_without_touching_the_channel_policy(
                 logs.add_response("create_delivery", {}, None)
         configured.append(apply.handler({"step": "configure", "sibling": name, **common}, context))
     stub("s3").add_response("put_object", {}, None)
-    published = apply.handler({"step": "publish", "digest": bundle.digest, "results": configured, **common}, context)
+    published = apply.handler({"step": "publish", "results": configured, **common}, context)
     assert published == {"release": 1, "plans": {"fastm-demo": "fastm-demo-p-a"}}
     assert apply.handler({"step": "fail", "error": {"Error": "E"}, "execution": "e"}, context)["release"] is None
     with pytest.raises(ValueError, match="unknown step 'promote'"):

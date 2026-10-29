@@ -55,21 +55,30 @@ The event starts the state machine `<prefix>-release` (Step Functions Standard, 
 
 1. **Prepare** loads the bundle and runs every validator again, plus a check that the document holds neither origin
    secret. A bundle that fails is refused and ledgered (`release.reject` on the chain `release/bundle`). Otherwise
-   the deployment gets its release number (an event delivered twice gets the same one; deploying an earlier bundle
-   again is a new release) and the siblings it configures: every sibling of a channel never released, else the idle
-   sibling and any sibling not configured yet.
-2. **Functions** creates the release's Function tree, children first, with the ownership tags
+   the deployment gets its release number: an event delivered twice gets the same one (and is skipped once
+   applied), a deployment that brings an earlier bundle back gets a new one.
+2. **Accept** takes the controller's lock, so releases apply one at a time: a release that finds another one
+   applying waits for it (up to 20 minutes). It then chooses the siblings the release configures (every sibling of
+   a channel never released, else the idle sibling and any sibling not configured yet) and ledgers
+   `release.accept`.
+3. **Functions** creates the Function trees those siblings map, children first, with the ownership tags
    (`fast:owner=release-controller`, `fast:release=rNNNN`, `fast:change=<change id>`). An existing id with the same
    definition is left alone (a retried step); one with another definition stops the release.
-3. **Configure** (one sibling at a time): `PutPlaybackConfiguration` with the origin secret read from Secrets Manager
+4. **Configure** (one sibling at a time): `PutPlaybackConfiguration` with the origin secret read from Secrets Manager
    at that moment, its logging, and its vended-log deliveries ([below](#the-siblings-logs)).
-4. **Publish** records each channel's siblings in the state table `<prefix>-release`, rewrites the playback plan and
-   ledgers `release.apply` on the chain `release/<channel>`.
-5. **Check drift** runs the drift check once.
+5. **Publish** records each channel's siblings in the state table `<prefix>-release`, rewrites the playback plan,
+   ledgers `release.apply` on the chain `release/<channel>` and gives the lock back.
+6. **Check drift** runs the drift check once.
 
-Any failure after Prepare marks the release `FAILED` and ledgers `release.fail` with the error. The first release
+Any failure after Prepare marks the release `FAILED`, gives the lock back and ledgers `release.fail` with the error
+(a lock left by an execution that died expires after the state machine's 90-minute timeout). The first release
 makes `-p-a` stable and `-p-b` idle; later releases go to the idle sibling. The ledger's principal is
 `release-controller`.
+
+To apply a bundle again (a failed release, or a lost event), start the state machine with the event's detail as
+input: `{"bundle_key": "release/<digest>/bundle.json", "digest": "<digest>", "correlation_id": "<id>"}`. The
+`release.accept` record holds the bundle key, the digest and the `request`; the same id retries that release, a new
+id makes a new one. Redeploying an unchanged stack does nothing: CloudFormation does not call the custom resource.
 
 ## The playback plan
 
@@ -139,13 +148,16 @@ the Media stack's content base URL, CDN, media bucket and channel URLs from the 
 
 Deleting the stack (`make destroy-demand`, or `deploy-demand` with the module turned off) runs `Custom::ReleaseReaper`
 first: it deletes the siblings with their deliveries and delivery sources, the Functions (executors first) and the
-playback plans, each owner-checked by tag.
+playback plans, each owner-checked by tag. A deployment that takes a channel out of `modules.release.channels`
+deletes that channel's siblings and plan the same way (stop the channel first: its policy narrows); the Functions
+stay until the stack goes.
 
 ## Troubleshooting
 
 | Symptom | Look at |
 |---|---|
 | A deploy fails at `Custom::DesiredState` | The custom resource's log: the rules the bundle breaks, one per line |
-| No release after a deploy | The state machine's executions; `<prefix>-release-dead-letters`; the ledger chain `release/bundle` |
+| No release after a deploy | The state machine's executions; `<prefix>-release-dead-letters`; the ledger chain `release/bundle`. Start the state machine by hand ([above](#the-apply-path)) |
+| An execution waits at Accept | Another release is applying; its execution holds the lock until it ends |
 | `release.fail` in the ledger | Its `error`; an `ImmutableFunctionError` means a Function id exists with another definition (someone put it outside the controller) |
 | `<prefix>-release-drift` in alarm | The drift function's log (`release drift`): the paths that differ |

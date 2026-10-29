@@ -43,7 +43,11 @@ from fast_channels.infra.constructs.queues import dead_letter_queue
 
 HANDLERS: Final = "fast_channels.functions.release"
 DRIFT_INTERVAL: Final = Duration.hours(1)
-APPLY_TIMEOUT: Final = Duration.minutes(30)
+APPLY_TIMEOUT: Final = Duration.minutes(90)
+"""Also how long a dead execution's lock lasts (``functions.release.store.LOCK_SECONDS``)."""
+BUSY_RETRY: Final = Duration.seconds(30)
+BUSY_ATTEMPTS: Final = 40
+"""A release waits up to 20 minutes for the one applying before it."""
 
 
 class ReleaseController(Construct):
@@ -127,6 +131,7 @@ class ReleaseController(Construct):
             "RELEASE_LOG_DESTINATION": log_destination_arn,
             "LAKE_DELIVERIES": lake_deliveries,
             "ORIGIN_SECRET_REGION": origin_secret_region,
+            "RELEASE_CHANNELS": ",".join(channels),
         }
         self.apply = self._function("Apply", "apply", "Release Controller: one step of the apply path", environment)
         self.drift = self._function(
@@ -135,7 +140,7 @@ class ReleaseController(Construct):
         self._grant(ledger_table, media_bucket, log_destination_arn, origin_secret_region)
         self.state_machine = self._state_machine()
         dead_letters = dead_letter_queue(self, "DeadLetters", removal_policy=removal_policy)
-        events.Rule(
+        rule = events.Rule(
             self,
             "OnDesiredState",
             description="Apply each new release bundle",
@@ -164,7 +169,7 @@ class ReleaseController(Construct):
             queue=dead_letters,
             name=f"{prefix}-release-dead-letters",
             description="A Desired State Rendered event could not start the Release Controller: the bundle is not "
-            "applied (redeploy the Release stack, or start the state machine with the event's detail)",
+            "applied. Start the state machine with the event's detail (bundle_key, digest, correlation_id) as input",
             topic=topic,
         )
         self._drift_schedule(topic)
@@ -186,7 +191,7 @@ class ReleaseController(Construct):
                 "Prefix": prefix,
                 "EventBus": event_bus.event_bus_name,
             },
-        ).node.add_dependency(self.state_machine, self.bucket)
+        ).node.add_dependency(self.state_machine, self.bucket, rule)  # the rule exists before the first event
         self.reaper = self._function("Reaper", "reaper", "Release Controller: delete its siblings and Functions", {})
         self._grant_reaper(media_bucket)
         reaper = CustomResource(
@@ -242,7 +247,7 @@ class ReleaseController(Construct):
             function.allow(["mediatailor:GetFunction"], [functions], why="the deployment's Functions (<p>_*)")
         self.drift.allow(["mediatailor:GetChannelPolicy"], [self._mt("channel", c) for c in self._channels] or ["*"])
         apply = self.apply
-        apply.allow(["dynamodb:PutItem", "dynamodb:UpdateItem"], [self.table.table_arn])
+        apply.allow(["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"], [self.table.table_arn])
         apply.allow(
             ["dynamodb:PutItem"],
             [ledger],
@@ -286,8 +291,9 @@ class ReleaseController(Construct):
         reaper.allow(["mediatailor:ListPlaybackConfigurations", "mediatailor:ListFunctions"], ["*"])
         reaper.allow(
             ["mediatailor:DeletePlaybackConfiguration"],
-            [self._mt("playbackConfiguration", names.sibling_pattern(c)) for c in self._channels] or ["*"],
-            why="the monetized channels' siblings",
+            [self._mt("playbackConfiguration", "*-p-?")],
+            why="siblings, also of channels taken out of the module; the reaper deletes only those tagged as the "
+            "controller's",
         )
         reaper.allow(
             ["mediatailor:DeleteFunction"],
@@ -299,9 +305,9 @@ class ReleaseController(Construct):
             ["logs:DeleteDelivery", "logs:DeleteDeliverySource"],
             [
                 arn(self, "logs", "delivery", "*", colon=True),
-                arn(self, "logs", "delivery-source", f"{self._prefix}-*", colon=True),
+                arn(self, "logs", "delivery-source", "*-p-?-*", colon=True),
             ],
-            why="the siblings' deliveries and delivery sources",
+            why="the siblings' deliveries and delivery sources (<sibling>-<log type>)",
         )
         reaper.allow(
             ["s3:DeleteObject"],
@@ -344,7 +350,15 @@ class ReleaseController(Construct):
             "change_id": "{% $plan.change_id %}",
             "execution": execution,
         }
-        functions = self._invoke("Functions", {"step": "functions", **context})
+        accept = self._invoke(
+            "Accept",
+            {"step": "accept", "request": "{% $plan.request %}", **context},
+            assign={"plan": "{% $merge([$plan, $states.result.Payload]) %}"},
+        )
+        accept.add_retry(  # another release holds the lock: wait for it
+            errors=["ReleaseBusyError"], interval=BUSY_RETRY, max_attempts=BUSY_ATTEMPTS, backoff_rate=1
+        )
+        functions = self._invoke("Functions", {"step": "functions", "siblings": "{% $plan.siblings %}", **context})
         configure = sfn.Map.jsonata(
             self,
             "Configure",
@@ -353,7 +367,7 @@ class ReleaseController(Construct):
             item_selector={"step": "configure", "sibling": "{% $states.context.Map.Item.Value %}", **context},
         ).item_processor(self._invoke("ConfigureSibling", "{% $states.input %}"))
         publish = self._invoke("Publish", {"step": "publish", "results": "{% $states.input %}", **context})
-        publish.add_retry(errors=["StaleStateError"], max_attempts=3)  # another execution wrote the channel first
+        publish.add_retry(errors=["StaleStateError"], max_attempts=3)  # another writer changed the channel first
         drift = tasks.LambdaInvoke.jsonata(
             self,
             "CheckDrift",
@@ -366,25 +380,28 @@ class ReleaseController(Construct):
             "RecordFailure",
             {
                 "step": "fail",
-                "release": "{% $exists($plan) ? $plan.release : null %}",
-                "change_id": "{% $exists($plan) ? $plan.change_id : null %}",
+                "release": "{% $exists($plan.release) ? $plan.release : null %}",
+                "change_id": "{% $exists($plan.change_id) ? $plan.change_id : null %}",
                 "error": "{% $states.input %}",
                 "execution": execution,
             },
         ).next(sfn.Fail(self, "ReleaseFailed", error="ReleaseFailed", cause="See the ledger's release.fail record"))
-        for step in (functions, publish):
+        rejected = sfn.Fail(
+            self, "BundleRejected", error="BundleRejected", cause="See the ledger's release.reject record"
+        )
+        prepare.add_catch(rejected, errors=["InvalidBundleError"], outputs="{% $states.errorOutput %}")
+        for step in (prepare, accept, functions, configure, publish):
             step.add_catch(failed, outputs="{% $states.errorOutput %}")
-        configure.add_catch(failed, outputs="{% $states.errorOutput %}")
         skip = sfn.Choice(self, "AlreadyReleased?").when(
             sfn.Condition.jsonata("{% $plan.skip %}"), sfn.Succeed(self, "NothingToDo")
         )
-        definition = prepare.next(skip.otherwise(functions.next(configure).next(publish).next(drift)))
+        definition = prepare.next(skip.otherwise(accept.next(functions).next(configure).next(publish).next(drift)))
         state_machine = sfn.StateMachine(
             self,
             "StateMachine",
             state_machine_name=names.state_machine(self._prefix),
-            comment="Release Controller: validate the bundle, create its Functions, configure the idle siblings, "
-            "publish the plans and ledger the release (DESIGN §8.3)",
+            comment="Release Controller: validate the bundle, take the lock, create its Functions, configure the idle "
+            "siblings, publish the plans and ledger the release (DESIGN §8.3)",
             query_language=sfn.QueryLanguage.JSONATA,
             definition_body=sfn.DefinitionBody.from_chainable(definition),
             timeout=APPLY_TIMEOUT,
