@@ -42,6 +42,7 @@ from fast_channels.core.monetization.playback import (
     sibling_name,
     sibling_playback_configuration,
 )
+from fast_channels.core.specs import SIBLING_PATTERN
 
 BUNDLE_SCHEMA_VERSION: Final = 1
 SESSION_CONTROLS_BUDGET_MS: Final = 400
@@ -362,7 +363,7 @@ def build_bundle(
             MonetizedChannel(
                 name=c.name,
                 child_directed=c.child_directed,
-                policy_source_arns=(c.name, f"{c.name}-p-?"),
+                policy_source_arns=(c.name, f"{c.name}{SIBLING_PATTERN}"),
             )
             for c in channels
         ),
