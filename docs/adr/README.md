@@ -4,6 +4,9 @@ Each record explains one decision that shaped v3: the context, what we chose, an
 live experiments in an AWS account during the v3 design (October 2026). When you change one of these decisions, add a
 new record that supersedes the old one rather than editing history.
 
+Records from 0020 on belong to the optional modules ([modules.md](../modules.md)). A Proposed record says when it
+is accepted: with its module's last change or once the module passes its end-to-end leg.
+
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-python-cdk-and-uv-workspace.md) | Python CDK app in a uv workspace | Accepted, amended by 0020 |

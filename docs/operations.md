@@ -34,8 +34,9 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 The `modules` section holds optional modules for ad monetization, which are being built on the
 `feature/agentic-monetization` branch. Every module is off by default, and with every module off the stacks are
 exactly v3.0.0's, which snapshot tests of every template check (`infra/tests/test_snapshots.py`). A module's
-settings are validated from the start, but enabling a module changes nothing until its code is merged. Merged so
-far: `models` (the per-task model registry, [agent.md](agent.md#model-registry)).
+settings are validated from the start, but enabling a module changes nothing until its code is merged.
+[modules.md](modules.md) describes each module, what of it is merged, how to turn it on, how it fails safe and what
+it costs.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -306,7 +307,9 @@ turns one module on and keeps the rest of `cdk.json`. `STAGE=<name>` selects a s
 
 ```bash
 make synth STAGE=fastm                       # cdk-nag included
-make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Models, -Operator, -Crawl
+make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Ops, -Models, -Operator, -Crawl,
+                                             # -DemandEdge, -DemandBuild
+make deploy-demand STAGE=fastm               # the guidance, -Demand and -Pds (demand module)
 make seed STAGE=fastm SEED_ARGS="--wait --yes"
 make destroy STAGE=fastm
 make deploy STAGE=fastci PREFIX=fastci-pr7   # the same stage under another prefix
@@ -329,16 +332,23 @@ make as-run-router STAGE=fastm   # the stack FastChannels-AsRun, with fastm's lo
 `make deploy` and `make destroy` never select the router stack. It is termination protected. Delete it only once no
 deployment in the account and region is `shared`: turn termination protection off and delete the stack.
 
-A module with merged code adds its own stack after the ones it builds on, and may change theirs:
+A module with merged code adds its own stack after the ones it builds on, and may change theirs
+([deploy and destroy order](modules.md#deploy-and-destroy-order)):
 
 | Module | Adds | Changes |
 |---|---|---|
-| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, the account quota and hook alarms, the zero-ad-sessions detector, the `ListAlerts` poller, the runbooks `<prefix>-runbook-<id>`, the probe canary `<prefix>-probe`, and the AppConfig application `<prefix>-fast` with environment `<prefix>` and the feature flags `flags` ([observability.md](observability.md#lake), [ledger](observability.md#ledger), [runbooks](observability.md#runbooks-flags-and-the-probe)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
+| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, the account quota and hook alarms, the zero-ad-sessions detector, the `ListAlerts` poller, the runbooks `<prefix>-runbook-<id>`, the probe canary `<prefix>-probe`, and the AppConfig application `<prefix>-fast` with environment `<prefix>` and the feature flags `flags` ([observability.md](observability.md#lake), [ledger](observability.md#ledger), [runbooks](observability.md#runbooks-flags-and-the-probe)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels`; the as-run reconciler also marks breaks `AIRED` from `AdBreakStart`, a sweep marks the rest `UNAIRED`, and the JSON EPG feed's breaks carry their `event_id` and `upid` ([channel-assembly.md](channel-assembly.md#the-schedule-of-record-and-the-epg)) |
+| `models` | `FastChannels-<prefix>-Models`: per task an application inference profile `<prefix>-<task>` and a registry entry `/<prefix>/models/tasks/<task>`, the spend-counter table `<prefix>-models`, and with `budgets_action` an AWS Budget and action per task role ([agent.md](agent.md#model-registry)) | Operator: the scheduler agent reads its `scheduler.plan` entry instead of the ModelSpec parameter (which is not created), and its role may invoke only that task's profile |
+| `demand` | `FastChannels-<prefix>-DemandEdge` (us-east-1: the two origin secrets and the WAF rule group) and `-DemandBuild` (the image repository and build project, the guidance bootstrap's execution policy). `make deploy-demand` then adds the guidance's own bootstrap `<prefix>-cdk-bootstrap`, the guidance `<prefix>-pbs` (and `<prefix>-pbs-sim` with the `guidance_stack` simulator), the SSM contract `/<prefix>/demand/*` and `FastChannels-<prefix>-Demand` (the private zone, the census gate, dayparts and warm-up, the `lambda` simulator) ([demand.md](demand.md#deploy-and-destroy)) | Media: in demo mode each ladder kit also encodes the ten demo creatives, once |
+| `pds` | With `make deploy-demand`, `FastChannels-<prefix>-Pds` in the guidance's VPC ([pds.md](pds.md#the-service)) | Data: the table `<prefix>-pds`, the private config bucket and the SSM parameters `/<prefix>/pds/config-bucket` and `/<prefix>/pds/lake-bucket` (outputs `PdsTableName`, `PdsConfigBucketName`) |
+| `release` | Nothing yet | Media: the channel policy of each channel in `modules.release.channels` also admits its sibling configurations `<channel>-p-?`, which the deployment refuses to change while the channel runs ([channel-assembly.md](channel-assembly.md#iac-channels)) |
+| `crawl` | `FastChannels-<prefix>-Crawl`: the catalog context publisher, its daily sweep and its dead-letter alarm ([content-enrichment.md](content-enrichment.md#the-context-publisher)) | — |
 
 With the default `observability.as_run: per_stage`, at most five stages can exist per account and region: each Media
 stack subscribes its as-run reconciler to the account-shared log group `MediaTailor/Channel/AsRunLog`, and CloudWatch
 Logs allows five subscription filters per log group (quota `L-87E7D306`, not adjustable). `shared` stages take none
-(above).
+(above). [modules.md](modules.md#account-level-limits-and-teardown-residue) lists every limit that stages share in
+an account, and what a teardown leaves behind.
 
 With `modules.demand` on, `make deploy` deploys the repository's stacks only. The Prebid Server guidance, its own CDK
 bootstrap and image follow with `make deploy-demand STAGE=<name>` ([demand.md](demand.md#deploy-and-destroy)), and
@@ -390,6 +400,14 @@ and reports what is left; the next poll, or the next `make destroy`, resumes whe
   group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops module, a
   locked ledger archive (above) and the probe canary's function logs `/aws/lambda/cwsyn-<prefix>-probe-*`
   (Synthetics creates them at the canary's first run and deletes only the function; delete the group by hand).
+- Left after every `make destroy`, modules or not: two log groups of CDK's log-retention provider, which deleting the
+  Operator stack recreates and no stack owns, one of them without retention:
+  `FastChannels-<prefix>-Operator-LogRetention…ResourceLogs…` and
+  `/aws/lambda/FastChannels-<prefix>-Oper-LogRetention…`.
+  Find them with `aws logs describe-log-groups --log-group-name-pattern LogRetention` and delete both by hand with
+  `aws logs delete-log-group`.
+- With the demand module, `make destroy-demand` leaves only the guidance's six KMS keys, scheduled for deletion with
+  the 7-day minimum ([demand.md](demand.md#deploy-and-destroy)).
 - If the reaper fails on its first attempt (the error is shown in the stack events), run `make destroy` again; it
   resumes where it stopped.
 - When the reaper cannot finish (a VOD source locked by orphaned programs, an interrupted destroy, a stack deleted
@@ -458,6 +476,7 @@ Defaults per account and region; request increases in Service Quotas before you 
 | Amazon Bedrock | Tokens and requests per minute per model | Account specific | Check before running many autopilots |
 | CloudFront | Custom cache and response headers policies | 20 each per account | The distribution uses no custom cache policy and one response headers policy |
 | CloudWatch Logs | Subscription filters per log group | 5 (`L-87E7D306`, not adjustable) | The as-run log: one per `per_stage` deployment and one for the as-run router; `shared` deployments take none (ADR-0032) |
+| Amazon VPC | VPCs; Elastic IP addresses (per region) | 5; 5 | Demand module only: the guidance's VPC with two NAT gateways (2 addresses), and with the default `guidance_stack` simulator a second VPC with two more ([modules.md](modules.md#account-level-limits-and-teardown-residue)) |
 | Cognito | Emails with the default sender | Low daily limit | Configure Amazon SES for production |
 
 ## Costs
@@ -483,6 +502,9 @@ us-east-1 list prices, rounded. Your bill is authoritative.
 What costs money while nobody watches: running channels (stop them), CloudWatch alarms and storage, S3 storage, and
 the CloudFront, AgentCore and DynamoDB request charges of whatever still calls them. An idle deployment with stopped
 channels costs a few dollars a month. A 24/7 BASIC channel adds about $73 a month before ads and delivery.
+
+The optional modules have their own costs ([modules.md](modules.md#what-the-modules-cost)). The largest is the demand
+module's: a stage with the Prebid Server guidance deployed costs about $120–150 a month with every channel stopped.
 
 ## Security model
 
@@ -545,6 +567,8 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | Deletion fails at `RuntimeResourceReaper` | A non-transient error on its first, synchronous attempt | Fix the error in the stack events and run `make destroy` again |
 | Deletion fails at a channel's lifecycle resource: `deleted <n> programs of <channel>, <m> remain` | The drain ran out of time before every program was deleted | Run `make destroy` again; it resumes with the programs that remain |
 | Deletion fails on the source location or a slate | A runtime resource created outside the tools (e.g. a channel created by hand uses the filler slate) | Delete that resource, or run `scripts/cleanup.py --apply`, then destroy again |
+| The Media stack fails at `AWS::Logs::SubscriptionFilter` with `ServiceLimitExceeded` on `MediaTailor/Channel/AsRunLog` | Five deployments (or four and the as-run router) already subscribe to the account's as-run log | Use `observability.as_run: shared` with the as-run router ([Stages](#stages)), or destroy a `per_stage` deployment |
+| `make deploy-demand` fails on the guidance: AWS::Glue::Database `Database already exists` | Another guidance in the account and region was deployed before overlay O1 prefixed its Glue database name | Run `make deploy-demand` for that stage from the current code (CloudFormation replaces its database with the prefixed name), then retry |
 
 ### Ingest
 

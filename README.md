@@ -153,6 +153,25 @@ us-east-1 list prices; see [docs/operations.md](docs/operations.md#costs) for ev
 Channels are never started by a deployment, and a started channel stops after `channels.max_runtime_hours` (4 by
 default). With stopped channels an idle deployment costs a few dollars a month (alarms, storage, logs).
 
+## Optional modules
+
+Optional modules for ad monetization and its operations are being built on the `feature/agentic-monetization`
+branch. Each one is off by default (`modules.<name>.enabled` in `cdk.json`), and with every module off a deployment
+is exactly v3.0.0's.
+
+| Module | Adds |
+|---|---|
+| `ops` | A lake for Athena, a hash-chained ledger, account and hook alarms, runbooks, kill switches and a probe canary |
+| `models` | A per-task model registry: an application inference profile per LLM task, eval-gated models, daily spend caps |
+| `demand` | Programmatic demand through the AWS Prebid Server guidance, with a bidder simulator and demo creatives |
+| `pds` | The Pod Decision Service: what each ad request may share with third parties, and which ads fill the pod |
+| `release` | The Release Controller for monetized playback configurations |
+| `crawl` | Show-level content metadata (IAB Tech Lab Content Taxonomy 3.1) in ad requests |
+
+[docs/modules.md](docs/modules.md) describes what each module does and how much of it is built, how to turn it on,
+how it fails safe, what it costs and the limits that stages share in an account. The demand module costs about
+$120–150 a month while its Prebid Server stack is deployed, even with every channel stopped.
+
 ## Repository layout
 
 ```
@@ -236,7 +255,9 @@ before CloudFormation deletes the stacks. With `removal: retain` data is kept an
 If a teardown is interrupted, `uv run python scripts/cleanup.py` lists the runtime resources that are left and
 `--apply` deletes them; then run `make destroy` again. The account-level
 `FastChannels-AccountBaseline` stack (only with Transaction Search enabled) and the account-shared as-run log group
-are never deleted automatically. Details in [docs/operations.md](docs/operations.md#destroy).
+are never deleted automatically. Details in [docs/operations.md](docs/operations.md#destroy). With the demand module,
+run `make destroy-demand STAGE=<name>` first;
+[docs/modules.md](docs/modules.md#account-level-limits-and-teardown-residue) lists what a teardown leaves behind.
 
 ## Documentation
 
@@ -251,6 +272,8 @@ are never deleted automatically. Details in [docs/operations.md](docs/operations
 | [Integrate your CMS](docs/integrate-your-cms.md) | Catalog contract, OpenAPI Gateway target, ingest contract, events |
 | [Observability](docs/observability.md) | Logging and tracing matrix, correlation contract, trace script, alarms, Transaction Search |
 | [Operations](docs/operations.md) | Configuration reference, deploy and destroy, users, quotas, costs, security, troubleshooting |
+| [Optional modules](docs/modules.md) | The ad-monetization and operations modules: status, turning them on, fail-safe behaviour, costs, account-level limits |
+| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Content enrichment](docs/content-enrichment.md) | The `demand`, `pds` and `crawl` modules |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |
 | [Decision records](docs/adr/README.md) | Why the architecture is the way it is |
 | [Console](console/README.md), [Agent](agent/README.md) | Component READMEs |

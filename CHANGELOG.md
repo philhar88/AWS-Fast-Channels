@@ -160,6 +160,12 @@ All notable changes to this project are documented here. The format follows
   settings; the `scheduler.plan` record of Claude Haiku 5.5 is committed. The recommender's record format, with its
   deterministic faithfulness check, is defined. With the registry on, the scheduler's ModelSpec parameter is retired:
   the agent falls back to its entry as deployed.
+- **Module documentation** ([docs/modules.md](docs/modules.md)): what each module does and how much of it is
+  built, how to turn it on, the deploy and destroy order, how each module fails safe, what it costs, and the limits
+  that stages share in an account: at most five `per_stage` as-run subscriptions, one Prebid Server guidance per
+  account without overlay O1's Glue fix, VPC and Elastic IP quotas, and the teardown residue (CDK's log-retention log
+  groups, the probe canary's function logs, the guidance's KMS keys pending deletion, a locked ledger archive). The
+  architecture, operations and README pages cover the module stacks, their outputs and constructs.
 
 ### Fixed
 
