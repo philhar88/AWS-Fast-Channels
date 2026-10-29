@@ -1,0 +1,19 @@
+O4: compile the fast-ctv module through the guidance's amt-bidder injection point (FAST Channels overlay, v1.4.0)
+
+The guidance's Dockerfile builds the Prebid Server core jar only; its one supported injection point for code is
+amt-bidder/copy-bidder-files.sh, run when the image is built with INCLUDE_AMT_BIDDER=true. The script now ends by
+running amt-bidder/copy-fast-ctv.sh when the build context has it (scripts/prebid_guidance.py apply copies the script
+and the module's sources there).
+
+diff --git a/source/loadtest/amt-bidder/copy-bidder-files.sh b/source/loadtest/amt-bidder/copy-bidder-files.sh
+--- a/source/loadtest/amt-bidder/copy-bidder-files.sh
++++ b/source/loadtest/amt-bidder/copy-bidder-files.sh
+@@ -50,3 +50,8 @@
+ echo "adapters.amt.enabled=true
+ adapters.amt.endpoint=http://localhost:8090/amt-exchange
+ " >> ./src/test/resources/org/prebid/server/it/test-application.properties
++
++# Overlay O4 (FAST Channels): compile the fast-ctv module into the image when the build context carries it.
++if [ -f ./amt-bidder/copy-fast-ctv.sh ]; then
++  bash ./amt-bidder/copy-fast-ctv.sh
++fi

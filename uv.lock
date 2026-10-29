@@ -803,6 +803,7 @@ dev = [
     { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "syrupy" },
 ]
@@ -820,6 +821,7 @@ dev = [
     { name = "pillow", specifier = ">=12" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-cov", specifier = ">=7" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "syrupy", specifier = ">=4.9" },
 ]
