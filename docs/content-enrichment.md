@@ -14,6 +14,7 @@ whose metadata cannot be read is requested without it.
 - [Catalog fields](#catalog-fields)
 - [The catalog context object](#the-catalog-context-object)
 - [Genres and categories](#genres-and-categories)
+- [The PRE_ADS lookup](#the-pre_ads-lookup)
 - [Limits](#limits)
 - [Privacy](#privacy)
 
@@ -29,9 +30,9 @@ whose metadata cannot be read is requested without it.
    300 s window, whatever the audience.
 4. The Pod Decision Service reads the same objects and fills OpenRTB 2.6 `app.content` in each bid request.
 
-The catalog fields, the context object (`fast_channels.core.crawl.catalog_context`), the genre map and the
-[publisher](#the-context-publisher) are in place; the PRE_ADS lookup and the OpenRTB mapping are added with the rest
-of the module.
+The catalog fields, the context object (`fast_channels.core.crawl.catalog_context`), the genre map, the
+[publisher](#the-context-publisher) and the [PRE_ADS lookup](#the-pre_ads-lookup) are in place; the OpenRTB mapping
+is added with the rest of the module.
 
 ## The context publisher
 
@@ -162,6 +163,36 @@ ids through IAB Tech Lab's CTV Genre Mapping, in
 
 The taxonomy files are © IAB Technology Laboratory, Inc., licensed under CC BY 3.0; the source commit, checksums and
 changes are in [`ATTRIBUTION.md`](../core/src/fast_channels/core/crawl/taxonomy/ATTRIBUTION.md).
+
+## The PRE_ADS lookup
+
+With `modules.crawl.pre_ads` (on by default) the release bundle maps one PRE_ADS tree on every general sibling of a
+monetized channel (`<channel>-p-a` and `-p-b`); the house-only probe `-p-z` has none. The Release Controller applies
+it with the rest of the bundle (`<p>_pa_root_rNNNN`, `<p>_pa_meta_rNNNN`), so it is released, promoted and rolled
+back like every other function.
+
+| Function | What it does |
+|---|---|
+| `<p>_pa_root` | `SEQUENTIAL_EXECUTOR`, 400 ms: runs the lookup and commits one value, the `x-fast-ctx` request header |
+| `<p>_pa_meta` | `HTTP_REQUEST` GET `<content base>/catalog/ctx/v1/<content id>.json`, 250 ms, skipped when the break has no UPID. The content id is `scte.segmentation_upid` with its `FST3` prefix removed if MediaTailor left it. `Cache` 300/300 s keyed `meta\|v1\|<UPID>` |
+
+- **Load.** MediaTailor's Function cache is per playback configuration and splits into about 4 partitions that each
+  coalesce concurrent misses, so the CDN sees about 4 requests per title per sibling in each 300 s window, whatever
+  the audience (measured with herds of 100 and 300 sessions). A title missing from the catalog is a cached 404 too
+  ([Serving and misses](#serving-and-misses)).
+- **Output.** `x-fast-ctx` carries the object's `hdr` when the lookup answered 200 with a `v1` object, and is empty
+  otherwise. The expression caps it at 1,000 characters, so the release validators can prove the documented output
+  limit (which the service does not enforce).
+- **No viewer data.** The URL, the header and the cache key read only the UPID (validator R-F5). Nothing is written to
+  `player_params`, and the templated POST body is untouched: MediaTailor inserts values without JSON escaping and
+  silently skips an ad request whose body is not valid JSON.
+- **Budget.** The 400 ms come out of the ad request's wall clock: MediaTailor's Live (and VOD) maximum is a deadline
+  that includes PRE_ADS time, and what it cuts is the ad request. The validators require each sibling's maximum to be
+  at least 400 ms plus `AdsRequestTimeoutMilliseconds` (6,000 ≥ 400 + 2,000).
+- **Fail open.** An unknown title, an origin error or timeout, a break without a UPID or an exhausted hook budget
+  sends the ad request without the header.
+- `pre_ads: false` leaves PRE_ADS unmapped; the Pod Decision Service still enriches `app.content` from the same
+  objects.
 
 ## Limits
 
