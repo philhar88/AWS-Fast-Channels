@@ -161,13 +161,13 @@ def test_select_fixtures_cover_the_measured_table() -> None:
     [
         ({"adm_kind": None}, Outcome.INVALID_VAST),
         ({"vast_dur_ms": None}, Outcome.NO_DURATION),
-        ({"dur": None}, Outcome.NO_DURATION),
-        ({"dur": 0}, Outcome.NO_DURATION),
+        ({"vast_dur_ms": 0}, Outcome.NO_DURATION),
         ({"vast_dur_ms": 30_500}, Outcome.DURATION_MISMATCH),  # rounds half up to 31 s
         ({"dur": 15, "vast_dur_ms": 15_015}, Outcome.RQDDURS),
         ({"crid": None}, Outcome.NO_CRID),
         ({"crid": ""}, Outcome.NO_CRID),
         ({"adomain": []}, Outcome.NO_ADOMAIN),
+        ({"adomain": ["", " "]}, Outcome.NO_ADOMAIN),
         ({"price": Decimal("0.99")}, Outcome.FLOOR),
     ],
 )
@@ -188,11 +188,51 @@ def test_house_ads_are_exempt_from_floors_and_adomain() -> None:
     assert decision.outcomes == {"h": Outcome.WON}
 
 
-@pytest.mark.parametrize("mode", [Mode.SAFE, Mode.KIDS, None])
+@pytest.mark.parametrize("mode", [Mode.SAFE, None])
 def test_own_book_only_without_a_third_party_mode(mode: Mode | None) -> None:
     bids = [bid("third"), bid("line", bidder="ownbook", price=Decimal(1))]
     decision = select_pod(request(bids, mode=mode))
     assert decision.outcomes == {"third": Outcome.MODE, "line": Outcome.WON}
+
+
+def test_kids_breaks_take_house_ads_and_approved_creatives_only() -> None:
+    bids = [
+        bid("third", "s1"),
+        bid("line", "s1", bidder="ownbook", price=Decimal(9), dealid="sponsor"),
+        bid("approved", "s2", bidder="ownbook", price=Decimal(5)),
+        house("h", "s3"),
+    ]
+    context = PodContext(tier0_deals={"sponsor"}, kids_approved={"approved"})
+    decision = select_pod(request(bids, 3, mode=Mode.KIDS), context)
+    assert decision.outcomes == {
+        "third": Outcome.MODE,
+        "line": Outcome.KIDS,  # a tier-0 sponsorship not approved for children
+        "approved": Outcome.WON,
+        "h": Outcome.WON,
+    }
+
+
+def test_the_house_flag_counts_only_from_the_own_book() -> None:
+    forged = bid("forged", "s1", house=True, price=Decimal(0), adomain=[])  # a third party claiming to be a filler
+    decision = select_pod(request([forged, house("h", "s1")]), PodContext(floor_cpm=Decimal(1)))
+    assert decision.outcomes == {"forged": Outcome.NO_ADOMAIN, "h": Outcome.WON}
+    on_probe = select_pod(request([bid("forged", house=True)], mode=Mode.SAFE, probe=True))
+    assert on_probe.outcomes == {"forged": Outcome.MODE}
+    assert select_pod(
+        request([bid("forged", house=True, adomain=["a.example"])]), PodContext(floor_cpm=Decimal(20))
+    ).outcomes == {"forged": Outcome.FLOOR}
+
+
+def test_tier0_lines_ignore_the_open_market_floor() -> None:
+    line = bid("line", bidder="ownbook", price=Decimal(8), dealid="pg")
+    decision = select_pod(request([line]), PodContext(tier0_deals={"pg"}, floor_cpm=Decimal(10)))
+    assert decision.outcomes == {"line": Outcome.WON}
+    assert decision.below_floor == frozenset()
+
+
+def test_an_absent_dur_is_taken_from_the_vast_duration() -> None:
+    assert select_pod(request([bid("x", dur=None)])).pod[0].dur == 30
+    assert select_pod(request([bid("x", dur=0, vast_dur_ms=15_015)])).outcomes == {"x": Outcome.RQDDURS}
 
 
 def test_probe_sessions_get_house_ads_only() -> None:
@@ -244,6 +284,12 @@ def test_the_lambda_stub_prices_nothing() -> None:
     assert crids(select_pod(request(demo_demand(2), 2), context)) == crids(select_pod(request(demo_demand(2), 2)))
     with pytest.raises(ValueError, match="negative"):
         slot_lambdas(-1)
+
+
+def test_the_default_lambda_is_the_ad_load_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fast_channels.core.pds.pod.slot_lambdas", lambda slots: (Decimal(1),) * slots)
+    decision = select_pod(request([bid("x", price=Decimal(50)), house("h")]))
+    assert decision.outcomes == {"x": Outcome.BAR, "h": Outcome.BAR}
 
 
 def test_lambdas_must_match_the_slots() -> None:
@@ -302,6 +348,7 @@ def test_limit_ms() -> None:
     assert limit_ms(108_120, 120_120) == 108_120  # a remainder pod after a late join stays the remainder
     assert limit_ms(59_000, 60_060) == 59_000  # not the schedule's rounding
     assert limit_ms(60_000, 60_000) == 60_000
+    assert limit_ms(60_000, 59_600) == 59_600  # a prefetch rounding up must not stretch the break
 
 
 def test_sum_of_declared_durations_fits_poddur() -> None:
@@ -325,6 +372,18 @@ def test_a_standalone_backs_its_own_slot_with_the_same_duration() -> None:
     decision = select_pod(select)
     assert crids(decision) == (["a", "b"], ["backup", "other-slot"])
     assert decision.outcomes["short"] is Outcome.OUTBID
+
+
+def test_standalones_together_keep_the_pod_within_the_break() -> None:
+    bids = [
+        bid("w1", "s1", vast_dur_ms=30_000),
+        bid("w2", "s2", vast_dur_ms=30_000),
+        bid("b1", "s1", price=Decimal(2)),
+        bid("b2", "s2", price=Decimal(2)),
+    ]
+    decision = select_pod(request(bids, 2, dur_ms=60_040))
+    assert crids(decision) == (["w1", "w2"], ["b1"])  # with b2 as well, both failures would play 60.06 s
+    assert decision.outcomes["b2"] is Outcome.OUTBID
 
 
 def test_a_standalone_must_keep_the_pod_within_the_break() -> None:
@@ -424,6 +483,7 @@ def _random_request(rng: random.Random) -> tuple[SelectRequest, PodContext]:
     )
     context = PodContext(
         tier0_deals=frozenset({"pg1"}),
+        kids_approved=frozenset({f"c{rng.randint(0, 12)}"}),
         floor_cpm=Decimal(rng.choice([0, 1, 5])),
         recent_crids=frozenset({f"c{rng.randint(0, 12)}"}),
         scheduled_ms=rng.choice([None, slots * SLOT_MS]),
@@ -448,10 +508,14 @@ def test_randomized_pods_keep_every_invariant() -> None:
         assert len({ad.slot for ad in decision.pod}) == len(decision.pod), "two ads in one slot"
         assert [ad.slot for ad in decision.pod] == sorted(ad.slot for ad in decision.pod)
         assert set(decision.outcomes) == set(by_ref)
+        worst_ms = decision.filled_ms  # every winner with a standalone fails and the standalone plays
         for backup in decision.standalones:
             (winner,) = [ad for ad in decision.pod if ad.slot == backup.slot]
             assert backup.dur == winner.dur
-            assert decision.filled_ms - winner.vast_dur_ms + backup.vast_dur_ms <= decision.limit_ms
+            worst_ms += max(backup.vast_dur_ms - winner.vast_dur_ms, 0)
+        assert worst_ms <= decision.limit_ms, "the standalones can overrun the break"
+        if select.mode is Mode.KIDS:
+            assert all(b.house or b.crid in context.kids_approved for b in placed)
         if select.dur_ms < MIN_AVAIL_MS:
             assert not decision.pod
         if select.mode in {Mode.SAFE, Mode.KIDS, None}:

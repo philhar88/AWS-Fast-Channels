@@ -52,6 +52,11 @@ def test_viewer_address_finds_the_egress_whatever_follows_it() -> None:
         (f"{CF_VIEWER_SIDE}, {MT_EGRESS}, {CF_PBS_SIDE}", CFVA, IpRule.SHORT_CHAIN),
         (CF_PBS_SIDE, "", IpRule.SHORT_CHAIN),
         (f"{VIEWER}, 3.81.20.31, {CF_PBS_SIDE}", CFVA, IpRule.EGRESS_NOT_FOUND),
+        (f"{THROUGH_CDN}, 10.0.1.17", "", IpRule.UNEXPECTED_HOP),  # one more hop than the path has
+        ("81.2.69.160, 5.6.7.8, 9.9.9.9", "", IpRule.UNEXPECTED_HOP),  # not through the PBS CloudFront
+        (f"{VIEWER}, {CF_VIEWER_SIDE}, {MT_EGRESS}", CFVA, IpRule.UNEXPECTED_HOP),  # nothing right of the egress
+        (f"{VIEWER}, {MT_EGRESS}, 10.0.1.17, {CF_PBS_SIDE}", CFVA, IpRule.UNEXPECTED_HOP),
+        (f"{VIEWER}, unknown, {CF_PBS_SIDE}", "", IpRule.INVALID_ENTRY),  # the egress position holds no address
         (THROUGH_CDN, "not-an-address", IpRule.INVALID_ENTRY),
         (f"unknown, {MT_EGRESS}, {CF_PBS_SIDE}", CFVA, IpRule.INVALID_ENTRY),
         (f", {MT_EGRESS}, {CF_PBS_SIDE}", "", IpRule.INVALID_ENTRY),
@@ -63,8 +68,9 @@ def test_chains_that_hold_no_viewer(chain: str, cfva: str, rule: IpRule) -> None
     assert viewer_ip(chain, cfva, ORIGIN_FACING) == ViewerIp(None, rule)
 
 
-def test_without_origin_facing_networks_the_viewer_side_cloudfront_is_not_skipped() -> None:
-    assert viewer_ip(THROUGH_CDN, CFVA, ()).ip == IPv4Address(CF_VIEWER_SIDE)
+def test_without_origin_facing_networks_no_hop_is_trusted() -> None:
+    assert viewer_ip(THROUGH_CDN, CFVA, ()) == ViewerIp(None, IpRule.UNEXPECTED_HOP)
+    assert viewer_ip(THROUGH_CDN, "", ()) == ViewerIp(None, IpRule.UNEXPECTED_HOP)
 
 
 def test_ipv6_viewers_and_viewer_addresses() -> None:

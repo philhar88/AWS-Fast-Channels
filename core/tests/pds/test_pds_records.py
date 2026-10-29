@@ -120,3 +120,21 @@ def test_select_record_keeps_every_bid_at_or_above_the_floor() -> None:
     ]
     assert json.loads(record.model_dump_json())["bids"][1]["price"] == 12.5  # a number, not a string
     assert decision.outcomes["cheap"] is Outcome.FLOOR
+
+
+def test_bids_under_the_floor_are_counted_whatever_else_rejected_them() -> None:
+    request = SelectRequest(
+        v=1,
+        decision_id="s-1.77",
+        sid="s-1",
+        pc="fast-demo-p-a",
+        evid="77",
+        dur_ms=60060,
+        mode=Mode.SAFE,
+        slots=[{"impid": "s1", "poddur": 30, "rqddurs": [30]}],
+        bids=[_bid("cheap", price=Decimal("0.2")), _bid("line", bidder="ownbook", price=Decimal(2))],
+    )
+    decision = select_pod(request, PodContext(floor_cpm=Decimal(1)))
+    assert decision.outcomes["cheap"] is Outcome.MODE  # rejected for the mode first
+    record = select_record(request, decision, latency_ms=1.0)
+    assert ([bid.ref for bid in record.bids], record.below_floor) == (["line"], 1)

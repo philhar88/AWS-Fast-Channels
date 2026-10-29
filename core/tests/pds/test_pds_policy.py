@@ -86,11 +86,17 @@ def test_bound_viewers_by_consent(consent: Consent | None, expected: Resolution)
     assert resolve(Reason.BOUND, viewer=VIEWER, consent=consent) == expected
 
 
-def test_probe_and_kids_come_first() -> None:
-    assert resolve(Reason.BOUND, viewer=VIEWER, consent=Consent.FULL, probe=True, kids=True) == Resolution(
-        Mode.SAFE, Reason.PROBE
-    )
-    assert resolve(Reason.BOUND, viewer=VIEWER, consent=Consent.FULL, kids=True) == Resolution(Mode.KIDS, Reason.KIDS)
+def test_kids_and_probe_come_first() -> None:
+    kids = Resolution(Mode.KIDS, Reason.KIDS)
+    assert resolve(Reason.BOUND, viewer=VIEWER, consent=Consent.FULL, probe=True, kids=True) == kids
+    assert resolve(Reason.BOUND, viewer=VIEWER, consent=Consent.FULL, kids=True) == kids
+    probe = Resolution(Mode.SAFE, Reason.PROBE)
+    assert resolve(Reason.BOUND, viewer=VIEWER, consent=Consent.FULL, probe=True) == probe
+
+
+def test_a_probe_on_a_kids_configuration_keeps_coppa() -> None:
+    response = decide(request(pc="fast-demo-p-k", probe=True), DEMAND, origin_facing=()).response
+    assert (response.mode, response.regs.coppa, response.bidders) == (Mode.KIDS, 1, {})
 
 
 @pytest.mark.parametrize("mode", [Mode.SAFE, Mode.KIDS])

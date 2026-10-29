@@ -22,8 +22,11 @@ SID_PATTERN: Final = r"^[A-Za-z0-9-]{1,64}$"
 """MediaTailor session id (``X-Fast-Sid: {{session.uuid}}``)."""
 PC_PATTERN: Final = r"^[A-Za-z0-9_-]{1,64}$"
 """Playback configuration name (``X-Fast-Pc``)."""
-EVID_PATTERN: Final = r"^[0-9]{0,10}$"
-"""SCTE-35 event id of the break (``[scte.event_id]``, 31 bits); empty on breaks MediaTailor cannot identify."""
+EVID_PATTERN: Final = r"^[0-9]{1,10}$"
+"""SCTE-35 event id of the break (``[scte.event_id]``, 31 bits). Required: it makes ``decision_id`` unique per break,
+so a request without one is refused (the module then serves the own book and house ads)."""
+OWN_BOOK: Final = "ownbook"
+"""Prebid Server bidder alias of the own book."""
 NAME_PATTERN: Final = r"^[A-Za-z0-9_.-]{1,64}$"
 """Bidder, imp and bid-reference names."""
 
@@ -120,7 +123,7 @@ class PolicyRequest(_Wire):
     fv: str = Field(
         default="", pattern=r"^[A-Za-z0-9_-]{0,32}$", description="Release of the configuration's Functions."
     )
-    evid: str = Field(default="", pattern=EVID_PATTERN, description="SCTE-35 event id of the break.")
+    evid: str = Field(pattern=EVID_PATTERN, description="SCTE-35 event id of the break.")
     upid: str = Field(default="", max_length=255, description="Segmentation UPID of the break: the content id.")
     dur_ms: int = Field(ge=0, description="Break duration as MediaTailor requested it (session.avail_duration_ms).")
     ua: str = Field(default="", max_length=2048, description="User-Agent of the ADS request: the viewer's.")
@@ -214,7 +217,9 @@ class Bid(_Wire):
     cat: list[str] = Field(default_factory=list)
     cattax: int | None = Field(default=None, ge=1, description="Taxonomy of cat; OpenRTB's default is 1.")
     dealid: str | None = Field(default=None, max_length=128)
-    house: bool = Field(default=False, description="An own-book house ad (ext.fast.house): a filler, never sold.")
+    house: bool = Field(
+        default=False, description="An own-book house ad (ext.fast.house): a filler, never sold. Ignored for others."
+    )
     has_impression: bool = Field(default=False, description="The adm already has an <Impression>.")
     adm_kind: AdmKind | None = Field(default=None, description="InLine or Wrapper; null when adm is not usable VAST.")
 
@@ -226,7 +231,7 @@ class SelectRequest(_Wire):
     decision_id: str
     sid: str = Field(pattern=SID_PATTERN)
     pc: str = Field(pattern=PC_PATTERN)
-    evid: str = Field(default="", pattern=EVID_PATTERN)
+    evid: str = Field(pattern=EVID_PATTERN)
     dur_ms: int = Field(ge=0)
     mode: Mode | None = Field(description="Mode of the applied /policy patch; null when the module applied none.")
     probe: bool = False

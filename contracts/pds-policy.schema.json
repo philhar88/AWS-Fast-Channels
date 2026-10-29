@@ -194,9 +194,8 @@
           "type": "string"
         },
         "evid": {
-          "default": "",
           "description": "SCTE-35 event id of the break.",
-          "pattern": "^[0-9]{0,10}$",
+          "pattern": "^[0-9]{1,10}$",
           "title": "Evid",
           "type": "string"
         },
@@ -252,6 +251,7 @@
         "v",
         "sid",
         "pc",
+        "evid",
         "dur_ms"
       ],
       "title": "PolicyRequest",

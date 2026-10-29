@@ -20,10 +20,11 @@ from fast_channels.core.pds.models import (
     Reason,
     SelectRequest,
 )
-from fast_channels.core.pds.pod import Outcome, PodDecision
+from fast_channels.core.pds.pod import Outcome  # noqa: TC001 - pydantic resolves field types at runtime
 from fast_channels.core.pds.xff import IpRule  # noqa: TC001 - pydantic resolves field types at runtime
 
 if TYPE_CHECKING:
+    from fast_channels.core.pds.pod import PodDecision
     from fast_channels.core.pds.policy import PolicyDecision
 
 POLICY_RECORD: Final = "pds.policy"
@@ -158,6 +159,6 @@ def select_record(request: SelectRequest, decision: PodDecision, *, latency_ms: 
         pod=[ad.ref for ad in decision.pod],
         standalone=[ad.ref for ad in decision.standalones],
         filled_ms=decision.filled_ms,
-        bids=[bid for bid in bids if bid.outcome is not Outcome.FLOOR],
-        below_floor=sum(bid.outcome is Outcome.FLOOR for bid in bids),
+        bids=[bid for bid in bids if bid.ref not in decision.below_floor],
+        below_floor=len(decision.below_floor),
     )

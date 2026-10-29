@@ -134,7 +134,7 @@
         },
         "house": {
           "default": false,
-          "description": "An own-book house ad (ext.fast.house): a filler, never sold.",
+          "description": "An own-book house ad (ext.fast.house): a filler, never sold. Ignored for others.",
           "title": "House",
           "type": "boolean"
         },
@@ -243,8 +243,7 @@
           "type": "string"
         },
         "evid": {
-          "default": "",
-          "pattern": "^[0-9]{0,10}$",
+          "pattern": "^[0-9]{1,10}$",
           "title": "Evid",
           "type": "string"
         },
@@ -292,6 +291,7 @@
         "decision_id",
         "sid",
         "pc",
+        "evid",
         "dur_ms",
         "mode",
         "slots"

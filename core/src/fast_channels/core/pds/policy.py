@@ -3,7 +3,8 @@
 The PDS is the authority: whatever the session claims, each break's mode comes from the binding and the consent store,
 in this order (docs/pds.md#privacy-modes):
 
-1. a probe session is SAFE (house only), a kids configuration KIDS;
+1. a kids configuration or child-directed channel is KIDS (COPPA set, even for a probe), a probe session SAFE
+   (house only);
 2. a ticket that is missing, malformed, unknown, replayed, minted for another configuration or past its lease is
    CONTEXTUAL, with every viewer parameter zeroed;
 3. a bound viewer whose consent cannot be read (store failure, or an answer older than 60 s) is SAFE: own book and
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING, Final
 
 from fast_channels.core.pds.contributors import Contributions, PatchContributor, collect
 from fast_channels.core.pds.devicetype import device_type
-from fast_channels.core.pds.models import Device, Fpd, Mode, PolicyResponse, Reason, Regs
+from fast_channels.core.pds.models import OWN_BOOK, Device, Fpd, Mode, PolicyResponse, Reason, Regs
 from fast_channels.core.pds.xff import IpRule, viewer_ip
 
 if TYPE_CHECKING:
@@ -37,8 +38,6 @@ TICKET: Final = re.compile(r"[A-Za-z0-9_-]{22}")
 """A playback ticket: ``secrets.token_urlsafe(16)``."""
 KIDS_SIBLINGS: Final = frozenset({"k", "l"})
 """Sibling letters of the kids playback configurations ``<prefix>-<channel>-p-k`` and ``-p-l``."""
-OWN_BOOK: Final = "ownbook"
-"""Prebid Server bidder alias of the own book."""
 
 
 class Consent(StrEnum):
@@ -107,10 +106,10 @@ def resolve(
         probe: a probe session.
         kids: a kids configuration or a child-directed channel.
     """
-    if probe:
-        return Resolution(Mode.SAFE, Reason.PROBE)
     if kids:
         return Resolution(Mode.KIDS, Reason.KIDS)
+    if probe:
+        return Resolution(Mode.SAFE, Reason.PROBE)
     if identity is not Reason.BOUND:
         return Resolution(Mode.CONTEXTUAL, identity)
     return _by_consent(consent, viewer)

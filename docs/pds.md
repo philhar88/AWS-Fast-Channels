@@ -46,7 +46,8 @@ house ads, no third party, no viewer data. If `/select` fails, the module render
 - Every request and response carries `v: 1`, and both sides refuse unknown fields. A change to the contract is a new
   version: a module and a PDS that disagree fail visibly, and safely.
 - `decision_id` is `<sid>.<evid>`, the MediaTailor session id and the break's event id. It joins decision records,
-  trackers, delivery and the ledger.
+  trackers, delivery and the ledger, so both are required: a request without them is refused, and the break is served
+  by the fail-safe path.
 - Each example holds a `description`, the PDS-side `context` (snapshot values the request does not carry), the
   `request` and the `response`. The `response` is regenerated from the rules, so the examples double as golden tests on
   both sides of the contract.
@@ -60,12 +61,13 @@ house ads, no third party, no viewer data. If `/select` fails, the module render
 | FULL | A consented adult with separate video-privacy consent | Per-partner pseudonymous ids, user data scoped per bidder |
 | PSEUDONYMOUS | Authenticated, no sale/share opt-out | No ids; genre and category, never the title |
 | CONTEXTUAL | Guests, ticketless sessions, invalid or replayed tickets, opted-out viewers | No ids, no user data, coarse geo; show-level content metadata; GPP where known |
-| SAFE | The consent store failed or is older than 60 s; probe sessions | Nothing: own book and house ads only |
-| KIDS | A kids playback configuration (`…-p-k`, `…-p-l`) or a child-directed channel | Nothing: COPPA set, house ads and approved direct lines only |
+| SAFE | The consent store failed or is older than 60 s; probe sessions | Nothing: own book and house ads only (house ads only for probes) |
+| KIDS | A kids playback configuration (`…-p-k`, `…-p-l`) or a child-directed channel | Nothing: COPPA set, house ads and creatives approved for children only |
 
 The PDS resolves a break's mode in this order (`fast_channels.core.pds.policy.resolve`):
 
-1. a probe session is SAFE; a kids configuration is KIDS;
+1. a kids configuration or child-directed channel is KIDS, even for a probe, so COPPA is always set there; any other
+   probe session is SAFE (house ads only);
 2. a ticket that is missing, malformed, unknown, bound to another session, minted for another configuration, or past
    its lease gives CONTEXTUAL, with a reason code (`missing`, `invalid`, `unknown`, `replay`, `pc_mismatch`,
    `expired_or_raced`) and **every viewer parameter zeroed**;
@@ -87,7 +89,9 @@ appends its TCP peer, so by the time an ad request reaches Prebid Server the cha
 
 `fast_channels.core.pds.xff.viewer_ip` walks it from the right:
 
-1. drop the PBS-side CloudFront hop that the load balancer appended;
+1. drop the PBS-side CloudFront hop that the load balancer appended. The guidance's load balancer admits only
+   CloudFront's origin-facing addresses carrying its CloudFront's secret header, so this hop must be one of those
+   addresses;
 2. drop MediaTailor's egress. It cannot be recognised by address range (MediaTailor used 18 different EC2 addresses
    with no service tag in one test), so it is found by position, or, when the PBS CloudFront forwards
    `CloudFront-Viewer-Address`, as that address's rightmost occurrence;
@@ -95,8 +99,8 @@ appends its TCP peer, so by the time an ad request reaches Prebid Server the cha
    (`CLOUDFRONT_ORIGIN_FACING` in `ip-ranges.json`); a session opened directly on MediaTailor has none;
 4. the next entry is the viewer.
 
-A chain that does not fit gives no address (`no_chain`, `short_chain`, `egress_not_found`, `invalid_entry`,
-`not_global`), never a guess. The address is not authenticated: it is what the chain says the viewer's connection came
+A chain that does not fit gives no address (`no_chain`, `short_chain`, `egress_not_found`, `unexpected_hop`,
+`invalid_entry`, `not_global`), never a guess. The address is not authenticated: it is what the chain says the viewer's connection came
 from.
 
 ## Device type
@@ -104,7 +108,8 @@ from.
 `device.devicetype` (AdCOM 1.0) comes from the viewer's User-Agent (`fast_channels.core.pds.devicetype`): Connected TV
 only on an explicit TV token (Samsung, LG, Sony, Hisense and Vizio sets, HbbTV, Roku, Fire TV, Apple TV, Chromecast,
 Android TV), then set-top boxes, game consoles (Connected Device), tablets, phones and computers. A browser, the
-reference player included, is never declared CTV. A User-Agent no rule recognises gives none.
+reference player included, is never declared CTV. A User-Agent no rule recognises gives none, and so does an Android
+one with neither "Mobile" nor a tablet token, which many TV boxes send.
 
 ## Pod rules
 
@@ -112,10 +117,10 @@ reference player included, is never declared CTV. A User-Agent no rule recognise
 
 | Step | Rule |
 |---|---|
-| Eligibility | Own book only in SAFE, KIDS, or when the module applied no policy; house ads only on probe sessions. Usable VAST (InLine or Wrapper) with a known duration that agrees with the declared `dur` (rounded half up) and that the slot accepts (`rqddurs`). A `crid`, and an `adomain` unless it is a house ad. No creative the session saw in its recent breaks. At or above the floor; house ads are exempt |
+| Eligibility | Own book only in SAFE, KIDS, or when the module applied no policy; in KIDS only house ads and creatives approved for children; house ads only on probe sessions. A house ad is an own-book bid marked house: the mark from any other bidder is ignored. Usable VAST (InLine or Wrapper) with a known duration; a declared `dur` must agree with it (rounded half up) and a missing one is taken from it; the slot must accept it (`rqddurs`). A `crid`, and an `adomain` unless it is a house ad. No creative the session saw in its recent breaks. At or above the floor, except house ads (fillers) and tier-0 lines (contracted) |
 | Value | Tier-0 lines first (sponsorships, guaranteed lines, PG deals). Then paid bids by accepted net value, `price / 1000 × accept_ratio(bidder) − c_ins` with `c_ins` = $0.0005 per insertion, which must beat the slot's ad-load price λ (0 until the ad-load model exists, `fast_channels.core.adload`). House ads fill the rest; they are never sold |
 | Placement | Each bid stays in its own imp's slot. Best candidates first; one is placed if its slot is free, it repeats no creative, advertiser domain or IAB category already in the pod (across bidders; house ads only never repeat a creative), and Σ `dur` ≤ `poddur` and Σ VAST durations ≤ the break still hold |
-| Standalones | Per winner, the best remaining candidate of the same slot and duration that keeps the pod within the break if it replaces the winner. MediaTailor's ad buffet plays it in that slot if the winner fails, for example a creative it has not transcoded yet |
+| Standalones | Per winner, the best remaining candidate of the same slot and duration. MediaTailor's ad buffet plays it in that slot if the winner fails, for example a creative it has not transcoded yet. The pod stays within the break even if every winner that has a standalone fails |
 | Leftover | Slots nothing fills are not returned. Channel Assembly's break slate plays them; at a personalization threshold of 121 s MediaTailor keeps the partial pod |
 | Short avails | An avail under 30 s (the tail of a break a session joined late) gets an empty pod |
 

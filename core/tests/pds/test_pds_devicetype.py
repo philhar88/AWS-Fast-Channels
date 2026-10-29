@@ -22,6 +22,9 @@ CTV = DeviceType.CONNECTED_TV
         ),
         ("Mozilla/5.0 (Linux; Android 11; SHIELD Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0", CTV),
         ("HbbTV/1.5.1 (+DRM; Vestel; MB130; 3.1.1.0; ; _TV_G31_2020;)", CTV),
+        ("Dalvik/2.1.0 (Linux; U; Android 12; Chromecast Build/STTE.230319.008)", CTV),
+        ("Mozilla/5.0 (Linux; Android 9; MIBOX4 Build/PI) AppleWebKit/537.36 (KHTML, like Gecko)", CTV),
+        ("Mozilla/5.0 (Linux; Android 12; onn. 4K Streaming Box Build/SGZ1.221127.063)", None),
         ("Mozilla/5.0 (Linux; U; Android 4.2.2; en-us; Amino STB A140) AppleWebKit/534.30", DeviceType.SET_TOP_BOX),
         (
             "Mozilla/5.0 (PlayStation; PlayStation 5/2.26) AppleWebKit/605.1.15 (KHTML, like Gecko)",
@@ -37,7 +40,7 @@ CTV = DeviceType.CONNECTED_TV
         ),
         (
             "Mozilla/5.0 (Linux; Android 13; SM-X700) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari",
-            DeviceType.TABLET,
+            None,  # an Android tablet without a tablet token, indistinguishable from many TV boxes
         ),
         (
             "Mozilla/5.0 (Linux; Android 11; KFTRWI) AppleWebKit/537.36 (KHTML, like Gecko) Silk/120.4 like Chrome",

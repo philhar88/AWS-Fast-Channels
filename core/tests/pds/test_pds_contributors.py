@@ -4,7 +4,7 @@ from typing import Any
 from fast_channels.core.pds.contributors import Contribution, PatchContributor, collect
 from fast_channels.core.pds.models import Mode, PolicyRequest
 
-REQUEST = PolicyRequest(v=1, sid="s", pc="fast-demo-p-a", dur_ms=60060, upid="tears-of-steel")
+REQUEST = PolicyRequest(v=1, sid="s", pc="fast-demo-p-a", evid="1", dur_ms=60060, upid="tears-of-steel")
 
 
 @dataclass
@@ -50,6 +50,23 @@ def test_failing_and_colliding_contributors_are_skipped() -> None:
     assert merged.record == {"enr": 0}
     assert merged.applied == ("crawl", "dup-record")
     assert merged.skipped == ("broken", "dup-content", "late")
+
+
+class _Wrong:
+    name = "wrong"
+
+    def contribute(self, request: PolicyRequest, mode: Mode) -> Contribution:
+        return None  # type: ignore[return-value]  # a contributor that breaks its contract
+
+
+def test_contributors_that_break_the_contract_are_skipped() -> None:
+    not_json = _Fixed("sets", {"keywords": {"a", "b"}})  # a set is not JSON
+    bad_record = _Fixed("bad-record", record={"enr": object()})
+    contributors: list[PatchContributor] = [_Wrong(), not_json, bad_record, _Fixed("ok", {"id": "a"})]
+    merged = collect(contributors, REQUEST, Mode.CONTEXTUAL)
+    assert merged.app_content == {"id": "a"}
+    assert merged.applied == ("ok",)
+    assert merged.skipped == ("wrong", "sets", "bad-record")
 
 
 def test_no_contributors() -> None:

@@ -55,6 +55,7 @@ def test_policy_request_defaults_and_decision_id() -> None:
         {"sid": "x;y"},
         {"pc": "a/b"},
         {"evid": "12a"},
+        {"evid": ""},  # a break without an event id would share its decision_id with the session's others
         {"dur_ms": -1},
         {"ctx": "x" * 1001},
         {"unknown": 1},

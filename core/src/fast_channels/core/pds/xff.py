@@ -6,7 +6,8 @@ appends its TCP peer instead, which a client cannot forge. By the time an ad req
 
     [client-supplied, ...] viewer [, viewer-side CloudFront] , MediaTailor egress , PBS-side CloudFront
 
-- the rightmost entry is what the PBS load balancer appended: the PBS CloudFront's origin-facing address;
+- the rightmost entry is what the PBS load balancer appended: the PBS CloudFront's origin-facing address (the
+  load balancer admits only CloudFront, and only with the CloudFront's secret header);
 - left of it, the PBS CloudFront appended its own viewer, which is MediaTailor's egress. That address is also the
   ``CloudFront-Viewer-Address`` of the request when the PBS CloudFront forwards that header. MediaTailor's egress
   cannot be recognised by address range (it uses many EC2 addresses with no service tag), so it is found by position,
@@ -43,6 +44,9 @@ class IpRule(StrEnum):
     """Fewer hops than the path has: no entry is left for the viewer."""
     EGRESS_NOT_FOUND = "egress_not_found"
     """CloudFront-Viewer-Address is not in the chain."""
+    UNEXPECTED_HOP = "unexpected_hop"
+    """The hop right of MediaTailor's egress is not a CloudFront origin-facing address: the request did not come
+    the way the rule expects."""
     INVALID_ENTRY = "invalid_entry"
     """The entry in the viewer's position, or CloudFront-Viewer-Address, is not an IP address."""
     NOT_GLOBAL = "not_global"
@@ -93,15 +97,28 @@ def _origin_facing(address: IpAddress, networks: Sequence[IpNetwork]) -> bool:
     return any(address in network for network in networks)
 
 
-def _left_of_egress(entries: list[str], cfva: str) -> list[str] | IpRule:
-    """The entries left of MediaTailor's egress: by ``CloudFront-Viewer-Address`` (its rightmost occurrence) when
-    given, else by position (second from the right, left of the load balancer's CloudFront hop)."""
+def _egress(entries: list[str], cfva: str) -> int | IpRule:
+    """Index of MediaTailor's egress: the rightmost occurrence of ``CloudFront-Viewer-Address`` when given, else the
+    second entry from the right (left of the load balancer's CloudFront hop)."""
     if not cfva.strip():
-        return entries[:-2]
+        if len(entries) < 2:
+            return IpRule.SHORT_CHAIN
+        return len(entries) - 2 if _address(entries[-2]) is not None else IpRule.INVALID_ENTRY
     if (egress := _viewer_address(cfva)) is None:
         return IpRule.INVALID_ENTRY
     matches = [index for index, entry in enumerate(entries) if _address(entry) == egress]
-    return entries[: matches[-1]] if matches else IpRule.EGRESS_NOT_FOUND
+    return matches[-1] if matches else IpRule.EGRESS_NOT_FOUND
+
+
+def _left_of_egress(entries: list[str], cfva: str, origin_facing: Sequence[IpNetwork]) -> list[str] | IpRule:
+    """The entries left of MediaTailor's egress, once the hop right of it is confirmed as the PBS CloudFront's."""
+    index = _egress(entries, cfva)
+    if isinstance(index, IpRule):
+        return index
+    hop = _address(entries[index + 1]) if index + 1 < len(entries) else None
+    if hop is None or not _origin_facing(hop, origin_facing):
+        return IpRule.UNEXPECTED_HOP
+    return entries[:index]
 
 
 def _viewer(entry: str) -> ViewerIp:
@@ -123,7 +140,7 @@ def viewer_ip(xff: str, cfva: str, origin_facing: Sequence[IpNetwork]) -> Viewer
     entries = [entry.strip() for entry in xff.split(",")] if xff.strip() else []
     if not entries:
         return ViewerIp(None, IpRule.NO_CHAIN)
-    left = _left_of_egress(entries, cfva)
+    left = _left_of_egress(entries, cfva, origin_facing)
     if isinstance(left, IpRule):
         return ViewerIp(None, left)
     if left and (hop := _address(left[-1])) is not None and _origin_facing(hop, origin_facing):
