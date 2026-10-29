@@ -335,9 +335,10 @@ A module with merged code adds its own stack after the ones it builds on, and ma
 |---|---|---|
 | `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, and the AppConfig application `<prefix>-fast` with environment `<prefix>` ([observability.md](observability.md#lake), [ledger](observability.md#ledger)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
 
-At most five stages can exist per account and region: each Media stack subscribes its as-run reconciler to the
-account-shared log group `MediaTailor/Channel/AsRunLog`, and CloudWatch Logs allows five subscription filters per log
-group (quota `L-87E7D306`, not adjustable).
+With the default `observability.as_run: per_stage`, at most five stages can exist per account and region: each Media
+stack subscribes its as-run reconciler to the account-shared log group `MediaTailor/Channel/AsRunLog`, and CloudWatch
+Logs allows five subscription filters per log group (quota `L-87E7D306`, not adjustable). `shared` stages take none
+(above).
 
 With `modules.demand` on, `make deploy` deploys the repository's stacks only. The Prebid Server guidance, its own CDK
 bootstrap and image follow with `make deploy-demand STAGE=<name>` ([demand.md](demand.md#deploy-and-destroy)), and
