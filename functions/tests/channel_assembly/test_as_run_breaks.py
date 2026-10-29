@@ -215,3 +215,25 @@ def test_other_write_errors_fail_the_batch(
 
     with pytest.raises(ClientError, match="ProvisionedThroughputExceeded"):
         reconciler.handler(subscription(first), context)
+
+
+def test_eventbridge_as_run_events_are_reconciled_too(monkeypatch: pytest.MonkeyPatch, context: Any) -> None:
+    """The shared as-run router puts each event on the default bus with the as-run event as its detail."""
+    library = Library()
+    monkeypatch.setattr(reconciler, "_program", library.program)
+    monkeypatch.setattr(reconciler, "_decide", library.decide)
+    [first] = [e for e in RUN["as_run"] if e["eventType"] == "AdBreakStart"][:1]
+    start = next(e for e in RUN["as_run"] if e["eventType"] == "VodProgramStart")
+    library.items[start["programName"]]["aired_at"] = start["timeStamp"]
+
+    reconciler.handler(
+        {"id": "e-1", "detail-type": "AdBreakStart", "source": "fast-channels.as-run", "detail": first}, context
+    )
+    reconciler.handler({"unexpected": True}, context)
+
+    [marked] = [b for b in library.items[first["programName"]]["breaks"] if "status" in b]
+    assert (marked["status"], marked["aired_at"]) == ("AIRED", first["timeStamp"])
+
+
+def test_eventbridge_events_that_are_not_as_run_events_are_dropped(context: Any) -> None:
+    reconciler.handler({"id": "e-2", "detail-type": "AdBreakStart", "detail": {"eventType": 7}}, context)

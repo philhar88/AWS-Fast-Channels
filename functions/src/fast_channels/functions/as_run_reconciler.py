@@ -16,13 +16,14 @@ whose time has long passed without a start ``UNAIRED``: Channel Assembly logs no
 example after the channel stopped.
 """
 
+import json
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger, Metrics
 from aws_lambda_powertools.metrics import MetricUnit
-from aws_lambda_powertools.utilities.data_classes import CloudWatchLogsEvent, event_source
+from aws_lambda_powertools.utilities.data_classes import CloudWatchLogsEvent
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -75,19 +76,13 @@ class AsRunEvent(BaseModel):
 
 @metrics.log_metrics
 @logger.inject_lambda_context
-@event_source(data_class=CloudWatchLogsEvent)
-def handler(event: CloudWatchLogsEvent, context: LambdaContext) -> None:
-    """Mark the program of every ``VodProgramStart`` event in the batch as aired."""
+def handler(event: dict[str, Any], context: LambdaContext) -> None:
+    """Mark the program of every ``VodProgramStart`` event (and, with ``AS_RUN_BREAKS``, the break of every
+    ``AdBreakStart`` event) aired. ``event`` is a CloudWatch Logs subscription batch, or one EventBridge event whose
+    ``detail`` is an as-run event (an account's shared as-run router puts those)."""
     settings().require("library_table")
-    data = event.parse_logs_data()
-    logger.append_keys(log_stream=data.log_stream)
     aired = breaks = 0
-    for log_event in data.log_events:
-        try:
-            start = AsRunEvent.model_validate_json(log_event.message)
-        except ValidationError:
-            logger.warning("not an as-run event", extra={"log_message": log_event.message[:500]})
-            continue
+    for start in _as_run_events(event):
         if not start.program:
             continue
         if start.event_type == PROGRAM_START and mark_aired(start):
@@ -97,6 +92,27 @@ def handler(event: CloudWatchLogsEvent, context: LambdaContext) -> None:
     metrics.add_metric(name="ProgramsAired", unit=MetricUnit.Count, value=aired)
     if breaks:
         metrics.add_metric(name="BreaksAired", unit=MetricUnit.Count, value=breaks)
+
+
+def _as_run_events(event: dict[str, Any]) -> list[AsRunEvent]:
+    """The as-run events of a subscription batch or of an EventBridge event; anything else is logged and dropped."""
+    if "awslogs" in event:
+        data = CloudWatchLogsEvent(event).parse_logs_data()
+        logger.append_keys(log_stream=data.log_stream)
+        messages = [log_event.message for log_event in data.log_events]
+    elif isinstance(event.get("detail"), dict):
+        logger.append_keys(event_id=event.get("id"))
+        messages = [json.dumps(event["detail"])]
+    else:
+        logger.warning("neither a log subscription batch nor an EventBridge event", extra={"keys": sorted(event)})
+        return []
+    events = []
+    for message in messages:
+        try:
+            events.append(AsRunEvent.model_validate_json(message))
+        except ValidationError:
+            logger.warning("not an as-run event", extra={"log_message": message[:500]})
+    return events
 
 
 def _program(start: AsRunEvent) -> dict[str, Any] | None:
