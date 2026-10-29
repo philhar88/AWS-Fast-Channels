@@ -435,8 +435,9 @@ policies apply to it unchanged.
   [observability.md](observability.md#what-the-agent-runtime-records).
 - Runtime application and usage logs, Gateway application logs and Memory application logs are vended to
   `/aws/vendedlogs/bedrock-agentcore/<prefix>/…` log groups.
-- **Traces** need CloudWatch Transaction Search (`observability.transaction_search: enable`, an account-level change;
-  see [observability.md](observability.md#transaction-search)). Without it the Runtime sets
+- **Traces** need CloudWatch Transaction Search (`observability.transaction_search: enable` and
+  `make account-baseline` before `make deploy`, an account-level change; see
+  [observability.md](observability.md#transaction-search)). Without it the Runtime sets
   `OTEL_TRACES_EXPORTER=none`, so it exports no spans and logs no export errors.
 - **Online evaluations** (traces on only): an `OnlineEvaluationConfig` named `<runtime>_online` scores 10 % of
   sessions with the built-in Goal Success Rate, Tool Selection Accuracy and Tool Parameter Accuracy evaluators. They

@@ -175,6 +175,8 @@ teardown leaves behind.
 | **The probe canary's function logs** | CloudWatch Synthetics creates `/aws/lambda/cwsyn-<prefix>-probe-*` at the canary's first run and deletes only the function with the canary | Delete the log group by hand after `make destroy` |
 | **The ledger archive** | With `ledger_lock` `governance` or `compliance` the archive is retained and its records are under Object Lock | After `make destroy`, `scripts/ledger_verify.py purge --prefix <prefix> --apply` deletes the versions whose retention has passed, then the bucket; in governance mode `--apply --bypass-governance` deletes it at once. Development stages use `ledger_retention_days: 1` |
 
-The `FastChannels-AccountBaseline` (Transaction Search) and `FastChannels-AsRun` stacks are account-level and
-termination protected, and neither `make deploy` nor `make destroy` touches them. Delete the router only once no
-deployment in the account and Region is `shared`.
+The `FastChannels-AccountBaseline` (Transaction Search, `make account-baseline`) and `FastChannels-AsRun`
+(`make as-run-router`) stacks are account-level and termination protected. Each has its own make target, and
+neither `make deploy` nor `make destroy` selects them, so their protection never stops a teardown part-way. Delete
+the router only once no deployment in the account and Region is `shared`, and the baseline only once none uses
+`observability.transaction_search` `enable` or `existing`.

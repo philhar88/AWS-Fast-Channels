@@ -413,8 +413,10 @@ class AgentConfig(_Section):
 
 class ObservabilityConfig(_Section):
     transaction_search: TransactionSearchMode = TransactionSearchMode.OFF
-    """``enable`` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans
-    are then billed as CloudWatch Logs); ``existing`` if it is already on in this account and region."""
+    """``enable``: ``make account-baseline`` deploys the account-level FastChannels-AccountBaseline stack (an
+    account-wide change: X-Ray spans are then billed as CloudWatch Logs), once per account and region before
+    ``make deploy``; ``existing`` if it is already on in this account and region. Both turn on the agent's traces.
+    ``make deploy`` and ``make destroy`` never touch the baseline stack."""
     log_retention_days: int = 7
     """Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs)."""
     mediatailor_log_percent: int = Field(default=100, ge=0, le=100)

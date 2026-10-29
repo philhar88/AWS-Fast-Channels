@@ -20,7 +20,7 @@ TOPOLOGIES = {
     "default": ({}, "us-east-1"),
     "stage-fastm": (FASTM, "us-east-1"),
     "production-everything": (
-        {"removal": "retain", "observability.transaction_search": "enable", **GLOBAL_MODELS},
+        {"removal": "retain", "observability.transaction_search": "enable", "account-baseline": True, **GLOBAL_MODELS},
         "eu-west-1",
     ),
     "media-only": ({"agent.enabled": False}, "eu-central-1"),

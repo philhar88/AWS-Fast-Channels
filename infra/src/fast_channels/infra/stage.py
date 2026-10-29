@@ -6,7 +6,7 @@ from aws_cdk import Aspects, Environment, Stage, Tags
 
 from fast_channels.core.demand import NETWORK_CONTEXT, DemandNetwork
 from fast_channels.core.tags import Owner, resource_tags
-from fast_channels.infra.config import FastChannelsConfig, Removal, TransactionSearchMode
+from fast_channels.infra.config import ConfigError, FastChannelsConfig, Removal, TransactionSearchMode
 from fast_channels.infra.constructs.functions import (
     FunctionLogGroups,
     LambdaDefaults,
@@ -45,8 +45,8 @@ def stage_id(prefix: str) -> str:
 class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
     ``modules.crawl.enabled``, after Media), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
-    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (if
-    ``observability.transaction_search`` is ``enable``), DemandEdge (in us-east-1) and DemandBuild (if
+    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (the
+    account's Transaction Search, only with ``account_baseline``), DemandEdge (in us-east-1) and DemandBuild (if
     ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), Demand
     beside the guidance once ``scripts/prebid_guidance.py`` passes its network (context
     ``fast-channels:demand-network``), Pds after it (if ``modules.pds.enabled``), and AsRun (the account's as-run
@@ -63,10 +63,23 @@ class FastChannelsStage(Stage):
         env: account (may be unresolved) and region (required) of the deployment.
         as_run_router: add the account's as-run router stack ``FastChannels-AsRun`` (``make as-run-router``, ADR-0032).
             It is never part of the stage otherwise, so ``make deploy`` and ``make destroy`` leave it alone.
+        account_baseline: add the account baseline stack ``FastChannels-AccountBaseline`` (``make account-baseline``),
+            which needs ``observability.transaction_search: enable``. It is never part of the stage otherwise, so
+            ``make deploy`` and ``make destroy`` leave it, and its termination protection, alone.
+
+    Raises:
+        ConfigError: ``account_baseline`` is set while ``observability.transaction_search`` is not ``enable``.
     """
 
     def __init__(
-        self, scope: Construct, id: str, *, config: FastChannelsConfig, env: Environment, as_run_router: bool = False
+        self,
+        scope: Construct,
+        id: str,
+        *,
+        config: FastChannelsConfig,
+        env: Environment,
+        as_run_router: bool = False,
+        account_baseline: bool = False,
     ) -> None:
         if not env.region:
             raise ValueError("the deployment region must be known at synth time (set AWS_REGION or a profile region)")
@@ -94,9 +107,7 @@ class FastChannelsStage(Stage):
 
         self.as_run = self._as_run_router(config, tags) if as_run_router else None
 
-        self.baseline: AccountBaselineStack | None = None
-        if config.observability.transaction_search is TransactionSearchMode.ENABLE:
-            self.baseline = AccountBaselineStack(self, "AccountBaseline", tags=tags)
+        self.baseline = self._account_baseline(config, tags) if account_baseline else None
 
         self.models: ModelsStack | None = None
         if config.modules.models.enabled:
@@ -177,6 +188,15 @@ class FastChannelsStage(Stage):
             self.pds.add_stack_dependency(self.demand, "The PDS's record is in the Demand stack's private zone")
             if self.ops is not None:
                 self.pds.add_stack_dependency(self.ops, "The decision records' tables are in the lake's database")
+
+    def _account_baseline(self, config: FastChannelsConfig, tags: dict[str, str]) -> AccountBaselineStack:
+        """The account's Transaction Search baseline, which only ``transaction_search: enable`` asks for."""
+        if (mode := config.observability.transaction_search) is not TransactionSearchMode.ENABLE:
+            raise ConfigError(
+                "the account baseline turns Transaction Search on for the account; "
+                f"observability.transaction_search is {mode.value!r}: set it to 'enable'"
+            )
+        return AccountBaselineStack(self, "AccountBaseline", tags=tags)
 
     def _as_run_router(self, config: FastChannelsConfig, tags: dict[str, str]) -> AsRunRouterStack:
         """The account's as-run router stack, after Media (whose custom resource creates the as-run log group)."""

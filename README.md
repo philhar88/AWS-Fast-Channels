@@ -253,11 +253,11 @@ make destroy                       # make destroy PREFIX=<name> for other deploy
 The runtime-resource reaper deletes agent channels, programs, VOD sources, runtime source locations and job templates
 before CloudFormation deletes the stacks. With `removal: retain` data is kept and stacks are termination protected.
 If a teardown is interrupted, `uv run python scripts/cleanup.py` lists the runtime resources that are left and
-`--apply` deletes them; then run `make destroy` again. The account-level
-`FastChannels-AccountBaseline` stack (only with Transaction Search enabled) and the account-shared as-run log group
-are never deleted automatically. Details in [docs/operations.md](docs/operations.md#destroy). With the demand module,
-run `make destroy-demand STAGE=<name>` first;
-[docs/modules.md](docs/modules.md#account-level-limits-and-teardown-residue) lists what a teardown leaves behind.
+`--apply` deletes them; then run `make destroy` again. The account-level `FastChannels-AccountBaseline` stack
+(Transaction Search, deployed only by `make account-baseline`) and the account-shared as-run log group are never
+deleted automatically. Details in [docs/operations.md](docs/operations.md#destroy). With the demand module, run
+`make destroy-demand STAGE=<name>` first; [docs/modules.md](docs/modules.md#account-level-limits-and-teardown-residue)
+lists what a teardown leaves behind.
 
 ## Documentation
 

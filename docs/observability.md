@@ -344,9 +344,19 @@ as such for every application in the account. FAST Channels therefore leaves it 
 | `observability.transaction_search` | Effect |
 |---|---|
 | `off` (default) | No spans: the Runtime sets `OTEL_TRACES_EXPORTER=none`; logs and metrics are unaffected |
-| `enable` | Deploys `FastChannels-AccountBaseline` (Transaction Search with 1 % indexing, the free tier, and its log resource policy), then trace deliveries for Gateway and Memory, span export from the Runtime and online evaluations; message content is captured unless `capture_prompts` is `false` |
+| `enable` | `make account-baseline` deploys `FastChannels-AccountBaseline` (Transaction Search with 1 % indexing, the free tier, and its log resource policy); the deployment then has trace deliveries for Gateway and Memory, span export from the Runtime and online evaluations; message content is captured unless `capture_prompts` is `false` |
 | `existing` | Transaction Search is already on in this account and region: same as `enable` without the baseline stack |
 
-The baseline stack is termination protected and its resources are retained, so deleting a deployment never turns
-Transaction Search off for other workloads; delete the stack deliberately to do so. The traced configuration has been
-synthesised and unit-tested but not deployed end to end in v3.0.
+With `enable`, deploy the baseline once per account and region before the deployment, because the Operator stack's
+trace deliveries fail while Transaction Search is off:
+
+```bash
+make account-baseline   # the stack FastChannels-AccountBaseline (also STAGE=<name> or PREFIX=<name>)
+make deploy
+```
+
+`make deploy` and `make destroy` never select the baseline stack. It is termination protected and its resources are
+retained, so deleting a deployment never turns Transaction Search off for other workloads, and `make destroy` is not
+stopped by the protection part-way. To turn Transaction Search off, turn the stack's termination protection off and
+delete it deliberately, once no deployment in the account and region uses `enable` or `existing`. The traced
+configuration has been synthesised and unit-tested but not deployed end to end in v3.0.
