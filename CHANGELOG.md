@@ -45,6 +45,16 @@ All notable changes to this project are documented here. The format follows
   documented Functions limits and the JSONata allow-list that MediaTailor does not enforce when a function is put,
   the body template, the cache keys, the channel-policy pattern and the rollout strategy. The bundle's JSON Schema
   is `contracts/monetization-bundle.schema.json`.
+- **Demand: the pinned Prebid Server guidance** ([docs/demand.md](docs/demand.md), ADR-0020 proposed, ADR-0002
+  exception A). `vendor/prebid-guidance/PIN.toml` pins the AWS Guidance for Deploying a Prebid Server on AWS at
+  v1.4.0, with the SHA-256 of every upstream file its overlays patch or rely on. Five overlays add a stack-name prefix
+  and a dedicated CDK bootstrap (O1), a customer WAF rule group (O2), the fast-ctv module's build hook (O4), simulator
+  creatives from configuration (O5) and 100% minimum healthy ECS deployments (O7). `scripts/prebid_guidance.py
+  checkout|verify|apply` refuses a moved tag, a changed upstream file or a patch that does not apply, and the CI job
+  `guidance-overlays` applies the overlays on every run. `render-config` renders a stage's Prebid Server configuration
+  (`fast_channels.core.pbs_config`): stored requests per 30/60/90/120 s break (and kids variants) for the own book
+  only, the stage's account with the module's execution plan and Activity Controls, and the application
+  configuration.
 
 ## [3.0.0] - 2026-10-16
 

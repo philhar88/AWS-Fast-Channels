@@ -42,6 +42,23 @@ jobs:
       - name: No unfilled release placeholders in the docs
         run: "! git grep -nE '\\{\\{[A-Z_]+\\}\\}' -- '*.md'"
 
+  guidance-overlays:
+    name: Prebid Server guidance overlays
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked --all-packages
+      # Fetches the guidance at the pinned tag and fails if the tag moved, a pinned upstream file changed or a patch no
+      # longer applies (vendor/prebid-guidance/PIN.toml).
+      - name: Apply the overlays to the pinned guidance
+        run: uv run python scripts/prebid_guidance.py apply
+      - name: Overlay tests on the patched guidance
+        run: uv run pytest tests/e2e/test_prebid_guidance.py -v
+
   console:
     name: Console (lint, types, tests, build)
     runs-on: ubuntu-24.04-arm

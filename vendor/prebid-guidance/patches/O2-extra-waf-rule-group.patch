@@ -1,0 +1,117 @@
+O2: a customer WAF rule group referenced first by the guidance's web ACL (FAST Channels overlay, guidance v1.4.0)
+
+The guidance creates its CloudFront web ACL in a custom resource and deletes it with the lock token from creation,
+so any later UpdateWebACL makes stack deletion fail, and it has no extension point for customer rules. New stack
+parameter ExtraWafRuleGroupArn (default empty: no change): the web ACL references that rule group at priority 0,
+before every guidance rule, and the custom resource's role may reference rule groups. Changing the rule group's
+rules (rotating an origin secret) never touches the web ACL. The ARN is read when the web ACL is created.
+
+diff --git a/source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py b/source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py
+--- a/source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py
++++ b/source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py
+@@ -48,12 +48,30 @@
+ 
+     wafv2_client = boto3.client("wafv2", config=config.Config(**boto_config))
+ 
++    # Overlay O2 (FAST Channels): an optional customer rule group, evaluated before every guidance rule. Changing
++    # its rules (for example rotating a secret) never touches this web ACL, which on_delete removes with the lock
++    # token captured here.
++    extra_rule_group_arn = os.environ.get("EXTRA_RULE_GROUP_ARN", "")
++    customer_rules = [
++        {
++            "Name": "CustomerRuleGroup",
++            "Priority": 0,
++            "OverrideAction": {"None": {}},
++            "Statement": {"RuleGroupReferenceStatement": {"ARN": extra_rule_group_arn}},
++            "VisibilityConfig": {
++                "SampledRequestsEnabled": True,
++                "CloudWatchMetricsEnabled": True,
++                "MetricName": "CustomerRuleGroup",
++            },
++        }
++    ] if extra_rule_group_arn else []
++
+     response = wafv2_client.create_web_acl(
+         Name=f"PrebidWaf-{event['StackId'].rsplit('/')[-1]}-{get_4char_uuid()}",
+         Scope="CLOUDFRONT",
+         DefaultAction={"Allow": {}},
+         Description="Creating Web ACL for Cloudfront applying AWS managed rule sets",
+-        Rules=[
++        Rules=customer_rules + [
+             # Allow specific POST operation to /cache endpoint
+             {
+                 "Name": "AllowPostToCache",
+diff --git a/source/infrastructure/prebid_server/cloudfront_waf_construct.py b/source/infrastructure/prebid_server/cloudfront_waf_construct.py
+--- a/source/infrastructure/prebid_server/cloudfront_waf_construct.py
++++ b/source/infrastructure/prebid_server/cloudfront_waf_construct.py
+@@ -24,10 +24,12 @@
+             scope,
+             id,
+             prebid_alb,
+-            x_header_secret_value
++            x_header_secret_value,
++            extra_rule_group_arn=""
+     ) -> None:
+         """
+-        This construct creates CloudFront and Waf resources
++        This construct creates CloudFront and Waf resources. Overlay O2 (FAST Channels): extra_rule_group_arn names an
++        optional customer rule group that the web ACL references first.
+         """
+         super().__init__(scope, id)
+ 
+@@ -145,6 +147,7 @@
+                     resources=[
+                         f"arn:aws:wafv2:us-east-1:{Aws.ACCOUNT_ID}:global/webacl/PrebidWaf-*",
+                         f"arn:aws:wafv2:us-east-1:{Aws.ACCOUNT_ID}:global/managedruleset/*/*",
++                        f"arn:aws:wafv2:us-east-1:{Aws.ACCOUNT_ID}:global/rulegroup/*/*",
+                     ],
+                 )
+             ],
+@@ -171,6 +174,7 @@
+                 "SOLUTION_VERSION": self.node.try_get_context("SOLUTION_VERSION"),
+                 "SOLUTION_APPLICATION_TYPE": stack_constants.SOLUTION_APPLICATION_TYPE,
+                 "SOLUTION_NAME": self.node.try_get_context("SOLUTION_NAME"),
++                "EXTRA_RULE_GROUP_ARN": extra_rule_group_arn,
+             }
+         )
+ 
+diff --git a/source/infrastructure/prebid_server/stack_cfn_parameters.py b/source/infrastructure/prebid_server/stack_cfn_parameters.py
+--- a/source/infrastructure/prebid_server/stack_cfn_parameters.py
++++ b/source/infrastructure/prebid_server/stack_cfn_parameters.py
+@@ -196,6 +196,21 @@
+             self.simulator_endpoint_param, label="SimulatorEndpoint",
+             group=VPC_PEERING_GROUP_NAME)
+ 
++        # Overlay O2 (FAST Channels): a customer WAF rule group, referenced before the guidance's rules
++        self.extra_waf_rule_group_arn_param = CfnParameter(
++            stack,
++            id="ExtraWafRuleGroupArn",
++            description="ARN of a CLOUDFRONT-scope WAF rule group (us-east-1) that the web ACL evaluates first. Read when the web ACL is created. Empty: none.",
++            type="String",
++            default="",
++            allowed_pattern="^$|^arn:aws:wafv2:us-east-1:[0-9]{12}:global/rulegroup/[A-Za-z0-9_-]+/[a-f0-9-]+$",
++            constraint_description="Must be empty or the ARN of a CLOUDFRONT-scope WAF rule group"
++        )
++
++        stack.solutions_template_options.add_parameter(
++            self.extra_waf_rule_group_arn_param, label="ExtraWafRuleGroupArn",
++            group=CDN_GROUP_NAME)
++
+         # --- CfnConditions ---
+         # HasRtbRequesterGateway: EnableRtbRequesterGateway == "true"
+         self.has_rtb_requester_gateway = CfnCondition(
+diff --git a/source/infrastructure/prebid_server/cloudfront_entry_deployment.py b/source/infrastructure/prebid_server/cloudfront_entry_deployment.py
+--- a/source/infrastructure/prebid_server/cloudfront_entry_deployment.py
++++ b/source/infrastructure/prebid_server/cloudfront_entry_deployment.py
+@@ -123,7 +123,10 @@
+                                                     alb_sec_group=alb_sec_group)
+ 
+         # Create CloudFront and WAF resources, and prefix list id.
+-        cloudfront_waf_construct = CloudFrontWafConstruct(self, "CloudFrontWaf", prebid_alb, x_header_secret_value)
++        cloudfront_waf_construct = CloudFrontWafConstruct(
++            self, "CloudFrontWaf", prebid_alb, x_header_secret_value,
++            extra_rule_group_arn=stack_params.extra_waf_rule_group_arn_param.value_as_string,  # overlay O2
++        )
+ 
+         # Set CACHE_HOST to CloudFront domain so cache URLs in bid responses
+         # point to the public CloudFront endpoint instead of the internal ALB

@@ -20,3 +20,9 @@ genre-map.toml from the IAB Tech Lab Taxonomies repository (github.com/Interacti
 commit, checksums and changes: core/src/fast_channels/core/crawl/taxonomy/ATTRIBUTION.md.
 
 Third-party software is listed in uv.lock, package-lock.json and console/package-lock.json under its own licences.
+
+Guidance overlays
+-----------------
+vendor/prebid-guidance/ holds patches to the Guidance for Deploying a Prebid Server on AWS (Copyright Amazon.com,
+Inc. or its affiliates; Apache License 2.0). They are distributed under the Apache License 2.0; see
+vendor/prebid-guidance/NOTICE.

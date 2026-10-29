@@ -1,0 +1,140 @@
+{
+  "app": {
+    "content": {
+      "cattax": 9,
+      "context": 1,
+      "livestream": 1
+    },
+    "id": "fastm-app",
+    "name": "FAST Channels",
+    "publisher": {
+      "id": "fastm"
+    }
+  },
+  "at": 1,
+  "cur": [
+    "USD"
+  ],
+  "id": "fast-pod-kids-90s",
+  "imp": [
+    {
+      "ext": {
+        "prebid": {
+          "bidder": {
+            "ownbook": {}
+          }
+        }
+      },
+      "id": "s1",
+      "ssai": 3,
+      "video": {
+        "h": 1080,
+        "linearity": 1,
+        "mimes": [
+          "application/x-mpegURL",
+          "video/mp4"
+        ],
+        "plcmt": 1,
+        "poddur": 90,
+        "podid": 1,
+        "protocols": [
+          3,
+          6,
+          7,
+          8
+        ],
+        "rqddurs": [
+          30
+        ],
+        "slotinpod": 1,
+        "startdelay": -1,
+        "w": 1920
+      }
+    },
+    {
+      "ext": {
+        "prebid": {
+          "bidder": {
+            "ownbook": {}
+          }
+        }
+      },
+      "id": "s2",
+      "ssai": 3,
+      "video": {
+        "h": 1080,
+        "linearity": 1,
+        "mimes": [
+          "application/x-mpegURL",
+          "video/mp4"
+        ],
+        "plcmt": 1,
+        "poddur": 90,
+        "podid": 1,
+        "protocols": [
+          3,
+          6,
+          7,
+          8
+        ],
+        "rqddurs": [
+          30
+        ],
+        "slotinpod": 0,
+        "startdelay": -1,
+        "w": 1920
+      }
+    },
+    {
+      "ext": {
+        "prebid": {
+          "bidder": {
+            "ownbook": {}
+          }
+        }
+      },
+      "id": "s3",
+      "ssai": 3,
+      "video": {
+        "h": 1080,
+        "linearity": 1,
+        "mimes": [
+          "application/x-mpegURL",
+          "video/mp4"
+        ],
+        "plcmt": 1,
+        "poddur": 90,
+        "podid": 1,
+        "protocols": [
+          3,
+          6,
+          7,
+          8
+        ],
+        "rqddurs": [
+          30
+        ],
+        "slotinpod": -1,
+        "startdelay": -1,
+        "w": 1920
+      }
+    }
+  ],
+  "regs": {
+    "coppa": 1
+  },
+  "source": {
+    "schain": {
+      "complete": 1,
+      "nodes": [
+        {
+          "asi": "d111111abcdef8.cloudfront.net",
+          "hp": 1,
+          "sid": "fastm"
+        }
+      ],
+      "ver": "1.0"
+    }
+  },
+  "tmax": 500
+}

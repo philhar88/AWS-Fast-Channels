@@ -1,6 +1,6 @@
 # 0002 — Stable L2 constructs over AWS Solutions Constructs
 
-**Status:** Accepted
+**Status:** Accepted, amended by [0020](0020-demand-through-the-prebid-server-guidance.md) (exception A)
 
 ## Context
 Re-use is a primary goal. AWS Solutions Constructs 2.105 offer patterns that look relevant (`aws-s3-stepfunctions`,
@@ -22,3 +22,9 @@ exists (MediaTailor, MediaConvert templates, log deliveries). No alpha or previe
 ## Consequences
 Slightly more code in our constructs, but every property is visible and documented, and adopters can lift any single
 construct without inheriting a pattern library's opinions.
+
+## Exceptions
+- **A. The Guidance for Deploying a Prebid Server on AWS** ([0020](0020-demand-through-the-prebid-server-guidance.md))
+  is deployed as its own CDK app at a pinned tag, with overlays, and is not composed into this app. Porting its
+  roughly 350 resources to our constructs would fork a guidance that AWS maintains. The overlays (about 150 lines)
+  are re-checked against the pin on every CI run.

@@ -87,6 +87,8 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 | `ladders/*.toml` | The `standard` table, TOML example and multivariant in `docs/encoding.md`, job template snapshot | `uv run pytest core/tests --snapshot-update` |
 | `scripts/render_architecture.py` | `docs/images/architecture.png` | `uv run --group docs python scripts/render_architecture.py` (needs Graphviz) |
 | `scripts/render_brand_assets.py` | `assets/brand/*.png` | `uv run python scripts/render_brand_assets.py` (changes every kit fingerprint) |
+| `fast_channels.core.pbs_config` | Golden Prebid Server configuration in `core/tests/__snapshots__/test_pbs_config/` | `uv run pytest core/tests/test_pbs_config.py --snapshot-update` |
+| The guidance pin and overlays (`vendor/prebid-guidance/`) | The upstream hashes in `PIN.toml` | See [docs/demand.md](docs/demand.md#the-guidance-and-its-overlays) |
 
 ## Tests
 
