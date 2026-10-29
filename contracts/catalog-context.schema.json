@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ContentIds": {
+      "additionalProperties": false,
+      "description": "The title's ids in one registry (OpenRTB 2.6 ``content.data[]`` with ``name`` and ``cids``).",
+      "properties": {
+        "name": {
+          "description": "Registry domain; the first entry is the publisher's own.",
+          "title": "Name",
+          "type": "string"
+        },
+        "ids": {
+          "description": "The title's ids in that registry.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "ids"
+      ],
+      "title": "ContentIds",
+      "type": "object"
+    },
+    "ContentType": {
+      "description": "How a title is packaged.",
+      "enum": [
+        "movie",
+        "episode",
+        "special",
+        "trailer",
+        "clip"
+      ],
+      "title": "ContentType",
+      "type": "string"
+    },
+    "Producer": {
+      "additionalProperties": false,
+      "description": "OpenRTB ``content.producer``.",
+      "properties": {
+        "name": {
+          "default": "",
+          "description": "Producer or studio.",
+          "maxLength": 200,
+          "title": "Name",
+          "type": "string"
+        },
+        "domain": {
+          "default": "",
+          "description": "The producer's web domain.",
+          "title": "Domain",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "domain"
+      ],
+      "title": "Producer",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One title's show-level metadata (``catalog/ctx/v1/<id>.json``). Absent text is ``\"\"``, absent numbers null.",
+  "properties": {
+    "v": {
+      "const": 1,
+      "default": 1,
+      "description": "Schema version.",
+      "title": "V",
+      "type": "integer"
+    },
+    "id": {
+      "description": "Catalog content id (OpenRTB content.id).",
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "title": "Id",
+      "type": "string"
+    },
+    "title": {
+      "description": "Title.",
+      "maxLength": 200,
+      "title": "Title",
+      "type": "string"
+    },
+    "series": {
+      "description": "Show of an episode, or franchise of a film.",
+      "maxLength": 200,
+      "title": "Series",
+      "type": "string"
+    },
+    "season": {
+      "description": "Season label.",
+      "maxLength": 200,
+      "title": "Season",
+      "type": "string"
+    },
+    "episode": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Episode number.",
+      "title": "Episode"
+    },
+    "type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContentType"
+        },
+        {
+          "const": "",
+          "type": "string"
+        }
+      ],
+      "description": "How the title is packaged; empty when the catalog is silent.",
+      "title": "Type"
+    },
+    "genre": {
+      "description": "Content Taxonomy 3.1 name of the most apt genre.",
+      "title": "Genre",
+      "type": "string"
+    },
+    "genres": {
+      "description": "Content Taxonomy 3.1 ids, most apt first.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Genres",
+      "type": "array"
+    },
+    "gtax": {
+      "const": 9,
+      "default": 9,
+      "description": "Taxonomy of genres: 9, IAB Tech Lab Content Taxonomy 3.1.",
+      "title": "Gtax",
+      "type": "integer"
+    },
+    "cat": {
+      "description": "Content Taxonomy 3.1 ids of the content category.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Cat",
+      "type": "array"
+    },
+    "cattax": {
+      "const": 9,
+      "default": 9,
+      "description": "Taxonomy of cat: 9, IAB Tech Lab Content Taxonomy 3.1.",
+      "title": "Cattax",
+      "type": "integer"
+    },
+    "contentrating": {
+      "description": "Parental rating.",
+      "maxLength": 200,
+      "title": "Contentrating",
+      "type": "string"
+    },
+    "len": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Running time in seconds.",
+      "title": "Len"
+    },
+    "language": {
+      "description": "ISO 639-1 language; empty when unknown.",
+      "pattern": "^(?:[a-z]{2})?$",
+      "title": "Language",
+      "type": "string"
+    },
+    "prodq": {
+      "anyOf": [
+        {
+          "maximum": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "AdCOM production quality.",
+      "title": "Prodq"
+    },
+    "producer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Producer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Producer."
+    },
+    "kwarray": {
+      "description": "Descriptive tags that are not genres.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Kwarray",
+      "type": "array"
+    },
+    "cids": {
+      "description": "Ids by registry, the publisher's first.",
+      "items": {
+        "$ref": "#/$defs/ContentIds"
+      },
+      "minItems": 1,
+      "title": "Cids",
+      "type": "array"
+    },
+    "title_q": {
+      "description": "title, encoded as by encodeURIComponent.",
+      "maxLength": 1000,
+      "title": "Title Q",
+      "type": "string"
+    },
+    "series_q": {
+      "description": "series, encoded as by encodeURIComponent.",
+      "maxLength": 1000,
+      "title": "Series Q",
+      "type": "string"
+    },
+    "hdr": {
+      "description": "Compact form for the x-fast-ctx request header.",
+      "maxLength": 1000,
+      "title": "Hdr",
+      "type": "string"
+    },
+    "updated": {
+      "description": "When the publisher wrote the object.",
+      "format": "date-time",
+      "title": "Updated",
+      "type": "string"
+    }
+  },
+  "required": [
+    "v",
+    "id",
+    "title",
+    "series",
+    "season",
+    "episode",
+    "type",
+    "genre",
+    "genres",
+    "gtax",
+    "cat",
+    "cattax",
+    "contentrating",
+    "len",
+    "language",
+    "prodq",
+    "producer",
+    "kwarray",
+    "cids",
+    "title_q",
+    "series_q",
+    "hdr",
+    "updated"
+  ],
+  "title": "CatalogContext",
+  "type": "object"
+}
