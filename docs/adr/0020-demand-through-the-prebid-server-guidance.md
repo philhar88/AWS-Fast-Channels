@@ -1,7 +1,8 @@
 # 0020 — Programmatic demand through the AWS Prebid Server guidance
 
-**Status:** Proposed (amends [0002](0002-l2-constructs-over-solutions-constructs.md), exception A). It is accepted when
-the demand and Pod Decision Service modules pass their end-to-end legs.
+**Status:** Proposed (amends [0001](0001-python-cdk-and-uv-workspace.md) and
+[0002](0002-l2-constructs-over-solutions-constructs.md), exception A). It is accepted when the demand and Pod Decision
+Service modules pass their end-to-end legs.
 
 ## Context
 The optional demand module ([docs/demand.md](../demand.md)) puts an auction behind the channel's ad breaks.

@@ -23,7 +23,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -79,6 +79,9 @@ class Pin:
     patched: Mapping[str, str]
     relied_on: Mapping[str, str]
     vendor: Path = VENDOR
+    pbs_java_repository: str = "https://github.com/prebid/prebid-server-java"
+    pbs_java_commits: Mapping[str, str] = field(default_factory=dict)
+    """Prebid Server Java release -> the commit its tag must resolve to."""
 
     @classmethod
     def load(cls, path: Path = PIN_FILE) -> Pin:
@@ -99,6 +102,8 @@ class Pin:
             patched=dict(data["patched"]),
             relied_on=dict(data.get("relied_on", {})),
             vendor=path.parent,
+            pbs_java_repository=data["pbs_java"]["repository"],
+            pbs_java_commits=dict(data["pbs_java"]["commits"]),
         )
 
     @property

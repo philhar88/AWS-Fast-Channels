@@ -57,7 +57,10 @@ module = ["aws_cdk.*", "constructs.*", "cdk_nag.*", "jsii.*", "diagrams.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib", "-ra", "-m", "not e2e"]
+addopts = ["--import-mode=importlib", "-ra", "-m", "not e2e and not pbs"]
 consider_namespace_packages = true
-testpaths = ["core/tests", "functions/tests", "agent/tests", "infra/tests", "tests/e2e"]
-markers = ["e2e: deployed end-to-end tests (require AWS credentials and a deployed stage)"]
+testpaths = ["core/tests", "functions/tests", "agent/tests", "infra/tests", "tests/e2e", "tests/pbs"]
+markers = [
+    "e2e: deployed end-to-end tests (require AWS credentials and a deployed stage)",
+    "pbs: Prebid Server contract tests (require the jar from scripts/pbs_module.py build and Java 21)",
+]

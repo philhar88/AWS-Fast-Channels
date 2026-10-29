@@ -18,7 +18,7 @@ make help           # every target
 | Target | What it runs |
 |---|---|
 | `make lint` | `ruff format --check`, `ruff check`, console ESLint |
-| `make typecheck` | `mypy` (strict) on `core/src functions/src agent/src infra/src`, then on `scripts tests/e2e`; console `tsc -b` |
+| `make typecheck` | `mypy` (strict) on `core/src functions/src agent/src infra/src`, then on `scripts tests/e2e` and `tests/pbs`; console `tsc -b` |
 | `make test` | `pytest` (core, functions, agent, infra), console Vitest |
 | `make synth` | Console build, then `cdk synth` with cdk-nag; fails on unacknowledged findings |
 | `make check` | All of the above, what CI runs |
@@ -70,8 +70,8 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 
 - Python 3.14 idioms: `match`, `X | Y` unions, `type` aliases, `StrEnum`, f-strings, `pathlib`. Small, pure functions
   where possible; precise docstrings; comments only where they explain *why*.
-- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy core/src functions/src agent/src infra/src` and
-  `MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e` pass.
+- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy core/src functions/src agent/src infra/src`,
+  `MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e` and `MYPYPATH=tests/pbs uv run mypy tests/pbs` pass.
 - New behaviour has tests. Infrastructure changes have CDK assertions, and cdk-nag findings are fixed or acknowledged
   on the construct that causes them, with a reason.
 - Changing a CloudFormation snapshot is deliberate: `uv run pytest infra/tests/test_snapshots.py --snapshot-update`
@@ -95,6 +95,9 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 - **Unit and infrastructure tests**: `uv run pytest` (all four packages) and `cd console && npm test`.
 - **Console smoke tests**: `cd console && npx playwright install chromium && npm run test:e2e` (mock mode, strict
   CSP).
+- **Prebid Server module** (demand module, Java 21): `make pbs-test` builds Prebid Server Java with the fast-ctv
+  module exactly as the guidance's image does and runs the module's JUnit tests; `make pbs-contract` then runs the
+  contract tests (marker `pbs`) against that jar with local mocks. CI runs both in the `pbs-module` job.
 - **Model conformance**: `make eval MODEL=<bedrock model id>` before proposing a model for `agent.allowed_models`.
 - **End-to-end tests** (`tests/e2e`, marker `e2e`) run against a deployed stage: the stack-output contract; an
   upload with a sidecar through MediaConvert to a VOD source; the default ladder's kit as MediaTailor reads it;
