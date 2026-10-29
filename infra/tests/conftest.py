@@ -1,6 +1,7 @@
 """Fixtures: FAST Channels stages synthesized from the shipped cdk.json context, with asset bundling disabled."""
 
 import json
+import os
 import re
 import shutil
 from collections.abc import Callable, Iterator, Mapping
@@ -15,7 +16,7 @@ from syrupy.extensions.json import JSONSnapshotExtension
 
 from fast_channels.core.ladder import BUILTIN_DIR, LADDERS_DIR_ENV, Ladder, LadderOps, propose
 from fast_channels.infra.app import build
-from fast_channels.infra.config import FastChannelsConfig
+from fast_channels.infra.config import EVAL_RECORDS, EVAL_RECORDS_ENV, FastChannelsConfig
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -26,6 +27,9 @@ ACCOUNT = "123456789012"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CDK_CONTEXT: dict[str, Any] = json.loads((REPO_ROOT / "cdk.json").read_text())["context"]
 type Overrides = Mapping[str, Any]
+FIXTURE_RECORDS = Path(__file__).parent / "data" / "evals"
+"""Eval records of tasks without a suite yet (the recommender's), for configurations these tests synthesize."""
+os.environ[EVAL_RECORDS_ENV] = os.pathsep.join([str(EVAL_RECORDS), str(FIXTURE_RECORDS)])
 WEAK_REFERENCE_OUTPUT = "PublishOutput"
 """Name prefix of the outputs behind weak cross-stack references (``Fn::GetStackOutput``)."""
 

@@ -49,18 +49,19 @@ the same protocol to the same Gateway.
 | `MEMORY_ID` | AgentCore Memory id. Without it, sessions are kept on local disk (development only). |
 | `MEMORY_PREFERENCE_NAMESPACE` | Optional. USER_PREFERENCE namespace template, for example `/users/{actorId}/preferences/`. When set, recalled preferences are added to the prompt. |
 | `CONFIRM_TOOLS` | Comma-separated qualified tool names that need operator approval (`registry.confirm_tools()`). |
-| `MODEL_SPEC_PARAMETER` | SSM String parameter holding the ModelSpec JSON `{"model_id", "effort": {"chat", "plan"}, "max_tokens", "thinking"?}`. Read with a 60 s cache. |
+| `MODEL_SPEC_PARAMETER` | SSM String parameter holding the ModelSpec JSON `{"model_id", "effort": {"chat", "plan"}, "max_tokens", "thinking"?}`. Read with a 60 s cache. Not set with `modules.models`. |
 | `MODEL_PROFILE_ARN` | Optional (set with `modules.models`). The task's application inference profile: every model call goes through it, and a registry entry must name it. |
-| `MODEL_COUNTER_TABLE`, `MODEL_DAILY_CAP_USD`, `ALERT_TOPIC_ARN` | Optional (set with `modules.models`). The daily spend counter table, the deployed cap in US dollars (a registry entry's own cap applies while the entry is in use) and the topic told once a day when the cap is reached. |
-| `MODEL_TASK_PARAMETER` | Optional (set with `modules.models`). SSM String parameter holding the agent's model-registry entry (`scheduler.plan`, [contracts/model-registry.schema.json](../contracts/model-registry.schema.json)). Read first, with the same cache; the ModelSpec applies only when the entry is missing or invalid. |
+| `MODEL_COUNTER_TABLE`, `ALERT_TOPIC_ARN` | Optional (set with `modules.models`). The daily spend counter table and the topic told once a day when the cap is reached. |
+| `MODEL_TASK_PARAMETER` | Optional (set with `modules.models`). SSM String parameter holding the agent's model-registry entry (`scheduler.plan`, [contracts/model-registry.schema.json](../contracts/model-registry.schema.json)), read with a 60 s cache. |
+| `MODEL_TASK_DEFAULT` | Optional (set with `modules.models`). The same entry as deployed (JSON): its settings and cap apply whenever the entry in SSM cannot be used. |
 | `DEFAULT_MODEL_ID` | Code default model. Use the region's geo profile, for example `us.anthropic.claude-haiku-5-5`. |
 | `ALLOWED_MODELS` | Comma-separated model ids. A spec naming any other model is ignored. The runtime role must be able to invoke each of them. |
 | `CAPTURE_PROMPTS` | Optional debug switch, off by default. `true` keeps prompts, tool results and model replies in the runtime's logs and traces (see Logging below). |
 
 Runtime role: `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the allowed profiles,
 `ssm:GetParameter` on the spec parameter, and Memory read and write. With `modules.models` the model grant is the
-task's application inference profile only (and its foundation model only through it), plus `ssm:GetParameter` on the
-registry entry, `dynamodb:UpdateItem` on the task's counter items and `sns:Publish` on the alert topic. The Gateway
+task's application inference profile only (and its foundation model only through it), `ssm:GetParameter` is on the
+registry entry instead, `dynamodb:UpdateItem` on the task's counter items and `sns:Publish` on the alert topic. The Gateway
 needs no IAM grant, because the operator's JWT is forwarded.
 
 ## Code zip (PYTHON_3_14, arm64)

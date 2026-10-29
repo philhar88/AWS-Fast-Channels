@@ -20,7 +20,13 @@ if TYPE_CHECKING:
 type GetDeployment = Callable[..., Any]
 
 HAIKU, SONNET = "us.anthropic.claude-haiku-5-5", "us.anthropic.claude-sonnet-5-5"
-RECOMMENDER = {"model": "{geo}.anthropic.claude-haiku-5-5", "effort": "low", "max_tokens": 8000, "data_class": "viewer"}
+RECOMMENDER = {
+    "model": "{geo}.anthropic.claude-haiku-5-5",
+    "effort": "low",
+    "max_tokens": 8000,
+    "data_class": "viewer",
+    "eval": "haiku-5-5-adaptive-8k",  # a fixture record (infra/tests/data/evals)
+}
 MODELS = {"modules.models.enabled": True}
 TWO_TASKS = {**MODELS, "modules.models.tasks": {"recommender": RECOMMENDER}}
 BUDGETS = {**MODELS, "modules.models.budgets_action": True, "notifications.email": "ops@example.com"}
@@ -122,7 +128,7 @@ def test_one_entry_per_task_naming_its_own_profile(deployment: GetDeployment) ->
             "max_tokens": 16000,
             "data_class": "operational",
             "daily_cap_usd": 5.0,
-            "eval": None,
+            "eval": "haiku-5-5-adaptive-16k",
             "profile_arn": f"<profile:{scheduler}>",
         },
         "/fast/models/tasks/recommender": {
@@ -133,7 +139,7 @@ def test_one_entry_per_task_naming_its_own_profile(deployment: GetDeployment) ->
             "max_tokens": 8000,
             "data_class": "viewer",
             "daily_cap_usd": None,
-            "eval": None,
+            "eval": "haiku-5-5-adaptive-8k",
             "profile_arn": f"<profile:{recommender}>",
         },
     }
@@ -200,7 +206,7 @@ def test_the_agent_reads_its_entry_and_counts_its_spend_by_name(deployment: GetD
     statements = runtime_statements(d)
 
     assert environment["MODEL_TASK_PARAMETER"] == SCHEDULER_PARAMETER
-    assert (environment["MODEL_COUNTER_TABLE"], environment["MODEL_DAILY_CAP_USD"]) == ("fast-models", "5.0")
+    assert environment["MODEL_COUNTER_TABLE"] == "fast-models"
     assert environment["ALERT_TOPIC_ARN"] == "arn:aws:sns:us-east-1:123456789012:fast-alerts"  # by name
     assert {
         "Action": "ssm:GetParameter",
@@ -219,11 +225,33 @@ def test_the_agent_reads_its_entry_and_counts_its_spend_by_name(deployment: GetD
     assert not [name for name in media if name.startswith("PublishOutputRefObservabilityTopic")]  # Media unchanged
 
 
-def test_without_a_cap_the_agent_gets_none(deployment: GetDeployment) -> None:
-    # As the CLI passes it: CDK context drops a None inside an object.
-    d = deployment({**MODELS, "modules.models.tasks": '{"scheduler.plan": {"daily_cap_usd": null}}'})
+def test_the_entry_as_deployed_is_the_agents_fallback(deployment: GetDeployment) -> None:
+    d = deployment(MODELS)
+    environment = runtime(d)["EnvironmentVariables"]
+    [scheduler] = profiles(d)
 
-    assert "MODEL_DAILY_CAP_USD" not in runtime(d)["EnvironmentVariables"]
+    deployed = environment["MODEL_TASK_DEFAULT"]["Fn::Join"][1]
+    assert json.loads(deployed[0] + "<profile>" + deployed[2]) == {
+        **parameters(d)[SCHEDULER_PARAMETER],
+        "profile_arn": "<profile>",
+    }
+    assert deployed[1] == profile_output(d, scheduler)
+
+
+def test_with_the_registry_the_model_spec_is_gone(default: Any, deployment: GetDeployment) -> None:
+    d = deployment(MODELS)
+    operator = d.template(d.stage.operator)
+
+    assert "MODEL_SPEC_PARAMETER" not in runtime(d)["EnvironmentVariables"]
+    assert not [p for p in operator.find_resources("AWS::SSM::Parameter").values() if "model-spec" in str(p)]
+    assert "ModelSpecParameter" not in operator.find_outputs("*")
+    assert "ModelSpecParameter" in default.template(default.stage.operator).find_outputs("*")  # v3.0.0 keeps it
+
+
+def test_without_a_cap_there_is_no_budget(deployment: GetDeployment) -> None:
+    # As the CLI passes it: CDK context drops a None inside an object.
+    d = deployment({**BUDGETS, "modules.models.tasks": '{"scheduler.plan": {"daily_cap_usd": null}}'})
+
     assert d.stage.operator.budget is None
 
 

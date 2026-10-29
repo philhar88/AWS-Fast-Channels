@@ -341,30 +341,25 @@ With `modules.models.enabled`, the `FastChannels-<prefix>-Models` stack gives ev
 
 The stack outputs `TaskParameters`, `TaskProfiles` and `CounterTableName` list them. The scheduler agent's task is
 `scheduler.plan`, which ships with today's ModelSpec values (Haiku 5.5, effort `low` for chat and `medium` for plans,
-16,000 tokens) and a daily cap of $5. The agent resolves its settings, with a 60 s cache, from the first source that is
-valid:
-
-1. the `scheduler.plan` registry entry (`MODEL_TASK_PARAMETER`);
-2. the ModelSpec (`/<prefix>/agent/model-spec`);
-3. the code default (`agent.model`).
-
-An entry that is missing, unreadable, invalid, names a model outside `agent.allowed_models` or names another profile
-is skipped with a `model source unavailable` warning. Synth refuses an entry whose model is not allowed, and an entry
+16,000 tokens), a daily cap of $5 and its committed eval record. With the registry there is no ModelSpec parameter:
+the agent reads the `scheduler.plan` entry (`MODEL_TASK_PARAMETER`) with a 60 s cache and, when it cannot use it, the
+entry as deployed (`MODEL_TASK_DEFAULT`). An entry that is missing, unreadable, invalid, names a model outside
+`agent.allowed_models` or names another profile is skipped with a `model source unavailable` warning. Synth refuses an entry whose model is not allowed, and an entry
 for a task with viewer data (`data_class: viewer`) on a `global.` profile. Every run's `run started` log record names
-its `task`, `model_id` and `model_source` (`registry`, `model-spec` or `default`). A task's thinking setting is fixed:
+its `task`, `model_id` and `model_source` (`registry`, `model-spec` without the registry, or `default`). A task's thinking setting is fixed:
 it never changes from one call to the next, because a change rewrites the prompt cache.
 
 **Through the profile only.** With the registry, every model call goes through the task's profile
 (`MODEL_PROFILE_ARN`), whatever the source, and the runtime role may invoke nothing else: the profile, and the
 foundation model only through it (`bedrock:InferenceProfileArn`), never the system profile directly or another task's
 profile. `agent.allowed_models` then holds one model for the agent, the task's, so switching the scheduler to another
-model is a `cdk.json` change and a deployment (a new profile), not an SSM edit; the ModelSpec and the entry still tune
-effort, thinking and `max_tokens`. Prompt caching works through the profile.
+model is a `cdk.json` change, an eval record and a deployment (a new profile), not an SSM edit; an edit of the entry
+still tunes effort, thinking, `max_tokens` and the cap. Prompt caching works through the profile.
 
 **Daily cap.** Caps are circuit breakers against a runaway, set at about ten times expected use, not budgets. Before
 each run and each model call the agent makes a conditional write on the counter item `COUNTER#scheduler.plan#<UTC day>`
-that succeeds only while the day's spend is under `daily_cap_usd` (the entry's, or the deployed value when the entry
-is unusable); after each call it adds the call's cost from its token usage at list prices (`fast_channels.agent.caps`).
+that succeeds only while the day's spend is under `daily_cap_usd` (the entry's, or the deployed entry's when the
+entry is unusable); after each call it adds the call's cost from its token usage at list prices (`fast_channels.agent.caps`).
 Past the cap a run ends with `RUN_ERROR` `MODEL_CAP_REACHED` (a call within a run is cancelled with the same message
 as the reply), and the alert topic `<prefix>-alerts` gets one notification per task and day. It resumes at 00:00 UTC
 or as soon as the cap is raised. When the counter cannot be reached the run goes ahead and the agent logs a warning.
@@ -376,6 +371,18 @@ enforces the day, the budget catches what the counter cannot see (another caller
 hours late and only once the cost allocation tag is active; reverse an action in AWS Budgets (Action history) once
 the cause is fixed.
 
+**Eval records and the synth gate.** A model qualifies for a task only with a passing eval record,
+`evals/records/<task>/<key>.json` ([contracts/eval-record.schema.json](../contracts/eval-record.schema.json)), committed
+with the change that uses it. `make eval TASK=scheduler.plan MODEL=<id>` runs the conformance suite below with the
+task's settings from `cdk.json` (effort, thinking, `max_tokens`) and writes the record, passing or not; its key reads
+like `haiku-5-5-adaptive-16k`. With the registry on, synth fails while any task's `eval` names no passing record for
+its model and settings: removing the record, switching `scheduler.plan` to Sonnet 5.5 or changing its `max_tokens`
+each needs a new record. Any routing of the tested model qualifies (`us.`, `eu.`, `global.`). Tasks without a suite
+here (the recommender's ships with its module) need their own: a recommender record must report `schema_valid`,
+`faithfulness` (the deterministic check that each tile's reason cites only facts of the input), `policy_violations`
+and `cost_per_rail`, and a judge sample runs before any default flip. Swapping the model of a task with viewer data
+needs a human's approval.
+
 ### Conformance suite and bringing your own model
 
 Before a model enters `allowed_models`, it should pass the scheduling conformance suite: a standard scenario (fill a
@@ -384,6 +391,7 @@ each run through the real agent and scored on the published schedule.
 
 ```bash
 make eval MODEL=us.anthropic.claude-sonnet-5-5          # 3 runs per scenario against a local fake tool server
+make eval TASK=scheduler.plan MODEL=us.anthropic.claude-sonnet-5-5   # the same with scheduler.plan's settings: a record
 uv run python scripts/eval_model.py --model-id <id> --runs 3 --scenarios standard,hard \
   --gateway-url "$GATEWAY_URL" --token-file ~/.fast/token --channel <prefix>-agent-eval   # against deployed tools
 ```

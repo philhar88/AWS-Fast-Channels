@@ -4,7 +4,7 @@ and the alert topic is told once.
 Runs only on a stage whose ``scheduler.plan`` registry entry has a tiny cap (at most 5 US cents), because it spends
 the stage's agent budget for the rest of the UTC day; deploy the e2e stage with
 ``-c 'fast-channels.modules.models.tasks={"scheduler.plan": {"daily_cap_usd": 0.01}}'`` and the machine client (see
-``test_05_agent``). It runs last for the same reason.
+``test_05_agent``). It runs last (``test_99``) for the same reason.
 
 A cached agent turn costs a few hundredths of a cent, so turns alone take long to reach even a cent. After one turn
 has been counted, the test lowers the registry entry's cap below the day's spend (an operator's runtime edit of the

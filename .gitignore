@@ -29,3 +29,6 @@ console/.vite/
 .DS_Store
 .idea/
 .vscode/
+
+# Model conformance runs (scripts/eval_model.py --out); eval records live in evals/records/
+evals-results/

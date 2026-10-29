@@ -14,6 +14,7 @@ from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, RenditionProfile
 from fast_channels.infra.config import (
+    EVAL_RECORDS_ENV,
     AdsMode,
     ChannelTier,
     ConfigError,
@@ -378,6 +379,14 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
 
 
 MODULES = ("ops", "models", "demand", "pds", "release", "crawl")
+RECS = "haiku-5-5-adaptive-8k"
+"""The recommender's fixture eval record (``infra/tests/data/evals``)."""
+RECOMMENDER: dict[str, Any] = {
+    "model": "{geo}.anthropic.claude-haiku-5-5",
+    "effort": "low",
+    "max_tokens": 8000,
+    "eval": RECS,
+}
 LINE: dict[str, Any] = {
     "id": "direct1",
     "advertiser": "Example Coffee Co.",
@@ -527,7 +536,7 @@ def test_invalid_module_configurations(load_config: Load, overrides: dict[str, A
 
 
 def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> None:
-    recommender = {"model": "{geo}.anthropic.claude-haiku-5-5", "effort": "low", "max_tokens": 8000}
+    recommender = {"model": "{geo}.anthropic.claude-haiku-5-5", "effort": "low", "max_tokens": 8000, "eval": RECS}
     config = load_config(
         with_shipped(
             **modules_on(*MODULES),
@@ -597,7 +606,7 @@ def test_task_models_resolve_when_the_registry_keeps_its_defaults(load_config: L
 
 
 def test_viewer_data_tasks_refuse_a_region_whose_geography_is_global(load_config: Load) -> None:
-    recommender = {"model": "{geo}.anthropic.claude-haiku-5-5", "data_class": "viewer"}
+    recommender = {**RECOMMENDER, "data_class": "viewer"}
     viewer = {
         "fast-channels": {
             "agent": {"enabled": False},
@@ -616,7 +625,7 @@ def test_viewer_data_tasks_refuse_a_region_whose_geography_is_global(load_config
 
 
 def test_the_agent_needs_its_registry_entry(load_config: Load) -> None:
-    tasks = {"recommender": {"model": "{geo}.anthropic.claude-haiku-5-5"}}
+    tasks = {"recommender": RECOMMENDER}
     registry = {"modules": {"models": {"enabled": True, "tasks": tasks}}}
 
     message = config_error(load_config, {"fast-channels": registry}, region="us-east-1")
@@ -649,3 +658,67 @@ def test_release_strategies_name_the_core_rollouts() -> None:
     """``modules.release.strategy`` selects one of the bundle's AppConfig strategies (DESIGN §8.4)."""
     assert [s.value for s in ReleaseStrategy] == [t.value for t in RolloutTier]
     assert {RolloutTier(s.value) for s in ReleaseStrategy} == set(ROLLOUTS)
+
+
+MODELS_ON = {"fast-channels": {"modules": {"models": {"enabled": True}}}}
+SCHEDULER = {"model": "{geo}.anthropic.claude-haiku-5-5", "eval": "haiku-5-5-adaptive-16k"}
+
+
+def test_the_shipped_scheduler_entry_has_its_committed_eval_record(load_config: Load) -> None:
+    entry = load_config(MODELS_ON, region="us-east-1").modules.models.tasks["scheduler.plan"]
+
+    assert entry.eval == "haiku-5-5-adaptive-16k"
+
+
+def test_removing_the_record_fails_synth_with_a_clear_message(
+    load_config: Load, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(EVAL_RECORDS_ENV, str(tmp_path))  # a records directory without the record
+
+    message = config_error(load_config, MODELS_ON, region="us-east-1")
+
+    assert (
+        "fast-channels.modules.models.tasks[scheduler.plan]: eval record 'haiku-5-5-adaptive-16k' does not exist "
+        f"({tmp_path}/scheduler.plan/haiku-5-5-adaptive-16k.json); run make eval TASK=scheduler.plan MODEL=<model>"
+    ) in message
+    assert not load_config({"fast-channels": {}}, region="us-east-1").modules.models.enabled  # off: no gate
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        (
+            {"model": "{geo}.anthropic.claude-sonnet-5-5"},
+            "eval record 'haiku-5-5-adaptive-16k' does not qualify it: it tested anthropic.claude-haiku-5-5, not "
+            "anthropic.claude-sonnet-5-5",
+        ),
+        (
+            {"model": "{geo}.anthropic.claude-sonnet-5-5", "eval": "sonnet-5-5-adaptive-16k"},
+            "eval record 'sonnet-5-5-adaptive-16k' does not exist",
+        ),
+        (
+            {"max_tokens": 8000},
+            "it ran with effort chat low / plan medium, thinking adaptive and max_tokens 16000, the entry has chat "
+            "low / plan medium, adaptive and 8000",
+        ),
+        ({"eval": None}, "names no eval record; run make eval TASK=scheduler.plan MODEL=<model> and set eval"),
+    ],
+)
+def test_a_model_or_setting_without_its_own_record_fails_synth(
+    load_config: Load, entry: dict[str, Any], expected: str
+) -> None:
+    raw = {
+        "modules": {
+            "models": {
+                "enabled": True,
+                "tasks": {"scheduler.plan": {**SCHEDULER, **entry}},
+            }
+        }
+    }
+
+    assert expected in config_error(load_config, {"fast-channels": raw}, region="us-east-1")
+
+
+def test_any_routing_of_the_tested_model_qualifies(load_config: Load) -> None:
+    for region in ("eu-west-1", "sa-east-1"):  # eu. and global. profiles of the us.-tested Haiku 5.5
+        assert load_config(MODELS_ON, region=region).modules.models.tasks["scheduler.plan"].eval

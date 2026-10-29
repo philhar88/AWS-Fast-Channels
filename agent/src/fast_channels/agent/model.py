@@ -5,8 +5,8 @@ per mode, thinking, max tokens): a mutable provider or endpoint would let anyone
 prompts and tool results outside the IAM allow-list (_review.md, ModelSpec). The first valid source wins:
 
 1. the ``scheduler.plan`` entry of the model registry (``MODEL_TASK_PARAMETER``, deployed with ``modules.models``);
-2. the ModelSpec (``MODEL_SPEC_PARAMETER``);
-3. the code default.
+2. the ModelSpec (``MODEL_SPEC_PARAMETER``, deployed without the model registry);
+3. the default: the registry entry as deployed (``MODEL_TASK_DEFAULT``), or the code default.
 
 A source that is missing, unreadable, invalid or names a model outside the allow-list is skipped with a warning.
 With the model registry the deployment also gives the task an application inference profile (``MODEL_PROFILE_ARN``):
@@ -147,19 +147,24 @@ class ModelSpecSource:
                     extra={"source": source.value, "parameter": name},
                     exc_info=True,
                 )
-        return ActiveSpec(self._default, SpecSource.DEFAULT, settings.daily_cap_usd)
+        if deployed := settings.model_task_default:
+            try:
+                return self._entry(deployed, SpecSource.DEFAULT)
+            except ValueError:
+                logger.warning("the deployed registry entry is invalid, using the code default", exc_info=True)
+        return ActiveSpec(self._default, SpecSource.DEFAULT)
 
     def _registry_entry(self, raw: str) -> ActiveSpec:
+        return self._entry(raw, SpecSource.REGISTRY)
+
+    def _entry(self, raw: str, source: SpecSource) -> ActiveSpec:
         settings = self._settings
         entry = parse_task_entry(raw, allowed=settings.allowed_models, profile_arn=settings.model_profile_arn)
         cap = Decimal(str(entry.daily_cap_usd)) if entry.daily_cap_usd is not None else None
-        return ActiveSpec(entry.spec(), SpecSource.REGISTRY, cap)
+        return ActiveSpec(entry.spec(), source, cap)
 
     def _model_spec(self, raw: str) -> ActiveSpec:
-        settings = self._settings
-        return ActiveSpec(
-            parse_spec(raw, allowed=settings.allowed_models), SpecSource.MODEL_SPEC, settings.daily_cap_usd
-        )
+        return ActiveSpec(parse_spec(raw, allowed=self._settings.allowed_models), SpecSource.MODEL_SPEC)
 
 
 def parse_spec(raw: str, *, allowed: frozenset[str]) -> ModelSpec:

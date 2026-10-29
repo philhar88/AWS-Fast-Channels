@@ -115,6 +115,13 @@ All notable changes to this project are documented here. The format follows
   counter per task (`<prefix>-models`) refuses runs and calls past `daily_cap_usd` with `MODEL_CAP_REACHED` and tells
   the alert topic once a day; `scheduler.plan` ships with a $5 cap. `budgets_action` adds an AWS Budget per task role
   (monthly, at 31 days of the cap: Budgets actions accept no daily budget) whose action denies the role's invocations.
+- **Eval records and the synth gate** (`modules.models`, ADR 0029): `make eval TASK=<task> MODEL=<id>` runs the
+  task's conformance suite with its settings and writes `evals/records/<task>/<key>.json`
+  (`contracts/eval-record.schema.json`). Synth refuses a task whose `eval` names no passing record for its model and
+  settings; the `scheduler.plan` record of Claude Haiku 5.5 is committed. The recommender's record format, with its
+  deterministic faithfulness check, is defined. With the registry on, the scheduler's ModelSpec parameter is retired:
+  the agent falls back to its entry as deployed.
+
 ## [3.0.0] - 2026-10-16
 
 A rewrite of FAST Channels on AWS on the AWS CDK (Python), with agentic scheduling on Amazon Bedrock AgentCore, one

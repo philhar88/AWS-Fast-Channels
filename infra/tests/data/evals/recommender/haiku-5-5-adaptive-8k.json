@@ -1,0 +1,19 @@
+{
+  "task": "recommender",
+  "key": "haiku-5-5-adaptive-8k",
+  "model": "us.anthropic.claude-haiku-5-5",
+  "effort": "low",
+  "thinking": "adaptive",
+  "max_tokens": 8000,
+  "suite": "test fixture of the infra tests, not an evaluation: the recommender suite ships with its module",
+  "runs": 1,
+  "passed": true,
+  "checks": [
+    {"name": "schema_valid", "passed": true, "value": 1.0, "threshold": ">= 0.99"},
+    {"name": "faithfulness", "passed": true, "value": 0.95, "threshold": ">= 0.90"},
+    {"name": "policy_violations", "passed": true, "value": 0.0, "threshold": "== 0"},
+    {"name": "cost_per_rail", "passed": true, "value": 0.0024, "threshold": "<= 0.01"}
+  ],
+  "cost_usd": "0",
+  "recorded_at": "2026-10-29T00:00:00Z"
+}

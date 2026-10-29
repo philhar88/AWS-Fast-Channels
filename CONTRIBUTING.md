@@ -23,7 +23,7 @@ make help           # every target
 | `make synth` | Console build, then `cdk synth` with cdk-nag; fails on unacknowledged findings |
 | `make check` | All of the above, what CI runs |
 | `make diff`, `make deploy`, `make destroy` | Against your account; `PREFIX=<name>` for a separate copy, `STAGE=<name>` for a [stage file](docs/operations.md#stages) |
-| `make seed`, `make trace ID=…`, `make eval MODEL=…`, `make model-access` | Operator scripts |
+| `make seed`, `make trace ID=…`, `make eval MODEL=… [TASK=…]`, `make model-access` | Operator scripts |
 
 The console also runs without AWS: `cd console && npm run dev:mock` (see [console/README.md](console/README.md)).
 
@@ -99,6 +99,8 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
   module exactly as the guidance's image does and runs the module's JUnit tests; `make pbs-contract` then runs the
   contract tests (marker `pbs`) against that jar with local mocks. CI runs both in the `pbs-module` job.
 - **Model conformance**: `make eval MODEL=<bedrock model id>` before proposing a model for `agent.allowed_models`.
+  For a model-registry task, `make eval TASK=<task> MODEL=<id>` writes its eval record to `evals/records/`; commit it
+  with the entry that names it (synth refuses an entry without a passing record).
 - **End-to-end tests** (`tests/e2e`, marker `e2e`) run against a deployed stage: the stack-output contract; an
   upload with a sidecar through MediaConvert to a VOD source; the default ladder's kit as MediaTailor reads it;
   programs published through the tools, then SSAI sessions watching the breaks air with ads from the second break

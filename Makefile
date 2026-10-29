@@ -76,8 +76,8 @@ model-access: ## Check (and optionally request) Amazon Bedrock model access for 
 seed: ## Ingest the open-licensed sample titles and load the reference catalog (SEED_ARGS="--wait --yes")
 	uv run python scripts/seed_sample_content.py $(PREFIX_OPT) $(SEED_ARGS)
 
-eval: ## Run the agent model-conformance suite (MODEL=<bedrock model id>)
-	uv run python scripts/eval_model.py --model-id $(or $(MODEL),us.anthropic.claude-haiku-5-5)
+eval: ## Run the agent model-conformance suite (MODEL=<bedrock model id>; TASK=scheduler.plan writes its eval record)
+	uv run python scripts/eval_model.py --model-id $(or $(MODEL),us.anthropic.claude-haiku-5-5) $(if $(TASK),--task $(TASK))
 
 trace: ## Find every log line for a correlation id (ID=<asset id, session id or execution name>)
 	uv run python scripts/trace.py $(ID) $(PREFIX_OPT)
