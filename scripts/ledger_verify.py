@@ -157,7 +157,7 @@ def synthetic_entries(count: int, chains: int, run_id: str) -> list[LedgerEntry]
 
 
 def write_and_verify(stage: Stage, count: int, chains: int) -> int:
-    run_id = f"{datetime.now(UTC):%Y%m%dT%H%M%S}-{os.urandom(3).hex()}"
+    run_id = f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{os.urandom(3).hex()}"  # lower case, as chain ids are
     table = ledger_table(stage)
     entries = synthetic_entries(count, chains, run_id)
     started = time.monotonic()
