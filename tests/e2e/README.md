@@ -53,6 +53,12 @@ Session fixtures (`conftest.py`) do each slow step once, when a test first needs
 | `test_06_stop` | `channels___stop_channel` | The channel is STOPPED. The session teardown stops it again, whatever failed before. |
 | `test_07_late_start` | With the channel stopped, publish two programs starting in 3 minutes, with one 2-minute break each. Start the channel 30 s after the first program's start. Stop it at the end of the module. | `channels___start_channel` reports the first program in `skipped` (and only programs whose start had passed), the media library marks it `SKIPPED`, and the as-run log shows the second program starting at its planned time, within one segment, and no start of the first. |
 
+With a module on, the stage also runs that module's tests (each skipped on a stage without the module's stack):
+
+| Module | Step | Checks |
+|---|---|---|
+| `test_08_ops` (`modules.ops`) | Wait up to 15 minutes for the lake's log copies and 7 minutes for the census | The Ops stack outputs exist. The lake's copies of the ADS logs hold the run's `MAKING_ADS_REQUEST` events, and no ADS record has `requestHeaders` or `rawAdsRequest`, nor any manifest record `mediaTailorPath`, `input` or `http`. `v_breaks` (Athena) returns every break of the run's three programs by its SCTE-35 event id, each seen by a session. The bus log has a `Census Changed` event from 0 to running and one from running to 0. |
+
 Timing and behaviour worth knowing:
 
 - **The first break of a new creative airs its slate.** MediaTailor imports a creative the first time it sees it

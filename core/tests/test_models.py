@@ -13,6 +13,7 @@ from fast_channels.core.events import (
     AssetReady,
     AutopilotRun,
     CatalogItemChanged,
+    CensusChanged,
     LadderFailed,
     LadderReady,
     SchedulePublished,
@@ -143,6 +144,7 @@ def test_events() -> None:
         LadderFailed(ladder_version=LV, correlation_id="c", error="E", cause="C"),
         SchedulePublished(channel="ch", plan_id="p", programs=2, start_ms=0, end_ms=1, correlation_id="c"),
         AutopilotRun(channel="ch", status="SUCCEEDED", session_id="s", summary="ok"),
+        CensusChanged(running=1, previous=0, correlation_id="c"),
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version=LV),
         CatalogItemChanged(content_id="sintel"),
     ]
@@ -162,3 +164,8 @@ def test_events() -> None:
     assert event_source("fast") == "fast-channels.fast"
     with pytest.raises(KeyError):
         put_events_entry(ContentQuery(), prefix="fast", event_bus="b")
+
+
+def test_census_changed_counts_are_never_negative() -> None:
+    with pytest.raises(ValidationError):
+        CensusChanged(running=-1, previous=0, correlation_id="c")

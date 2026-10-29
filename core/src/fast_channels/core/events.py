@@ -78,6 +78,15 @@ class CatalogItemChanged(BaseModel):
     correlation_id: str | None = Field(None, description="Trace id of the change in your CMS.")
 
 
+class CensusChanged(BaseModel):
+    """The number of the deployment's running channels crossed zero: the first channel started, or the last one
+    stopped (published by the channel census with the ops module on; at most one census interval late)."""
+
+    running: int = Field(ge=0, description="Running channels now; 0 when the last one stopped.")
+    previous: int = Field(ge=0, description="Running channels at the census before.")
+    correlation_id: str = Field(description="Name of the census execution that saw the change.")
+
+
 DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     IngestRequest: "Ingest Requested",
     AssetReady: "Asset Ready",
@@ -87,6 +96,7 @@ DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     SchedulePublished: "Schedule Published",
     AutopilotRun: "Autopilot Run",
     CatalogItemChanged: "Catalog Item Changed",
+    CensusChanged: "Census Changed",
 }
 
 

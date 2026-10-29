@@ -76,6 +76,14 @@ All notable changes to this project are documented here. The format follows
   CMS sync job puts after changing a title, and in a daily sweep. It rewrites an object only when its content
   changes and deletes the objects of removed titles. `modules.crawl.publisher_domain` names the registry of your
   content ids. `make seed` now announces the sample titles with `Catalog Item Changed`.
+- **Ops module, lake and census events** (`modules.ops.enabled`): a per-stage lake (bucket in the Data stack;
+  `FastChannels-<prefix>-Ops` with the Glue database `<prefix>_lake`, the Athena workgroup `<prefix>-lake` with a
+  10 GiB scan limit, and the views `v_breaks` and `v_fill_by_pc`). The lake reads the CloudFront Parquet logs
+  without `c-ip`, `cs-uri-query` and `x-forwarded-for`, and receives JSON copies of each IaC playback
+  configuration's MediaTailor ad decision server logs (without `requestHeaders` and `rawAdsRequest`) and manifest
+  logs (without `mediaTailorPath`, `input` and `http`). The channel census puts `Census Changed` on the bus when the
+  number of running channels crosses zero. The AppConfig application `<prefix>-fast` and environment `<prefix>` are
+  created for the flags and release profiles that later pull requests add.
 
 ## [3.0.0] - 2026-10-16
 

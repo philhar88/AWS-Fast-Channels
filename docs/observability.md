@@ -9,6 +9,7 @@ alarms and notifications.
 - [Correlation contract](#correlation-contract)
 - [Tracing an id](#tracing-an-id)
 - [Dashboard and alarms](#dashboard-and-alarms)
+- [Lake](#lake)
 - [Metrics](#metrics)
 - [What the agent runtime records](#what-the-agent-runtime-records)
 - [Audit trail](#audit-trail)
@@ -132,6 +133,48 @@ running-channel census and the channel-hours alarm.
 Channel Assembly publishes no metric while a channel runs without viewers, so a `ChannelCensus` Express state machine
 counts this deployment's `RUNNING` channels (by the `fast:app` tag) every 5 minutes into
 `FastChannels/RunningChannels`, which the channel-hours alarm sums.
+
+With the ops module (`modules.ops.enabled`) the census also announces when the count crosses zero: it compares the
+count with the last one it recorded in the SSM parameter `/<prefix>/ops/running-channels`, and when one of them is 0
+and the other is not it puts a `Census Changed` event (`running`, `previous`, `correlation_id` = the census execution
+name; [contract](../contracts/events.schema.json)) on the deployment's bus, then records the new count. An event is
+therefore at most one census interval (5 minutes) late, and a failed put is repeated by the next census, so consumers
+(Prebid Server scaling, provisioned concurrency, canaries) must treat it as at-least-once. The parameter always holds
+the latest count; read it instead of listing channels.
+
+## Lake
+
+With the ops module (`modules.ops.enabled`) each stage has a lake for Amazon Athena: the bucket `LakeBucketName`
+(Data stack; versioned, SSE-S3, access-logged to `s3/lake/`, objects expiring after `modules.ops.lake_retention_days`),
+the Glue database `<prefix>_lake` and the workgroup `<prefix>-lake` (Ops stack outputs `LakeDatabase`,
+`LakeWorkGroup`). The workgroup enforces its settings, keeps results as Athena managed query results and cancels a
+query that would scan more than 10 GiB. Tables use partition projection, so nothing crawls and no partition needs
+adding; filter on the partition keys to keep scans small.
+
+| Table or view | What | Partitions |
+|---|---|---|
+| `cloudfront_access` | The media distribution's standard logs v2 (the v3.0 Parquet in the logs bucket), every field except `c-ip`, `cs-uri-query` and `x-forwarded-for` | `year`, `month`, `day`, `hour` (UTC, zero-padded strings) |
+| `mediatailor_ads` | Copies of every IaC playback configuration's ad decision server logs, JSON under `mediatailor/ads/`, without `requestHeaders` and `rawAdsRequest` | `datehour` (`yyyy/MM/dd/HH`, UTC) |
+| `mediatailor_manifest` | The same for the manifest service logs, under `mediatailor/manifest/`, without `mediaTailorPath`, `input` and `http` | `datehour` |
+| `v_breaks` | One row per aired break by SCTE-35 event id (`evid`): UPID, channel, the ad marker's `START-DATE`, the first ADS request, configurations, sessions, ADS requests, filled avails and seconds | — |
+| `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate | — |
+
+Column names are the log fields in lower case (`eventtype`, `adsrequesturl`, `cs_uri_stem`, `cmcd_session_id`).
+Nested log objects (`avail`, `vastresponse`, `beaconinfo`) are JSON text: read them with `json_extract_scalar`. The
+excluded fields never reach the lake: the ADS request headers hold the viewer's address and user agent (and, on
+monetized configurations, header secrets and the playback ticket), the manifest fields hold the viewer's request path
+and query and the session-initialization hook's HTTP exchange, and `cs-uri-query` records the viewer's original
+query, before any edge rewrite. The CloudWatch Logs copies of the same logs are v3.0's (`/aws/vendedlogs/mediatailor/<prefix>`).
+
+```sql
+SELECT evid, upid, started_at, sessions, ads_requests, filled_avails, filled_seconds
+FROM v_breaks ORDER BY started_at DESC LIMIT 20;
+
+SELECT configuration, hour, breaks, fill_rate FROM v_fill_by_pc ORDER BY hour DESC;
+
+SELECT eventtype, count(*) FROM mediatailor_ads
+WHERE datehour >= date_format(current_timestamp - INTERVAL '1' HOUR, '%Y/%m/%d/%H') GROUP BY eventtype;
+```
 
 ## Metrics
 

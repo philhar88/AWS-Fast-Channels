@@ -28,6 +28,7 @@ class FastEventBus(Construct):
         removal_policy: what happens to the log group when the stack is deleted.
 
     Attributes:
+        name: the bus name, ``<prefix>-fast-channels``.
         bus: the event bus.
         archive: archive of every event on the bus.
         log_group: the bus log group.
@@ -44,7 +45,7 @@ class FastEventBus(Construct):
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
-        name = f"{prefix}-fast-channels"
+        self.name = name = f"{prefix}-fast-channels"
         self.bus = events.EventBus(
             self,
             "Bus",

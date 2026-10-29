@@ -7,7 +7,7 @@ new record that supersedes the old one rather than editing history.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-python-cdk-and-uv-workspace.md) | Python CDK app in a uv workspace | Accepted, amended by 0020 |
-| [0002](0002-l2-constructs-over-solutions-constructs.md) | Stable L2 constructs over AWS Solutions Constructs | Accepted, amended by 0020 |
+| [0002](0002-l2-constructs-over-solutions-constructs.md) | Stable L2 constructs over AWS Solutions Constructs | Accepted, amended by 0020; L1 list amended for the modules |
 | [0003](0003-native-rendition-profiles-no-object-lambda.md) | Rendition profiles are static encode manifests, no S3 Object Lambda | Accepted, amended by 0016 |
 | [0004](0004-tracing-without-the-xray-sdk.md) | Tracing without the AWS X-Ray SDK | Accepted |
 | [0005](0005-preconditioned-ads.md) | Preconditioned ads (no MediaTailor transcoding) by default | Accepted, amended by 0016 and 0017 |

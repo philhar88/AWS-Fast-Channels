@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 SNAPSHOT_STACKS = ("data", "baseline")
+MODULE_STACKS = {"ops": ({"modules.ops.enabled": True}, ("data", "media", "ops"))}
+"""Per module: the overrides that turn it on, and the stacks it adds or changes (the others stay v3.0's)."""
 SHIPPED_STACKS = {
     "us-east-1": ("data", "media", "operator"),  # what `make synth` synthesizes
     "eu-west-1": ("edge",),  # the stack the shipped configuration adds in any other region
@@ -54,5 +56,22 @@ def test_shipped_templates(
     """The shipped configuration synthesizes exactly the committed templates, first recorded from v3.0.0. Every
     module is off in it, so a module's pull request leaves these snapshots unchanged."""
     d = fresh_deployment(region=region)
+
+    assert normalized(d.template(getattr(d.stage, stack))) == snapshot_json
+
+
+@pytest.mark.parametrize(
+    ("module", "stack"), [(module, stack) for module, (_, stacks) in MODULE_STACKS.items() for stack in stacks]
+)
+def test_module_templates(
+    deployment: Callable[..., Any],
+    normalized: Callable[..., Any],
+    snapshot_json: SnapshotAssertion,
+    module: str,
+    stack: str,
+) -> None:
+    """What each module adds to the shipped configuration, module by module."""
+    overrides, _ = MODULE_STACKS[module]
+    d = deployment(overrides)
 
     assert normalized(d.template(getattr(d.stage, stack))) == snapshot_json

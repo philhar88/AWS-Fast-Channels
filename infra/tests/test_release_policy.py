@@ -15,13 +15,9 @@ if TYPE_CHECKING:
 
 type GetDeployment = Callable[..., Any]
 
-RELEASE_ON = {
-    "modules.ops.enabled": True,
-    "modules.demand.enabled": True,
-    "modules.pds.enabled": True,
-    "modules.release.enabled": True,
-    "modules.release.channels": ["{prefix}-demo"],
-}
+NEEDED_ON = {"modules.ops.enabled": True, "modules.demand.enabled": True, "modules.pds.enabled": True}
+"""The modules release needs; the comparisons below start from them, so they show what release alone changes."""
+RELEASE_ON = {**NEEDED_ON, "modules.release.enabled": True, "modules.release.channels": ["{prefix}-demo"]}
 NEWS = {"channels.iac": [{"name": "{prefix}-demo"}, {"name": "{prefix}-news"}]}
 ACCOUNT, REGION = "123456789012", "us-east-1"
 
@@ -71,7 +67,7 @@ def _policy(deployment: Any, channel: str) -> dict[str, Any]:
 def test_release_changes_only_the_policy_and_guard_of_monetized_channels(
     deployment: GetDeployment, snapshot_json: SnapshotAssertion
 ) -> None:
-    on, off = deployment(RELEASE_ON), deployment()
+    on, off = deployment(RELEASE_ON), deployment(NEEDED_ON)
 
     media = _changed(on, off, "media")
     assert {r["Type"] for r in media.values()} == {"Custom::ChannelGuard", "AWS::MediaTailor::ChannelPolicy"}
