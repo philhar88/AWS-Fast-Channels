@@ -316,5 +316,56 @@ def test_census_announces_changes_with_ops_on(ops: Any, default: Any) -> None:
     ]
 
 
-def test_ops_on_changes_nothing_in_the_operator_stack(ops: Any, default: Any, normalized: Any) -> None:
-    assert normalized(ops.template(ops.stage.operator)) == normalized(default.template(default.stage.operator))
+def _without_epg_flag(template: dict[str, Any]) -> dict[str, Any]:
+    for resource in template["Resources"].values():
+        if resource["Type"] == "AWS::Lambda::Function":
+            resource["Properties"].get("Environment", {}).get("Variables", {}).pop("EPG_BREAK_IDS", None)
+    return template
+
+
+def test_ops_on_changes_only_the_guide_writers_environment_in_the_operator_stack(
+    ops: Any, default: Any, normalized: Any
+) -> None:
+    template = normalized(ops.template(ops.stage.operator))
+    flagged = {
+        r["Properties"]["Handler"]
+        for r in template["Resources"].values()
+        if r["Type"] == "AWS::Lambda::Function"
+        and r["Properties"].get("Environment", {}).get("Variables", {}).get("EPG_BREAK_IDS") == "true"
+    }
+
+    assert flagged == {
+        "fast_channels.functions.tools.schedule.handler",
+        "fast_channels.functions.tools.channels.handler",
+    }
+    assert _without_epg_flag(template) == normalized(default.template(default.stage.operator))
+
+
+def test_with_ops_the_as_run_log_feeds_break_starts_and_a_sweep_decides_unaired_breaks(ops: Any, default: Any) -> None:
+    media = ops.template(ops.stage.media)
+    [subscription] = resources(media, "AWS::Logs::SubscriptionFilter").values()
+    [v3_subscription] = resources(default.template(default.stage.media), "AWS::Logs::SubscriptionFilter").values()
+    reconcilers = {
+        r["Properties"]["Handler"]: r["Properties"]["Environment"]["Variables"]
+        for r in resources(media, "AWS::Lambda::Function").values()
+        if r["Properties"]["Handler"].startswith("fast_channels.functions.as_run_reconciler.")
+    }
+    [schedule] = [
+        r["Properties"]
+        for r in resources(media, "AWS::Scheduler::Schedule").values()
+        if "never aired" in r["Properties"].get("Description", "")
+    ]
+
+    assert subscription["Properties"]["FilterPattern"] == (
+        '{ ($.eventType = "VodProgramStart" || $.eventType = "AdBreakStart") && ($.channelName = "fast-*") }'
+    )
+    assert v3_subscription["Properties"]["FilterPattern"] == (
+        '{ ($.eventType = "VodProgramStart") && ($.channelName = "fast-*") }'
+    )
+    assert set(reconcilers) == {
+        "fast_channels.functions.as_run_reconciler.handler",
+        "fast_channels.functions.as_run_reconciler.sweep",
+    }
+    assert all(env["AS_RUN_BREAKS"] == "true" for env in reconcilers.values())
+    assert schedule["ScheduleExpression"] == "rate(15 minutes)"
+    assert default.stage.media.as_run.sweeper is None

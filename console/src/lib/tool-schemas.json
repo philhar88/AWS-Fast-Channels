@@ -672,6 +672,12 @@
                     },
                     "duration_ms": {
                       "type": "integer"
+                    },
+                    "event_id": {
+                      "type": "integer"
+                    },
+                    "upid": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -823,6 +829,12 @@
                     },
                     "duration_ms": {
                       "type": "integer"
+                    },
+                    "event_id": {
+                      "type": "integer"
+                    },
+                    "upid": {
+                      "type": "string"
                     }
                   },
                   "required": [

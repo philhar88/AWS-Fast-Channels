@@ -212,6 +212,7 @@ every one: Powertools adds `service`, the function's handler module, to each met
 | `LadderProvisioningStarted`, `LadderReady`, `LadderFailed` | `service` = `ingest.kit` | Ladder provisioner |
 | `ToolSucceeded`, `ToolFailed` | `service` = `tools.<target>`, `tool` (`<target>___<tool>`) | Every agent tool call |
 | `ProgramsAired` | `service` = `as_run_reconciler` | As-run reconciler |
+| `BreaksAired`, `BreaksUnaired` | `service` = `as_run_reconciler` | As-run reconciler and its break sweep (ops module) |
 | `AutopilotSucceeded`, `AutopilotFailed`, `AutopilotPublishes` | `service` = `autopilot`, `channel` | Autopilot runs |
 | `ReapedChannels`, `ReapedPlaybackConfigurations`, `ReapedVodSources`, `ReapedSourceLocations`, `ReapedJobTemplates` | `service` = `custom_resources.reaper` | Runtime-resource reaper (stack deletion) |
 | `RunningChannels` | `App` = `<prefix>` | Channel census |

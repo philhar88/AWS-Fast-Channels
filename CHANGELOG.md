@@ -89,6 +89,15 @@ All notable changes to this project are documented here. The format follows
   `chain_id`) and Firehose archives the records in an S3 Object Lock bucket (`modules.ops.ledger_lock`,
   `ledger_retention_days`) that outlives its stack. `scripts/ledger_verify.py` verifies every chain against its head,
   writes synthetic records end to end, and purges a destroyed stage's archive. ADR-0022 (ledger part) is proposed.
+- **Ops module, break ids and as-run breaks**: the EPG JSON feed's breaks carry their SCTE-35 `event_id` and `upid`;
+  the as-run reconciler also reads `AdBreakStart` events and marks the scheduled break `AIRED` with its `aired_at`,
+  and a sweep every 15 minutes marks the breaks that never aired `UNAIRED`. Without the module the feed and the
+  reconciler are v3.0's.
+
+### Fixed
+
+- The as-run log group allows five subscription filters per log group, not two: at most five deployments can exist
+  per account and region (docs/channel-assembly.md).
 
 ## [3.0.0] - 2026-10-16
 

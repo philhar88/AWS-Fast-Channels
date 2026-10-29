@@ -99,6 +99,7 @@ class OperatorStack(Stack):
             cdns=config.delivery.cdns,
             log_retention=retention,
             removal_policy=removal,
+            epg_break_ids=config.modules.ops.enabled,
         )
         self.gateway = AgentGateway(
             self,

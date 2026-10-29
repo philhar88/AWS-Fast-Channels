@@ -72,6 +72,10 @@ class Settings:
     """The ops module's ledger table (``<prefix>-ledger``)."""
     ledger_stream: str = field(default_factory=lambda: _env("LEDGER_STREAM"))
     """The Firehose stream that archives linked ledger records."""
+    as_run_breaks: bool = field(default_factory=lambda: _env("AS_RUN_BREAKS") == "true")
+    """The as-run reconciler marks breaks aired (ops module)."""
+    epg_break_ids: bool = field(default_factory=lambda: _env("EPG_BREAK_IDS") == "true")
+    """EPG feeds carry each break's SCTE-35 event id and UPID (ops module)."""
 
     @property
     def app(self) -> str:

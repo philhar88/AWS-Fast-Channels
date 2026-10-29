@@ -1,0 +1,457 @@
+{
+ "source": "A live run on 2026-10-27: a LINEAR channel aired 4 planned programs with 24 breaks of 60.06 s and was stopped at 22:10:12Z, mid-program 4, after its 20th break",
+ "stopped_at": "2026-10-27T22:10:12.000Z",
+ "channel": "fastv3-exp-p0d-ch",
+ "programs": [
+  {
+   "name": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "start_ms": 1793135280000,
+   "duration_ms": 1094528,
+   "breaks": [
+    {
+     "offset_ms": 120120,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1817010633,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 240240,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1791762605,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 360360,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1155167592,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 480480,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 302705169,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 600601,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 2101201870,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 702703,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 102747050,
+     "upid": "465354337030642D746F73"
+    }
+   ]
+  },
+  {
+   "name": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "start_ms": 1793136374528,
+   "duration_ms": 954120,
+   "breaks": [
+    {
+     "offset_ms": 90090,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 878643168,
+     "upid": "465354337030642D6564"
+    },
+    {
+     "offset_ms": 210210,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 836826415,
+     "upid": "465354337030642D6564"
+    },
+    {
+     "offset_ms": 330330,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 678202907,
+     "upid": "465354337030642D6564"
+    },
+    {
+     "offset_ms": 450450,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1716163265,
+     "upid": "465354337030642D6564"
+    },
+    {
+     "offset_ms": 570570,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1753792641,
+     "upid": "465354337030642D6564"
+    }
+   ]
+  },
+  {
+   "name": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "start_ms": 1793137328648,
+   "duration_ms": 1308441,
+   "breaks": [
+    {
+     "offset_ms": 60060,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1335861023,
+     "upid": "465354337030642D73696E74656C"
+    },
+    {
+     "offset_ms": 180180,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1096467230,
+     "upid": "465354337030642D73696E74656C"
+    },
+    {
+     "offset_ms": 300300,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1318632610,
+     "upid": "465354337030642D73696E74656C"
+    },
+    {
+     "offset_ms": 420420,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 641914151,
+     "upid": "465354337030642D73696E74656C"
+    },
+    {
+     "offset_ms": 540541,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 205759166,
+     "upid": "465354337030642D73696E74656C"
+    },
+    {
+     "offset_ms": 660661,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 867215168,
+     "upid": "465354337030642D73696E74656C"
+    },
+    {
+     "offset_ms": 780781,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1585273447,
+     "upid": "465354337030642D73696E74656C"
+    }
+   ]
+  },
+  {
+   "name": "fastv3-exp-p0d-20261027T220357-p0d-tos",
+   "start_ms": 1793138637089,
+   "duration_ms": 1094528,
+   "breaks": [
+    {
+     "offset_ms": 60060,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1310071916,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 180180,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 707174231,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 300300,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 2046283592,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 420420,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 555639893,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 540541,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 1968433175,
+     "upid": "465354337030642D746F73"
+    },
+    {
+     "offset_ms": 660661,
+     "duration_ms": 60060,
+     "slate_gops": 30,
+     "event_id": 830961481,
+     "upid": "465354337030642D746F73"
+    }
+   ]
+  }
+ ],
+ "as_run": [
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:02:00.599Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:02:30.629Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:03:00.659Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:03:30.689Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:04:00.719Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:04:30.749Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:05:00.779Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:05:30.809Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:06:00.839Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:06:30.869Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:07:00.899Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "FillerSlateStart",
+   "programName": "",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:07:30.929Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "VodProgramStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:08:00.959Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:10:01.079Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:13:01.259Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:16:01.439Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:19:01.619Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:22:01.800Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T210800-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:24:43.962Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "VodProgramStart",
+   "programName": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:26:15.487Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:27:45.577Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:30:45.757Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:33:45.937Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:36:46.117Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T212614-p0d-ed",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:39:46.297Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "VodProgramStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:42:09.607Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:43:09.667Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:46:09.847Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:49:10.027Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:52:10.207Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:55:10.388Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T21:58:10.568Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T214208-p0d-sintel",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T22:01:10.748Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "VodProgramStart",
+   "programName": "fastv3-exp-p0d-20261027T220357-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T22:03:58.048Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T220357-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T22:04:58.108Z"
+  },
+  {
+   "channelName": "fastv3-exp-p0d-ch",
+   "eventType": "AdBreakStart",
+   "programName": "fastv3-exp-p0d-20261027T220357-p0d-tos",
+   "sourceGroup": "hls",
+   "timeStamp": "2026-10-27T22:07:58.288Z"
+  }
+ ]
+}

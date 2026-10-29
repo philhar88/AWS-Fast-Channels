@@ -158,6 +158,7 @@ class MediaStack(Stack):
             as_run_retention_days=config.observability.log_retention_days,
             log_retention=retention,
             removal_policy=removal,
+            breaks=config.modules.ops.enabled,
         )
         external_ads = config.ads.url if config.ads.mode is AdsMode.EXTERNAL_VAST else None
         self.channels = tuple(
