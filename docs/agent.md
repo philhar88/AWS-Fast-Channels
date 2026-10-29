@@ -197,7 +197,11 @@ engine runs in `ENFORCE` mode. No role in the solution may update the Gateway, i
 policies: the Runtime, tool and autopilot roles carry an explicit `Deny` on those actions, because whoever holds them
 could switch enforcement to `LOG_ONLY`. IAM below Cedar is least privilege too: destructive MediaTailor actions are
 granted only on `<prefix>-agent-*` names, and creation calls only with this deployment's `fast:app` request tag
-([ADR-0009](adr/0009-jwt-gateway-with-cedar-groups.md)).
+([ADR-0009](adr/0009-jwt-gateway-with-cedar-groups.md)). The channels tool role may also create one IAM role,
+MediaTailor's service-linked role `AWSServiceRoleForMediaTailor` (`iam:CreateServiceLinkedRole` with
+`iam:AWSServiceName = mediatailor.amazonaws.com`). `channels___create_channel` turns on the channel's and the
+playback configuration's logs, and MediaTailor refuses those calls from a caller without that permission
+(`ForbiddenException: Cannot create the service-linked role`), even when the role already exists.
 
 To bring your own identity provider, point the Runtime and Gateway authorizers at its OIDC discovery URL and emit an
 array group claim that the policies match (adapt `GROUPS_CLAIM` in `cedar.py` if it is not `cognito:groups`).
