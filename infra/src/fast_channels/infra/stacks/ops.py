@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack
 
+from fast_channels.core.flags import DemandMode, Flags
+from fast_channels.core.runbooks import Runbook
 from fast_channels.infra.constructs.observability import census_parameter_name
 from fast_channels.infra.constructs.ops import (
     AccountQuotaAlarms,
@@ -12,9 +14,13 @@ from fast_channels.infra.constructs.ops import (
     Lake,
     LedgerWriter,
     OpsAppConfig,
+    ProbeCanary,
+    Runbooks,
     ZeroAdsDetector,
+    off_air_alarm_name,
 )
 from fast_channels.infra.exports import OpsExports
+from fast_channels.infra.stacks.edge import EDGE_REGION
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -22,7 +28,19 @@ if TYPE_CHECKING:
     from fast_channels.infra.config import FastChannelsConfig
     from fast_channels.infra.exports import DataExports, MediaExports
 
-__all__ = ["OpsExports", "OpsStack"]
+__all__ = ["OpsExports", "OpsStack", "stage_flags"]
+
+
+def stage_flags(config: FastChannelsConfig) -> Flags:
+    """The ``flags`` profile's default for this deployment: every kill switch on (nothing killed; a module that is
+    not deployed reads none), ``commercial`` off and ``demand.mode`` as configured."""
+    demand = config.modules.demand
+    return Flags(
+        agents=True,
+        demand=DemandMode(demand.mode.value) if demand.enabled else DemandMode.OFF,
+        crawl=True,
+        release_promote=True,
+    )
 
 
 class OpsStack(Stack):
@@ -107,7 +125,40 @@ class OpsStack(Stack):
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,
         )
-        self.appconfig = OpsAppConfig(self, "AppConfig", prefix=prefix)
+        self.appconfig = OpsAppConfig(self, "AppConfig", prefix=prefix, flags=stage_flags(config))
+        self.probe = ProbeCanary(
+            self,
+            "Probe",
+            prefix=prefix,
+            channels={
+                channel.name: next(iter(channel.playback(media.cdn_base_url).values())) for channel in media.channels
+            },
+            census_parameter=census_parameter_name(prefix),
+            event_bus=media.event_bus,
+            artifacts_bucket=data.logs_bucket,
+            topic=media.alert_topic,
+        )
+        self.runbooks = Runbooks(
+            self,
+            "Runbooks",
+            prefix=prefix,
+            event_bus=media.event_bus,
+            ledger_table=data.ledger_table,
+            library=data.library_table,
+            catalog=data.catalog_table,
+            appconfig=self.appconfig,
+            channels=[channel.name for channel in media.channels],
+            source_location=media.source_location_name,
+            alarms={
+                Runbook.R7: list(self.quota_alarms.alarms),
+                Runbook.R9: [name for name in self.configuration_alarms.alarms if name.endswith("-getmanifest-errors")],
+                Runbook.R12: [off_air_alarm_name(prefix)],
+                # CloudFront's metrics, and so its alarm, are in us-east-1 only.
+                Runbook.R17: [f"{prefix}-cdn-5xx"] if self.region == EDGE_REGION else [],
+            },
+            log_retention=config.observability.log_retention,
+            removal_policy=config.removal_policy,
+        )
         self.exports = OpsExports(
             appconfig_application=self.appconfig.application,
             appconfig_environment=self.appconfig.environment,

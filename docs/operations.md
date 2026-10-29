@@ -333,7 +333,7 @@ A module with merged code adds its own stack after the ones it builds on, and ma
 
 | Module | Adds | Changes |
 |---|---|---|
-| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, and the AppConfig application `<prefix>-fast` with environment `<prefix>` ([observability.md](observability.md#lake), [ledger](observability.md#ledger)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
+| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, the account quota and hook alarms, the zero-ad-sessions detector, the `ListAlerts` poller, the runbooks `<prefix>-runbook-<id>`, the probe canary `<prefix>-probe`, and the AppConfig application `<prefix>-fast` with environment `<prefix>` and the feature flags `flags` ([observability.md](observability.md#lake), [ledger](observability.md#ledger), [runbooks](observability.md#runbooks-flags-and-the-probe)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels` |
 
 With the default `observability.as_run: per_stage`, at most five stages can exist per account and region: each Media
 stack subscribes its as-run reconciler to the account-shared log group `MediaTailor/Channel/AsRunLog`, and CloudWatch
@@ -388,7 +388,8 @@ and reports what is left; the next poll, or the next `make destroy`, resumes whe
 - Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search), the
   `FastChannels-AsRun` stack (the as-run router of `make as-run-router`), the account-shared as-run log
   group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops module, a
-  locked ledger archive (above).
+  locked ledger archive (above) and the probe canary's function logs `/aws/lambda/cwsyn-<prefix>-probe-*`
+  (Synthetics creates them at the canary's first run and deletes only the function; delete the group by hand).
 - If the reaper fails on its first attempt (the error is shown in the stack events), run `make destroy` again; it
   resumes where it stopped.
 - When the reaper cannot finish (a VOD source locked by orphaned programs, an interrupted destroy, a stack deleted

@@ -1,9 +1,10 @@
-"""Constructs of the ops module (``modules.ops``): the per-stage lake, the hash-chained ledger and the AppConfig
-application.
+"""Constructs of the ops module (``modules.ops``): the per-stage lake, the hash-chained ledger, the alarms and
+detectors, the runbooks, the probe canary and the AppConfig application with its feature flags.
 
 Nothing here is deployed unless ``modules.ops.enabled`` is true; with the module off the stage is v3.0's.
 """
 
+from fast_channels.infra.constructs.ops.canary import ProbeCanary, canary_name, off_air_alarm_name
 from fast_channels.infra.constructs.ops.detectors import (
     AccountQuotaAlarms,
     AlertsPoller,
@@ -22,6 +23,7 @@ from fast_channels.infra.constructs.ops.lake import (
     lake_database_name,
 )
 from fast_channels.infra.constructs.ops.ledger import ARCHIVE_PREFIX, ARCHIVE_TAG, LedgerStorage, LedgerWriter
+from fast_channels.infra.constructs.ops.runbooks import Runbooks
 
 __all__ = [
     "ADS_LOG_FIELDS",
@@ -39,6 +41,10 @@ __all__ = [
     "LedgerStorage",
     "LedgerWriter",
     "OpsAppConfig",
+    "ProbeCanary",
+    "Runbooks",
     "ZeroAdsDetector",
+    "canary_name",
     "lake_database_name",
+    "off_air_alarm_name",
 ]

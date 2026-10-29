@@ -115,6 +115,12 @@ All notable changes to this project are documented here. The format follows
   the as-run reconciler also reads `AdBreakStart` events and marks the scheduled break `AIRED` with its `aired_at`,
   and a sweep every 15 minutes marks the breaks that never aired `UNAIRED`. Without the module the feed and the
   reconciler are v3.0's.
+- **Ops module, runbooks, flags and the probe**: runbooks R7, R9 and R12-R17, one allow-listed state machine each
+  (`<prefix>-runbook-<id>`), started by their alarms, `Channel Alert`, `Asset Failed`, `Schedule Published` or an
+  hourly schedule; each execution appends its decision to the ledger chain `runbook/<id>`. Until ADR-0023 every
+  runbook runs its dry-run path (it records what it would do). The AppConfig profile `flags` (feature flags) holds the
+  kill switches of D§19.5. One CloudWatch Synthetics canary, `<prefix>-probe`, plays the running IaC channels every 5
+  minutes; the census starts and stops it, and two failed runs in a row start R12.
 - **Ops module, alarms and detectors**: account quota alarms at 80 % of the ad insertion (10,000/s) and Channel
   Assembly (400/s) request quotas, summed over the account with CloudWatch Metrics Insights; hook and manifest error
   alarms per IaC playback configuration; an hourly detector of sessions that saw three or more breaks without an ad
