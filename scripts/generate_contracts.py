@@ -9,6 +9,11 @@ contract) and ``catalog.gateway.openapi.json`` (the same contract as an AgentCor
 The OpenAPI documents are flattened for Gateway targets: every schema is inline, optional fields drop their ``null``
 branch, and no ``$ref``/``anyOf``/``oneOf``/``allOf`` remains (agentcore.md §5.2); operationIds become the tool
 names.
+
+``pds-policy.schema.json`` and ``pds-select.schema.json`` are the Pod Decision Service contract with the fast-ctv
+Prebid Server module (requests as the PDS accepts them, responses as it writes them). The examples under
+``fixtures/pds/<call>/`` are shared with the module's tests: their ``description``, ``context`` and ``request`` are
+written by hand, and their ``response`` is what the PDS rules answer, regenerated here.
 """
 
 import argparse
@@ -16,6 +21,7 @@ import json
 import re
 import sys
 from collections.abc import Iterator
+from ipaddress import ip_network
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,11 +32,16 @@ from fast_channels.core.crawl.catalog_context import CatalogContext
 from fast_channels.core.events import DETAIL_TYPES
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.model_registry import SCHEDULER_TASK, TaskEntry
+from fast_channels.core.pds.models import PolicyRequest, PolicyResponse, SelectRequest, SelectResponse
+from fast_channels.core.pds.pod import PodContext, select_pod, select_response
+from fast_channels.core.pds.policy import Demand, decide
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
+FIXTURES = CONTRACTS / "fixtures" / "pds"
+"""Hand-written inputs of the PDS examples (read from the repository even when ``CONTRACTS`` points elsewhere)."""
 JSON_SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 VERSION = "3.0.0"
 
@@ -97,6 +108,71 @@ def model_registry_schema() -> dict[str, Any]:
         ),
         "examples": [entry.model_dump(mode="json") for entry in examples],
     }
+
+
+def pds_schema(call: str, description: str, request: type[BaseModel], response: type[BaseModel]) -> dict[str, Any]:
+    """JSON Schema of one PDS call: the request as the PDS validates it, the response as it serializes it."""
+    refs, definitions = models_json_schema(
+        [(request, "validation"), (response, "serialization")], ref_template="#/$defs/{model}"
+    )
+    return {
+        "$schema": JSON_SCHEMA,
+        "title": f"Pod Decision Service {call}, contract version 1",
+        "description": description,
+        "oneOf": [refs[request, "validation"], refs[response, "serialization"]],
+        **definitions,
+    }
+
+
+def pds_policy_schema() -> dict[str, Any]:
+    """``POST /policy``: the module's request and the patch the PDS answers with."""
+    return pds_schema(
+        "/policy",
+        "The fast-ctv module asks before each auction; it applies the answer verbatim to the bid request.",
+        PolicyRequest,
+        PolicyResponse,
+    )
+
+
+def pds_select_schema() -> dict[str, Any]:
+    """``POST /select``: every bid of the auction and the pod the PDS selects."""
+    return pds_schema(
+        "/select",
+        "The fast-ctv module sends every bid after the auction and renders exactly the pod the answer names.",
+        SelectRequest,
+        SelectResponse,
+    )
+
+
+def pds_fixture_response(call: str, document: dict[str, Any]) -> dict[str, Any]:
+    """The PDS answer to a fixture's request, given the fixture's PDS-side context."""
+    context = document["context"]
+    match call:
+        case "policy":
+            decision = decide(
+                PolicyRequest.model_validate(document["request"]),
+                Demand(context["demand"]),
+                origin_facing=[ip_network(network) for network in context["origin_facing"]],
+                kids_channel=context["kids_channel"],
+            )
+            return decision.response.model_dump(mode="json")
+        case "select":
+            request = SelectRequest.model_validate(document["request"])
+            pod = select_pod(request, PodContext.model_validate(context["pod"]))
+            response = select_response(request, pod, tracker_base=context["tracker_base"], enr=context["enr"])
+            return response.model_dump(mode="json")
+        case _:
+            raise ValueError(f"no PDS call {call!r} (fixtures/pds/<policy|select>/*.json)")
+
+
+def pds_fixtures() -> dict[str, dict[str, Any]]:
+    """Every PDS example with its response regenerated, by path under ``contracts/``."""
+    fixtures = {}
+    for path in sorted(FIXTURES.glob("*/*.json")):
+        document = json.loads(path.read_text())
+        document["response"] = pds_fixture_response(path.parent.name, document)
+        fixtures[path.relative_to(FIXTURES.parents[1]).as_posix()] = document
+    return fixtures
 
 
 def _flatten(schema: Any, definitions: dict[str, Any]) -> Any:
@@ -228,6 +304,9 @@ def render() -> dict[str, str]:
         "catalog-context.schema.json": as_json(catalog_context_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
+        "pds-policy.schema.json": as_json(pds_policy_schema()),
+        "pds-select.schema.json": as_json(pds_select_schema()),
+        **{name: as_json(document) for name, document in pds_fixtures().items()},
     }
 
 
@@ -242,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
             if not path.exists() or path.read_text() != text:
                 stale.append(name)
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
     if stale:
         print(f"out of date: {', '.join(stale)}; run scripts/generate_contracts.py", file=sys.stderr)
