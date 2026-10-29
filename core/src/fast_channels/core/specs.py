@@ -155,8 +155,25 @@ def program_requests(
     return requests
 
 
-def channel_policy(*, channel_arn: str, playback_configuration_arn: str, account: str) -> dict[str, Any]:
-    """Channel policy letting only the channel's own playback configuration read it (SigV4, no anonymous)."""
+SIBLING_PATTERN: Final = "-p-?"
+"""Appended to a channel's playback configuration ARN, the ``ArnLike`` pattern of its sibling configurations
+``<channel>-p-<s>`` (the release module): ``?`` is exactly one character, so no other channel's sibling and no longer
+name matches. ``<channel>*`` would admit them (51 of 72 probes of another channel's sibling, P0-08)."""
+
+
+def channel_policy(
+    *, channel_arn: str, playback_configuration_arn: str, account: str, siblings: bool = False
+) -> dict[str, Any]:
+    """Channel policy letting only the channel's own playback configuration read it (SigV4, no anonymous).
+
+    With ``siblings`` (a channel the release module monetizes) it also admits the sibling configurations by the
+    static pattern ``<playback configuration ARN>-p-?``; the v3.0.0 configuration is named like the channel, so
+    the pattern is ``…:playbackConfiguration/<channel>-p-?``. The pattern is set when the channel is created and no
+    release changes it: a policy change on a running channel is not session-safe (P0-08 §3.2).
+    """
+    source: str | list[str] = playback_configuration_arn
+    if siblings:
+        source = [playback_configuration_arn, f"{playback_configuration_arn}{SIBLING_PATTERN}"]
     return {
         "Version": "2012-10-17",
         "Statement": [
@@ -168,7 +185,7 @@ def channel_policy(*, channel_arn: str, playback_configuration_arn: str, account
                 "Resource": channel_arn,
                 "Condition": {
                     "StringEquals": {"aws:SourceAccount": account},
-                    "ArnLike": {"aws:SourceArn": playback_configuration_arn},
+                    "ArnLike": {"aws:SourceArn": source},
                 },
             }
         ],

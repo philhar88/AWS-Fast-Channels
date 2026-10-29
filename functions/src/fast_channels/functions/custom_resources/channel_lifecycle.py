@@ -4,8 +4,11 @@ One Lambda serves three resource types, placed at different points of the channe
 
 ``Custom::ChannelGuard`` (the channel depends on it)
     Channel Assembly rejects any change to a running channel ("Running channels cannot be updated",
-    channel-assembly.md §4.1). When a stack update changes the channel, the guard fails first with what to do, or
-    stops the channel when ``RestartOnUpdate`` is ``true``. A rollback is let through while the channel still has
+    channel-assembly.md §4.1), and a channel-policy change on a running channel breaks sessions of the
+    configurations it keeps (6-13% of playlist requests for minutes, P0-08 §3.2). When a stack update changes the
+    channel (``Spec``) or the sibling pattern of its policy (``SiblingPattern``, set when the release module
+    monetizes it), the guard fails first with what to do, or stops the channel when ``RestartOnUpdate`` is
+    ``true``. A rollback is let through while the channel still has
     the properties CloudFormation re-applies; when the update being rolled back restarted the channel with its new
     properties, the guard stops it again, and the lifecycle resource restarts it once they are restored.
 ``Custom::ChannelEndpoint`` (depends on the channel)
@@ -55,6 +58,9 @@ __all__ = [
 GUARD: Final = "Custom::ChannelGuard"
 ENDPOINT: Final = "Custom::ChannelEndpoint"
 LIFECYCLE: Final = "Custom::ChannelLifecycle"
+GUARDED: Final = ("Spec", "SiblingPattern")
+"""Guard properties that mirror what an update would change on the channel: its settings, and the sibling pattern of
+its channel policy (absent unless the release module monetizes the channel)."""
 ROLLBACK_STATUSES: Final = frozenset({"UPDATE_ROLLBACK_IN_PROGRESS", "ROLLBACK_IN_PROGRESS"})
 TIME_MARGIN_MS: Final = 30_000
 """Stop deleting programs this long before the invocation times out, so the failure is reported."""
@@ -98,17 +104,23 @@ def guard(event: CloudFormationCustomResourceEvent) -> dict[str, Any]:
     """
     props = event.resource_properties
     channel = props["ChannelName"]
-    changes_channel = event.request_type == "Update" and props["Spec"] != event.old_resource_properties.get("Spec")
-    if not changes_channel or channel_state(channel) != "RUNNING":
+    old = event.old_resource_properties or {}
+    changed = [key for key in GUARDED if event.request_type == "Update" and props.get(key) != old.get(key)]
+    if not changed or channel_state(channel) != "RUNNING":
         return _guarded(channel, stopped="")
     if rolling_back(event.stack_id):
         # The update being rolled back (its properties are the "old" ones now) restarted the channel only if it
         # allowed restarts; otherwise the channel still has the properties CloudFormation re-applies.
-        if event.old_resource_properties.get("RestartOnUpdate") != "true":
+        if old.get("RestartOnUpdate") != "true":
             return _guarded(channel, stopped="")
     elif props.get("RestartOnUpdate") != "true":
+        why = (
+            "Channel Assembly cannot change a running channel"
+            if "Spec" in changed
+            else "changing the channel policy of a running channel breaks its sessions"
+        )
         raise ChannelRunningError(
-            f"Channel {channel} is RUNNING, and Channel Assembly cannot change a running channel. Stop it "
+            f"Channel {channel} is RUNNING, and {why}. Stop it "
             f"(channels___stop_channel, or `aws mediatailor stop-channel --channel-name {channel}`) and deploy "
             "again, or, for a LinearChannel built in code, set restart_on_update=True so that deployments stop "
             "and restart it."

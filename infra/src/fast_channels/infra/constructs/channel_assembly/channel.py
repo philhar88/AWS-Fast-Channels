@@ -68,6 +68,8 @@ class LinearChannel(Construct):
       stopped and are never started automatically.
     - :class:`AdInsertion` ``<name>``, and a channel policy (``core.specs.channel_policy``) that lets only that
       playback configuration read the channel, with SigV4; anonymous requests get 403 (channel-assembly.md §6.1).
+      A channel the release module monetizes (``siblings``) also admits its sibling configurations by the static
+      pattern ``<name>-p-?``; the pattern is set here, and the Release Controller never changes the policy.
     - Three custom resources (``fast_channels.functions.custom_resources.channel_lifecycle``): a guard that fails an
       update of a running channel fast (or stops it when ``restart_on_update``), the endpoint lookup (CloudFormation
       exposes only the ARN), and the lifecycle that writes the ``CHANNEL#<name>`` ``META`` item, restarts a channel
@@ -94,6 +96,10 @@ class LinearChannel(Construct):
             value changes).
         log_percent: share of playback sessions that emit vended logs.
         restart_on_update: let deployments stop a running channel to update it, and start it again.
+        siblings: admit the release module's sibling playback configurations ``<name>-p-<s>`` too. Turning it on
+            for an existing channel widens the policy once; the guard treats that as a change, so the channel must
+            be stopped (or ``restart_on_update``), because a policy change on a running channel is not
+            session-safe (P0-08).
         removal_policy: what happens to the custom-resource function logs when the stack is deleted.
 
     Attributes:
@@ -119,6 +125,7 @@ class LinearChannel(Construct):
         brief: ProgrammingBrief | None = None,
         log_percent: int = 100,
         restart_on_update: bool = False,
+        siblings: bool = False,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
@@ -141,7 +148,8 @@ class LinearChannel(Construct):
                 properties={"ChannelName": name, **properties},
             )
 
-        guard = resource("Guard", "Custom::ChannelGuard", RestartOnUpdate=restart_on_update, Spec=spec)
+        pattern = {"SiblingPattern": f"{name}{specs.SIBLING_PATTERN}"} if siblings else {}
+        guard = resource("Guard", "Custom::ChannelGuard", RestartOnUpdate=restart_on_update, Spec=spec, **pattern)
         self.channel = mediatailor.CfnChannel(self, "Resource", channel_name=name, playback_mode="LINEAR", outputs=[])
         override(self.channel, {key: value for key, value in spec.items() if key != "PlaybackMode"})
         self.channel.node.add_dependency(guard, origin.source_location)
@@ -168,6 +176,7 @@ class LinearChannel(Construct):
                 channel_arn=self.channel.attr_arn,
                 playback_configuration_arn=self.ad_insertion.arn,
                 account=Aws.ACCOUNT_ID,
+                siblings=siblings,
             ),
         )
         policy.add_resource_dependency(self.channel)

@@ -83,7 +83,13 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
 - its own **playback configuration** of the same name (`STITCHED_ONLY`: server-side ad insertion) with three
   vended-log deliveries ([ad-insertion.md](ad-insertion.md#the-playback-configuration));
 - a **channel policy** that admits only `mediatailor.amazonaws.com` for exactly that playback configuration (SigV4),
-  so anonymous requests to the channel get 403 ([ADR-0007](adr/0007-sigv4-channel-origin-no-cdn-shield.md));
+  so anonymous requests to the channel get 403 ([ADR-0007](adr/0007-sigv4-channel-origin-no-cdn-shield.md)). A
+  channel the release module monetizes (`modules.release.channels`) also admits its sibling playback
+  configurations `<channel>-p-<s>`, by the static pattern `<channel>-p-?` in `ArnLike aws:SourceArn`. `?` is
+  exactly one character, so no other channel's sibling matches; `<channel>*` would. The pattern is set when the
+  channel is created, and no release changes it. A policy change on a running channel takes minutes to grant, and
+  one that revokes a configuration breaks the sessions of the configurations it keeps. So the update guard treats
+  adding the pattern as a change to the channel: stop the channel before you turn the module on for it;
 - a `CHANNEL#<name>` item in the media library (ladder, outputs, playback prefixes, owner `iac`, brief);
 - **lifecycle custom resources**: an update guard that fails fast when an update would change a `RUNNING` channel
   (the `LinearChannel` construct's `restart_on_update=True` stops, updates and restarts instead, also when a later
@@ -98,7 +104,9 @@ Names must start with `<prefix>-`; `<prefix>-agent-` is reserved for the agent.
 `channels___create_channel` builds the same set of resources at runtime, from the same `core.specs` functions, as
 `<prefix>-agent-<name>` (name at most 24 characters), tagged `fast:owner=agent`. It needs a `READY` ladder, and at
 most `channels.max_agent_channels` (default 3) may exist. Only agent channels can be deleted through the tools; Cedar
-forbids destructive channel tools on any other name.
+forbids destructive channel tools on any other name. With the release module on, a new agent channel's policy has
+the sibling pattern too. It is set while the channel is new and stopped, so a later release can monetize the channel
+without changing its policy.
 
 ### Tiers and cost
 

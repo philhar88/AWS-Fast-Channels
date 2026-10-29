@@ -94,7 +94,7 @@ from fast_channels.core.monetization.playback import (
     SiblingRole,
 )
 from fast_channels.core.naming import MEDIATAILOR_NAME_MAX
-from fast_channels.core.specs import ADS_VARIABLES
+from fast_channels.core.specs import ADS_VARIABLES, SIBLING_PATTERN
 
 
 class Rule(StrEnum):
@@ -787,7 +787,7 @@ def check_channel_policy(policy: Mapping[str, Any], *, channel: str) -> list[Vio
     if not statements:
         return [_violation(Rule.C1, where, "no statement lets MediaTailor read the channel")]
     found: list[Violation] = []
-    expected = {channel, f"{channel}-p-?"}
+    expected = {channel, f"{channel}{SIBLING_PATTERN}"}
     for n, statement in enumerate(statements):
         at = f"{where} Statement[{n}]"
         condition = statement.get("Condition") or {}
@@ -809,7 +809,7 @@ def check_channel_policy(policy: Mapping[str, Any], *, channel: str) -> list[Vio
 
 def _check_channel(channel: MonetizedChannel, siblings: Iterable[Sibling]) -> Iterator[Violation]:
     where = f"channel {channel.name}"
-    if channel.policy_source_arns != (channel.name, f"{channel.name}-p-?"):
+    if channel.policy_source_arns != (channel.name, f"{channel.name}{SIBLING_PATTERN}"):
         yield _violation(Rule.C1, where, "the policy admits the channel and <channel>-p-? only")
     general = sorted(s.letter for s in siblings if s.channel == channel.name and s.role is SiblingRole.GENERAL)
     if general != sorted(ROLE_LETTERS[SiblingRole.GENERAL]):
