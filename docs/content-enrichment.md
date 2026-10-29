@@ -9,6 +9,7 @@ language and producer, from your own catalog. It uses no viewer data, adds a bou
 whose metadata cannot be read is requested without it.
 
 - [How it works](#how-it-works)
+- [The context publisher](#the-context-publisher)
 - [Catalog fields](#catalog-fields)
 - [The catalog context object](#the-catalog-context-object)
 - [Genres and categories](#genres-and-categories)
@@ -26,8 +27,48 @@ whose metadata cannot be read is requested without it.
    300 s window, whatever the audience.
 4. The Pod Decision Service reads the same objects and fills OpenRTB 2.6 `app.content` in each bid request.
 
-The catalog fields, the context object (`fast_channels.core.crawl.catalog_context`) and the genre map are in place;
-the publisher, the PRE_ADS lookup and the OpenRTB mapping are added with the rest of the module.
+The catalog fields, the context object (`fast_channels.core.crawl.catalog_context`), the genre map and the
+[publisher](#the-context-publisher) are in place; the PRE_ADS lookup and the OpenRTB mapping are added with the rest
+of the module.
+
+## The context publisher
+
+With `modules.crawl.enabled`, the stack `FastChannels-<prefix>-Crawl` deploys a Lambda function that keeps the objects
+in step with the reference catalog (`ReferenceCatalog`, [integrate-your-cms.md](integrate-your-cms.md#option-a-load-your-catalog-into-the-reference-table)).
+An object exists while its title is in the catalog: it is written when the title appears or changes and deleted
+when the title is removed, so a lookup of a removed title misses. Three triggers run it:
+
+| Trigger | Titles |
+|---|---|
+| `Schedule Published` (the schedule tools publish a plan) | Every title of the plan's programs |
+| `Catalog Item Changed` (your CMS sync job, or `make seed`) | The one title named in the event |
+| Daily sweep (EventBridge Scheduler, `rate(1 day)`) | Every catalog title; objects of titles that left the catalog are deleted |
+
+- After writing or deleting a `ReferenceCatalog` item, put a `Catalog Item Changed` event on the deployment's bus
+  ([Events](integrate-your-cms.md#events)). The object follows within seconds. `make seed` announces the sample
+  titles this way.
+- An object is rewritten only when its content changes: the function compares a digest it keeps in the object's
+  metadata, so `updated` is when the metadata last changed and an unchanged catalog costs one `HEAD` per title.
+- Scheduler runs the first sweep when the schedule is created: on `fastm` it ran within seconds of the stack's
+  creation, which published the catalog that was already loaded. To publish the whole catalog at any other time,
+  invoke the sweep (the stack's `CatalogContextPublisherName` output):
+
+  ```bash
+  aws lambda invoke --function-name <CatalogContextPublisherName> --payload '{"sweep": true}' \
+    --cli-binary-format raw-in-base64-out /dev/stdout
+  ```
+
+- The CDN's default route serves the objects (`CatalogContextBaseUrl` output: `<CdnBaseUrl>/catalog/ctx/v1/`) and
+  keeps them for their `max-age` of 300 s, so a change reaches the lookups within about 5 minutes.
+- `modules.crawl.publisher_domain` names your domain as the registry of your content ids (the first `cids` entry).
+  Without it the objects carry the content id in `id` only.
+- A catalog item that breaks the contract is logged as an error and counted in the `ContextsInvalid` metric
+  (namespace `FastChannels`), and its object is left as it was. A trigger that still fails after its retries goes to
+  a dead-letter queue, whose alarm `<prefix>-crawl-publisher-dead-letters` notifies the alert topic.
+- The function can read the catalog and media library tables, and read, write, delete and list objects under
+  `catalog/ctx/v1/` in the media bucket. It has no access to the ingest bucket.
+- One run of the sweep handles roughly as many titles as fit in its 5-minute timeout at one `HEAD` per title. A
+  catalog of tens of thousands of titles needs a sweep that is split into pages.
 
 ## Catalog fields
 

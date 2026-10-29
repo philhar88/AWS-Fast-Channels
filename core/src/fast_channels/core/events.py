@@ -7,6 +7,7 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field
 
+from fast_channels.core.catalog import CONTENT_ID_PATTERN
 from fast_channels.core.ingest import AssetKind, IngestRequest
 
 
@@ -69,6 +70,14 @@ class AutopilotRun(BaseModel):
     summary: str
 
 
+class CatalogItemChanged(BaseModel):
+    """A title of the reference catalog was added, changed or removed. A CMS sync job puts this event after writing
+    the ``ReferenceCatalog`` item; the content enrichment module republishes the title's catalog context object."""
+
+    content_id: str = Field(pattern=CONTENT_ID_PATTERN, max_length=64, description="The title's catalog id.")
+    correlation_id: str | None = Field(None, description="Trace id of the change in your CMS.")
+
+
 DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     IngestRequest: "Ingest Requested",
     AssetReady: "Asset Ready",
@@ -77,6 +86,7 @@ DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     LadderFailed: "Ladder Failed",
     SchedulePublished: "Schedule Published",
     AutopilotRun: "Autopilot Run",
+    CatalogItemChanged: "Catalog Item Changed",
 }
 
 

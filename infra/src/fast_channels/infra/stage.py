@@ -13,6 +13,7 @@ from fast_channels.infra.constructs.functions import (
     StateMachineDefaults,
 )
 from fast_channels.infra.stacks.baseline import AccountBaselineStack
+from fast_channels.infra.stacks.crawl import CrawlStack
 from fast_channels.infra.stacks.data import DataStack
 from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
 from fast_channels.infra.stacks.media import MediaStack
@@ -35,9 +36,9 @@ def stage_id(prefix: str) -> str:
 
 
 class FastChannelsStage(Stage):
-    """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Edge (in
-    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``) and AccountBaseline (if
-    ``observability.transaction_search`` is ``enable``).
+    """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
+    ``modules.crawl.enabled``, after Media), Edge (in us-east-1, when ``env.region`` is another region; named
+    ``<stage>-Edge-<region>``) and AccountBaseline (if ``observability.transaction_search`` is ``enable``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -88,6 +89,14 @@ class FastChannelsStage(Stage):
                 self.operator.add_stack_dependency(self.models, "The agent reads its model registry entry")
             if self.baseline is not None:
                 self.operator.add_stack_dependency(self.baseline, "Gateway and Memory traces need Transaction Search")
+
+        self.crawl: CrawlStack | None = None
+        if config.modules.crawl.enabled:
+            self.crawl = CrawlStack(
+                self, "Crawl", config=config, data=self.data.exports, media=self.media.exports, **stacks
+            )
+            self.crawl.add_stack_dependency(self.data)
+            self.crawl.add_stack_dependency(self.media)
 
         self.edge: EdgeStack | None = None
         if env.region != EDGE_REGION:

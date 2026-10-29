@@ -98,6 +98,7 @@ far: `models` (the per-task model registry, [agent.md](agent.md#model-registry))
 | `modules.crawl.enabled` | bool | `false` | Deploy show-level content metadata: a catalog context object per title, a cached PRE_ADS lookup by UPID and the OpenRTB `app.content` fields in each ad request, with a holdout that measures the uplift. |
 | `modules.crawl.pre_ads` | bool | `true` | Map the cached PRE_ADS lookup on the monetized playback configurations. |
 | `modules.crawl.holdout_percent` | int | `20` | Share of session-breaks that get no enrichment, the uplift measurement's control arm. |
+| `modules.crawl.publisher_domain` | str or null | `null` | Your domain (e.g. `example.com`), named as the registry of your catalog's content ids in the catalog context objects and in OpenRTB `content.data[].cids`; unset, the content id travels in `content.id` only. |
 
 `channels.iac[]`:
 
@@ -302,7 +303,7 @@ turns one module on and keeps the rest of `cdk.json`. `STAGE=<name>` selects a s
 
 ```bash
 make synth STAGE=fastm                       # cdk-nag included
-make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Models, -Operator
+make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Models, -Operator, -Crawl
 make seed STAGE=fastm SEED_ARGS="--wait --yes"
 make destroy STAGE=fastm
 make deploy STAGE=fastci PREFIX=fastci-pr7   # the same stage under another prefix

@@ -32,6 +32,7 @@ from fast_channels.infra.constructs.alerts import (
     PERIOD,
     alarm,
     alert_topic,
+    alert_topic_name,
     cdn_error_alarm,
     cdn_metric,
     dead_letter_alarm,
@@ -320,7 +321,7 @@ class MediaObservability(Construct):
         super().__init__(scope, id)
         self._prefix = prefix
         stack = Stack.of(self)
-        self.topic = alert_topic(self, "Topic", name=f"{prefix}-alerts", email=notification_email)
+        self.topic = alert_topic(self, "Topic", name=alert_topic_name(prefix), email=notification_email)
         self.mediaconvert_log_group = self._mediaconvert_job_logs(log_retention, removal_policy)
         self._forward_failures(event_bus.bus)
         self.census = ChannelCensus(

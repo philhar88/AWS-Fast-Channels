@@ -682,6 +682,9 @@ class CrawlModule(_Module):
     """Map the cached PRE_ADS lookup on the monetized playback configurations."""
     holdout_percent: int = Field(default=20, ge=0, le=100)
     """Share of session-breaks that get no enrichment, the uplift measurement's control arm."""
+    publisher_domain: str | None = Field(default=None, pattern=_DOMAIN)
+    """Your domain (e.g. ``example.com``), named as the registry of your catalog's content ids in the catalog context
+    objects and in OpenRTB ``content.data[].cids``; unset, the content id travels in ``content.id`` only."""
 
 
 _MODULE_NEEDS: Final = {

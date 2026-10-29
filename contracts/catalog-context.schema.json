@@ -222,11 +222,10 @@
       "type": "array"
     },
     "cids": {
-      "description": "Ids by registry, the publisher's first.",
+      "description": "Ids by registry, the publisher's first when it is configured.",
       "items": {
         "$ref": "#/$defs/ContentIds"
       },
-      "minItems": 1,
       "title": "Cids",
       "type": "array"
     },
