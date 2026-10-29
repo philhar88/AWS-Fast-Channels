@@ -125,6 +125,22 @@ channel, ad insertion, running channels and the CDN. Alarms send both `ALARM` an
 | `<prefix>-cdn-5xx` | CloudFront 5xx error rate (outside us-east-1: `<prefix>-<region>-cdn-5xx` in the `…-Edge-<region>` stack, with its own topic `<prefix>-<region>-alerts`) |
 | `<prefix>-autopilot-errors`, `<prefix>-autopilot-dead-letters` | With an autopilot only: a run failed (it is retried once), or failed again and was dead-lettered, so the channel's schedule was not extended |
 
+With the ops module the Ops stack adds, to the same topic and with missing data not breaching:
+
+| Alarm | Fires when |
+|---|---|
+| `<prefix>-account-ad-insertion-requests` | The ad insertion requests of every playback configuration in the account (CloudWatch Metrics Insights `SUM(Requests)`) stay at 80 % of the 10,000/s quota `L-32FBC51C` for 3 minutes; the quota has no usage metric |
+| `<prefix>-account-channel-assembly-requests` | The Channel Assembly requests of every channel in the account stay at 80 % of the 400/s quota for 3 minutes |
+| `<configuration>-presessioninithook-errors`, `-preadsrequesthook-errors`, `-function-errors`, `-getmanifest-errors` | Per IaC playback configuration: any such error in 5 minutes |
+| `<prefix>-zero-ads-sessions` | The hourly detector found sessions that saw at least three ad breaks (distinct ad markers) without any ad request: possible ad suppression by a direct caller. The detector's log names them; the lake's `v_zero_ads_sessions` lists them per day. Incomplete by design (short sessions are not found) |
+| `<prefix>-ledger-*` | The ledger ([below](#ledger)) |
+
+Every minute while the census counts a running channel, a poller reads Channel Assembly's alerts of the
+deployment's running channels and puts a `Channel Alert` event on the bus for each alert that changed in that
+minute (`channel`, `code`, `category`, `message`, `resource_arn`, `last_modified`, `correlation_id` = the poll's
+scheduled time; [contract](../contracts/events.schema.json)), leaving out the warnings the design raises by
+construction (`SEGMENT_DURATION_MISMATCH`, `BANDWIDTH_MISMATCH`). Runbooks subscribe to it.
+
 `Asset Failed`, `Ladder Failed` and failed `Autopilot Run` events are forwarded to the same topic as JSON, by rules
 that publish through a role of their own (the topic admits no service principal). Set
 `notifications.email` to subscribe an address, and confirm the subscription email (two of them outside us-east-1,
@@ -159,6 +175,7 @@ adding; filter on the partition keys to keep scans small.
 | `mediatailor_manifest` | The same for the manifest service logs, under `mediatailor/manifest/`, without `mediaTailorPath`, `input` and `http` | `datehour` |
 | `v_breaks` | One row per aired break by SCTE-35 event id (`evid`): UPID, channel, the ad marker's `START-DATE`, the first ADS request, configurations, sessions, ADS requests, filled avails and seconds | — |
 | `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate | — |
+| `v_zero_ads_sessions` | Sessions that saw at least three ad breaks and made no ad request, with the day, configuration and first and last break | — |
 
 Column names are the log fields in lower case (`eventtype`, `adsrequesturl`, `cs_uri_stem`, `cmcd_session_id`).
 Nested log objects (`avail`, `vastresponse`, `beaconinfo`) are JSON text: read them with `json_extract_scalar`. The
@@ -213,6 +230,9 @@ every one: Powertools adds `service`, the function's handler module, to each met
 | `ToolSucceeded`, `ToolFailed` | `service` = `tools.<target>`, `tool` (`<target>___<tool>`) | Every agent tool call |
 | `ProgramsAired` | `service` = `as_run_reconciler` | As-run reconciler |
 | `BreaksAired`, `BreaksUnaired` | `service` = `as_run_reconciler` | As-run reconciler and its break sweep (ops module) |
+| `ChannelAlerts` | `service` = `ops.list_alerts` | Channel Assembly alerts poller (ops module) |
+| `ZeroAdsSessions` | `service` = `ops.zero_ads_sessions` | Zero-ad-sessions detector (ops module) |
+| `AsRunEventsRouted` | `service` = `ops.as_run_router` | The account's as-run router (`observability.as_run`) |
 | `AutopilotSucceeded`, `AutopilotFailed`, `AutopilotPublishes` | `service` = `autopilot`, `channel` | Autopilot runs |
 | `ReapedChannels`, `ReapedPlaybackConfigurations`, `ReapedVodSources`, `ReapedSourceLocations`, `ReapedJobTemplates` | `service` = `custom_resources.reaper` | Runtime-resource reaper (stack deletion) |
 | `RunningChannels` | `App` = `<prefix>` | Channel census |

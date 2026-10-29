@@ -182,6 +182,26 @@
           "$ref": "#/$defs/CensusChanged"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Channel Alert"
+        },
+        "detail": {
+          "$ref": "#/$defs/ChannelAlert"
+        }
+      }
     }
   ],
   "$defs": {
@@ -368,6 +388,54 @@
         "correlation_id"
       ],
       "title": "CensusChanged",
+      "type": "object"
+    },
+    "ChannelAlert": {
+      "description": "A Channel Assembly alert of a running channel changed (ops module): Channel Assembly and MediaTailor publish no\nevents, so a poller reads ``ListAlerts`` every minute and publishes each alert changed in that minute once.",
+      "properties": {
+        "channel": {
+          "title": "Channel",
+          "type": "string"
+        },
+        "code": {
+          "description": "Alert code; for PROGRAM_ALERT the message names the program and its alert.",
+          "title": "Code",
+          "type": "string"
+        },
+        "category": {
+          "description": "SCHEDULING_ERROR (breaks playback), PLAYBACK_WARNING or INFO.",
+          "title": "Category",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "resource_arn": {
+          "title": "Resource Arn",
+          "type": "string"
+        },
+        "last_modified": {
+          "description": "UTC ISO-8601 time of the alert's last change.",
+          "title": "Last Modified",
+          "type": "string"
+        },
+        "correlation_id": {
+          "description": "The poll's scheduled time, which every alert of one poll shares.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel",
+        "code",
+        "category",
+        "message",
+        "resource_arn",
+        "last_modified",
+        "correlation_id"
+      ],
+      "title": "ChannelAlert",
       "type": "object"
     },
     "GeneratorInput": {

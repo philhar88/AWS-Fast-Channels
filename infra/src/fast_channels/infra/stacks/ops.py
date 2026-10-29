@@ -4,7 +4,16 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack
 
-from fast_channels.infra.constructs.ops import Lake, LedgerWriter, OpsAppConfig
+from fast_channels.infra.constructs.observability import census_parameter_name
+from fast_channels.infra.constructs.ops import (
+    AccountQuotaAlarms,
+    AlertsPoller,
+    ConfigurationAlarms,
+    Lake,
+    LedgerWriter,
+    OpsAppConfig,
+    ZeroAdsDetector,
+)
 from fast_channels.infra.exports import OpsExports
 
 if TYPE_CHECKING:
@@ -18,7 +27,8 @@ __all__ = ["OpsExports", "OpsStack"]
 
 class OpsStack(Stack):
     """The stage's lake (Glue database, tables and views over the CDN and MediaTailor logs, Athena workgroup, the
-    MediaTailor log copies), the ledger writer with its Firehose stream, and the AppConfig application.
+    MediaTailor log copies), the ledger writer with its Firehose stream, the account quota and hook alarms, the
+    zero-ad-sessions detector, the Channel Assembly alerts poller (``Channel Alert``) and the AppConfig application.
 
     The lake bucket itself is in the Data stack (``DataExports.lake_bucket``); the census's ``Census Changed``
     events come from the Media stack. Deleting this stack first removes the log copies' deliveries, then the
@@ -69,6 +79,31 @@ class OpsStack(Stack):
             table=data.ledger_table,
             archive=data.ledger_archive,
             topic=media.alert_topic,
+            log_retention=config.observability.log_retention,
+            removal_policy=config.removal_policy,
+        )
+        self.quota_alarms = AccountQuotaAlarms(self, "QuotaAlarms", prefix=prefix, topic=media.alert_topic)
+        self.configuration_alarms = ConfigurationAlarms(
+            self,
+            "ConfigurationAlarms",
+            configurations=[channel.playback_configuration_name for channel in media.channels],
+            topic=media.alert_topic,
+        )
+        self.zero_ads = ZeroAdsDetector(
+            self,
+            "ZeroAds",
+            prefix=prefix,
+            ads_log_group=f"/aws/vendedlogs/mediatailor/{prefix}",
+            topic=media.alert_topic,
+            log_retention=config.observability.log_retention,
+            removal_policy=config.removal_policy,
+        )
+        self.alerts = AlertsPoller(
+            self,
+            "Alerts",
+            prefix=prefix,
+            event_bus=media.event_bus,
+            census_parameter=census_parameter_name(prefix),
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,
         )

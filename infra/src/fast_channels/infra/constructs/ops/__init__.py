@@ -4,6 +4,12 @@ application.
 Nothing here is deployed unless ``modules.ops.enabled`` is true; with the module off the stage is v3.0's.
 """
 
+from fast_channels.infra.constructs.ops.detectors import (
+    AccountQuotaAlarms,
+    AlertsPoller,
+    ConfigurationAlarms,
+    ZeroAdsDetector,
+)
 from fast_channels.infra.constructs.ops.flags import OpsAppConfig
 from fast_channels.infra.constructs.ops.lake import (
     ADS_LOG_FIELDS,
@@ -25,10 +31,14 @@ __all__ = [
     "EXCLUDED_ADS_LOG_FIELDS",
     "EXCLUDED_MANIFEST_LOG_FIELDS",
     "MANIFEST_LOG_FIELDS",
+    "AccountQuotaAlarms",
+    "AlertsPoller",
+    "ConfigurationAlarms",
     "Lake",
     "LakeBucket",
     "LedgerStorage",
     "LedgerWriter",
     "OpsAppConfig",
+    "ZeroAdsDetector",
     "lake_database_name",
 ]
