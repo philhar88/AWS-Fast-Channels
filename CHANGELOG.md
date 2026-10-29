@@ -94,6 +94,11 @@ All notable changes to this project are documented here. The format follows
   policy. `deploy-demand` deploys the stack after Pds; deleting it reaps what the controller created. The Media stack
   writes the SSM parameters `/<prefix>/release/*` it reads. The Pod Decision Service's delivery function also counts
   the siblings' impressions, through a subscription filter on their log group.
+- **Release log reconciliation** (`modules.release`). Every hour, each sibling's vended ADS log is compared with
+  `AWS/MediaTailor`'s own counts (`AdDecisionServer.Ads` sample counts against `MAKING_ADS_REQUEST`, and avails
+  against `FILLED_AVAIL` for context); `<prefix>-release-log-loss` fires when MediaTailor made ad requests the log
+  does not have. MediaTailor was seen leaving a requested, filled break out of its log; delivery, which reads that
+  log's beacons, would under-count it.
 - **Release Controller: smoke gate, promotion and rollback** (`modules.release`,
   [docs/release-controller.md](docs/release-controller.md#promotion-and-rollback), ADRs 0019, 0021, 0023). After a
   release configures a channel's idle sibling, a probe session smoke-tests it for two breaks and soaks it for three

@@ -3656,6 +3656,329 @@
       },
       "Type": "AWS::Logs::SubscriptionFilter"
     },
+    "LogReconcilerAlarm3A99A871": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "MediaTailor made ad requests its vended ADS log does not have: delivery, which counts that log's beacons, is under-counted for those breaks (see the function's log for the siblings and the hour)",
+        "AlarmName": "fastm-release-log-loss",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "release.reconcile"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "UnloggedAdsRequests",
+        "Namespace": "FastChannels",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "LogReconcilerFunction44B752C5": {
+      "DependsOn": [
+        "LogReconcilerFunctionRoleDefaultPolicyA616CCC8",
+        "LogReconcilerFunctionRoleA1CAF1DD"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release: ad requests MediaTailor made but left out of the siblings' ADS log (hourly)",
+        "Environment": {
+          "Variables": {
+            "FAST_PREFIX": "fastm",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.reconcile",
+            "RELEASE_SIBLINGS": "fastm-demo-p-a,fastm-demo-p-b,fastm-demo-p-z,fastm-lab-p-a,fastm-lab-p-b,fastm-lab-p-z"
+          }
+        },
+        "Handler": "fast_channels.functions.release.reconcile.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "LogReconcilerFunctionLogs7D78CBEB"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "LogReconcilerFunctionRoleA1CAF1DD",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "LogReconcilerFunctionLogs7D78CBEB": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "LogReconcilerFunctionRoleA1CAF1DD": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "LogReconcilerFunctionRoleDefaultPolicyA616CCC8": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "LogReconcilerFunctionLogs7D78CBEB",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "cloudwatch:GetMetricData",
+                "logs:GetQueryResults",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:StartQuery"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Logs71AC9AA5",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "LogReconcilerFunctionRoleDefaultPolicyA616CCC8",
+        "Roles": [
+          {
+            "Ref": "LogReconcilerFunctionRoleA1CAF1DD"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "LogReconcilerSchedule080164B6": {
+      "Properties": {
+        "Description": "Release log reconciliation of fastm every hour",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "LogReconcilerFunction44B752C5",
+              "Arn"
+            ]
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 1
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "LogReconcilerScheduleRole5B82D256",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "LogReconcilerScheduleRole5B82D256": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: run the release log reconciliation",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "LogReconcilerScheduleRoleDefaultPolicy0156E269": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "LogReconcilerFunction44B752C5",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "LogReconcilerFunction44B752C5",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "LogReconcilerScheduleRoleDefaultPolicy0156E269",
+        "Roles": [
+          {
+            "Ref": "LogReconcilerScheduleRole5B82D256"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
     "Logs71AC9AA5": {
       "DeletionPolicy": "Delete",
       "Properties": {
@@ -3780,6 +4103,12 @@
                   {
                     "Fn::GetAtt": [
                       "ControllerSmokeRole9BCF356E",
+                      "Arn"
+                    ]
+                  },
+                  {
+                    "Fn::GetAtt": [
+                      "LogReconcilerFunctionRoleA1CAF1DD",
                       "Arn"
                     ]
                   },

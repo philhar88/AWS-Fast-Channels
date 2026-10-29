@@ -169,7 +169,7 @@ def watch(session: dict[str, Any], breaks: int, seconds: float = WATCH_SECONDS) 
     return session | {"markers": seen, "done": len(seen) >= breaks}
 
 
-def _query(group: str, query: str, start: float, end: float) -> list[dict[str, str]]:
+def insights(group: str, query: str, start: float, end: float) -> list[dict[str, str]]:
     """The rows of a Logs Insights ``query`` over ``group`` between ``start`` and ``end`` (epoch seconds)."""
     client = aws.client("logs")
     started = client.start_query(
@@ -197,7 +197,7 @@ def events(session: str, start: float, end: float) -> list[dict[str, str]]:
     """The session's MediaTailor log events in the module's log group."""
     config = settings()
     config.require("prefix")
-    return _query(names.log_group(config.prefix), QUERY.format(session=_quoted(session)), start, end)
+    return insights(names.log_group(config.prefix), QUERY.format(session=_quoted(session)), start, end)
 
 
 def decisions(session: str, start: float, end: float) -> set[str]:
@@ -205,7 +205,7 @@ def decisions(session: str, start: float, end: float) -> set[str]:
     from its function's log group."""
     config = settings()
     config.require("pds_policy_log_group")
-    rows = _query(config.pds_policy_log_group, DECISIONS.format(session=_quoted(session)), start, end)
+    rows = insights(config.pds_policy_log_group, DECISIONS.format(session=_quoted(session)), start, end)
     return {row["evid"] for row in rows if row.get("evid")}
 
 

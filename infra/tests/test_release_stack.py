@@ -192,10 +192,10 @@ def test_every_other_role_of_the_stage_is_denied_the_controllers_writes(deployme
         "/ControllerPromoteRole",
         "/ControllerReaperRole",
         "/PrefetcherFunctionRole",
-        "/ZeroAdsDetectorRole",
     )
-    controller = {n for n in unguarded if any(r in n for r in (*exempt, "/ControllerSmokeRole"))}
-    assert len(controller) == 6  # the controller's writers, and the readers of the siblings' logs
+    readers = ("/ZeroAdsDetectorRole", "/ControllerSmokeRole", "/LogReconcilerFunctionRole")
+    controller = {n for n in unguarded if any(r in n for r in (*exempt, *readers))}
+    assert len(controller) == 7  # the controller's writers, and the readers of the siblings' logs
     # The roles of CDK's core custom-resource providers are CfnResources, not iam.Role (the guard's Aspect cannot
     # attach to them): they empty buckets or run a trigger, and none of them may call MediaTailor.
     providers = set(unguarded) - controller
@@ -239,7 +239,8 @@ def test_the_siblings_logs_are_encrypted_with_a_key_that_delegates_nothing(deplo
     principals = [p for r in readers for p in _list(r["Principal"]["AWS"])]
     roles = resources(template, "AWS::IAM::Role")
     assert sorted(p["Fn::GetAtt"][0] for p in principals) == sorted(
-        next(n for n in roles if n.startswith(start)) for start in ("ZeroAdsDetectorRole", "ControllerSmokeRole")
+        next(n for n in roles if n.startswith(start))
+        for start in ("ZeroAdsDetectorRole", "ControllerSmokeRole", "LogReconcilerFunctionRole")
     )
     assert all(r["Condition"] == {"StringEquals": {"kms:ViaService": "logs.us-east-1.amazonaws.com"}} for r in readers)
     groups = resources(template, "AWS::Logs::LogGroup")
@@ -493,6 +494,29 @@ def test_the_marker_detector_counts_a_breaks_first_marker_and_alarms_on_two_loss
     off = deployment({**RELEASE, "modules.release.lab_channel": False}, extra=EXTRA)
     names_ = {a["AlarmName"] for a in resources(off.template(off.stage.release), "AWS::CloudWatch::Alarm").values()}
     assert "fastm-lab-x-markers-without-ads-request" not in names_
+
+
+def test_the_siblings_log_is_reconciled_with_mediatailors_counts_every_hour(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    [function] = [
+        f
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.release.reconcile.handler"
+    ]
+    siblings = function["Environment"]["Variables"]["RELEASE_SIBLINGS"].split(",")
+    assert {"fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z", "fastm-lab-p-a"} <= set(siblings)
+    [schedule] = [
+        s for s in resources(template, "AWS::Scheduler::Schedule").values() if "reconciliation" in s["Description"]
+    ]
+    assert schedule["ScheduleExpression"] == "rate(1 hour)"
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    loss = alarms["fastm-release-log-loss"]
+    assert (loss["MetricName"], loss["Threshold"], loss["TreatMissingData"]) == (
+        "UnloggedAdsRequests",
+        1,
+        "notBreaching",
+    )
 
 
 def test_template_snapshot(
