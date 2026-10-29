@@ -367,15 +367,17 @@ NEEDED_MODULES = ("pds",)
 """Modules a merged one needs on (``release`` needs ``pds``) whose code is not merged yet: they add nothing, so the
 comparison below still isolates the merged code."""
 MODULE_STACKS = {"Crawl": "FastChannels-fastm-Crawl"}
-"""Stacks of merged modules that add only stacks of their own (``crawl``); they stay off in the comparison, and
-their own tests snapshot what they synthesize (``test_crawl.py``)."""
+"""Stacks of merged modules kept off in the comparison (``crawl``, whose needs would turn every module on) ..."""
+MODULE_CHANGES = ("Media",)
+"""... and the shared stacks they change: crawl adds its catalog-context bucket and route to Media. Their own tests
+pin those changes down (``test_crawl.py::test_the_module_changes_nothing_else_in_the_media_stack``)."""
 
 
 def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeployment, normalized: Any) -> None:
     """Enabling a module changes nothing until its code is merged: the ``fastm`` stage, with every module on,
     synthesizes exactly what the shipped configuration does with only the merged modules (and those they need) on,
-    plus the stacks of the modules that add only stacks. What the merged modules add has its own tests
-    (``test_release_policy.py``, ``test_crawl.py``, ``test_demand_stacks.py``)."""
+    plus what the modules kept off add. What the merged modules add has its own tests (``test_release_policy.py``,
+    ``test_crawl.py``, ``test_demand_stacks.py``)."""
     stage = stage_args.load("fastm")
     fastm = deployment(stage_overrides("fastm"))
     on = (*NEEDED_MODULES, *MERGED_MODULES)
@@ -402,6 +404,8 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
     assert names(fastm) == names(merged) | MODULE_STACKS
     modules_on = {stack.node.id: stack for stack in fastm.stacks}
     for modules_merged in merged.stacks:
+        if modules_merged.node.id in MODULE_CHANGES:
+            continue
         stack = modules_on[modules_merged.node.id]
         assert normalized(fastm.template(stack)) == normalized(merged.template(modules_merged)), stack.stack_name
 

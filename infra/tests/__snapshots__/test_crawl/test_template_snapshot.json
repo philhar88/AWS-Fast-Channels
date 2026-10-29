@@ -20,6 +20,16 @@
         ]
       }
     },
+    "CatalogContextBucketName": {
+      "Description": "Bucket of the catalog context objects (catalog/ctx/v1/<content_id>.json)",
+      "Value": {
+        "Fn::GetStackOutput": {
+          "OutputName": "PublishOutputRefCatalogContextsBucketE67C84ADBF7FF690",
+          "Region": "us-east-1",
+          "StackName": "FastChannels-fastm-Media"
+        }
+      }
+    },
     "CatalogContextPublisherName": {
       "Description": "Context publisher; invoke it with {\"sweep\": true} to publish the whole catalog now",
       "Value": {
@@ -169,6 +179,13 @@
         "Description": "Crawl: publish catalog context objects (catalog/ctx/v1/) for the PRE_ADS lookup and the PDS",
         "Environment": {
           "Variables": {
+            "CATALOG_CONTEXT_BUCKET": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefCatalogContextsBucketE67C84ADBF7FF690",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-fastm-Media"
+              }
+            },
             "CATALOG_TABLE": {
               "Fn::GetStackOutput": {
                 "OutputName": "PublishOutputRefCatalog742F25FDA41764CC",
@@ -180,13 +197,6 @@
             "LIBRARY_TABLE": {
               "Fn::GetStackOutput": {
                 "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
-                "Region": "us-east-1",
-                "StackName": "FastChannels-fastm-Data"
-              }
-            },
-            "MEDIA_BUCKET": {
-              "Fn::GetStackOutput": {
-                "OutputName": "PublishOutputRefStorageMedia9333CB25D888E8BE",
                 "Region": "us-east-1",
                 "StackName": "FastChannels-fastm-Data"
               }
@@ -388,9 +398,9 @@
                   [
                     {
                       "Fn::GetStackOutput": {
-                        "OutputName": "PublishOutputFnGetAttStorageMedia9333CB25Arn75C441A1",
+                        "OutputName": "PublishOutputFnGetAttCatalogContextsBucketE67C84ADArnFB352F9B",
                         "Region": "us-east-1",
-                        "StackName": "FastChannels-fastm-Data"
+                        "StackName": "FastChannels-fastm-Media"
                       }
                     },
                     "/catalog/ctx/v1/*"
@@ -410,9 +420,9 @@
               "Effect": "Allow",
               "Resource": {
                 "Fn::GetStackOutput": {
-                  "OutputName": "PublishOutputFnGetAttStorageMedia9333CB25Arn75C441A1",
+                  "OutputName": "PublishOutputFnGetAttCatalogContextsBucketE67C84ADArnFB352F9B",
                   "Region": "us-east-1",
-                  "StackName": "FastChannels-fastm-Data"
+                  "StackName": "FastChannels-fastm-Media"
                 }
               }
             }

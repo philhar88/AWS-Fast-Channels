@@ -65,6 +65,8 @@ class Settings:
     max_agent_channels: int = field(default_factory=lambda: int(_env("MAX_AGENT_CHANNELS") or 0))
     scheduler_group: str = field(default_factory=lambda: _env("SCHEDULER_GROUP"))
     scheduler_role_arn: str = field(default_factory=lambda: _env("SCHEDULER_ROLE_ARN"))
+    catalog_context_bucket: str = field(default_factory=lambda: _env("CATALOG_CONTEXT_BUCKET"))
+    """The crawl module's bucket of catalog context objects (``catalog/ctx/v1/<content_id>.json``)."""
     publisher_domain: str = field(default_factory=lambda: _env("PUBLISHER_DOMAIN"))
     """The publisher's domain, the registry of catalog content ids in context objects (empty: not configured)."""
     region: str = field(default_factory=lambda: _env("AWS_REGION"))

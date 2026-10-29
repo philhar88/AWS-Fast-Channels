@@ -2,7 +2,7 @@
 
 Runs only when the stage has the Crawl stack (for example ``STAGE=fastci``); the v3.0.0 leg skips it. The test
 writes one ``ReferenceCatalog`` item of its own, puts ``Catalog Item Changed`` events on the bus and reads the
-media bucket and the CDN. It never touches the ingest bucket, and it removes its item and object at the end.
+catalog-context bucket and the CDN. It never touches the ingest bucket, and it removes its item and object at the end.
 """
 
 import json
@@ -33,14 +33,9 @@ PUBLISH_TIMEOUT_S: Final = 60
 @pytest.fixture(scope="module")
 def crawl(stage: Stage) -> dict[str, str]:
     """Outputs of the stage's Crawl stack; skips the module when the stage has none."""
-    name = f"{stage_id(stage.prefix)}-Crawl"
-    try:
-        [stack] = stage.cloudformation.describe_stacks(StackName=name)["Stacks"]
-    except ClientError as error:
-        if "does not exist" in error.response.get("Error", {}).get("Message", ""):
-            pytest.skip(f"stage {stage.prefix} has no {name} (modules.crawl is off)")
-        raise
-    return {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+    if not (outputs := crawl_outputs(stage)):
+        pytest.skip(f"stage {stage.prefix} has no {stage_id(stage.prefix)}-Crawl (modules.crawl is off)")
+    return outputs
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +61,7 @@ def catalog(stage: Stage, crawl: dict[str, str], title: ContentItem) -> Iterator
     yield table
     table.delete_item(Key={"pk": f"CONTENT#{title.content_id}", "sk": "META"})
     s3 = stage.session.client("s3", region_name=stage.region)
-    s3.delete_object(Bucket=stage.output(Plane.DATA, "MediaBucketName"), Key=context_key(title.content_id))
+    s3.delete_object(Bucket=crawl["CatalogContextBucketName"], Key=context_key(title.content_id))
 
 
 def announce(stage: Stage, content_id: str, run_id: str) -> float:
@@ -82,11 +77,23 @@ def announce(stage: Stage, content_id: str, run_id: str) -> float:
     return time.monotonic()
 
 
-def head(stage: Stage, content_id: str) -> dict[str, Any] | None:
-    """The object's HEAD, or None while it does not exist."""
-    s3 = stage.session.client("s3", region_name=stage.region)
+def crawl_outputs(stage: Stage) -> dict[str, str]:
+    """The Crawl stack's outputs, or {} when the stage has no Crawl stack."""
     try:
-        return dict(s3.head_object(Bucket=stage.output(Plane.DATA, "MediaBucketName"), Key=context_key(content_id)))
+        [stack] = stage.cloudformation.describe_stacks(StackName=f"{stage_id(stage.prefix)}-Crawl")["Stacks"]
+    except ClientError as error:
+        if "does not exist" in error.response.get("Error", {}).get("Message", ""):
+            return {}
+        raise
+    return {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+
+
+def head(stage: Stage, content_id: str) -> dict[str, Any] | None:
+    """The object's HEAD in the catalog-context bucket, or None while it does not exist."""
+    s3 = stage.session.client("s3", region_name=stage.region)
+    bucket = crawl_outputs(stage)["CatalogContextBucketName"]
+    try:
+        return dict(s3.head_object(Bucket=bucket, Key=context_key(content_id)))
     except ClientError as error:
         if error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
             return None
@@ -146,3 +153,15 @@ def test_the_sweep_runs_with_its_own_permissions(stage: Stage, crawl: dict[str, 
     assert "FunctionError" not in response, result
     assert set(result) == {"written", "unchanged", "deleted", "invalid"}
     assert result["invalid"] == 0
+
+
+def test_a_missing_title_is_a_404_and_the_route_never_lists(crawl: dict[str, str], run_id: str) -> None:
+    """MediaTailor's Function cache stores a 404 but not a 403, so the catalog-context bucket lets CloudFront list
+    it; the route still forwards neither the bucket root nor a query string, so no listing can come back."""
+    base = crawl["CatalogContextBaseUrl"]  # https://<cdn>/catalog/ctx/v1/
+    missing = httpx.get(f"{base}{run_id}-missing.json", timeout=10)
+    assert missing.status_code == 404, (missing.status_code, missing.text[:200])
+    root = base.removesuffix("v1/")
+    for url in (base, root, f"{root}?list-type=2", f"{base}?list-type=2&prefix=catalog/", f"{root}?delimiter=/"):
+        response = httpx.get(url, timeout=10)
+        assert response.status_code == 404 and "ListBucketResult" not in response.text, (url, response.status_code)

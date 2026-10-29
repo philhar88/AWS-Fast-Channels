@@ -116,8 +116,10 @@ All notable changes to this project are documented here. The format follows
   change, so it refuses it on a running channel (or stops and restarts the channel with `restart_on_update`),
   because a policy change on a running channel is not session-safe. With the module off the policy is unchanged.
 - **Catalog context publisher** (`crawl` module): with `modules.crawl.enabled`, the stack `FastChannels-<prefix>-Crawl`
-  keeps one context object per reference-catalog title in the media bucket (`catalog/ctx/v1/`, served by the CDN
-  with `Cache-Control: max-age=300`). It runs on `Schedule Published`, on a new `Catalog Item Changed` event that a
+  keeps one context object per reference-catalog title in a catalog-context bucket of its own (`catalog/ctx/v1/`,
+  served on a CloudFront route `/catalog/ctx/*` with `Cache-Control: max-age=300`). The bucket lets that distribution
+  list it, so a title missing from the catalog is a 404, which MediaTailor's Function cache stores; the media bucket
+  and its policy are unchanged. It runs on `Schedule Published`, on a new `Catalog Item Changed` event that a
   CMS sync job puts after changing a title, and in a daily sweep. It rewrites an object only when its content
   changes and deletes the objects of removed titles. `modules.crawl.publisher_domain` names the registry of your
   content ids. `make seed` now announces the sample titles with `Catalog Item Changed`.

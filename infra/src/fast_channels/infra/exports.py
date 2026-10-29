@@ -101,6 +101,9 @@ class MediaExports:
     (``core.specs.playback_configuration`` inputs other than the channel-specific ones)."""
     mediatailor_log_destination_arn: str
     """Vended-logs delivery destination that agent-created playback configurations deliver to."""
+    catalog_context_bucket: s3.IBucket | None = None
+    """The ``crawl`` module's catalog-context bucket (served at ``<cdn_base_url>/catalog/ctx/``); ``None`` when the
+    module is off."""
 
 
 @dataclass(frozen=True, slots=True)

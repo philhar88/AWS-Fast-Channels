@@ -21,6 +21,7 @@ from fast_channels.infra.constructs.queues import dead_letter_queue
 if TYPE_CHECKING:
     from aws_cdk import aws_cloudwatch as cw
     from aws_cdk import aws_logs as logs
+    from aws_cdk import aws_s3 as s3
     from aws_cdk import aws_sns as sns
 
     from fast_channels.infra.exports import DataExports
@@ -36,20 +37,21 @@ _TABLE_READ: Final = ("dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan")
 
 
 class ContextPublisher(Construct):
-    """A Lambda that keeps ``catalog/ctx/v1/<content_id>.json`` in the media bucket in step with the reference
-    catalog (``fast_channels.functions.crawl.publisher``).
+    """A Lambda that keeps ``catalog/ctx/v1/<content_id>.json`` in the catalog-context bucket in step with the
+    reference catalog (``fast_channels.functions.crawl.publisher``).
 
     Three triggers: ``Schedule Published`` and ``Catalog Item Changed`` from the deployment's bus, and a daily sweep
     from EventBridge Scheduler. Each delivery is retried, then dead-lettered to :attr:`dead_letters`, whose alarm
     notifies ``alert_topic``.
 
     The function reads the catalog and media library tables (items only), and reads, writes, deletes and lists objects
-    under the context prefix of the media bucket and nowhere else: never the ingest bucket. The objects are served
-    by the CDN's default route, with the ``Cache-Control`` the function sets.
+    under the context prefix of the catalog-context bucket and nowhere else: never the media or the ingest bucket.
+    The CDN's ``/catalog/ctx/*`` route serves the objects, with the ``Cache-Control`` the function sets.
 
     Args:
         prefix: deployment prefix (event source, alarm and schedule names).
-        data: Data stack references (tables and the media bucket).
+        data: Data stack references (the tables).
+        bucket: the catalog-context bucket (``MediaExports.catalog_context_bucket``).
         event_bus: the deployment's bus.
         alert_topic: topic of the dead-letter alarm.
         publisher_domain: ``modules.crawl.publisher_domain``; None leaves it out of the objects.
@@ -67,6 +69,7 @@ class ContextPublisher(Construct):
         *,
         prefix: str,
         data: DataExports,
+        bucket: s3.IBucket,
         event_bus: events.IEventBus,
         alert_topic: sns.ITopic,
         publisher_domain: str | None,
@@ -84,7 +87,7 @@ class ContextPublisher(Construct):
                 "FAST_PREFIX": prefix,
                 "CATALOG_TABLE": data.catalog_table.table_name,
                 "LIBRARY_TABLE": data.library_table.table_name,
-                "MEDIA_BUCKET": data.media_bucket.bucket_name,
+                "CATALOG_CONTEXT_BUCKET": bucket.bucket_name,
                 **({"PUBLISHER_DOMAIN": publisher_domain} if publisher_domain else {}),
             },
             timeout=TIMEOUT,
@@ -101,13 +104,13 @@ class ContextPublisher(Construct):
         self.function.allow(list(_TABLE_READ), [data.catalog_table.table_arn, data.library_table.table_arn])
         self.function.allow(
             ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-            [data.media_bucket.arn_for_objects(f"{CONTEXT_PREFIX}*")],
+            [bucket.arn_for_objects(f"{CONTEXT_PREFIX}*")],
             why=f"One catalog context object per title under {CONTEXT_PREFIX} (content ids are open-ended)",
         )
         # Listing finds orphans in the sweep, and turns the HEAD of a missing object into a 404 instead of a 403.
         self.function.allow(
             ["s3:ListBucket"],
-            [data.media_bucket.bucket_arn],
+            [bucket.bucket_arn],
             conditions={"StringLike": {"s3:prefix": [f"{CONTEXT_PREFIX}*"]}},
         )
 

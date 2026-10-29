@@ -1,5 +1,5 @@
-"""Catalog context publisher: keeps ``catalog/ctx/v1/<content_id>.json`` in the media bucket in step with the
-reference catalog (docs/content-enrichment.md).
+"""Catalog context publisher: keeps ``catalog/ctx/v1/<content_id>.json`` in the catalog-context bucket in step
+with the reference catalog (docs/content-enrichment.md).
 
 Each object mirrors one ``ReferenceCatalog`` title. It is written while the title is in the catalog and deleted when
 the title is not, so the lookup of a removed title misses. Three triggers:
@@ -69,7 +69,7 @@ class Outcome(StrEnum):
 @logger.inject_lambda_context
 def handler(event: Mapping[str, Any], context: LambdaContext) -> dict[str, int]:
     """Publish the titles an event names, or sweep the whole catalog; returns the count of each outcome."""
-    settings().require("catalog_table", "media_bucket")
+    settings().require("catalog_table", "catalog_context_bucket")
     updated = datetime.now(UTC)
     match event:
         case {"detail-type": Trigger.SCHEDULE_PUBLISHED, "detail": Mapping() as detail}:
@@ -134,7 +134,7 @@ def reconcile(content_id: str, item: Mapping[str, Any] | None, *, updated: datet
     config = settings()
     s3, key = aws.client("s3"), context_key(content_id)
     if item is None:
-        s3.delete_object(Bucket=config.media_bucket, Key=key)
+        s3.delete_object(Bucket=config.catalog_context_bucket, Key=key)
         logger.info("catalog context deleted", extra={"content_id": content_id, "key": key})
         return Outcome.DELETED
     try:
@@ -151,7 +151,7 @@ def reconcile(content_id: str, item: Mapping[str, Any] | None, *, updated: datet
     if _current_digest(key) == new:
         return Outcome.UNCHANGED
     s3.put_object(
-        Bucket=config.media_bucket,
+        Bucket=config.catalog_context_bucket,
         Key=key,
         Body=built.model_dump_json().encode(),
         ContentType=CONTENT_TYPE,
@@ -164,7 +164,7 @@ def reconcile(content_id: str, item: Mapping[str, Any] | None, *, updated: datet
 
 def _current_digest(key: str) -> str | None:
     try:
-        head = aws.client("s3").head_object(Bucket=settings().media_bucket, Key=key)
+        head = aws.client("s3").head_object(Bucket=settings().catalog_context_bucket, Key=key)
     except ClientError as error:
         if error.response.get("Error", {}).get("Code") in _MISSING:
             return None
@@ -198,7 +198,7 @@ def _published_ids() -> Iterable[str]:
     pages = (
         aws.client("s3")
         .get_paginator("list_objects_v2")
-        .paginate(Bucket=settings().media_bucket, Prefix=CONTEXT_PREFIX)
+        .paginate(Bucket=settings().catalog_context_bucket, Prefix=CONTEXT_PREFIX)
     )
     for page in pages:
         for entry in page.get("Contents", []):

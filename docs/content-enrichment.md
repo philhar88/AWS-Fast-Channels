@@ -10,6 +10,7 @@ whose metadata cannot be read is requested without it.
 
 - [How it works](#how-it-works)
 - [The context publisher](#the-context-publisher)
+- [Serving and misses](#serving-and-misses)
 - [Catalog fields](#catalog-fields)
 - [The catalog context object](#the-catalog-context-object)
 - [Genres and categories](#genres-and-categories)
@@ -19,8 +20,9 @@ whose metadata cannot be read is requested without it.
 ## How it works
 
 1. The catalog holds the metadata ([Catalog fields](#catalog-fields)); every field it adds is optional.
-2. A context publisher writes one **catalog context object** per title to the media bucket at
-   `catalog/ctx/v1/<content_id>.json`, served through the CDN with `Cache-Control: max-age=300`.
+2. A context publisher writes one **catalog context object** per title to the catalog-context bucket at
+   `catalog/ctx/v1/<content_id>.json`, served through the CDN with `Cache-Control: max-age=300`
+   ([Serving and misses](#serving-and-misses)).
 3. On each ad break, a cached PRE_ADS `HTTP_REQUEST` Function reads the object by the break's UPID and passes its
    compact form (`hdr`) to the ad decision server as a header. MediaTailor caches the response for 300 s per content id
    and playback configuration, so the origin sees about 4 requests per title per playback configuration in each
@@ -58,17 +60,39 @@ when the title is removed, so a lookup of a removed title misses. Three triggers
     --cli-binary-format raw-in-base64-out /dev/stdout
   ```
 
-- The CDN's default route serves the objects (`CatalogContextBaseUrl` output: `<CdnBaseUrl>/catalog/ctx/v1/`) and
-  keeps them for their `max-age` of 300 s, so a change reaches the lookups within about 5 minutes.
+- The CDN serves the objects on its `/catalog/ctx/*` route (`CatalogContextBaseUrl` output:
+  `<CdnBaseUrl>/catalog/ctx/v1/`) and keeps them for their `max-age` of 300 s, so a change reaches the lookups within
+  about 5 minutes.
 - `modules.crawl.publisher_domain` names your domain as the registry of your content ids (the first `cids` entry).
   Without it the objects carry the content id in `id` only.
 - A catalog item that breaks the contract is logged as an error and counted in the `ContextsInvalid` metric
   (namespace `FastChannels`), and its object is left as it was. A trigger that still fails after its retries goes to
   a dead-letter queue, whose alarm `<prefix>-crawl-publisher-dead-letters` notifies the alert topic.
 - The function can read the catalog and media library tables, and read, write, delete and list objects under
-  `catalog/ctx/v1/` in the media bucket. It has no access to the ingest bucket.
+  `catalog/ctx/v1/` in the catalog-context bucket (`CatalogContextBucketName` output). It has no access to the media
+  or the ingest bucket.
 - One run of the sweep handles roughly as many titles as fit in its 5-minute timeout at one `HEAD` per title. A
   catalog of tens of thousands of titles needs a sweep that is split into pages.
+
+## Serving and misses
+
+With the module on, the Media stack adds a bucket of its own for the context objects, and a CloudFront route,
+`/catalog/ctx/*`, ahead of the default route. The media bucket, its policy and every other route stay as they are.
+
+A lookup of a title that is not in the catalog must come back as **404**: MediaTailor's Function cache stores a 404
+(the miss is then served from the cache for 300 s, like a hit), but not a 403. S3 answers 404 for a missing key only
+to a requester that may list the bucket, so:
+
+- The bucket's policy lets this distribution, and only it (`AWS:SourceArn`), read `catalog/ctx/*` and list the
+  bucket. The bucket is otherwise private: Block Public Access, SSE-S3, bucket owner enforced, TLS 1.2 or later only.
+- The route forwards only what its cache key holds (`Managed-CachingOptimizedForUncompressedObjects`: no query string,
+  header or cookie), has no origin request policy, accepts GET and HEAD only, and its origin adds no path. Every
+  request S3 sees is therefore a `GetObject` (or `HeadObject`) of a key under `catalog/ctx/`: never the bucket root,
+  never a listing, whatever the viewer appends.
+- A viewer-response CloudFront Function cannot turn the media bucket's 403 into a 404: CloudFront does not run
+  viewer-response functions when the origin answers 400 or more.
+
+Other CDNs chained to CloudFront serve the route as the `PathContract` output describes it (origin `catalog`).
 
 ## Catalog fields
 

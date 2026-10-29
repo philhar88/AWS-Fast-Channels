@@ -18,7 +18,7 @@ from fast_channels.functions.crawl import publisher
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools.catalog import catalog_item
 
-CATALOG, LIBRARY, MEDIA = "catalog-test", "library-test", "media-test"
+CATALOG, LIBRARY, BUCKET = "catalog-test", "library-test", "catalog-contexts-test"
 PUBLISHER = "example.com"
 SINTEL = ContentItem(
     content_id="sintel",
@@ -58,7 +58,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("CATALOG_TABLE", CATALOG)
     monkeypatch.setenv("LIBRARY_TABLE", LIBRARY)
-    monkeypatch.setenv("MEDIA_BUCKET", MEDIA)
+    monkeypatch.setenv("CATALOG_CONTEXT_BUCKET", BUCKET)
     monkeypatch.setenv("PUBLISHER_DOMAIN", PUBLISHER)
     monkeypatch.setattr(publisher, "datetime", _Frozen)
     settings.cache_clear()
@@ -106,7 +106,7 @@ def expect_head(s3: Stubber, key: str, current: str | None, *, error: str = "404
     if current is None:
         s3.add_client_error("head_object", service_error_code=error, http_status_code=int(error))
     else:
-        s3.add_response("head_object", {"Metadata": {"digest": current}}, {"Bucket": MEDIA, "Key": key})
+        s3.add_response("head_object", {"Metadata": {"digest": current}}, {"Bucket": BUCKET, "Key": key})
 
 
 def built(item: ContentItem, domain: str | None = PUBLISHER) -> CatalogContext:
@@ -120,7 +120,7 @@ def digest_of(item: ContentItem, domain: str | None = PUBLISHER) -> str:
 def expect_put(s3: Stubber, item: ContentItem) -> None:
     """Queue the write of ``item``'s object, exactly as the publisher must make it."""
     expected = {
-        "Bucket": MEDIA,
+        "Bucket": BUCKET,
         "Key": f"catalog/ctx/v1/{item.content_id}.json",
         "Body": built(item).model_dump_json().encode(),
         "ContentType": "application/json",
@@ -154,7 +154,7 @@ def test_an_unchanged_title_is_not_rewritten(s3: Stubber, catalog: Stubber) -> N
 
 def test_a_title_that_left_the_catalog_loses_its_object(s3: Stubber, catalog: Stubber) -> None:
     expect_get(catalog, None, "gone")
-    s3.add_response("delete_object", {}, {"Bucket": MEDIA, "Key": "catalog/ctx/v1/gone.json"})
+    s3.add_response("delete_object", {}, {"Bucket": BUCKET, "Key": "catalog/ctx/v1/gone.json"})
     assert handle(changed_event("gone"))["deleted"] == 1
 
 
@@ -220,9 +220,9 @@ def test_the_sweep_publishes_the_catalog_and_removes_orphans(s3: Stubber, catalo
     s3.add_response(
         "list_objects_v2",
         {"Contents": [{"Key": f"catalog/ctx/v1/{k}.json"} for k in keys] + [{"Key": "catalog/ctx/v1/notes.txt"}]},
-        {"Bucket": MEDIA, "Prefix": "catalog/ctx/v1/"},
+        {"Bucket": BUCKET, "Prefix": "catalog/ctx/v1/"},
     )
-    s3.add_response("delete_object", {}, {"Bucket": MEDIA, "Key": "catalog/ctx/v1/removed.json"})
+    s3.add_response("delete_object", {}, {"Bucket": BUCKET, "Key": "catalog/ctx/v1/removed.json"})
     assert handle({"sweep": True}) == {"written": 1, "unchanged": 1, "deleted": 1, "invalid": 0}
 
 
