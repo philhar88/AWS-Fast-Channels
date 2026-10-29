@@ -28,9 +28,14 @@ One CDK `Stage` (`FastChannelsStage`) holds a deployment. Its id is `FastChannel
 | `…-Models` | Operator | The per-task model registry: per LLM task an application inference profile `<prefix>-<task>` and an SSM entry `/<prefix>/models/tasks/<task>`; the `<prefix>-models` spend-counter table | Only with `modules.models.enabled`, before Operator |
 | `…-Operator` | Operator | Cognito, agent tool Lambdas, AgentCore Gateway with its Cedar policy engine, AgentCore Runtime, autopilot, operator console | When `agent.enabled` (default) |
 | `…-Edge-<region>` | Media | CloudFront standard-logs-v2 delivery, CDN alert topic and 5xx alarm, in us-east-1 | Only when the deployment region is not us-east-1 (otherwise these live in Media); one per deployment region |
+| `…-DemandEdge` | Demand | The two origin secrets and the WAF rule group the Prebid Server guidance's web ACL references first, in us-east-1 ([demand.md](demand.md)) | Only with `modules.demand.enabled`; named `…-DemandEdge-<region>` outside us-east-1 |
+| `…-DemandBuild` | Demand | The Prebid Server image repository, its x86 CodeBuild project, and the CloudFormation execution policy of the guidance's dedicated CDK bootstrap | Only with `modules.demand.enabled` |
 | `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only with `observability.transaction_search: enable`. One per account and region, termination protected, retained |
 
-Dependencies run Data → Media → (Models →) Operator. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
+The demand module's Prebid Server is the AWS guidance, deployed as its own CDK app (`<prefix>-pbs`, and
+`<prefix>-pbs-sim` with the guidance's simulator) by `make deploy-demand`, never by `make deploy`.
+
+Dependencies run Data → Media → (Models →) Operator; DemandEdge and DemandBuild depend on nothing. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
 refactored without export locks, and they also cross regions for the Edge stack. Memory lives in the Data stack so
 that an Operator rollback can never get stuck on a Memory that is still `CREATING`.
 

@@ -21,14 +21,17 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+import boto3
 import stage_args
-from _stack import Plane, Stage
+from _demand import DemandError, DemandStage, iterate_tool_versions
+from _stack import Plane, StackError, Stage
 
 from fast_channels.core.pbs_config import PbsSettings, render, tracker_host
 
@@ -269,6 +272,90 @@ def render_config(args: argparse.Namespace) -> int:
     return 0
 
 
+STAGE_COMMANDS: Final = {
+    "doctor": "check the tools a demand deploy uses",
+    "bootstrap": "create or update the guidance's dedicated CDK bootstrap",
+    "build-image": "build the Prebid Server image on the stage's x86 CodeBuild project",
+    "deploy": "deploy the demand module: repository stacks, bootstrap, image, guidance, SSM contract, smoke",
+    "outputs": "write the SSM contract /<prefix>/demand/* from the deployed guidance",
+    "upload-config": "upload the rendered configuration and roll the tasks (full capacity throughout)",
+    "smoke": "synthetic MediaTailor POSTs through the guidance's CloudFront and WAF",
+    "destroy": "destroy the demand module, including what the guidance's templates retain",
+    "inventory": "list what is left of the stage's demand module",
+}
+
+
+def demand_stage(args: argparse.Namespace) -> DemandStage:
+    """The stage the command acts on."""
+    region = args.region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+    config = stage_config(args.stage, args.prefix, region)
+    if not config.modules.demand.enabled:
+        raise GuidanceError(f"stage {config.prefix}: modules.demand is off")
+    return DemandStage(config, args.stage, boto3.Session(region_name=region))
+
+
+def content_base_url(args: argparse.Namespace, prefix: str) -> str:
+    return args.content_base_url or Stage.of(prefix).output(Plane.MEDIA, "ContentBaseUrl")
+
+
+def stage_command(args: argparse.Namespace, pin: Pin) -> int:
+    """Run one of :data:`STAGE_COMMANDS`."""
+    if args.command == "doctor":
+        tools = list(iterate_tool_versions())
+        for name, version in tools:
+            print(f"{name:16} {version}")
+        return 1 if any(version.startswith("MISSING") for _, version in tools) else 0
+    stage = demand_stage(args)
+    started = time.monotonic()
+    match args.command:
+        case "bootstrap":
+            stage.bootstrap()
+        case "build-image":
+            apply(pin, stage.checkout)
+            print(stage.build_image(pin))
+        case "deploy":
+            base = content_base_url(args, stage.prefix)
+            stage.deploy_repository_stacks()
+            stage.bootstrap()
+            apply(pin, stage.checkout)
+            image = stage.build_image(pin)
+            stage.render_into_checkout(base)
+            stage.deploy_guidance(image)
+            stage.write_parameters(stage.discover(image))
+            if not args.no_smoke:
+                return report_smoke(stage)
+        case "outputs":
+            stage.write_parameters(stage.discover())
+        case "upload-config":
+            stage.upload_config(content_base_url(args, stage.prefix))
+        case "smoke":
+            return report_smoke(stage)
+        case "destroy":
+            stage.destroy()
+            return report_inventory(stage)
+        case "inventory":
+            return report_inventory(stage)
+    print(f"{args.command} done in {round(time.monotonic() - started)} s")
+    return 0
+
+
+def report_smoke(stage: DemandStage) -> int:
+    results = stage.smoke()
+    print(json.dumps(results, indent=2))
+    return 0 if results["passed"] else 1
+
+
+def report_inventory(stage: DemandStage) -> int:
+    residue = stage.inventory()
+    for item in residue:
+        print(f"residue: {item}")
+    print(
+        f"{len(residue)} resources of stage {stage.prefix}'s demand module remain (KMS keys pending deletion "
+        "are not counted)"
+    )
+    return 1 if residue else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -282,11 +369,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--dir", type=Path, default=DEFAULT_CHECKOUT, help=f"checkout (default {DEFAULT_CHECKOUT})"
         )
     rendering = commands.add_parser("render-config", help="render a stage's Prebid Server configuration")
-    rendering.add_argument("--stage", help="a stage (stages/<name>.json); default: cdk.json alone")
-    rendering.add_argument("--prefix", help="deployment prefix (replaces the stage's)")
-    rendering.add_argument("--region", help="deployment region (default: AWS_REGION, else us-east-1)")
-    rendering.add_argument("--content-base-url", help="the stage's ContentBaseUrl (default: its Media stack output)")
+    for command in [rendering, *(commands.add_parser(name, help=text) for name, text in STAGE_COMMANDS.items())]:
+        command.add_argument("--stage", help="a stage (stages/<name>.json); default: cdk.json alone")
+        command.add_argument("--prefix", help="deployment prefix (replaces the stage's)")
+        command.add_argument("--region", help="deployment region (default: AWS_REGION, else us-east-1)")
+        command.add_argument("--content-base-url", help="the stage's ContentBaseUrl (default: its Media stack output)")
     rendering.add_argument("--out", type=Path, help="output directory (default build/prebid-guidance/<prefix>-config)")
+    commands.choices["deploy"].add_argument("--no-smoke", action="store_true", help="skip the synthetic POSTs")
     args = parser.parse_args(argv)
     try:
         pin = Pin.load()
@@ -303,7 +392,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"{args.dir}: {pin.tag} at {pin.commit} with overlays {', '.join(applied)}")
             case "render-config":
                 return render_config(args)
-    except (GuidanceError, stage_args.StageError) as error:
+            case _:
+                return stage_command(args, pin)
+    except (GuidanceError, DemandError, StackError, stage_args.StageError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0

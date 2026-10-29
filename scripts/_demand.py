@@ -1,0 +1,879 @@
+"""Deploy and destroy a stage's demand module: the repository's DemandEdge and DemandBuild stacks, the guidance's
+dedicated CDK bootstrap, the Prebid Server image, the guidance's stacks and the SSM contract (docs/demand.md).
+
+Used by ``scripts/prebid_guidance.py`` (``doctor``, ``bootstrap``, ``build-image``, ``deploy``, ``outputs``,
+``upload-config``, ``smoke``, ``destroy``, ``inventory``). Deploy order (DESIGN §4.3): DemandEdge and DemandBuild →
+bootstrap → image → guidance (simulator stack first in ``guidance_stack`` mode) → SSM parameters. Destroy runs it
+backwards and also removes what the guidance's templates retain: its S3 buckets (every version), log groups,
+inactive task definitions; its KMS keys are scheduled for deletion with the 7-day minimum, the only residue.
+"""
+
+import hashlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import tomllib
+import zipfile
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import suppress
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from functools import cached_property
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import stage_args
+from botocore.exceptions import ClientError
+
+from fast_channels.core import demand as names
+from fast_channels.core.demand import Parameter
+from fast_channels.core.pbs_config import POD_SECONDS, render, simulator_host
+
+if TYPE_CHECKING:
+    import boto3
+
+    from fast_channels.infra.config import FastChannelsConfig
+
+REPO: Final = Path(__file__).resolve().parents[1]
+VENDOR: Final = REPO / "vendor" / "prebid-guidance"
+BUILD: Final = REPO / "build" / "prebid-guidance"
+VENV: Final = BUILD / ".venv"
+CDK: Final = REPO / "node_modules" / ".bin" / "cdk"
+GUIDANCE_PYTHON: Final = "3.11"
+"""The guidance's Lambda runtime; its local bundling installs packages with the deploying interpreter's pip."""
+GUIDANCE_STACK_ID: Final = "prebid-server-deployment-on-aws"
+SIMULATOR_STACK_ID: Final = "BiddingServerSimulator"
+CONFIG_ROOT: Final = Path("deployment/ecr/prebid-server")
+KMS_PENDING_DAYS: Final = 7
+EC2_DESCRIBE: Final = {
+    "subnet": ("describe_subnets", "SubnetIds"),
+    "vpc": ("describe_vpcs", "VpcIds"),
+    "vpc-endpoint": ("describe_vpc_endpoints", "VpcEndpointIds"),
+    "security-group": ("describe_security_groups", "GroupIds"),
+    "route-table": ("describe_route_tables", "RouteTableIds"),
+    "internet-gateway": ("describe_internet_gateways", "InternetGatewayIds"),
+    "elastic-ip": ("describe_addresses", "AllocationIds"),
+    "network-acl": ("describe_network_acls", "NetworkAclIds"),
+}
+"""EC2 resource types the tagging index keeps listing for a while after they are deleted: the describe call (which
+fails with ``*.NotFound``, or returns nothing) that tells."""
+TAGS: Final = {"fast:owner": "iac", names.MODULE_TAG: names.MODULE}
+"""Tags of everything the demand module deploys, besides ``fast:app``."""
+_LOCK_GROUPS: Final = {"main", "local", "dev"}
+"""poetry.lock groups the guidance's ``poetry install`` installs; its CDK helpers import cdk-nag (dev)."""
+
+
+class DemandError(RuntimeError):
+    """A deploy, destroy or check step failed."""
+
+
+def log(message: str) -> None:
+    print(f"[demand] {message}", flush=True)
+
+
+def run(
+    argv: Sequence[str | Path], *, cwd: Path = REPO, env: Mapping[str, str] | None = None, stream: bool = False
+) -> str:
+    """Run a tool and return its standard output; with ``stream``, print its output as it comes (long deploys).
+    Raise DemandError with the tail of its output on failure."""
+    command = [str(arg) for arg in argv]
+    if not stream:
+        result = subprocess.run(  # noqa: S603 - argv built here, no shell
+            command, cwd=cwd, env=dict(env) if env else None, capture_output=True, text=True, check=False
+        )
+        output, code = result.stdout + result.stderr, result.returncode
+    else:
+        lines: list[str] = []
+        with subprocess.Popen(  # noqa: S603 - argv built here, no shell
+            command,
+            cwd=cwd,
+            env=dict(env) if env else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ) as process:
+            assert process.stdout is not None
+            for line in process.stdout:
+                print(f"  {line}", end="", flush=True)
+                lines.append(line)
+        output, code = "".join(lines), process.returncode
+        result = subprocess.CompletedProcess(command, code, output, "")
+    if code != 0:
+        tail = "\n".join(output.splitlines()[-60:])
+        raise DemandError(f"{Path(command[0]).name} {' '.join(command[1:4])} … failed:\n{tail}")
+    return str(result.stdout)
+
+
+def lock_requirements(lock: Path) -> tuple[list[str], list[str]]:
+    """Hashed requirement lines for the guidance's ``poetry.lock`` (main, local and dev groups, markers kept), and
+    the paths of its local packages."""
+    requirements, local = [], []
+    for package in tomllib.loads(lock.read_text())["package"]:
+        groups = set(package.get("groups", []))
+        if not groups & _LOCK_GROUPS:
+            continue
+        source = package.get("source", {})
+        if source.get("type") == "directory":
+            local.append(source["url"])
+            continue
+        markers = package.get("markers")
+        if isinstance(markers, dict):
+            markers = " or ".join(f"({markers[g]})" for g in sorted(_LOCK_GROUPS & set(markers))) or None
+        hashes = " ".join(f"--hash={entry['hash']}" for entry in package["files"])
+        requirements.append(f"{package['name']}=={package['version']}{f' ; {markers}' if markers else ''} {hashes}")
+    return requirements, local
+
+
+def context_digest(root: Path) -> str:
+    """Content hash of a build context (paths and bytes), the image tag: equal contexts build equal images."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()[:16]
+
+
+def zip_directory(root: Path) -> bytes:
+    """``root`` as a zip with fixed timestamps and modes (deterministic)."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(p for p in root.rglob("*") if p.is_file()):
+            info = zipfile.ZipInfo(str(path.relative_to(root)), date_time=(2020, 1, 1, 0, 0, 0))
+            info.external_attr = (0o755 if os.access(path, os.X_OK) else 0o644) << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, path.read_bytes())
+    return buffer.getvalue()
+
+
+def console_bucket(url: str) -> str:
+    """The bucket of an S3 console URL output (``...?region=<r>&bucket=<name>``)."""
+    return parse_qs(urlsplit(url).query)["bucket"][0]
+
+
+def empty_bucket(s3: Any, bucket: str) -> int:
+    """Delete every object version and delete marker of ``bucket``; returns how many."""
+    deleted = 0
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket):
+        keys = [
+            {"Key": item["Key"], "VersionId": item["VersionId"]}
+            for item in [*page.get("Versions", []), *page.get("DeleteMarkers", [])]
+        ]
+        for start in range(0, len(keys), 1000):
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": keys[start : start + 1000], "Quiet": True})
+        deleted += len(keys)
+    return deleted
+
+
+def smoke_passed(results: Mapping[str, Mapping[str, Any]]) -> bool:
+    """Every grid duration answered 200 with a VAST 4.2 document as XML; the POST without the origin secret and the
+    request to another path were blocked at the edge (403); the off-grid duration was refused (400)."""
+    pods = [result for key, result in results.items() if key.removesuffix("s").isdigit()]
+    return (
+        len(pods) == len(POD_SECONDS)
+        and all(
+            r["status"] == 200 and str(r["content_type"]).startswith("application/xml") and r["vast_4_2"] for r in pods
+        )
+        and results["no-secret"]["status"] == 403
+        and results["off-grid-31s"]["status"] == 400
+        and results["other-path"]["status"] == 403
+    )
+
+
+@dataclass
+class Retained:
+    """What the guidance's templates leave behind when their stacks are deleted."""
+
+    buckets: list[str] = field(default_factory=list)
+    log_groups: list[str] = field(default_factory=list)
+    keys: list[str] = field(default_factory=list)
+    task_definitions: list[str] = field(default_factory=list)
+
+    def merge(self, other: Retained) -> Retained:
+        return Retained(
+            sorted({*self.buckets, *other.buckets}),
+            sorted({*self.log_groups, *other.log_groups}),
+            sorted({*self.keys, *other.keys}),
+            sorted({*self.task_definitions, *other.task_definitions}),
+        )
+
+
+def retained_resources(resources: Sequence[Mapping[str, Any]], cluster: str | None) -> Retained:
+    """The resources of a guidance stack that outlive it (``list_stack_resources`` rows): buckets, log groups,
+    keys and task definitions, plus the log groups Lambda and Container Insights create on their own."""
+    found = Retained()
+    for resource in resources:
+        physical = resource.get("PhysicalResourceId")
+        if not physical:
+            continue
+        match resource["ResourceType"]:
+            case "AWS::S3::Bucket":
+                found.buckets.append(physical)
+            case "AWS::Logs::LogGroup":
+                found.log_groups.append(physical)
+            case "AWS::Lambda::Function":
+                found.log_groups.append(f"/aws/lambda/{physical}")
+            case "AWS::KMS::Key":
+                found.keys.append(physical)
+            case "AWS::ECS::TaskDefinition":
+                found.task_definitions.append(physical)
+    if cluster:
+        found.log_groups.append(f"/aws/ecs/containerinsights/{cluster}/performance")
+    return found
+
+
+@dataclass
+class DemandStage:
+    """One stage's demand module in one account and region."""
+
+    config: FastChannelsConfig
+    stage: str | None
+    """The stage file (``stages/<stage>.json``) the repository's stacks are synthesized with, if any."""
+    session: boto3.Session
+    _clients: dict[tuple[str, str], Any] = field(default_factory=dict, init=False, repr=False)
+
+    @property
+    def prefix(self) -> str:
+        return self.config.prefix
+
+    @cached_property
+    def account(self) -> str:
+        account: str = self.session.client("sts").get_caller_identity()["Account"]
+        return account
+
+    @property
+    def region(self) -> str:
+        if not (region := self.session.region_name):
+            raise DemandError("no AWS region configured: set AWS_REGION")
+        return region
+
+    @property
+    def checkout(self) -> Path:
+        """The stage's own guidance checkout (rendered configuration included)."""
+        return BUILD / self.prefix
+
+    def client(self, service: str, region: str | None = None) -> Any:
+        """One client per service and region (tests stub them)."""
+        key = (service, region or self.region)
+        if key not in self._clients:
+            self._clients[key] = self.session.client(service, region_name=key[1])  # type: ignore[call-overload]
+        return self._clients[key]
+
+    # ----- the repository's stacks -----------------------------------------------------------------------------
+
+    def repository_context(self) -> list[str]:
+        """CDK CLI context arguments for the repository's app: the stage file under this prefix."""
+        if self.stage:
+            return stage_args.arguments(stage_args.with_prefix(stage_args.load(self.stage), self.prefix))
+        return ["-c", f"fast-channels.prefix={self.prefix}"]
+
+    @property
+    def stage_id(self) -> str:
+        return "FastChannels" if self.prefix == "fast" else f"FastChannels-{self.prefix}"
+
+    def repository_stacks(self) -> list[str]:
+        return [f"{self.stage_id}/DemandEdge", f"{self.stage_id}/DemandBuild"]
+
+    def deploy_repository_stacks(self) -> None:
+        log(f"deploying {', '.join(self.repository_stacks())}")
+        run(
+            [
+                CDK,
+                "deploy",
+                *self.repository_stacks(),
+                "--exclusively",
+                "--require-approval",
+                "never",
+                *self.repository_context(),
+            ],
+            env=self.cdk_environment(),
+            stream=True,
+        )
+
+    def destroy_repository_stacks(self) -> None:
+        log(f"destroying {', '.join(self.repository_stacks())}")
+        run(
+            [CDK, "destroy", *self.repository_stacks(), "--exclusively", "--force", *self.repository_context()],
+            env=self.cdk_environment(),
+            stream=True,
+        )
+
+    def stack_outputs(self, name: str, region: str | None = None) -> dict[str, str]:
+        try:
+            [stack] = self.client("cloudformation", region).describe_stacks(StackName=name)["Stacks"]
+        except ClientError as error:
+            raise DemandError(f"stack {name} does not exist: deploy it first ({error})") from None
+        return {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
+
+    @property
+    def edge_stack(self) -> str:
+        return f"{self.stage_id}-DemandEdge" + ("" if self.region == "us-east-1" else f"-{self.region}")
+
+    @property
+    def build_stack(self) -> str:
+        return f"{self.stage_id}-DemandBuild"
+
+    def cdk_environment(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
+        return {
+            **os.environ,
+            "JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION": "1",
+            "AWS_REGION": self.region,
+            **(extra or {}),
+        }
+
+    # ----- the guidance's toolchain and bootstrap ---------------------------------------------------------------
+
+    def toolchain(self) -> Path:
+        """The guidance's Python environment (its pinned ``poetry.lock``, hashes required), once per lock."""
+        lock = self.checkout / "source" / "poetry.lock"
+        stamp = VENV / ".fast-lock"
+        digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+        if stamp.is_file() and stamp.read_text() == digest:
+            return VENV
+        log(f"creating the guidance's Python {GUIDANCE_PYTHON} environment from its poetry.lock")
+        shutil.rmtree(VENV, ignore_errors=True)
+        run(["uv", "venv", "--quiet", "--seed", "--python", GUIDANCE_PYTHON, VENV])
+        requirements, local = lock_requirements(lock)
+        requirements_file = BUILD / "guidance-requirements.txt"
+        requirements_file.write_text("\n".join(requirements) + "\n")
+        environment = {**os.environ, "VIRTUAL_ENV": str(VENV)}
+        run(["uv", "pip", "install", "--quiet", "--require-hashes", "-r", requirements_file], env=environment)
+        helpers = [self.checkout / "source" / path for path in local if path.startswith("cdk_solution_helper_py")]
+        run(["uv", "pip", "install", "--quiet", "--no-deps", *helpers], env=environment)
+        stamp.write_text(digest)
+        return VENV
+
+    def bootstrap(self) -> None:
+        """The guidance's dedicated CDK bootstrap: qualifier = prefix, prefixed bucket and repository, our
+        execution policy, the AWS managed S3 key (no key of its own to wait out on teardown)."""
+        policy = self.stack_outputs(self.build_stack)["GuidanceExecutionPolicyArn"]
+        template = run([CDK, "bootstrap", "--show-template"], env=self.cdk_environment())
+        parameters = {
+            "Qualifier": names.bootstrap_qualifier(self.prefix),
+            "FileAssetsBucketName": names.assets_bucket(self.prefix, self.account, self.region),
+            "ContainerAssetsRepositoryName": names.images_repository(self.prefix, self.account, self.region),
+            "CloudFormationExecutionPolicies": policy,
+            "FileAssetsBucketKmsKeyId": "AWS_MANAGED_KEY",
+            "PublicAccessBlockConfiguration": "true",
+            "TrustedAccounts": "",
+            "TrustedAccountsForLookup": "",
+        }
+        self.apply_stack(names.toolkit_stack(self.prefix), template, parameters)
+
+    def apply_stack(self, name: str, template: str, parameters: Mapping[str, str]) -> None:
+        """Create or update a stack from a template body and wait."""
+        cloudformation = self.client("cloudformation")
+        request = {
+            "StackName": name,
+            "TemplateBody": template,
+            "Parameters": [{"ParameterKey": k, "ParameterValue": v} for k, v in parameters.items()],
+            "Capabilities": ["CAPABILITY_NAMED_IAM"],
+            "Tags": [{"Key": k, "Value": v} for k, v in self.tags().items()],
+        }
+        try:
+            cloudformation.describe_stacks(StackName=name)
+            exists = True
+        except ClientError:
+            exists = False
+        log(f"{'updating' if exists else 'creating'} {name}")
+        try:
+            if exists:
+                cloudformation.update_stack(**request)
+            else:
+                cloudformation.create_stack(**request, OnFailure="DELETE")
+        except ClientError as error:
+            if "No updates are to be performed" in str(error):
+                return
+            raise
+        waiter = cloudformation.get_waiter("stack_update_complete" if exists else "stack_create_complete")
+        waiter.wait(StackName=name, WaiterConfig={"Delay": 10, "MaxAttempts": 180})
+
+    def tags(self) -> dict[str, str]:
+        return {"fast:app": self.prefix, **TAGS}
+
+    # ----- the image ---------------------------------------------------------------------------------------------
+
+    def build_context(self, out: Path) -> Path:
+        """The guidance's Docker build context with its ``amt-bidder`` sources (overlays and module included), and
+        our build script, under ``out``."""
+        shutil.rmtree(out, ignore_errors=True)
+        shutil.copytree(self.checkout / CONFIG_ROOT, out / "context")
+        shutil.rmtree(out / "context" / "amt-bidder")
+        shutil.copytree(self.checkout / "source" / "loadtest" / "amt-bidder", out / "context" / "amt-bidder")
+        shutil.copy2(VENDOR / "build-image.sh", out / "build-image.sh")
+        return out
+
+    def build_image(self, pin: Any) -> str:
+        """Build the Prebid Server image on the stage's x86 CodeBuild project (skipped when the repository already
+        has the context's tag); returns the image URI."""
+        outputs = self.stack_outputs(self.build_stack)
+        repository_uri, project = outputs["ImageRepositoryUri"], outputs["ImageBuildProject"]
+        config = json.loads((self.checkout / CONFIG_ROOT / "docker-build-config.json").read_text())
+        version = config["GIT_TAG_VERSION"]
+        if version not in pin.pbs_java_commits:
+            raise DemandError(f"PIN.toml [pbs_java.commits] has no commit for Prebid Server Java {version}")
+        context = self.build_context(BUILD / f"{self.prefix}-image")
+        tag = f"{version}-{context_digest(context)}"
+        image = f"{repository_uri}:{tag}"
+        ecr = self.client("ecr")
+        try:
+            ecr.describe_images(repositoryName=names.image_repository(self.prefix), imageIds=[{"imageTag": tag}])
+            log(f"image {image} exists")
+            return image
+        except ClientError as error:
+            if error.response["Error"]["Code"] != "ImageNotFoundException":
+                raise
+        bucket = names.assets_bucket(self.prefix, self.account, self.region)
+        key = f"{names.IMAGE_SOURCE_PREFIX}context-{tag}.zip"
+        self.client("s3").put_object(Bucket=bucket, Key=key, Body=zip_directory(context))
+        codebuild = self.client("codebuild")
+        build = codebuild.start_build(
+            projectName=project,
+            sourceTypeOverride="S3",
+            sourceLocationOverride=f"{bucket}/{key}",
+            environmentVariablesOverride=[
+                {"name": "IMAGE_TAG", "value": tag, "type": "PLAINTEXT"},
+                {"name": "PBS_JAVA_REPOSITORY", "value": config["GIT_REPO_URL"], "type": "PLAINTEXT"},
+                {"name": "PBS_JAVA_TAG", "value": version, "type": "PLAINTEXT"},
+                {"name": "PBS_JAVA_COMMIT", "value": pin.pbs_java_commits[version], "type": "PLAINTEXT"},
+            ],
+        )["build"]
+        log(f"building {image} ({build['id']})")
+        while True:
+            time.sleep(20)
+            [state] = codebuild.batch_get_builds(ids=[build["id"]])["builds"]
+            if state["buildStatus"] != "IN_PROGRESS":
+                break
+        if state["buildStatus"] != "SUCCEEDED":
+            raise DemandError(
+                f"image build {build['id']} {state['buildStatus']}: {state.get('logs', {}).get('deepLink')}"
+            )
+        log(f"built {image} in {round((state['endTime'] - state['startTime']).total_seconds())} s")
+        return image
+
+    # ----- the guidance --------------------------------------------------------------------------------------------
+
+    def guidance_parameters(self, stack: str, values: Mapping[str, str]) -> list[str]:
+        """``--parameters <stack name>:<key>=<value>``: CDK keys stack parameters by the stack's name."""
+        return [arg for key, value in values.items() for arg in ("--parameters", f"{stack}:{key}={value}")]
+
+    def guidance_command(self, *stacks: str, simulator: bool, extra: Sequence[str] = ()) -> list[str | Path]:
+        venv = self.toolchain()
+        return [
+            CDK,
+            "deploy",
+            *stacks,
+            "--app",
+            f"{venv / 'bin' / 'python'} app.py",
+            "--require-approval",
+            "never",
+            "-c",
+            f"stackPrefix={self.prefix}",
+            "-c",
+            f"bootstrapQualifier={names.bootstrap_qualifier(self.prefix)}",
+            "-c",
+            f"fileAssetsBucketName={names.assets_bucket(self.prefix, self.account, self.region)}",
+            "-c",
+            f"imageAssetsRepositoryName={names.images_repository(self.prefix, self.account, self.region)}",
+            "-c",
+            f"deployBiddingSimulator={'true' if simulator else 'false'}",
+            *(arg for key, value in self.tags().items() for arg in ("--tags", f"{key}={value}")),
+            *extra,
+        ]
+
+    def guidance_environment(self, image: str) -> dict[str, str]:
+        venv = self.toolchain()
+        return self.cdk_environment(
+            {"OVERRIDE_ECR_REGISTRY": image, "PATH": f"{venv / 'bin'}:{os.environ['PATH']}", "VIRTUAL_ENV": str(venv)}
+        )
+
+    def render_into_checkout(self, content_base_url: str) -> None:
+        """The stage's Prebid Server configuration into the checkout, which the guidance uploads (overlay O3)."""
+        from prebid_guidance import pbs_settings  # noqa: PLC0415 - the CLI module imports this one
+
+        for rel, content in render(pbs_settings(self.config, content_base_url)).items():
+            path = self.checkout / CONFIG_ROOT / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        demo = self.checkout / "source" / "loadtest" / "demo" / "dist"
+        if not demo.is_dir():  # the simulator stack serves a demo page we never use; it must exist to synthesize
+            demo.mkdir(parents=True)
+            (demo / "index.html").write_text("<!doctype html><title>FAST Channels demand</title>\n")
+
+    def simulator_endpoint(self, image: str) -> dict[str, str]:
+        """The PBS stack's simulator parameters for the configured mode."""
+        demand = self.config.modules.demand
+        if demand.mode != "demo":
+            return {}
+        if demand.simulator == "lambda":
+            # The simulator Lambda behind an internal load balancer in the PBS VPC, named in the stage's private
+            # zone (the Demand stack). Prebid Server resolves it per request, so it may come up after the guidance.
+            return {"SimulatorEndpoint": f"http://{simulator_host(self.prefix)}/"}
+        sim = names.simulator_stack(self.prefix)
+        run(
+            self.guidance_command(
+                SIMULATOR_STACK_ID, simulator=True, extra=self.guidance_parameters(sim, {"EnableRtbFabric": "false"})
+            ),
+            cwd=self.checkout / "source" / "infrastructure",
+            env=self.guidance_environment(image),
+            stream=True,
+        )
+        outputs = self.stack_outputs(sim)
+        return {
+            "SimulatorVpcId": outputs["BidderSimulatorVpcId"],
+            "SimulatorAlbSgId": outputs["BidderSimulatorAlbSecurityGroupId"],
+            "SimulatorRouteTableId1": outputs["BidderSimulatorRouteTableId1"],
+            "SimulatorRouteTableId2": outputs["BidderSimulatorRouteTableId2"],
+            "SimulatorEndpoint": outputs["BidderSimulatorAlbEndpoint"],
+        }
+
+    def deploy_guidance(self, image: str) -> None:
+        demand = self.config.modules.demand
+        rule_group = self.stack_outputs(self.edge_stack, "us-east-1")["OriginRuleGroupArn"]
+        simulator = demand.mode == "demo" and demand.simulator == "guidance_stack"
+        values = {
+            "SpotInstanceWeight": "0",
+            "ECSTaskMinCapacity": str(demand.tasks.min),
+            "ECSTaskMaxCapacity": str(demand.tasks.max),
+            "EnableLogAnalytics": "false",
+            "ExtraWafRuleGroupArn": rule_group,
+            **self.simulator_endpoint(image),
+        }
+        stack = names.guidance_stack(self.prefix)
+        log(f"deploying {stack} with {image}")
+        run(
+            self.guidance_command(
+                GUIDANCE_STACK_ID, simulator=simulator, extra=self.guidance_parameters(stack, values)
+            ),
+            cwd=self.checkout / "source" / "infrastructure",
+            env=self.guidance_environment(image),
+            stream=True,
+        )
+
+    # ----- outputs and configuration -------------------------------------------------------------------------------
+
+    def discover(self, image: str | None = None) -> dict[Parameter, str]:
+        """The SSM contract, read from the deployed guidance."""
+        stack = names.guidance_stack(self.prefix)
+        outputs = self.stack_outputs(stack)
+        cluster, service = outputs["EcsClusterName"], outputs["EcsServiceName"]
+        ecs = self.client("ecs")
+        [described] = ecs.describe_services(cluster=cluster, services=[service])["services"]
+        network = described["networkConfiguration"]["awsvpcConfiguration"]
+        ec2 = self.client("ec2")
+        [subnet] = ec2.describe_subnets(SubnetIds=network["subnets"][:1])["Subnets"]
+        elb = self.client("elbv2")
+        [group] = elb.describe_target_groups(TargetGroupArns=[described["loadBalancers"][0]["targetGroupArn"]])[
+            "TargetGroups"
+        ]
+        domain = outputs["PrebidCloudFrontDistributionEndpoint"]
+        cloudfront = self.client("cloudfront", "us-east-1")
+        distributions = cloudfront.list_distributions()["DistributionList"].get("Items", [])
+        [distribution] = [d for d in distributions if d["DomainName"] == domain]
+        config_output = next(v for k, v in outputs.items() if k.startswith("ContainerImagePrebidSolutionConfig"))
+        settings = console_bucket(config_output)
+        stored = console_bucket(outputs["PrebidStoredRequestsBucket"])
+        [running] = [d for d in described["deployments"] if d["status"] == "PRIMARY"]
+        definition = ecs.describe_task_definition(taskDefinition=running["taskDefinition"])["taskDefinition"]
+        pin = json.loads((self.checkout / ".fast-overlays.json").read_text())
+        return {
+            Parameter.CLOUDFRONT_DOMAIN: domain,
+            Parameter.SETTINGS_BUCKET: settings,
+            Parameter.STORED_REQUESTS_BUCKET: stored,
+            Parameter.CLUSTER_ARN: described["clusterArn"],
+            Parameter.SERVICE_ARN: described["serviceArn"],
+            Parameter.TASK_SECURITY_GROUP: network["securityGroups"][0],
+            Parameter.VPC_ID: subnet["VpcId"],
+            Parameter.PRIVATE_SUBNET_IDS: ",".join(network["subnets"]),
+            Parameter.ALB_ARN: group["LoadBalancerArns"][0],
+            Parameter.WEB_ACL_ARN: distribution["WebACLId"],
+            Parameter.IMAGE_URI: image or definition["containerDefinitions"][0]["image"],
+            Parameter.GUIDANCE: f"{pin['tag']}@{pin['commit']}",
+        }
+
+    def write_parameters(self, values: Mapping[Parameter, str]) -> None:
+        ssm = self.client("ssm")
+        for parameter, value in values.items():
+            ssm.put_parameter(
+                Name=names.parameter_path(self.prefix, parameter), Value=value, Type="String", Overwrite=True
+            )
+            ssm.add_tags_to_resource(
+                ResourceType="Parameter",
+                ResourceId=names.parameter_path(self.prefix, parameter),
+                Tags=[{"Key": k, "Value": v} for k, v in self.tags().items()],
+            )
+        log(f"wrote {len(values)} parameters under {names.parameter_path(self.prefix)}")
+
+    def parameters(self) -> dict[str, str]:
+        ssm = self.client("ssm")
+        found: dict[str, str] = {}
+        for page in ssm.get_paginator("get_parameters_by_path").paginate(Path=names.parameter_path(self.prefix)):
+            found |= {p["Name"].rsplit("/", 1)[1]: p["Value"] for p in page["Parameters"]}
+        return found
+
+    def upload_config(self, content_base_url: str) -> None:
+        """Upload the rendered configuration (``current/`` and the stored data) and force a new deployment, which
+        overlay O7 keeps at full capacity."""
+        from prebid_guidance import pbs_settings  # noqa: PLC0415
+
+        values = self.parameters()
+        s3 = self.client("s3")
+        for rel, content in render(pbs_settings(self.config, content_base_url)).items():
+            if rel.startswith("current-config/"):
+                bucket, key = values[Parameter.SETTINGS_BUCKET], f"prebid-server/current/{rel.split('/', 1)[1]}"
+            else:
+                bucket, key = values[Parameter.STORED_REQUESTS_BUCKET], rel
+            s3.put_object(Bucket=bucket, Key=key, Body=content.encode())
+        ecs = self.client("ecs")
+        cluster, service = values[Parameter.CLUSTER_ARN], values[Parameter.SERVICE_ARN]
+        ecs.update_service(cluster=cluster, service=service, forceNewDeployment=True)
+        log("configuration uploaded; waiting for the new deployment")
+        ecs.get_waiter("services_stable").wait(
+            cluster=cluster, services=[service], WaiterConfig={"Delay": 15, "MaxAttempts": 80}
+        )
+
+    # ----- smoke ---------------------------------------------------------------------------------------------------
+
+    def origin_secret(self, slot: str = "a") -> str:
+        secrets = self.client("secretsmanager", "us-east-1")
+        value: str = secrets.get_secret_value(SecretId=names.origin_secret(self.prefix, slot))["SecretString"]
+        return value
+
+    def smoke(self) -> dict[str, Any]:
+        """A synthetic MediaTailor POST per grid duration (VAST 4.2, ``application/xml``), one without the origin
+        secret (blocked at the edge), one for an off-grid duration (400) and one for another path (blocked)."""
+        domain = self.parameters()[Parameter.CLOUDFRONT_DOMAIN]
+        secret = self.origin_secret()
+        results: dict[str, Any] = {}
+        with httpx.Client(timeout=10) as http:
+
+            def post(seconds: int, headers: Mapping[str, str]) -> httpx.Response:
+                body = {"ext": {"prebid": {"storedrequest": {"id": f"fast-pod-{seconds}s"}}}}
+                query = f"evid=1&upid=smoke&dur={seconds * 1001}"
+                sent = {
+                    "Content-Type": "application/json",
+                    "X-Fast-Sid": f"smoke-{seconds}",
+                    "X-Fast-Probe": "1",
+                    "X-Fast-Pc": f"{self.prefix}-smoke",
+                    **headers,
+                }
+                return http.post(f"https://{domain}/openrtb2/auction?{query}", json=body, headers=sent)
+
+            for seconds in POD_SECONDS:
+                response = post(seconds, {"X-Fast-Origin": secret})
+                results[f"{seconds}s"] = {
+                    "status": response.status_code,
+                    "content_type": response.headers.get("content-type", ""),
+                    "vast_4_2": response.text.startswith('<VAST version="4.2"'),
+                }
+            results["no-secret"] = {"status": post(60, {}).status_code}
+            results["off-grid-31s"] = {"status": post(31, {"X-Fast-Origin": secret}).status_code}
+            results["other-path"] = {"status": http.get(f"https://{domain}/info/bidders").status_code}
+        results["passed"] = smoke_passed(results)
+        return results
+
+    # ----- destroy and inventory -----------------------------------------------------------------------------------
+
+    def retained(self) -> Retained:
+        found = Retained()
+        cloudformation = self.client("cloudformation")
+        for stack in (names.guidance_stack(self.prefix), names.simulator_stack(self.prefix)):
+            try:
+                # ListStackResources pages; DescribeStackResources stops at 100 of the guidance's ~350 resources
+                resources = [
+                    row
+                    for page in cloudformation.get_paginator("list_stack_resources").paginate(StackName=stack)
+                    for row in page["StackResourceSummaries"]
+                ]
+            except ClientError:
+                continue
+            outputs = self.stack_outputs(stack)
+            found = found.merge(retained_resources(resources, outputs.get("EcsClusterName")))
+        return found
+
+    def destroy(self) -> None:
+        """Every guidance stack, what its templates retain, the SSM contract, the bootstrap and the repository's
+        stacks, in that order; KMS keys go to their 7-day deletion window."""
+        record = BUILD / f"{self.prefix}-retained.json"
+        known = Retained(**json.loads(record.read_text())) if record.is_file() else Retained()
+        retained = known.merge(self.retained())
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps(retained.__dict__, indent=2))
+        cloudformation = self.client("cloudformation")
+        for stack in (names.guidance_stack(self.prefix), names.simulator_stack(self.prefix)):
+            self.delete_stack(cloudformation, stack)
+        self.remove_retained(retained)
+        self.delete_parameters()
+        self.destroy_bootstrap()
+        self.destroy_repository_stacks()
+        record.unlink(missing_ok=True)
+
+    def delete_stack(self, cloudformation: Any, stack: str) -> None:
+        try:
+            cloudformation.describe_stacks(StackName=stack)
+        except ClientError:
+            return
+        log(f"deleting {stack}")
+        cloudformation.delete_stack(StackName=stack)
+        cloudformation.get_waiter("stack_delete_complete").wait(
+            StackName=stack, WaiterConfig={"Delay": 20, "MaxAttempts": 270}
+        )
+
+    def remove_retained(self, retained: Retained) -> None:
+        s3, logs, kms, ecs = self.client("s3"), self.client("logs"), self.client("kms"), self.client("ecs")
+        for bucket in retained.buckets:
+            try:
+                log(f"emptying and deleting bucket {bucket} ({empty_bucket(s3, bucket)} versions)")
+                s3.delete_bucket(Bucket=bucket)
+            except ClientError as error:
+                if error.response["Error"]["Code"] != "NoSuchBucket":
+                    raise
+        for group in retained.log_groups:
+            with suppress(logs.exceptions.ResourceNotFoundException):
+                logs.delete_log_group(logGroupName=group)
+        for key in retained.keys:
+            try:
+                state = kms.describe_key(KeyId=key)["KeyMetadata"]
+            except kms.exceptions.NotFoundException:
+                continue
+            if state["KeyState"] == "PendingDeletion":
+                if state["DeletionDate"] - datetime.now(UTC) <= timedelta(days=KMS_PENDING_DAYS + 1):
+                    continue
+                kms.cancel_key_deletion(KeyId=key)  # scheduled with a longer window; the minimum is 7 days
+            kms.schedule_key_deletion(KeyId=key, PendingWindowInDays=KMS_PENDING_DAYS)
+            log(f"key {key} scheduled for deletion in {KMS_PENDING_DAYS} days")
+        for definition in retained.task_definitions:
+            with suppress(ClientError):
+                ecs.deregister_task_definition(taskDefinition=definition)
+        for start in range(0, len(retained.task_definitions), 10):
+            with suppress(ClientError):
+                ecs.delete_task_definitions(taskDefinitions=retained.task_definitions[start : start + 10])
+
+    def delete_parameters(self) -> None:
+        ssm = self.client("ssm")
+        found = [names.parameter_path(self.prefix, Parameter(name)) for name in self.parameters()]
+        for start in range(0, len(found), 10):  # DeleteParameters takes at most 10 names
+            ssm.delete_parameters(Names=found[start : start + 10])
+
+    def destroy_bootstrap(self) -> None:
+        bucket = names.assets_bucket(self.prefix, self.account, self.region)
+        repository = names.images_repository(self.prefix, self.account, self.region)
+        self.delete_stack(self.client("cloudformation"), names.toolkit_stack(self.prefix))
+        s3, ecr = self.client("s3"), self.client("ecr")
+        try:
+            empty_bucket(s3, bucket)
+            s3.delete_bucket(Bucket=bucket)
+        except ClientError as error:
+            if error.response["Error"]["Code"] != "NoSuchBucket":
+                raise
+        with suppress(ecr.exceptions.RepositoryNotFoundException):
+            ecr.delete_repository(repositoryName=repository, force=True)
+
+    def inventory(self) -> list[str]:
+        """What is left of the stage's demand module; KMS keys pending deletion and the tagging index's stale
+        entries for deleted resources are not residue."""
+        residue = []
+        cloudformation = self.client("cloudformation")
+        for stack in (
+            names.guidance_stack(self.prefix),
+            names.simulator_stack(self.prefix),
+            names.toolkit_stack(self.prefix),
+            self.build_stack,
+        ):
+            try:
+                [described] = cloudformation.describe_stacks(StackName=stack)["Stacks"]
+                residue.append(f"stack {stack} {described['StackStatus']}")
+            except ClientError:
+                pass
+        try:
+            self.client("cloudformation", "us-east-1").describe_stacks(StackName=self.edge_stack)
+            residue.append(f"stack {self.edge_stack}")
+        except ClientError:
+            pass
+        for region in sorted({self.region, "us-east-1"}):
+            tagging = self.client("resourcegroupstaggingapi", region)
+            for page in tagging.get_paginator("get_resources").paginate(
+                TagFilters=[
+                    {"Key": "fast:app", "Values": [self.prefix]},
+                    {"Key": names.MODULE_TAG, "Values": [names.MODULE]},
+                ]
+            ):
+                residue += [
+                    arn
+                    for item in page["ResourceTagMappingList"]
+                    if (arn := item["ResourceARN"]) and not self.gone(arn, region)
+                ]
+        s3 = self.client("s3")
+        residue += [
+            f"bucket {b['Name']}"
+            for b in s3.list_buckets()["Buckets"]
+            if b["Name"].startswith((f"{self.prefix}-pbs", f"{self.prefix}-cdk-"))
+        ]
+        logs = self.client("logs")
+        for prefix in (f"/aws/lambda/{self.prefix}-pbs", f"{self.prefix}-pbs", f"/aws/codebuild/{self.prefix}-pbs"):
+            for page in logs.get_paginator("describe_log_groups").paginate(logGroupNamePrefix=prefix):
+                residue += [f"log group {g['logGroupName']}" for g in page["logGroups"]]
+        if self.parameters():
+            residue.append(f"parameters under {names.parameter_path(self.prefix)}")
+        return sorted(set(residue))
+
+    def gone(self, arn: str, region: str) -> bool:
+        """Whether a tagged ARN is a deleted resource the tagging index still lists, or a key pending deletion."""
+        service = arn.split(":")[2]
+        try:
+            match service:
+                case "kms":
+                    state = self.client("kms", region).describe_key(KeyId=arn)["KeyMetadata"]["KeyState"]
+                    return bool(state == "PendingDeletion")
+                case "ec2" if ":natgateway/" in arn:
+                    [nat] = self.client("ec2", region).describe_nat_gateways(NatGatewayIds=[arn.rsplit("/", 1)[1]])[
+                        "NatGateways"
+                    ]
+                    return bool(nat["State"] == "deleted")
+                case "ec2" if (kind := arn.split(":")[5].split("/", maxsplit=1)[0]) in EC2_DESCRIBE:
+                    operation, key = EC2_DESCRIBE[kind]
+                    found = getattr(self.client("ec2", region), operation)(**{key: [arn.rsplit("/", 1)[1]]})
+                    return not any(isinstance(value, list) and value for value in found.values())
+                case "ecs":
+                    return self.ecs_gone(arn, region)
+        except ClientError:
+            return True
+        return False
+
+    def ecs_gone(self, arn: str, region: str) -> bool:
+        ecs = self.client("ecs", region)
+        if ":task-definition/" in arn:
+            [definition] = [ecs.describe_task_definition(taskDefinition=arn)["taskDefinition"]]
+            return bool(definition["status"] in ("INACTIVE", "DELETE_IN_PROGRESS"))
+        if ":cluster/" in arn:
+            [cluster] = ecs.describe_clusters(clusters=[arn])["clusters"] or [{"status": "INACTIVE"}]
+            return bool(cluster["status"] == "INACTIVE")
+        if ":task/" in arn:
+            return True  # stopped tasks stay listed for a while
+        if ":service/" in arn:
+            cluster = arn.split("/")[1]
+            [service] = ecs.describe_services(cluster=cluster, services=[arn])["services"] or [{"status": "INACTIVE"}]
+            return bool(service["status"] == "INACTIVE")
+        return False
+
+
+def iterate_tool_versions() -> Iterator[tuple[str, str]]:
+    """The tools a demand deploy uses, and their versions."""
+    for name, argv in (
+        ("git", ["git", "--version"]),
+        ("uv", ["uv", "--version"]),
+        ("node", ["node", "--version"]),
+        ("cdk", [str(CDK), "--version"]),
+        (
+            "aws credentials",
+            [sys.executable, "-c", "import boto3; print(boto3.client('sts').get_caller_identity()['Arn'])"],
+        ),
+    ):
+        try:
+            yield name, run(argv, env={**os.environ, "JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION": "1"}).strip()
+        except (DemandError, FileNotFoundError) as error:
+            yield name, f"MISSING: {error}"

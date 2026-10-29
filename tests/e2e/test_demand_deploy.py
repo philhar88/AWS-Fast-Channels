@@ -1,0 +1,358 @@
+"""Offline tests of the demand module's deploy and destroy (scripts/_demand.py, not marked e2e), with botocore
+Stubber standing in for AWS. The live deploy, smoke and destroy run in the e2e demand leg."""
+
+import io
+import zipfile
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import _demand
+import boto3
+import prebid_guidance
+import pytest
+from botocore.stub import Stubber
+
+from fast_channels.core.demand import Parameter
+
+REGION = "us-east-1"
+LOCK = """
+[[package]]
+name = "aws-cdk-lib"
+version = "2.237.0"
+groups = ["main", "dev", "local"]
+files = [{file = "aws_cdk_lib-2.237.0-py3-none-any.whl", hash = "sha256:aaa"}]
+
+[[package]]
+name = "pywin32"
+version = "310"
+groups = ["main"]
+markers = "sys_platform == \\"win32\\""
+files = [{file = "pywin32-310-cp311-cp311-win32.whl", hash = "sha256:bbb"}]
+
+[[package]]
+name = "pytest-mock"
+version = "3.14.0"
+groups = ["dev"]
+markers = {dev = "python_version >= \\"3.11\\""}
+files = [{file = "pytest_mock-3.14.0-py3-none-any.whl", hash = "sha256:ccc"}]
+
+[[package]]
+name = "sphinx"
+version = "8.0.0"
+groups = ["docs"]
+files = [{file = "sphinx-8.0.0-py3-none-any.whl", hash = "sha256:ddd"}]
+
+[[package]]
+name = "aws-solutions-cdk"
+version = "2.0.0"
+groups = ["local"]
+files = []
+
+[package.source]
+type = "directory"
+url = "cdk_solution_helper_py/helpers_cdk"
+"""
+
+
+def session() -> boto3.Session:
+    return boto3.Session(region_name=REGION, aws_access_key_id="test", aws_secret_access_key="test")
+
+
+@pytest.fixture(scope="module")
+def fastci() -> Any:
+    return prebid_guidance.stage_config("fastci", "fastcix", REGION)
+
+
+@pytest.fixture
+def stage(fastci: Any) -> Iterator[_demand.DemandStage]:
+    demand = _demand.DemandStage(fastci, "fastci", session())
+    demand.__dict__["account"] = "123456789012"  # cached_property: no STS call
+    yield demand
+
+
+@pytest.fixture
+def stub(stage: _demand.DemandStage) -> Iterator[Any]:
+    stubbers: list[Stubber] = []
+
+    def stubbed(service: str, region: str | None = None) -> Stubber:
+        stubber = Stubber(stage.client(service, region))
+        stubber.activate()
+        stubbers.append(stubber)
+        return stubber
+
+    yield stubbed
+    for stubber in stubbers:
+        stubber.assert_no_pending_responses()
+        stubber.deactivate()
+
+
+def test_lock_requirements_keep_the_installed_groups_with_hashes_and_markers(tmp_path: Path) -> None:
+    lock = tmp_path / "poetry.lock"
+    lock.write_text(LOCK)
+
+    requirements, local = _demand.lock_requirements(lock)
+
+    assert requirements == [
+        "aws-cdk-lib==2.237.0 --hash=sha256:aaa",
+        'pywin32==310 ; sys_platform == "win32" --hash=sha256:bbb',
+        'pytest-mock==3.14.0 ; (python_version >= "3.11") --hash=sha256:ccc',
+    ]
+    assert local == ["cdk_solution_helper_py/helpers_cdk"]
+
+
+def test_the_image_tag_is_the_contexts_content(tmp_path: Path) -> None:
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "buildspec.yml").write_text("version: 0.2\n")
+    first = _demand.context_digest(tmp_path)
+
+    assert _demand.context_digest(tmp_path) == first
+    assert _demand.zip_directory(tmp_path) == _demand.zip_directory(tmp_path)
+    with zipfile.ZipFile(io.BytesIO(_demand.zip_directory(tmp_path))) as archive:
+        assert sorted(archive.namelist()) == ["buildspec.yml", "context/Dockerfile"]
+    (tmp_path / "context" / "Dockerfile").write_text("FROM alpine\n")
+    assert _demand.context_digest(tmp_path) != first
+
+
+def test_console_bucket() -> None:
+    url = "https://us-east-1.console.aws.amazon.com/s3/home?region=us-east-1&bucket=fastcix-pbs-bucket83908e77-abc"
+
+    assert _demand.console_bucket(url) == "fastcix-pbs-bucket83908e77-abc"
+
+
+def test_retained_resources_include_what_lambda_and_container_insights_create() -> None:
+    rows = [
+        {"ResourceType": "AWS::S3::Bucket", "PhysicalResourceId": "fastcix-pbs-bucket"},
+        {"ResourceType": "AWS::Logs::LogGroup", "PhysicalResourceId": "fastcix-pbs-container"},
+        {"ResourceType": "AWS::Lambda::Function", "PhysicalResourceId": "fastcix-pbs-HeaderSecret"},
+        {"ResourceType": "AWS::KMS::Key", "PhysicalResourceId": "key-1"},
+        {"ResourceType": "AWS::ECS::TaskDefinition", "PhysicalResourceId": "arn:aws:ecs:td/x:1"},
+        {"ResourceType": "AWS::EC2::VPC", "PhysicalResourceId": "vpc-1"},
+        {"ResourceType": "AWS::S3::Bucket"},
+    ]
+
+    retained = _demand.retained_resources(rows, "fastcix-pbs-Cluster")
+
+    assert retained == _demand.Retained(
+        buckets=["fastcix-pbs-bucket"],
+        log_groups=[
+            "fastcix-pbs-container",
+            "/aws/lambda/fastcix-pbs-HeaderSecret",
+            "/aws/ecs/containerinsights/fastcix-pbs-Cluster/performance",
+        ],
+        keys=["key-1"],
+        task_definitions=["arn:aws:ecs:td/x:1"],
+    )
+
+
+def test_names_follow_the_prefix(stage: _demand.DemandStage) -> None:
+    assert (stage.prefix, stage.stage_id) == ("fastcix", "FastChannels-fastcix")
+    assert stage.repository_stacks() == ["FastChannels-fastcix/DemandEdge", "FastChannels-fastcix/DemandBuild"]
+    assert (stage.edge_stack, stage.build_stack) == (
+        "FastChannels-fastcix-DemandEdge",
+        "FastChannels-fastcix-DemandBuild",
+    )
+    assert stage.checkout.name == "fastcix"
+    context = stage.repository_context()
+    assert context[context.index("-c") + 1].startswith("fast-channels.")
+    assert any(arg == 'fast-channels.prefix="fastcix"' for arg in context)
+
+
+def test_guidance_parameters_are_keyed_by_the_renamed_stack(stage: _demand.DemandStage) -> None:
+    assert stage.guidance_parameters("fastcix-pbs", {"SpotInstanceWeight": "0", "EnableLogAnalytics": "false"}) == [
+        "--parameters",
+        "fastcix-pbs:SpotInstanceWeight=0",
+        "--parameters",
+        "fastcix-pbs:EnableLogAnalytics=false",
+    ]
+
+
+def test_the_lambda_simulator_is_reached_through_the_private_zone(stage: _demand.DemandStage) -> None:
+    assert stage.simulator_endpoint("image") == {"SimulatorEndpoint": "http://sim.fastcix.fast.internal/"}
+
+
+def test_smoke_passes_only_with_every_check() -> None:
+    pod = {"status": 200, "content_type": "application/xml; charset=utf-8", "vast_4_2": True}
+    results: dict[str, dict[str, Any]] = {
+        **{f"{seconds}s": dict(pod) for seconds in (30, 60, 90, 120)},
+        "no-secret": {"status": 403},
+        "off-grid-31s": {"status": 400},
+        "other-path": {"status": 403},
+    }
+
+    assert _demand.smoke_passed(results)
+    for key, change in (
+        ("60s", {"content_type": "application/json"}),
+        ("90s", {"vast_4_2": False}),
+        ("no-secret", {"status": 200}),
+        ("off-grid-31s", {"status": 200}),
+        ("other-path", {"status": 404}),
+    ):
+        broken = {k: dict(v) for k, v in results.items()}
+        broken[key] |= change
+        assert not _demand.smoke_passed(broken), key
+    del results["120s"]
+    assert not _demand.smoke_passed(results)
+
+
+def test_empty_bucket_deletes_every_version_and_marker(stage: _demand.DemandStage, stub: Any) -> None:
+    s3 = stub("s3")
+    s3.add_response(
+        "list_object_versions",
+        {"Versions": [{"Key": "a", "VersionId": "1"}], "DeleteMarkers": [{"Key": "a", "VersionId": "2"}]},
+        {"Bucket": "b"},
+    )
+    s3.add_response(
+        "delete_objects",
+        {},
+        {
+            "Bucket": "b",
+            "Delete": {"Objects": [{"Key": "a", "VersionId": "1"}, {"Key": "a", "VersionId": "2"}], "Quiet": True},
+        },
+    )
+
+    assert _demand.empty_bucket(stage.client("s3"), "b") == 2
+
+
+def test_remove_retained_shortens_long_key_deletion_windows(stage: _demand.DemandStage, stub: Any) -> None:
+    now = datetime.now(UTC)
+    kms = stub("kms")
+    kms.add_response(
+        "describe_key",
+        {"KeyMetadata": {"KeyId": "k30", "KeyState": "PendingDeletion", "DeletionDate": now + timedelta(days=30)}},
+        {"KeyId": "k30"},
+    )
+    kms.add_response("cancel_key_deletion", {"KeyId": "k30"}, {"KeyId": "k30"})
+    kms.add_response("schedule_key_deletion", {"KeyId": "k30"}, {"KeyId": "k30", "PendingWindowInDays": 7})
+    kms.add_response(
+        "describe_key",
+        {"KeyMetadata": {"KeyId": "k7", "KeyState": "PendingDeletion", "DeletionDate": now + timedelta(days=7)}},
+        {"KeyId": "k7"},
+    )
+    kms.add_response("describe_key", {"KeyMetadata": {"KeyId": "kon", "KeyState": "Enabled"}}, {"KeyId": "kon"})
+    kms.add_response("schedule_key_deletion", {"KeyId": "kon"}, {"KeyId": "kon", "PendingWindowInDays": 7})
+    logs = stub("logs")
+    logs.add_client_error("delete_log_group", "ResourceNotFoundException", expected_params={"logGroupName": "gone"})
+    ecs = stub("ecs")
+    ecs.add_response("deregister_task_definition", {}, {"taskDefinition": "td:1"})
+    ecs.add_response("delete_task_definitions", {}, {"taskDefinitions": ["td:1"]})
+    s3 = stub("s3")
+    s3.add_client_error("list_object_versions", "NoSuchBucket", expected_params={"Bucket": "gone-bucket"})
+
+    stage.remove_retained(
+        _demand.Retained(
+            buckets=["gone-bucket"], log_groups=["gone"], keys=["k30", "k7", "kon"], task_definitions=["td:1"]
+        )
+    )
+
+
+def test_parameters_are_read_and_deleted_by_path(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    page = {"Parameters": [{"Name": "/fastcix/demand/vpc-id", "Value": "vpc-1"}]}
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ssm.add_response(
+        "delete_parameters", {"DeletedParameters": ["/fastcix/demand/vpc-id"]}, {"Names": ["/fastcix/demand/vpc-id"]}
+    )
+
+    assert stage.parameters() == {Parameter.VPC_ID.value: "vpc-1"}
+    stage.delete_parameters()
+
+
+def test_more_than_ten_parameters_are_deleted_ten_at_a_time(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    names = [f"/fastcix/demand/{parameter.value}" for parameter in Parameter]
+    page = {"Parameters": [{"Name": name, "Value": "x"} for name in names]}
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ssm.add_response("delete_parameters", {"DeletedParameters": names[:10]}, {"Names": names[:10]})
+    ssm.add_response("delete_parameters", {"DeletedParameters": names[10:]}, {"Names": names[10:]})
+
+    assert len(names) > 10
+    stage.delete_parameters()
+
+
+def test_retained_resources_are_read_page_by_page(stage: _demand.DemandStage, stub: Any) -> None:
+    """DescribeStackResources stops at 100 resources; the guidance has about 350."""
+    cloudformation = stub("cloudformation")
+    row = {"LastUpdatedTimestamp": datetime(2026, 10, 29, tzinfo=UTC), "ResourceStatus": "CREATE_COMPLETE"}
+    first = [
+        {
+            **row,
+            "LogicalResourceId": f"B{n}",
+            "PhysicalResourceId": f"fastcix-pbs-b{n}",
+            "ResourceType": "AWS::S3::Bucket",
+        }
+        for n in range(100)
+    ]
+    second = [{**row, "LogicalResourceId": "K", "PhysicalResourceId": "k1", "ResourceType": "AWS::KMS::Key"}]
+    cloudformation.add_response(
+        "list_stack_resources", {"StackResourceSummaries": first, "NextToken": "t"}, {"StackName": "fastcix-pbs"}
+    )
+    cloudformation.add_response(
+        "list_stack_resources", {"StackResourceSummaries": second}, {"StackName": "fastcix-pbs", "NextToken": "t"}
+    )
+    stack = {
+        "StackName": "fastcix-pbs",
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+    }
+    cloudformation.add_response("describe_stacks", {"Stacks": [stack]}, {"StackName": "fastcix-pbs"})
+    cloudformation.add_client_error(
+        "list_stack_resources", "ValidationError", expected_params={"StackName": "fastcix-pbs-sim"}
+    )
+
+    retained = stage.retained()
+
+    assert len(retained.buckets) == 100
+    assert retained.keys == ["k1"]
+
+
+def test_deleted_network_resources_are_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    ec2 = stub("ec2")
+    subnet = "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-1"
+    endpoint = "arn:aws:ec2:us-east-1:123456789012:vpc-endpoint/vpce-1"
+    ec2.add_client_error("describe_subnets", "InvalidSubnetID.NotFound", expected_params={"SubnetIds": ["subnet-1"]})
+    ec2.add_response(
+        "describe_vpc_endpoints", {"VpcEndpoints": [{"VpcEndpointId": "vpce-1"}]}, {"VpcEndpointIds": ["vpce-1"]}
+    )
+
+    assert stage.gone(subnet, REGION)
+    assert not stage.gone(endpoint, REGION)
+
+
+def test_a_key_pending_deletion_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    kms = stub("kms")
+    arn = "arn:aws:kms:us-east-1:123456789012:key/k1"
+    kms.add_response("describe_key", {"KeyMetadata": {"KeyId": "k1", "KeyState": "PendingDeletion"}}, {"KeyId": arn})
+    kms.add_response("describe_key", {"KeyMetadata": {"KeyId": "k1", "KeyState": "Enabled"}}, {"KeyId": arn})
+
+    assert stage.gone(arn, REGION)
+    assert not stage.gone(arn, REGION)
+
+
+def test_a_deleted_nat_gateway_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    ec2 = stub("ec2")
+    arn = "arn:aws:ec2:us-east-1:123456789012:natgateway/nat-1"
+    ec2.add_response(
+        "describe_nat_gateways",
+        {"NatGateways": [{"NatGatewayId": "nat-1", "State": "deleted"}]},
+        {"NatGatewayIds": ["nat-1"]},
+    )
+
+    assert stage.gone(arn, REGION)
+
+
+def test_cli_refuses_a_stage_without_demand(capsys: pytest.CaptureFixture[str]) -> None:
+    assert prebid_guidance.main(["inventory", "--prefix", "fastcix"]) == 1
+    assert "modules.demand is off" in capsys.readouterr().err
+
+
+def test_doctor_lists_the_tools(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        prebid_guidance, "iterate_tool_versions", lambda: iter([("git", "git 2"), ("cdk", "MISSING: x")])
+    )
+
+    assert prebid_guidance.main(["doctor"]) == 1
+    assert "cdk              MISSING: x" in capsys.readouterr().out

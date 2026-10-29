@@ -46,6 +46,13 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   `scripts/prebid_guidance.py` checks the pinned commit out, refuses it if the tag moved, a pinned file changed or a
   patch does not apply, then applies the overlays. The repository reads only the parameters the deploy script writes
   under `/<prefix>/demand/`. CI applies the overlays to the pinned tag on every run.
+- **The guidance deploys onto a CDK bootstrap of its own** per stage (qualifier = the prefix), never onto the
+  account's shared `hnb659fds` bootstrap, whose CloudFormation execution role is often AdministratorAccess. Its
+  execution policy (`vendor/prebid-guidance/bootstrap-policy.json`) allows the guidance's services, S3, Lambda and IAM
+  roles only on the guidance's names, managed-policy attachment only for the two Lambda execution policies it uses,
+  and KMS without data access. Inline role policies stay unconstrained; that is the residual risk.
+- **The image** is the guidance's unmodified Dockerfile with the overlays and the module, built by an x86 CodeBuild
+  project of the stage and tagged by the content of its build context.
 - **MediaTailor POSTs to the guidance's CloudFront.** A WAF rule group of ours, referenced first, blocks
   `/openrtb2/*` without the stage's origin secret (one of two values, for rotation).
 - **The body-template rule.** The body carries only constants and MediaTailor's own variables (`session.uuid`,

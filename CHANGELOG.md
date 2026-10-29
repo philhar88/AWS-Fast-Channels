@@ -65,6 +65,17 @@ All notable changes to this project are documented here. The format follows
   in `contracts/fixtures/pds/`; `tests/pbs` (marker `pbs`) runs the no-hook contract matrix, header isolation, wire
   fields and the impression rule against the jar, and validates every call it makes against the contract's models.
   New CI job `pbs-module` and make targets `pbs-test`, `pbs-contract`.
+- **Demand: deploy and destroy** ([docs/demand.md](docs/demand.md#deploy-and-destroy)). With `modules.demand` on, the
+  stage gains `FastChannels-<prefix>-DemandEdge` (us-east-1: two origin secrets and the WAF rule group the
+  guidance's web ACL references first, which blocks `/openrtb2/*` without a secret, every other path but
+  `/openrtb2/auction` and `/status`, and IPs above `rate_limit_per_ip`) and `-DemandBuild` (the image repository,
+  an x86 CodeBuild project, the guidance's CloudFormation execution policy). `make deploy-demand` /
+  `scripts/prebid_guidance.py deploy` then creates the guidance's own CDK bootstrap (qualifier = prefix, never the
+  shared `hnb659fds` roles), builds the image, deploys the guidance (`SpotInstanceWeight=0`, task limits from
+  `modules.demand.tasks`, the rule group, the simulator per mode), writes the SSM contract `/<prefix>/demand/*` and
+  runs a smoke test; `make destroy-demand` removes all of it, including what the guidance's templates retain, and
+  prints the inventory. The demand module needs a prefix of at most 10 characters (the bootstrap qualifier).
+
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a
@@ -104,7 +115,6 @@ All notable changes to this project are documented here. The format follows
   counter per task (`<prefix>-models`) refuses runs and calls past `daily_cap_usd` with `MODEL_CAP_REACHED` and tells
   the alert topic once a day; `scheduler.plan` ships with a $5 cap. `budgets_action` adds an AWS Budget per task role
   (monthly, at 31 days of the cap: Budgets actions accept no daily budget) whose action denies the role's invocations.
-
 ## [3.0.0] - 2026-10-16
 
 A rewrite of FAST Channels on AWS on the AWS CDK (Python), with agentic scheduling on Amazon Bedrock AgentCore, one

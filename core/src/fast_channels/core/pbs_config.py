@@ -62,6 +62,11 @@ def pds_host(prefix: str) -> str:
     return f"pds.{private_zone(prefix)}"
 
 
+def simulator_host(prefix: str) -> str:
+    """Stable name of the bidder simulator in ``lambda`` mode (an internal load balancer in the Prebid Server VPC)."""
+    return f"sim.{private_zone(prefix)}"
+
+
 def stored_request_id(seconds: int, *, kids: bool = False) -> str:
     """``fast-pod-<seconds>s`` (``fast-pod-kids-<seconds>s`` for child-directed playback configurations)."""
     return f"fast-pod-{'kids-' if kids else ''}{seconds}s"

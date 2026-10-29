@@ -1,0 +1,333 @@
+{
+  "Description": "FAST Channels (fastm): demand origin gate",
+  "Outputs": {
+    "OriginRuleGroupArn": {
+      "Description": "WAF rule group the guidance's web ACL references first (ExtraWafRuleGroupArn)",
+      "Value": {
+        "Fn::GetAtt": [
+          "OriginGateRuleGroup7EC2AB29",
+          "Arn"
+        ]
+      }
+    },
+    "OriginSecretAArn": {
+      "Description": "Origin secret A",
+      "Value": {
+        "Ref": "OriginGateOriginA715B559F"
+      }
+    },
+    "OriginSecretBArn": {
+      "Description": "Origin secret B",
+      "Value": {
+        "Ref": "OriginGateOriginBE9D1621D"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "OriginGateOriginA715B559F": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Origin secret A, sent by MediaTailor to the demand origin (x-fast-origin)",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "IncludeSpace": false,
+          "PasswordLength": 48
+        },
+        "Name": "fastm/demand/origin-a",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "OriginGateOriginBE9D1621D": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Origin secret B, sent by MediaTailor to the demand origin (x-fast-origin)",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "IncludeSpace": false,
+          "PasswordLength": 48
+        },
+        "Name": "fastm/demand/origin-b",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "OriginGateRuleGroup7EC2AB29": {
+      "Properties": {
+        "Capacity": 50,
+        "Description": "FAST Channels: only MediaTailor requests of the stage reach Prebid Server",
+        "Name": "fastm-demand-origin",
+        "Rules": [
+          {
+            "Action": {
+              "Block": {}
+            },
+            "Name": "fast-origin-required",
+            "Priority": 0,
+            "Statement": {
+              "AndStatement": {
+                "Statements": [
+                  {
+                    "ByteMatchStatement": {
+                      "FieldToMatch": {
+                        "UriPath": {}
+                      },
+                      "PositionalConstraint": "STARTS_WITH",
+                      "SearchString": "/openrtb2/",
+                      "TextTransformations": [
+                        {
+                          "Priority": 0,
+                          "Type": "NONE"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "NotStatement": {
+                      "Statement": {
+                        "OrStatement": {
+                          "Statements": [
+                            {
+                              "ByteMatchStatement": {
+                                "FieldToMatch": {
+                                  "SingleHeader": {
+                                    "Name": "x-fast-origin"
+                                  }
+                                },
+                                "PositionalConstraint": "EXACTLY",
+                                "SearchString": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "{{resolve:secretsmanager:",
+                                      {
+                                        "Ref": "OriginGateOriginA715B559F"
+                                      },
+                                      ":SecretString:::}}"
+                                    ]
+                                  ]
+                                },
+                                "TextTransformations": [
+                                  {
+                                    "Priority": 0,
+                                    "Type": "NONE"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "ByteMatchStatement": {
+                                "FieldToMatch": {
+                                  "SingleHeader": {
+                                    "Name": "x-fast-origin"
+                                  }
+                                },
+                                "PositionalConstraint": "EXACTLY",
+                                "SearchString": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "{{resolve:secretsmanager:",
+                                      {
+                                        "Ref": "OriginGateOriginBE9D1621D"
+                                      },
+                                      ":SecretString:::}}"
+                                    ]
+                                  ]
+                                },
+                                "TextTransformations": [
+                                  {
+                                    "Priority": 0,
+                                    "Type": "NONE"
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "fast-origin-required",
+              "SampledRequestsEnabled": true
+            }
+          },
+          {
+            "Action": {
+              "Block": {}
+            },
+            "Name": "fast-paths",
+            "Priority": 1,
+            "Statement": {
+              "NotStatement": {
+                "Statement": {
+                  "OrStatement": {
+                    "Statements": [
+                      {
+                        "ByteMatchStatement": {
+                          "FieldToMatch": {
+                            "UriPath": {}
+                          },
+                          "PositionalConstraint": "EXACTLY",
+                          "SearchString": "/openrtb2/auction",
+                          "TextTransformations": [
+                            {
+                              "Priority": 0,
+                              "Type": "NONE"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "ByteMatchStatement": {
+                          "FieldToMatch": {
+                            "UriPath": {}
+                          },
+                          "PositionalConstraint": "EXACTLY",
+                          "SearchString": "/status",
+                          "TextTransformations": [
+                            {
+                              "Priority": 0,
+                              "Type": "NONE"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "fast-paths",
+              "SampledRequestsEnabled": true
+            }
+          },
+          {
+            "Action": {
+              "Block": {}
+            },
+            "Name": "fast-rate",
+            "Priority": 2,
+            "Statement": {
+              "RateBasedStatement": {
+                "AggregateKeyType": "IP",
+                "EvaluationWindowSec": 60,
+                "Limit": 20000,
+                "ScopeDownStatement": {
+                  "ByteMatchStatement": {
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "PositionalConstraint": "STARTS_WITH",
+                    "SearchString": "/openrtb2/",
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "NONE"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "fast-rate",
+              "SampledRequestsEnabled": true
+            }
+          }
+        ],
+        "Scope": "CLOUDFRONT",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "demand"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VisibilityConfig": {
+          "CloudWatchMetricsEnabled": true,
+          "MetricName": "fastm-demand-origin",
+          "SampledRequestsEnabled": true
+        }
+      },
+      "Type": "AWS::WAFv2::RuleGroup"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

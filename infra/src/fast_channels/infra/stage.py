@@ -15,6 +15,8 @@ from fast_channels.infra.constructs.functions import (
 from fast_channels.infra.stacks.baseline import AccountBaselineStack
 from fast_channels.infra.stacks.crawl import CrawlStack
 from fast_channels.infra.stacks.data import DataStack
+from fast_channels.infra.stacks.demand_build import DemandBuildStack
+from fast_channels.infra.stacks.demand_edge import DemandEdgeStack
 from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
 from fast_channels.infra.stacks.media import MediaStack
 from fast_channels.infra.stacks.models import ModelsStack
@@ -39,8 +41,9 @@ def stage_id(prefix: str) -> str:
 class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
     ``modules.crawl.enabled``, after Media), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
-    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``) and AccountBaseline (if
-    ``observability.transaction_search`` is ``enable``).
+    us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (if
+    ``observability.transaction_search`` is ``enable``), and DemandEdge (in us-east-1) and DemandBuild (if
+    ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -127,6 +130,19 @@ class FastChannelsStage(Stage):
             )
             self.edge.add_stack_dependency(self.data)
             self.edge.add_stack_dependency(self.media)
+
+        self.demand_edge: DemandEdgeStack | None = None
+        self.demand_build: DemandBuildStack | None = None
+        if config.modules.demand.enabled:
+            self.demand_edge = DemandEdgeStack(
+                self,
+                "DemandEdge",
+                stack_name=f"{self.stage_name}-DemandEdge" + ("" if env.region == EDGE_REGION else f"-{env.region}"),
+                config=config,
+                env=Environment(account=env.account, region=EDGE_REGION),
+                **stacks,
+            )
+            self.demand_build = DemandBuildStack(self, "DemandBuild", config=config, **stacks)
 
         Aspects.of(self).add(FunctionLogGroups(log_groups))
         for key, value in tags.items():
