@@ -12,6 +12,7 @@ from fast_channels.core.events import (
     AssetFailed,
     AssetReady,
     AutopilotRun,
+    CatalogItemChanged,
     LadderFailed,
     LadderReady,
     SchedulePublished,
@@ -143,8 +144,12 @@ def test_events() -> None:
         SchedulePublished(channel="ch", plan_id="p", programs=2, start_ms=0, end_ms=1, correlation_id="c"),
         AutopilotRun(channel="ch", status="SUCCEEDED", session_id="s", summary="ok"),
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version=LV),
+        CatalogItemChanged(content_id="sintel"),
     ]
     assert {type(d) for d in details} == set(DETAIL_TYPES)
+    assert put_events_entry(details[-1], prefix="fast", event_bus="b")["DetailType"] == "Catalog Item Changed"
+    with pytest.raises(ValidationError):
+        CatalogItemChanged(content_id="-bad")
     assert "captions" not in AssetReady.model_fields
     entry = put_events_entry(details[0], prefix="fast", event_bus="fast-channels")
     assert entry == {

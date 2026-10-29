@@ -288,6 +288,36 @@ def test_catalog_items_are_the_catalog_tools_own_with_the_staged_mezzanine(stubb
     assert ContentItem.model_validate(item).mezzanine_uri == staged  # what the catalog tool serves
 
 
+def test_catalog_items_are_announced_in_batches_of_ten(stubbed: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(seed, "datetime", _Frozen)
+    events = session().client("events")
+    stubber = stubbed(events)
+    contents = [ContentItem(content_id=f"t{n}", title=f"T{n}") for n in range(12)]
+
+    def batch(ids: range) -> dict[str, Any]:
+        entry = {"Source": "fast-channels.fastci", "DetailType": "Catalog Item Changed", "EventBusName": "bus"}
+        details = (
+            json.dumps({"content_id": f"t{n}", "correlation_id": CORRELATION}, separators=(",", ":")) for n in ids
+        )
+        return {"Entries": [entry | {"Detail": detail} for detail in details]}
+
+    stubber.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{}] * 10}, batch(range(10)))
+    stubber.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{}] * 2}, batch(range(10, 12)))
+    seed.announce(events, contents, prefix="fastci", bus="bus")
+    stubber.add_response("put_events", {"FailedEntryCount": 1, "Entries": [{"ErrorCode": "x"}]})
+    with pytest.raises(SystemExit, match="Catalog Item Changed events rejected"):
+        seed.announce(events, contents[:1], prefix="fastci", bus="bus")
+
+
+CORRELATION = "seed-catalog-20261029T010203Z"
+
+
+class _Frozen(datetime):
+    @classmethod
+    def now(cls, tz: Any = None) -> Any:
+        return datetime(2026, 10, 29, 1, 2, 3, tzinfo=tz)
+
+
 def test_the_ladder_must_be_provisioned(stubbed: Any) -> None:
     table = library_table()
     stubber = stubbed(table.meta.client)

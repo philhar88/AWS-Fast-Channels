@@ -28,6 +28,12 @@ _SNS_SSE: Final = "AwsSolutions-SNS2"
 _SNS_REDRIVE: Final = "Serverless-SNSRedrivePolicy"
 
 
+def alert_topic_name(prefix: str) -> str:
+    """Name of the media plane's alert topic. The stacks of optional modules import the topic by this name, so
+    enabling a module adds no output to the Media stack."""
+    return f"{prefix}-alerts"
+
+
 def alert_topic(scope: Construct, id: str, *, name: str, email: str | None) -> sns.Topic:
     """SNS topic of alarms and failure events, optionally with an email subscription (confirmed by the
     recipient). EventBridge rules publish to it through a role of their own, never as a service principal (see

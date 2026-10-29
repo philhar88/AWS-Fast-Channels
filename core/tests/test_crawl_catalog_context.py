@@ -18,6 +18,7 @@ from fast_channels.core.crawl.catalog_context import (
     CatalogContext,
     build_context,
     context_key,
+    digest,
     header,
 )
 from fast_channels.core.crawl.taxonomy import default_genre_map
@@ -135,6 +136,20 @@ def test_a_bare_title_leaves_absent_values_out() -> None:
     assert dumped(context)["updated"] == "2026-01-02T03:04:05Z"
 
 
+def test_without_a_publisher_domain_the_id_is_only_in_id() -> None:
+    item = ContentItem(content_id="x", title="X", external_ids={"metadata.example.org": "M1"})
+    assert [entry.name for entry in build(item, publisher_domain=None).cids] == ["metadata.example.org"]
+    assert build(ContentItem(content_id="x", title="X"), publisher_domain=None).cids == []
+
+
+def test_the_digest_ignores_only_the_write_time() -> None:
+    first = build(SAMPLES["sintel"])
+    assert digest(first) == digest(build(SAMPLES["sintel"], updated=UPDATED + timedelta(days=1)))
+    changed = SAMPLES["sintel"].model_copy(update={"keywords": ["dragon"]})
+    assert digest(first) != digest(build(changed))
+    assert len(digest(first)) == 64
+
+
 def test_a_producer_domain_alone_is_a_producer() -> None:
     context = build(ContentItem(content_id="x", title="X", producer_domain="studio.example"))
     assert context.producer is not None and context.producer.model_dump() == {"name": "", "domain": "studio.example"}
@@ -208,7 +223,7 @@ def test_the_model_enforces_the_contract() -> None:
         {"genres": ["1", "2", "3", "4"]},
         {"hdr": "x" * (OUTPUT_MAX_CHARS + 1)},
         {"title_q": "x" * (OUTPUT_MAX_CHARS + 1)},
-        {"cids": []},
+        {"cids": [{"name": "example.org", "ids": []}]},
         {"id": "-bad"},
         {"extra": "field"},
         {"updated": "2026-10-28T00:00:00"},

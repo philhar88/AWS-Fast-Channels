@@ -138,7 +138,8 @@
         "crawl": {
           "enabled": false,
           "pre_ads": true,
-          "holdout_percent": 20
+          "holdout_percent": 20,
+          "publisher_domain": null
         }
       }
     },

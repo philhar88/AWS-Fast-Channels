@@ -329,12 +329,16 @@ MERGED_MODULES = ("models", "release")
 NEEDED_MODULES = ("ops", "demand", "pds")
 """Modules a merged one needs on (``release`` needs ``ops``, ``demand`` and ``pds``) whose code is not merged yet:
 they add nothing, so the comparison below still isolates the merged code."""
+MODULE_STACKS = {"Crawl": "FastChannels-fastm-Crawl"}
+"""Stacks of merged modules that add only stacks of their own (``crawl``); they stay off in the comparison, and
+their own tests snapshot what they synthesize (``test_crawl.py``)."""
 
 
 def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeployment, normalized: Any) -> None:
     """Enabling a module changes nothing until its code is merged: the ``fastm`` stage, with every module on,
-    synthesizes exactly what the shipped configuration does with only the merged modules (and those they need) on.
-    What the merged modules add has its own tests (``test_release_policy.py``)."""
+    synthesizes exactly what the shipped configuration does with only the merged modules (and those they need) on,
+    plus the stacks of the modules that add only stacks. What the merged modules add has its own tests
+    (``test_release_policy.py``, ``test_crawl.py``)."""
     stage = stage_args.load("fastm")
     fastm = deployment(stage_overrides("fastm"))
     on = (*NEEDED_MODULES, *MERGED_MODULES)
@@ -343,20 +347,17 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
     merged_modules = FastChannelsConfig.from_context(merged.app.node).modules
     assert FastChannelsConfig.from_context(fastm.app.node).modules != merged_modules
     assert {name for name in ModulesConfig.model_fields if merged_modules.enabled(name)} == set(on)
-    assert (
-        names(fastm)
-        == names(merged)
-        == {
-            "Data": "FastChannels-fastm-Data",
-            "Media": "FastChannels-fastm-Media",
-            "Models": "FastChannels-fastm-Models",
-            "Operator": "FastChannels-fastm-Operator",
-        }
-    )
-    for modules_on, modules_merged in zip(fastm.stacks, merged.stacks, strict=True):
-        assert normalized(fastm.template(modules_on)) == normalized(merged.template(modules_merged)), (
-            modules_on.stack_name
-        )
+    assert names(merged) == {
+        "Data": "FastChannels-fastm-Data",
+        "Media": "FastChannels-fastm-Media",
+        "Models": "FastChannels-fastm-Models",
+        "Operator": "FastChannels-fastm-Operator",
+    }
+    assert names(fastm) == names(merged) | MODULE_STACKS
+    modules_on = {stack.node.id: stack for stack in fastm.stacks}
+    for modules_merged in merged.stacks:
+        stack = modules_on[modules_merged.node.id]
+        assert normalized(fastm.template(stack)) == normalized(merged.template(modules_merged)), stack.stack_name
 
 
 def test_stage_checks_the_region_of_a_configuration_built_in_code() -> None:

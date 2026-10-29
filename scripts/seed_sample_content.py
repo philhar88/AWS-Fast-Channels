@@ -6,8 +6,9 @@
     uv run python scripts/seed_sample_content.py --dry-run           # what would happen, and what it costs
 
 For each title of assets/sample-catalog.json the script writes the ReferenceCatalog item that the catalog tool
-serves, then streams the mezzanine from its publisher into the ingest bucket (``samples/<content id>.<ext>``) after
-its JSON sidecar, which is exactly how a CMS hands content over: the upload triggers the ingest pipeline, which
+serves and announces it with a ``Catalog Item Changed`` event, as a CMS sync job does. It then streams the mezzanine
+from its publisher into the ingest bucket (``samples/<content id>.<ext>``) after its JSON sidecar, which is exactly
+how a CMS hands content over: the upload triggers the ingest pipeline, which
 encodes it, registers the VOD source and marks the asset READY in the media library. (MediaConvert can read HTTPS
 inputs directly, but the Blender Foundation's servers refuse its fetcher, so the catalog item's ``mezzanine_uri`` is
 the staged ``s3://`` copy and the publisher's URL is kept as ``source_url``.) Titles that are already READY with the
@@ -35,6 +36,7 @@ from boto3.s3.transfer import TransferConfig
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
+from fast_channels.core.events import CatalogItemChanged, put_events_entry
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.mediaconvert import needs_esam
 from fast_channels.core.naming import slug
@@ -51,6 +53,7 @@ from fast_channels.functions.tools.library_store import (
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
+    from mypy_boto3_events import EventBridgeClient
     from mypy_boto3_s3 import S3Client
     from mypy_boto3_stepfunctions import SFNClient
 
@@ -60,6 +63,8 @@ CATALOG: Final = REPO / "assets" / "sample-catalog.json"
 NOT_AGAIN: Final = frozenset({AssetStatus.READY, AssetStatus.INGESTING, AssetStatus.ENCODED})
 """Library statuses of an encode that is done or under way."""
 SAMPLES_PREFIX: Final = "samples/"
+PUT_EVENTS_BATCH: Final = 10
+"""EventBridge ``PutEvents`` takes at most 10 entries."""
 UPLOAD: Final = TransferConfig(multipart_chunksize=64 * 1024 * 1024, max_concurrency=8)
 POLL_SECONDS: Final = 15
 START_GRACE_SECONDS: Final = 180
@@ -114,7 +119,7 @@ def main() -> int:
     estimate = print_plan(titles, ladder)
     pending = [title for title in titles if title.needs_ingest]
     if args.dry_run:
-        print(f"\nDry run: would write {len(titles)} catalog items and request {len(pending)} ingests.")
+        print(f"\nDry run: would write and announce {len(titles)} catalog items and request {len(pending)} ingests.")
         return 0
     if pending and not args.yes and not confirm(f"\nEncode {len(pending)} titles for about ${estimate:.2f}? [y/N] "):
         print("Nothing changed.")
@@ -122,7 +127,11 @@ def main() -> int:
 
     bucket = stage.output(Plane.DATA, "IngestBucketName")
     write_catalog(catalog, titles, ingest_bucket=bucket)
-    print(f"\nWrote {len(titles)} items to {catalog.name}.")
+    events = stage.session.client("events", region_name=stage.region)
+    announce(
+        events, [title.content for title in titles], prefix=stage.prefix, bus=stage.output(Plane.MEDIA, "EventBusName")
+    )
+    print(f"\nWrote {len(titles)} items to {catalog.name} and announced them (Catalog Item Changed).")
     if not pending:
         return 0
     s3 = stage.session.client("s3", region_name=stage.region)
@@ -221,6 +230,25 @@ def write_catalog(catalog: Table, titles: list[Title], *, ingest_bucket: str) ->
             staged = f"s3://{ingest_bucket}/{staged_key(title.content)}"
             linked = title.content.model_copy(update={"asset_ids": [title.asset_id], "mezzanine_uri": staged})
             batch.put_item(Item={**catalog_item(linked), "source_url": str(title.content.mezzanine_uri)})
+
+
+def announce(events: EventBridgeClient, contents: list[ContentItem], *, prefix: str, bus: str) -> None:
+    """Put one ``Catalog Item Changed`` event per title, which republishes its catalog context object (``crawl``).
+
+    Raises:
+        SystemExit: EventBridge rejected an entry.
+    """
+    correlation_id = f"seed-catalog-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
+    entries = [
+        put_events_entry(
+            CatalogItemChanged(content_id=c.content_id, correlation_id=correlation_id), prefix=prefix, event_bus=bus
+        )
+        for c in contents
+    ]
+    for start in range(0, len(entries), PUT_EVENTS_BATCH):
+        response = events.put_events(Entries=entries[start : start + PUT_EVENTS_BATCH])  # type: ignore[arg-type]  # put_events_entry builds a plain dict
+        if response.get("FailedEntryCount"):
+            sys.exit(f"Catalog Item Changed events rejected: {response['Entries']}")
 
 
 def upload(s3: S3Client, http: httpx.Client, bucket: str, title: Title) -> str:

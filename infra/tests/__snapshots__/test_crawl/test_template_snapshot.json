@@ -1,0 +1,685 @@
+{
+  "Description": "FAST Channels (fastm): show-level content metadata",
+  "Outputs": {
+    "CatalogContextBaseUrl": {
+      "Description": "Base URL of the catalog context objects (<base>/<content_id>.json)",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputFnGetAttDeliveryDistribution45EACD51DomainNameD2F69309",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-fastm-Media"
+              }
+            },
+            "/catalog/ctx/v1/"
+          ]
+        ]
+      }
+    },
+    "CatalogContextPublisherName": {
+      "Description": "Context publisher; invoke it with {\"sweep\": true} to publish the whole catalog now",
+      "Value": {
+        "Ref": "PublisherFunction418C8B62"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "PublisherDeadLetters87C4741E": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "PublisherDeadLettersAlarmD17754F6": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A catalog context trigger failed after its retries; the objects may be stale until the sweep",
+        "AlarmName": "fastm-crawl-publisher-dead-letters",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "PublisherDeadLetters87C4741E",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Namespace": "AWS/SQS",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Maximum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "PublisherDeadLettersPolicy6C94705F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sqs:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "PublisherDeadLetters87C4741E",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "PublisherTriggers7E63C928",
+                      "Arn"
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "PublisherDeadLetters87C4741E",
+                  "Arn"
+                ]
+              },
+              "Sid": "AllowEventRuleFastChannelsfastmCrawlPublisherTriggers35EAA8E8"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Queues": [
+          {
+            "Ref": "PublisherDeadLetters87C4741E"
+          }
+        ]
+      },
+      "Type": "AWS::SQS::QueuePolicy"
+    },
+    "PublisherFunction418C8B62": {
+      "DependsOn": [
+        "PublisherFunctionRoleDefaultPolicy8185F861",
+        "PublisherFunctionRole01112238"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Crawl: publish catalog context objects (catalog/ctx/v1/) for the PRE_ADS lookup and the PDS",
+        "Environment": {
+          "Variables": {
+            "CATALOG_TABLE": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefCatalog742F25FDA41764CC",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-fastm-Data"
+              }
+            },
+            "FAST_PREFIX": "fastm",
+            "LIBRARY_TABLE": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-fastm-Data"
+              }
+            },
+            "MEDIA_BUCKET": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefStorageMedia9333CB25D888E8BE",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-fastm-Data"
+              }
+            },
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "crawl.publisher"
+          }
+        },
+        "Handler": "fast_channels.functions.crawl.publisher.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "PublisherFunctionLogs518B4CFF"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "PublisherFunctionRole01112238",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "PublisherFunctionEventInvokeConfig577197FC": {
+      "Properties": {
+        "DestinationConfig": {
+          "OnFailure": {
+            "Destination": {
+              "Fn::GetAtt": [
+                "PublisherDeadLetters87C4741E",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "FunctionName": {
+          "Ref": "PublisherFunction418C8B62"
+        },
+        "MaximumEventAgeInSeconds": 21600,
+        "MaximumRetryAttempts": 2,
+        "Qualifier": "$LATEST"
+      },
+      "Type": "AWS::Lambda::EventInvokeConfig"
+    },
+    "PublisherFunctionLogs518B4CFF": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "PublisherFunctionRole01112238": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "PublisherFunctionRoleDefaultPolicy8185F861": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "PublisherFunctionLogs518B4CFF",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:SendMessage"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "PublisherDeadLetters87C4741E",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:Query",
+                "dynamodb:Scan"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                      {
+                        "Fn::GetStackOutput": {
+                          "OutputName": "PublishOutputRefCatalog742F25FDA41764CC",
+                          "Region": "us-east-1",
+                          "StackName": "FastChannels-fastm-Data"
+                        }
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                      {
+                        "Fn::GetStackOutput": {
+                          "OutputName": "PublishOutputRefLibrary9A29C343BD63F0CC",
+                          "Region": "us-east-1",
+                          "StackName": "FastChannels-fastm-Data"
+                        }
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:DeleteObject",
+                "s3:GetObject",
+                "s3:PutObject"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetStackOutput": {
+                        "OutputName": "PublishOutputFnGetAttStorageMedia9333CB25Arn75C441A1",
+                        "Region": "us-east-1",
+                        "StackName": "FastChannels-fastm-Data"
+                      }
+                    },
+                    "/catalog/ctx/v1/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "catalog/ctx/v1/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttStorageMedia9333CB25Arn75C441A1",
+                  "Region": "us-east-1",
+                  "StackName": "FastChannels-fastm-Data"
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "PublisherFunctionRoleDefaultPolicy8185F861",
+        "Roles": [
+          {
+            "Ref": "PublisherFunctionRole01112238"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "PublisherGroup492B30FA": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Name": "fastm-crawl",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Scheduler::ScheduleGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "PublisherScheduleRole0169C702": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "PublisherGroup492B30FA",
+                      "Arn"
+                    ]
+                  }
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: invoke the catalog context sweep and dead-letter failed deliveries",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "PublisherScheduleRoleDefaultPolicy320F14D2": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "PublisherFunction418C8B62",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "PublisherFunction418C8B62",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "PublisherDeadLetters87C4741E",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "PublisherScheduleRoleDefaultPolicy320F14D2",
+        "Roles": [
+          {
+            "Ref": "PublisherScheduleRole0169C702"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "PublisherSweep4BE7D5F9": {
+      "Properties": {
+        "Description": "Crawl: publish every catalog title and remove the objects of titles that left the catalog",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "GroupName": "fastm-crawl",
+        "ScheduleExpression": "rate(1 day)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "PublisherFunction418C8B62",
+              "Arn"
+            ]
+          },
+          "DeadLetterConfig": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "PublisherDeadLetters87C4741E",
+                "Arn"
+              ]
+            }
+          },
+          "Input": "{\"sweep\":true}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 21600,
+            "MaximumRetryAttempts": 2
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "PublisherScheduleRole0169C702",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "PublisherTriggers7E63C928": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): republish catalog context objects after a publish or a change",
+        "EventBusName": {
+          "Fn::GetStackOutput": {
+            "OutputName": "PublishOutputRefEventsBus45DE433979464063",
+            "Region": "us-east-1",
+            "StackName": "FastChannels-fastm-Media"
+          }
+        },
+        "EventPattern": {
+          "detail-type": [
+            "Schedule Published",
+            "Catalog Item Changed"
+          ],
+          "source": [
+            "fast-channels.fastm"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "PublisherFunction418C8B62",
+                "Arn"
+              ]
+            },
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "PublisherDeadLetters87C4741E",
+                  "Arn"
+                ]
+              }
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumEventAgeInSeconds": 21600,
+              "MaximumRetryAttempts": 8
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "PublisherTriggersAllowEventRuleFastChannelsfastmCrawlPublisherFunction37925B701417F860": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "PublisherFunction418C8B62",
+            "Arn"
+          ]
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "PublisherTriggers7E63C928",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

@@ -142,6 +142,26 @@
           "$ref": "#/$defs/AutopilotRun"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Catalog Item Changed"
+        },
+        "detail": {
+          "$ref": "#/$defs/CatalogItemChanged"
+        }
+      }
     }
   ],
   "$defs": {
@@ -269,6 +289,36 @@
         "summary"
       ],
       "title": "AutopilotRun",
+      "type": "object"
+    },
+    "CatalogItemChanged": {
+      "description": "A title of the reference catalog was added, changed or removed. A CMS sync job puts this event after writing\nthe ``ReferenceCatalog`` item; the content enrichment module republishes the title's catalog context object.",
+      "properties": {
+        "content_id": {
+          "description": "The title's catalog id.",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Content Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Trace id of the change in your CMS.",
+          "title": "Correlation Id"
+        }
+      },
+      "required": [
+        "content_id"
+      ],
+      "title": "CatalogItemChanged",
       "type": "object"
     },
     "GeneratorInput": {

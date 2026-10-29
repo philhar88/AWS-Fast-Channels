@@ -9,6 +9,7 @@ The schema of ``v1`` never changes in place: MediaTailor cache entries cannot be
 ``v2`` under a new prefix with a new Function cache key (``contracts/catalog-context.schema.json`` pins ``v1``).
 """
 
+import hashlib
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Final, Literal, Self
@@ -76,7 +77,7 @@ class CatalogContext(BaseModel):
     prodq: int | None = Field(ge=0, le=3, description="AdCOM production quality.")
     producer: Producer | None = Field(description="Producer.")
     kwarray: list[str] = Field(description="Descriptive tags that are not genres.")
-    cids: list[ContentIds] = Field(min_length=1, description="Ids by registry, the publisher's first.")
+    cids: list[ContentIds] = Field(description="Ids by registry, the publisher's first when it is configured.")
     title_q: str = Field(max_length=OUTPUT_MAX_CHARS, description="title, encoded as by encodeURIComponent.")
     series_q: str = Field(max_length=OUTPUT_MAX_CHARS, description="series, encoded as by encodeURIComponent.")
     hdr: str = Field(max_length=OUTPUT_MAX_CHARS, description="Compact form for the x-fast-ctx request header.")
@@ -95,21 +96,22 @@ def context_key(content_id: str) -> str:
 
 
 def build_context(
-    item: ContentItem, *, genre_map: GenreMap, publisher_domain: str, updated: datetime
+    item: ContentItem, *, genre_map: GenreMap, publisher_domain: str | None, updated: datetime
 ) -> CatalogContext:
     """The context object of ``item``.
 
     Args:
         item: the catalog title.
         genre_map: catalog genre tags → Content Taxonomy 3.1 (``taxonomy.default_genre_map()`` ships with the code).
-        publisher_domain: the publisher's domain, the registry of the catalog's own content ids.
+        publisher_domain: the publisher's domain, the registry of the catalog's own content ids in ``cids``; None
+            leaves the content id in ``id`` only.
         updated: when the object is written; any time zone, stored as UTC seconds.
 
     Raises:
         ValueError: ``publisher_domain`` is not a domain, ``updated`` is naive, or the object would exceed the
             Functions response limit (:data:`BODY_MAX_CHARS`).
     """
-    if not is_domain(publisher_domain):
+    if publisher_domain is not None and not is_domain(publisher_domain):
         raise ValueError(f"publisher_domain must be a domain such as example.com, got {publisher_domain!r}")
     if updated.tzinfo is None:
         raise ValueError("updated must be timezone-aware")
@@ -179,9 +181,14 @@ def header(
     return ";".join([*head, *middle, *tail])
 
 
-def _content_ids(item: ContentItem, publisher_domain: str) -> list[ContentIds]:
+def digest(context: CatalogContext) -> str:
+    """SHA-256 of the object's content, ``updated`` aside: equal digests mean the same metadata."""
+    return hashlib.sha256(context.model_dump_json(exclude={"updated"}).encode()).hexdigest()
+
+
+def _content_ids(item: ContentItem, publisher_domain: str | None) -> list[ContentIds]:
     """The publisher's id first, then each registry's in domain order; one entry per registry."""
-    registries: dict[str, list[str]] = {publisher_domain: [item.content_id]}
+    registries: dict[str, list[str]] = {publisher_domain: [item.content_id]} if publisher_domain else {}
     for domain, id_ in sorted((item.external_ids or {}).items()):
         ids = registries.setdefault(domain, [])
         if id_ not in ids:
