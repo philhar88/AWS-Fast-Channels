@@ -183,8 +183,9 @@ sequenceDiagram
     MT-->>P: 301 to the ad segment on the CDN
 ```
 
-The channel policy admits only the channel's own playback configuration (SigV4), so viewers cannot read Channel
-Assembly output without ad insertion, and CloudFront's bucket policy denies the content manifests under `assets/`. See
+The channel policy admits only the channel's own playback configurations (SigV4: the channel's one, plus its
+siblings `<channel>-p-?` when the release module monetizes it), so viewers cannot read Channel Assembly output
+without ad insertion, and CloudFront's bucket policy denies the content manifests under `assets/`. See
 [ad-insertion.md](ad-insertion.md) and [delivery-and-multi-cdn.md](delivery-and-multi-cdn.md).
 
 ## Construct catalogue

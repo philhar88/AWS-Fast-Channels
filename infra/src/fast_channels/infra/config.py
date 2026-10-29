@@ -652,8 +652,9 @@ class ReleaseModule(_Module):
     Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and
     is rolled back unattended on an alarm."""
     channels: tuple[str, ...] = ()
-    """IaC channels to monetize (names from ``channels.iac``; ``{prefix}`` is replaced as there). Turning the module
-    on widens each channel's policy once: do it while the channels are stopped."""
+    """IaC channels to monetize (names from ``channels.iac``; ``{prefix}`` is replaced as there). Their channel policy
+    also admits the sibling configurations ``<channel>-p-?``. Adding a channel widens its policy once, and the
+    deployment refuses that while the channel runs: stop it first."""
     strategy: ReleaseStrategy = ReleaseStrategy.DEMO
     """``demo`` (a simulated audience: 10% steps over 30 minutes), ``standard`` (up to 20,000 concurrent viewers: 10%
     steps over 3 hours) or ``large`` (exponential steps over 4 hours)."""

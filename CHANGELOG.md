@@ -65,6 +65,11 @@ All notable changes to this project are documented here. The format follows
   in `contracts/fixtures/pds/`; `tests/pbs` (marker `pbs`) runs the no-hook contract matrix, header isolation, wire
   fields and the impression rule against the jar, and validates every call it makes against the contract's models.
   New CI job `pbs-module` and make targets `pbs-test`, `pbs-contract`.
+- **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
+  its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
+  every agent channel created while the module is on. The channel update guard treats adding the pattern as a
+  change, so it refuses it on a running channel (or stops and restarts the channel with `restart_on_update`),
+  because a policy change on a running channel is not session-safe. With the module off the policy is unchanged.
 
 ## [3.0.0] - 2026-10-16
 

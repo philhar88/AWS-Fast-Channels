@@ -201,6 +201,7 @@ class MediaStack(Stack):
                 log_destination_arn=self.vended_logs.destination_arn,
                 log_percent=config.observability.mediatailor_log_percent,
                 ads_url=external_ads,
+                sibling_policy=config.modules.release.enabled,
             ),
             mediatailor_log_destination_arn=self.vended_logs.destination_arn,
         )
@@ -226,6 +227,7 @@ class MediaStack(Stack):
             tier=channel.tier,
             brief=channel.brief,
             log_percent=config.observability.mediatailor_log_percent,
+            siblings=config.modules.release.enabled and channel.name in config.modules.release.channels,
             removal_policy=config.removal_policy,
         )
         # No dependency on AsRunLogging: channels are created stopped, so they log nothing before the stack is

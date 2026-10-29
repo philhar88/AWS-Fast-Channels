@@ -324,20 +324,25 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-MERGED_MODULES = ("models",)
-"""Modules whose code is merged; a module's pull request adds it here, with snapshots of what it synthesizes."""
+MERGED_MODULES = ("models", "release")
+"""Modules whose code is merged; a module's pull request adds it here, with tests of what it synthesizes."""
+NEEDED_MODULES = ("ops", "demand", "pds")
+"""Modules a merged one needs on (``release`` needs ``ops``, ``demand`` and ``pds``) whose code is not merged yet:
+they add nothing, so the comparison below still isolates the merged code."""
 
 
 def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeployment, normalized: Any) -> None:
     """Enabling a module changes nothing until its code is merged: the ``fastm`` stage, with every module on,
-    synthesizes exactly what the shipped configuration does with only the merged modules on."""
+    synthesizes exactly what the shipped configuration does with only the merged modules (and those they need) on.
+    What the merged modules add has its own tests (``test_release_policy.py``)."""
     stage = stage_args.load("fastm")
     fastm = deployment(stage_overrides("fastm"))
-    merged = deployment({"prefix": "fastm", **{f"modules.{name}": stage["modules"][name] for name in MERGED_MODULES}})
+    on = (*NEEDED_MODULES, *MERGED_MODULES)
+    merged = deployment({"prefix": "fastm", **{f"modules.{name}": stage["modules"][name] for name in on}})
 
     merged_modules = FastChannelsConfig.from_context(merged.app.node).modules
     assert FastChannelsConfig.from_context(fastm.app.node).modules != merged_modules
-    assert {name for name in ModulesConfig.model_fields if merged_modules.enabled(name)} == set(MERGED_MODULES)
+    assert {name for name in ModulesConfig.model_fields if merged_modules.enabled(name)} == set(on)
     assert (
         names(fastm)
         == names(merged)
