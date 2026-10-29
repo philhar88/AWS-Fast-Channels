@@ -28,6 +28,12 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
+from fast_channels.core.mediatailor_logs import (
+    ADS_LOG_FIELDS,
+    EXCLUDED_ADS_LOG_FIELDS,
+    EXCLUDED_MANIFEST_LOG_FIELDS,
+    MANIFEST_LOG_FIELDS,
+)
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.delivery import ACCESS_LOG_FIELDS
 from fast_channels.infra.constructs.logs import DELIVERY_PRINCIPAL, deliver
@@ -44,105 +50,8 @@ __all__ = [
     "lake_database_name",
 ]
 
-# Default record fields of MediaTailor's S3 deliveries, in the service's order (``aws logs
-# describe-configuration-templates --service mediatailor``, us-east-1, 2026-10-29).
-_ADS_DEFAULT_FIELDS: Final = (
-    "eventTimestamp",
-    "awsAccountId",
-    "originId",
-    "customerId",
-    "eventType",
-    "sessionType",
-    "requestId",
-    "eventDescription",
-    "sessionId",
-    "vodVastResponseTimeOffset",
-    "adsRequestUrl",
-    "adMarkers",
-    "segmentationUpid",
-    "segmentationTypeId",
-    "originalTargetUrl",
-    "updatedTargetUrl",
-    "rawAdsRequest",
-    "rawAdsRequestIndex",
-    "rawAdsResponse",
-    "rawAdsResponseIndex",
-    "avail",
-    "vastResponse",
-    "vastAd",
-    "vodCreativeOffsets",
-    "requestHeaders",
-    "beaconInfo",
-    "adBreakCorrelationId",
-    "prefetchScheduleName",
-    "eventId",
-    "functionId",
-    "executionTimeMs",
-    "functionType",
-    "status",
-    "errorType",
-    "error",
-    "additionalInfo",
-    "cause",
-    "input",
-    "output",
-    "http",
-    "streamId",
-)
-_MANIFEST_DEFAULT_FIELDS: Final = (
-    "eventTimestamp",
-    "awsAccountId",
-    "originId",
-    "customerId",
-    "eventType",
-    "sessionType",
-    "requestId",
-    "eventDescription",
-    "sessionId",
-    "originRequestUrl",
-    "mediaTailorPath",
-    "responseBody",
-    "requestNextToken",
-    "assetPath",
-    "originFullUrl",
-    "originPrefixUrl",
-    "additionalInfo",
-    "cause",
-    "response",
-    "httpCode",
-    "errorMessage",
-    "adAdsResponse",
-    "adAdsRawResponse",
-    "adAdsRequest",
-    "adNumNewAvails",
-    "generatedMediaPlaylist",
-    "requestStartTime",
-    "requestEndTime",
-    "requestStartTimeEpochMillis",
-    "requestEndTimeEpochMillis",
-    "eventId",
-    "functionId",
-    "executionTimeMs",
-    "functionType",
-    "status",
-    "errorType",
-    "input",
-    "output",
-    "http",
-    "streamId",
-)
-EXCLUDED_ADS_LOG_FIELDS: Final = frozenset({"requestHeaders", "rawAdsRequest"})
-"""Never in the lake: the headers MediaTailor sent the ADS (viewer address and user agent; on monetized
-configurations the origin secret and the ticket) and the opt-in raw request body (the ticket)."""
-EXCLUDED_MANIFEST_LOG_FIELDS: Final = frozenset({"mediaTailorPath", "input", "http"})
-"""Never in the lake: the viewer's request path with its query, and the session-initialization hook's input and HTTP
-exchange."""
 EXCLUDED_ACCESS_LOG_FIELDS: Final = frozenset({"c-ip", "cs-uri-query", "x-forwarded-for"})
 """CloudFront fields the lake's table leaves out: the viewer's address and the original viewer query."""
-ADS_LOG_FIELDS: Final = tuple(f for f in _ADS_DEFAULT_FIELDS if f not in EXCLUDED_ADS_LOG_FIELDS)
-"""Record fields of the lake's copy of the ad decision server logs."""
-MANIFEST_LOG_FIELDS: Final = tuple(f for f in _MANIFEST_DEFAULT_FIELDS if f not in EXCLUDED_MANIFEST_LOG_FIELDS)
-"""Record fields of the lake's copy of the manifest logs."""
 
 LEDGER_PREFIX: Final = "ledger/"
 """Key prefix of the ledger archive's records (``constructs.ops.ledger.ARCHIVE_PREFIX``)."""
@@ -165,7 +74,8 @@ QUERY_SCAN_LIMIT_BYTES: Final = 10 * 1024**3
 """Athena cancels a lake query that would scan more than this (10 GiB, about 5 US cents)."""
 MEDIATAILOR_PREFIX: Final = "mediatailor"
 """Key prefix of the MediaTailor log copies: ``mediatailor/<ads|manifest>/``."""
-_SUFFIX_PATH: Final = "{yyyy}/{MM}/{dd}/{HH}"
+LAKE_SUFFIX_PATH: Final = "{yyyy}/{MM}/{dd}/{HH}"
+"""Key layout of the lake's MediaTailor log copies under their prefix (the tables' partition projection reads it)."""
 _DATEHOUR_FORMAT: Final = "yyyy/MM/dd/HH"
 
 
@@ -542,7 +452,7 @@ class Lake(Construct):
                     destination_arn=destination.attr_arn,
                     after=previous,
                     record_fields=list(log.fields),
-                    s3_suffix_path=_SUFFIX_PATH,
+                    s3_suffix_path=LAKE_SUFFIX_PATH,
                     s3_enable_hive_compatible_path=False,
                 )
                 self.deliveries.append(previous)

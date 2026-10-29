@@ -204,9 +204,13 @@ def test_names_follow_the_prefix(stage: _demand.DemandStage) -> None:
     assert any(arg == 'fast-channels.prefix="fastcix"' for arg in context)
 
 
-def test_the_pds_stack_deploys_after_the_demand_stack(stage: _demand.DemandStage) -> None:
-    assert stage.pds_stack == "FastChannels-fastcix-Pds"
-    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Pds"]
+def test_the_pds_and_release_stacks_deploy_after_the_demand_stack(stage: _demand.DemandStage) -> None:
+    assert (stage.pds_stack, stage.release_stack) == ("FastChannels-fastcix-Pds", "FastChannels-fastcix-Release")
+    assert stage.beside_stacks() == [
+        "FastChannels-fastcix/Demand",
+        "FastChannels-fastcix/Pds",
+        "FastChannels-fastcix/Release",
+    ]
 
 
 def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
@@ -239,7 +243,7 @@ def test_the_pds_needs_the_parameters_of_the_data_and_media_stacks(stage: _deman
 def test_a_pds_stack_the_module_no_longer_has_is_deleted(fastci: Any, stub: Any) -> None:
     modules = fastci.modules.model_copy(update={"pds": fastci.modules.pds.model_copy(update={"enabled": False})})
     stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
-    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand"]
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Release"]
     cloudformation = Stubber(stage.client("cloudformation"))
     name = {"StackName": "FastChannels-fastcix-Pds"}
     cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
@@ -247,6 +251,32 @@ def test_a_pds_stack_the_module_no_longer_has_is_deleted(fastci: Any, stub: Any)
     cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
     with cloudformation:
         stage.check_pds_state()
+    cloudformation.assert_no_pending_responses()
+
+
+def test_the_release_stack_needs_the_media_stacks_parameters(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    name = {"Name": "/fastcix/release/content-base-url"}
+    ssm.add_client_error("get_parameter", "ParameterNotFound", expected_params=name)
+    with pytest.raises(_demand.DemandError, match="make deploy"):
+        stage.check_release_state()
+    ssm.add_response("get_parameter", {"Parameter": {"Name": name["Name"], "Value": "https://cdn"}}, name)
+    stage.check_release_state()
+
+
+def test_a_release_stack_the_module_no_longer_has_is_deleted(fastci: Any) -> None:
+    modules = fastci.modules.model_copy(
+        update={"release": fastci.modules.release.model_copy(update={"enabled": False})}
+    )
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Pds"]
+    cloudformation = Stubber(stage.client("cloudformation"))
+    name = {"StackName": "FastChannels-fastcix-Release"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
+    cloudformation.add_response("delete_stack", {}, name)
+    cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
+    with cloudformation:
+        stage.check_release_state()
     cloudformation.assert_no_pending_responses()
 
 

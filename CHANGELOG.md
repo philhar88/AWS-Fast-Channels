@@ -51,7 +51,19 @@ All notable changes to this project are documented here. The format follows
   stage's MediaTailor log group counts our tracker's `BEACON_FIRED` impressions once per `(sid, evid, crid)` and fills
   once per `(sid, evid)`, delivers their reservations and sends `pds.delivery` records to the lake (`pds_delivery`); a
   sweeper releases reservations without an impression after two hours. `/select` makes the reservations from M2-04.
-- **Monetization desired state** (`fast_channels.core.monetization`, for the release module; no stack uses it yet):
+- **Release Controller: the apply path** (`modules.release`, `FastChannels-<prefix>-Release`,
+  [docs/release-controller.md](docs/release-controller.md)). CDK renders and validates the release bundle;
+  `Custom::DesiredState` stores it by digest and puts `Desired State Rendered` on the bus; the state machine
+  `<prefix>-release` validates it again, creates its MediaTailor Functions (an id is never updated), configures
+  the idle sibling `<channel>-p-<s>` (all siblings on a channel's first release) with the origin secret read at
+  apply, creates its vended-log deliveries without the fields that may hold the secret or a ticket, rewrites
+  `/plan/playback/<channel>.json` and ledgers the release. The siblings' log group has its own KMS key, whose
+  policy lets only named roles decrypt. An hourly drift check (alarm `<prefix>-release-drift`), per-sibling hook
+  alarms and a zero-ad-sessions detector watch the siblings. With the module on, every other role of the stage is
+  denied the writes the controller owns (managed policy `ReleaseGuard`), and the controller never changes a channel
+  policy. `deploy-demand` deploys the stack after Pds; deleting it reaps what the controller created. The Media stack
+  writes the SSM parameters `/<prefix>/release/*` it reads.
+- **Monetization desired state** (`fast_channels.core.monetization`, for the release module):
   MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
   PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the
   sibling playback configurations `<prefix>-<ch>-p-<s>` with their templated OpenRTB POST to Prebid Server

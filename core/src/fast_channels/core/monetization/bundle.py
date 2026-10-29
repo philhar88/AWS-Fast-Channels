@@ -186,6 +186,8 @@ class MonetizedChannel(_Model):
 
     name: str
     child_directed: bool = False
+    outputs: tuple[str, ...] = ("hls",)
+    """The channel's outputs (rendition profiles): one playback URL each in ``/plan/playback/<channel>.json``."""
     policy_source_arns: tuple[str, ...]
     """The ``ArnLike aws:SourceArn`` values as playback-configuration names: the v3.0.0 configuration (the channel
     name) and the sibling pattern ``<channel>-p-?``."""
@@ -258,6 +260,8 @@ class ChannelInput(_Model):
     child_directed: bool = False
     lab: bool = False
     """The stage's lab channel: its siblings publish the PRE_SESSION hook events for the smoke test."""
+    outputs: tuple[str, ...] = ("hls",)
+    """The channel's outputs (``channels.iac[].outputs``)."""
 
 
 def root_stem(prefix: str, hook: Hook, *, sibling: str | None = None) -> str:
@@ -319,7 +323,8 @@ def build_bundle(
     contributions: Sequence[BundleContribution] = (),
 ) -> Bundle:
     """The bundle of ``channels``: siblings ``a``/``b`` (and the probe ``z``) per channel, each hook's root executor
-    over ``contributions`` and then the session controls.
+    over ``contributions`` and then the session controls. The probe, which never forwards a ticket, publishes the
+    PRE_SESSION hook events as lab siblings do, so the committed session controls can be read from its logs.
 
     Phase 1 has no kids pairs and no ticket (M4); sessions are CONTEXTUAL and PRE_SESSION runs the controls alone.
     Validate the result with :func:`fast_channels.core.monetization.validators.validate_bundle`.
@@ -352,7 +357,7 @@ def build_bundle(
                 function_mapping=mapping,
                 kids=channel.child_directed or role is SiblingRole.KIDS,
                 probe=role is SiblingRole.PROBE,
-                lab=channel.lab,
+                lab=channel.lab or role is SiblingRole.PROBE,  # never ticketed: it may log the hook's output
             )
             siblings.append(Sibling(name=name, channel=channel.name, letter=letter, role=role, playback=playback))
     return Bundle(
@@ -363,6 +368,7 @@ def build_bundle(
             MonetizedChannel(
                 name=c.name,
                 child_directed=c.child_directed,
+                outputs=c.outputs,
                 policy_source_arns=(c.name, f"{c.name}{SIBLING_PATTERN}"),
             )
             for c in channels

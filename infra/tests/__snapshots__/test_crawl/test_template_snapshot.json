@@ -293,6 +293,11 @@
           ],
           "Version": "2012-10-17"
         },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
         "Tags": [
           {
             "Key": "fast:app",
@@ -484,6 +489,11 @@
           "Version": "2012-10-17"
         },
         "Description": "EventBridge Scheduler: invoke the catalog context sweep and dead-letter failed deliveries",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
         "Tags": [
           {
             "Key": "fast:app",
@@ -663,6 +673,37 @@
         }
       },
       "Type": "AWS::Lambda::Permission"
+    },
+    "ReleaseGuard3432AE9F": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): only the Release Controller changes monetization",
+        "Path": "/",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "mediatailor:CreatePrefetchSchedule",
+                "mediatailor:DeleteFunction",
+                "mediatailor:DeletePlaybackConfiguration",
+                "mediatailor:DeletePrefetchSchedule",
+                "mediatailor:PutChannelPolicy",
+                "mediatailor:PutFunction",
+                "mediatailor:PutPlaybackConfiguration"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*"
+              ],
+              "Sid": "OnlyTheReleaseControllerChangesMonetization"
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::IAM::ManagedPolicy"
     }
   },
   "Rules": {

@@ -13,6 +13,7 @@ from fast_channels.infra.constructs.functions import (
     LogGroupDefaults,
     StateMachineDefaults,
 )
+from fast_channels.infra.constructs.release.guards import ReleaseGuard
 from fast_channels.infra.stacks.as_run import AsRunRouterStack
 from fast_channels.infra.stacks.baseline import AccountBaselineStack
 from fast_channels.infra.stacks.crawl import CrawlStack
@@ -26,6 +27,7 @@ from fast_channels.infra.stacks.models import ModelsStack
 from fast_channels.infra.stacks.operator import OperatorStack
 from fast_channels.infra.stacks.ops import OpsStack
 from fast_channels.infra.stacks.pds import PdsStack
+from fast_channels.infra.stacks.release import ReleaseStack
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -155,16 +157,23 @@ class FastChannelsStage(Stage):
             self.edge.add_stack_dependency(self.data)
             self.edge.add_stack_dependency(self.media)
 
-        self.demand_edge: DemandEdgeStack | None = None
-        self.demand_build: DemandBuildStack | None = None
-        self.demand: DemandStack | None = None
-        self.pds: PdsStack | None = None
-        if config.modules.demand.enabled:
-            self._demand_stacks(config, env, stacks)
+        self._modules(config, env, stacks)
 
         Aspects.of(self).add(FunctionLogGroups(log_groups))
         for key, value in tags.items():
             Tags.of(self).add(key, value)
+
+    def _modules(self, config: FastChannelsConfig, env: Environment, stacks: dict[str, Any]) -> None:
+        """The demand module's stacks (and Pds and Release beside the guidance), and the release module's guard."""
+        self.demand_edge: DemandEdgeStack | None = None
+        self.demand_build: DemandBuildStack | None = None
+        self.demand: DemandStack | None = None
+        self.pds: PdsStack | None = None
+        self.release: ReleaseStack | None = None
+        if config.modules.demand.enabled:
+            self._demand_stacks(config, env, stacks)
+        if config.modules.release.enabled:
+            Aspects.of(self).add(self._release_guard(config, str(env.region)))
 
     def _demand_stacks(self, config: FastChannelsConfig, env: Environment, stacks: dict[str, Any]) -> None:
         """DemandEdge (in us-east-1), DemandBuild, and Demand (then Pds) once the deploy script passes the guidance's
@@ -188,6 +197,27 @@ class FastChannelsStage(Stage):
             self.pds.add_stack_dependency(self.demand, "The PDS's record is in the Demand stack's private zone")
             if self.ops is not None:
                 self.pds.add_stack_dependency(self.ops, "The decision records' tables are in the lake's database")
+        if config.modules.release.enabled:
+            self.release = ReleaseStack(self, "Release", config=config, network=network, **stacks)
+            for stack, why in (
+                (self.data, "The ledger is the Data stack's"),
+                (self.media, "The channels and the SSM parameters the bundle reads"),
+                (self.ops, "The lake's delivery destinations"),
+                (self.demand, "Deployed beside the guidance"),
+                (self.pds, "Siblings POST to Prebid Server, which asks the PDS"),
+            ):
+                if stack is not None:
+                    self.release.add_stack_dependency(stack, why)
+
+    def _release_guard(self, config: FastChannelsConfig, region: str) -> ReleaseGuard:
+        """Only the Release Controller (its apply path and reaper) may change monetization (DESIGN §8.1)."""
+        exempt = []
+        if self.release is not None:
+            controller = self.release.controller
+            exempt = [controller.apply.node.path, controller.reaper.node.path]
+        return ReleaseGuard(
+            prefix=config.prefix, channels=config.modules.release.channels, region=region, exempt=exempt
+        )
 
     def _account_baseline(self, config: FastChannelsConfig, tags: dict[str, str]) -> AccountBaselineStack:
         """The account's Transaction Search baseline, which only ``transaction_search: enable`` asks for."""

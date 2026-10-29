@@ -15,6 +15,7 @@ from fast_channels.core.events import (
     CatalogItemChanged,
     CensusChanged,
     ChannelAlert,
+    DesiredStateRendered,
     LadderFailed,
     LadderReady,
     SchedulePublished,
@@ -156,6 +157,7 @@ def test_events() -> None:
             correlation_id="c",
         ),
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version=LV),
+        DesiredStateRendered(bundle_key="release/d/bundle.json", digest="a" * 64, correlation_id="c"),
         CatalogItemChanged(content_id="sintel"),
     ]
     assert {type(d) for d in details} == set(DETAIL_TYPES)

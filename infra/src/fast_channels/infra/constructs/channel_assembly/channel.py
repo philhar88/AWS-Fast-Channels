@@ -104,6 +104,7 @@ class LinearChannel(Construct):
 
     Attributes:
         channel: the ``CfnChannel``. ad_insertion: its :class:`AdInsertion`. exports: :class:`ChannelExports`.
+        channel_url: the channel's Channel Assembly base URL (its playback configurations' content source).
     """
 
     def __init__(
@@ -157,6 +158,7 @@ class LinearChannel(Construct):
         endpoint = resource("Endpoint", "Custom::ChannelEndpoint", Outputs=list(self.outputs))
         endpoint.node.add_dependency(self.channel)
         channel_url = endpoint.get_att_string("ChannelUrl")
+        self.channel_url = channel_url
         preconditioned = {"content_base_url": content_base_url, "ladder_version": ladder_version, "channel": name}
         self.ad_insertion = AdInsertion(
             self,
