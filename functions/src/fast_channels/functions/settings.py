@@ -72,6 +72,10 @@ class Settings:
     """The ops module's ledger table (``<prefix>-ledger``)."""
     ledger_stream: str = field(default_factory=lambda: _env("LEDGER_STREAM"))
     """The Firehose stream that archives linked ledger records."""
+    census_parameter: str = field(default_factory=lambda: _env("CENSUS_PARAMETER"))
+    """SSM parameter with the channel census's last count (ops module)."""
+    ads_log_group: str = field(default_factory=lambda: _env("ADS_LOG_GROUP"))
+    """The deployment's MediaTailor vended-log group (``/aws/vendedlogs/mediatailor/<prefix>``)."""
     as_run_breaks: bool = field(default_factory=lambda: _env("AS_RUN_BREAKS") == "true")
     """The as-run reconciler marks breaks aired (ops module)."""
     epg_break_ids: bool = field(default_factory=lambda: _env("EPG_BREAK_IDS") == "true")

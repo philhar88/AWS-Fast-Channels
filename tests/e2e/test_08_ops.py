@@ -1,6 +1,7 @@
 """The ops module, on stages that enable it (skipped otherwise): its stack outputs, the lake's MediaTailor log copies
 without the excluded fields, ``v_breaks`` returning the breaks this run aired, the as-run reconciler marking the
-breaks of the as-run log ``AIRED``, and ``Census Changed`` events for the channel's start and stop.
+breaks of the as-run log ``AIRED``, ``Census Changed`` events for the channel's start and stop, the ``ListAlerts``
+poller polling while the channel ran, and the account quota alarms.
 
 Runs after the channel tests, which aired the breaks and stopped the channel. The log copies reach S3 a few minutes
 after the events, and the census runs every five minutes, so these tests wait up to about ten minutes.
@@ -222,3 +223,53 @@ def test_census_changed_on_channel_start_and_stop(
     changes = wait_for(both, timeout=CENSUS_TIMEOUT_S, interval=30, what="Census Changed for the start and the stop")
 
     assert all(c["correlation_id"] for c in changes)
+
+
+def _ops_log_group(ops: Stage, logical_id_prefix: str) -> str:
+    """Physical name of the Ops stack's log group whose logical id starts with ``logical_id_prefix``."""
+    pages = ops.cloudformation.get_paginator("list_stack_resources").paginate(StackName=ops.stack_name(Module.OPS))
+    [name] = [
+        resource["PhysicalResourceId"]
+        for page in pages
+        for resource in page["StackResourceSummaries"]
+        if resource["ResourceType"] == "AWS::Logs::LogGroup"
+        and resource["LogicalResourceId"].startswith(logical_id_prefix)
+    ]
+    return name
+
+
+def test_the_alerts_poller_polls_while_the_channel_runs(
+    ops: Stage, published: dict[str, Any], observation: Observation
+) -> None:
+    """Once the census counts the running channel, the poller reads its alerts every minute and publishes its
+    ``ChannelAlerts`` metric; while no channel runs it returns at once, without one."""
+    since = datetime.fromisoformat(published["programs"][0]["start"]) - timedelta(minutes=5)
+    logs = ops.session.client("logs", region_name=ops.region)
+    group = _ops_log_group(ops, "AlertsPollerLogs")
+
+    def polls() -> list[Any] | None:
+        pages = logs.get_paginator("filter_log_events").paginate(
+            logGroupName=group, startTime=int(since.timestamp() * 1000), filterPattern='"ChannelAlerts"'
+        )
+        return [event for page in pages for event in page["events"]] or None
+
+    found = wait_for(polls, timeout=CENSUS_TIMEOUT_S, interval=30, what=f"ChannelAlerts metrics in {group}")
+    pages = logs.get_paginator("filter_log_events").paginate(
+        logGroupName=group, startTime=int(since.timestamp() * 1000), filterPattern='{ $.level = "ERROR" }'
+    )
+    errors = [event["message"][:500] for page in pages for event in page["events"]]
+
+    assert found
+    assert not errors, errors[0]  # e.g. ListAlerts denied: the polls while the channel ran failed
+
+
+def test_account_quota_alarms_exist_and_are_not_alarming(ops: Stage) -> None:
+    cloudwatch = ops.session.client("cloudwatch", region_name=ops.region)
+    alarms = cloudwatch.describe_alarms(AlarmNamePrefix=f"{ops.prefix}-account-")["MetricAlarms"]
+
+    assert {alarm["AlarmName"] for alarm in alarms} >= {
+        f"{ops.prefix}-account-ad-insertion-requests",
+        f"{ops.prefix}-account-channel-assembly-requests",
+    }, alarms
+    assert all(alarm["StateValue"] != "ALARM" for alarm in alarms), alarms
+    assert all(alarm["TreatMissingData"] == "notBreaching" for alarm in alarms), alarms

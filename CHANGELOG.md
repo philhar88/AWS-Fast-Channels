@@ -115,6 +115,12 @@ All notable changes to this project are documented here. The format follows
   the as-run reconciler also reads `AdBreakStart` events and marks the scheduled break `AIRED` with its `aired_at`,
   and a sweep every 15 minutes marks the breaks that never aired `UNAIRED`. Without the module the feed and the
   reconciler are v3.0's.
+- **Ops module, alarms and detectors**: account quota alarms at 80 % of the ad insertion (10,000/s) and Channel
+  Assembly (400/s) request quotas, summed over the account with CloudWatch Metrics Insights; hook and manifest error
+  alarms per IaC playback configuration; an hourly detector of sessions that saw three or more breaks without an ad
+  request (Logs Insights, with the lake view `v_zero_ads_sessions` per day); and a poller that publishes
+  `Channel Alert` events for the alerts of running channels every minute. Every alarm treats missing data as not
+  breaching.
 - **Shared as-run router** (`observability.as_run`, ADR-0032): `shared` deployments read their channels' as-run
   events from the account's default event bus instead of subscribing to the as-run log themselves.
   `make as-run-router` deploys the account's router stack `FastChannels-AsRun` once per account and region: one

@@ -403,6 +403,27 @@ FROM requests r LEFT JOIN fills f ON f.request_id = r.request_id
 GROUP BY r.configuration, date_trunc('hour', r.at)
 """,
     ),
+    View(
+        "v_zero_ads_sessions",
+        "Sessions that saw at least three ad breaks (distinct markers) and made no ad request: possible suppression",
+        (
+            ("day", "varchar"),
+            ("configuration", "varchar"),
+            ("session_id", "varchar"),
+            ("breaks", "bigint"),
+            ("first_break_at", "timestamp(3)"),
+            ("last_break_at", "timestamp(3)"),
+        ),
+        _BREAK_EVENTS  # noqa: S608 - constant SQL, nothing from input
+        + """
+SELECT date_format(min(m.started_at), '%Y-%m-%d') AS day, m.configuration, m.session_id,
+  count(DISTINCT m.evid) AS breaks, min(m.started_at) AS first_break_at, max(m.started_at) AS last_break_at
+FROM markers m LEFT JOIN (SELECT DISTINCT session_id FROM requests) r ON r.session_id = m.session_id
+WHERE r.session_id IS NULL AND m.evid IS NOT NULL
+GROUP BY m.configuration, m.session_id
+HAVING count(DISTINCT m.evid) >= 3
+""",
+    ),
 )
 
 

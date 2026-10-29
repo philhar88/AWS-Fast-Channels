@@ -87,6 +87,19 @@ class CensusChanged(BaseModel):
     correlation_id: str = Field(description="Name of the census execution that saw the change.")
 
 
+class ChannelAlert(BaseModel):
+    """A Channel Assembly alert of a running channel changed (ops module): Channel Assembly and MediaTailor publish no
+    events, so a poller reads ``ListAlerts`` every minute and publishes each alert changed in that minute once."""
+
+    channel: str
+    code: str = Field(description="Alert code; for PROGRAM_ALERT the message names the program and its alert.")
+    category: str = Field(description="SCHEDULING_ERROR (breaks playback), PLAYBACK_WARNING or INFO.")
+    message: str
+    resource_arn: str
+    last_modified: str = Field(description="UTC ISO-8601 time of the alert's last change.")
+    correlation_id: str = Field(description="The poll's scheduled time, which every alert of one poll shares.")
+
+
 DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     IngestRequest: "Ingest Requested",
     AssetReady: "Asset Ready",
@@ -97,6 +110,7 @@ DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     AutopilotRun: "Autopilot Run",
     CatalogItemChanged: "Catalog Item Changed",
     CensusChanged: "Census Changed",
+    ChannelAlert: "Channel Alert",
 }
 
 

@@ -14,6 +14,7 @@ from fast_channels.core.events import (
     AutopilotRun,
     CatalogItemChanged,
     CensusChanged,
+    ChannelAlert,
     LadderFailed,
     LadderReady,
     SchedulePublished,
@@ -145,6 +146,15 @@ def test_events() -> None:
         SchedulePublished(channel="ch", plan_id="p", programs=2, start_ms=0, end_ms=1, correlation_id="c"),
         AutopilotRun(channel="ch", status="SUCCEEDED", session_id="s", summary="ok"),
         CensusChanged(running=1, previous=0, correlation_id="c"),
+        ChannelAlert(
+            channel="ch",
+            code="SCHEDULING_ERROR",
+            category="SCHEDULING_ERROR",
+            message="m",
+            resource_arn="arn",
+            last_modified="2026-10-29T03:00:00Z",
+            correlation_id="c",
+        ),
         IngestRequest(source_uri="s3://i/a.mp4", ladder_version=LV),
         CatalogItemChanged(content_id="sintel"),
     ]

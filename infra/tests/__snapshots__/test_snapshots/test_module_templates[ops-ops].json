@@ -36,6 +36,274 @@
     }
   },
   "Resources": {
+    "AlertsPollerB3281580": {
+      "DependsOn": [
+        "AlertsPollerRoleDefaultPolicyEBF69213",
+        "AlertsPollerRole11A9F7BC"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Publish Channel Alert events for the alerts of running channels (every minute)",
+        "Environment": {
+          "Variables": {
+            "CENSUS_PARAMETER": "/fast/ops/running-channels",
+            "EVENT_BUS": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefEventsBus45DE433979464063",
+                "Region": "us-east-1",
+                "StackName": "FastChannels-Media"
+              }
+            },
+            "FAST_PREFIX": "fast",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "ops.list_alerts"
+          }
+        },
+        "Handler": "fast_channels.functions.ops.list_alerts.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AlertsPollerLogs0C54FEBC"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "AlertsPollerRole11A9F7BC",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 50,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "AlertsPollerLogs0C54FEBC": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AlertsPollerRole11A9F7BC": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AlertsPollerRoleDefaultPolicyEBF69213": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AlertsPollerLogs0C54FEBC",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "mediatailor:ListChannels",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "mediatailor:ListAlerts",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:alerts/*"
+            },
+            {
+              "Action": "ssm:GetParameter",
+              "Effect": "Allow",
+              "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/fast/ops/running-channels"
+            },
+            {
+              "Action": "events:PutEvents",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputFnGetAttEventsBus45DE4339Arn93FA22C0",
+                  "Region": "us-east-1",
+                  "StackName": "FastChannels-Media"
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AlertsPollerRoleDefaultPolicyEBF69213",
+        "Roles": [
+          {
+            "Ref": "AlertsPollerRole11A9F7BC"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AlertsSchedule67D3E782": {
+      "Properties": {
+        "Description": "Publish the alerts of fast's running channels every minute",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(1 minute)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "AlertsPollerB3281580",
+              "Arn"
+            ]
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 1
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "AlertsScheduleRole98CC555F",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "AlertsScheduleRole98CC555F": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AlertsScheduleRoleDefaultPolicyC013A585": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AlertsPollerB3281580",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AlertsPollerB3281580",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AlertsScheduleRoleDefaultPolicyC013A585",
+        "Roles": [
+          {
+            "Ref": "AlertsScheduleRole98CC555F"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
     "AppConfigApplicationF162A144": {
       "Properties": {
         "Description": "FAST Channels (fast): feature flags and the release pointer",
@@ -73,6 +341,202 @@
         ]
       },
       "Type": "AWS::AppConfig::Environment"
+    },
+    "ConfigurationAlarmsFastDemoFunctionErrors36B2715B": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "fast-demo: Function.Errors in the last five minutes",
+        "AlarmName": "fast-demo-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fast-demo"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ConfigurationAlarmsFastDemoGetmanifestErrorsDE82FC9C": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "fast-demo: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fast-demo-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fast-demo"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ConfigurationAlarmsFastDemoPreadsrequesthookErrors3FA1F21F": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "fast-demo: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fast-demo-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fast-demo"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ConfigurationAlarmsFastDemoPresessioninithookErrors55A242D3": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "fast-demo: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fast-demo-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fast-demo"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
     },
     "LakeAdsDeliveryfastdemoCB15E69A": {
       "Properties": {
@@ -1282,6 +1746,60 @@
       },
       "Type": "AWS::Glue::Table"
     },
+    "LakeVZeroAdsSessions1F58E78C": {
+      "DependsOn": [
+        "LakeCloudFrontAccessTableDA6D449B",
+        "LakeDatabase6CA13201",
+        "LakeLedgerTable95955543",
+        "LakeMediatailorAdsTable9EF71D3B",
+        "LakeMediatailorManifestTable2E1840AC"
+      ],
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": "fast_lake",
+        "TableInput": {
+          "Description": "Sessions that saw at least three ad breaks (distinct markers) and made no ad request: possible suppression",
+          "Name": "v_zero_ads_sessions",
+          "Parameters": {
+            "comment": "Presto View",
+            "presto_view": "true"
+          },
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "day",
+                "Type": "string"
+              },
+              {
+                "Name": "configuration",
+                "Type": "string"
+              },
+              {
+                "Name": "session_id",
+                "Type": "string"
+              },
+              {
+                "Name": "breaks",
+                "Type": "bigint"
+              },
+              {
+                "Name": "first_break_at",
+                "Type": "timestamp"
+              },
+              {
+                "Name": "last_break_at",
+                "Type": "timestamp"
+              }
+            ],
+            "SerdeInfo": {}
+          },
+          "TableType": "VIRTUAL_VIEW",
+          "ViewExpandedText": "/* Presto View */",
+          "ViewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggcmVxdWVzdHMgQVMgKFxuICBTRUxFQ1Qgb3JpZ2luaWQgQVMgY29uZmlndXJhdGlvbiwgc2Vzc2lvbmlkIEFTIHNlc3Npb25faWQsIHJlcXVlc3RpZCBBUyByZXF1ZXN0X2lkLFxuICAgIENBU1QoZnJvbV9pc284NjAxX3RpbWVzdGFtcChldmVudHRpbWVzdGFtcCkgQVMgdGltZXN0YW1wKDMpKSBBUyBhdCxcbiAgICBUUllfQ0FTVCh1cmxfZXh0cmFjdF9wYXJhbWV0ZXIoYWRzcmVxdWVzdHVybCwgJ2V2aWQnKSBBUyBiaWdpbnQpIEFTIGV2aWQsXG4gICAgdXJsX2V4dHJhY3RfcGFyYW1ldGVyKGFkc3JlcXVlc3R1cmwsICd1cGlkJykgQVMgdXBpZCxcbiAgICB1cmxfZXh0cmFjdF9wYXJhbWV0ZXIoYWRzcmVxdWVzdHVybCwgJ2NoJykgQVMgY2hhbm5lbFxuICBGUk9NIFwiZmFzdF9sYWtlXCIuXCJtZWRpYXRhaWxvcl9hZHNcIiBXSEVSRSBldmVudHR5cGUgPSAnTUFLSU5HX0FEU19SRVFVRVNUJ1xuKSxcbm1hcmtlcnMgQVMgKFxuICBTRUxFQ1Qgb3JpZ2luaWQgQVMgY29uZmlndXJhdGlvbiwgc2Vzc2lvbmlkIEFTIHNlc3Npb25faWQsXG4gICAgZnJvbV9iYXNlKHJlZ2V4cF9leHRyYWN0KGFkbWFya2VycywgJ0lEPVwiWzAtOV0rLVswLTldKy0oWzAtOUEtRmEtZl0rKVwiJywgMSksIDE2KSBBUyBldmlkLFxuICAgIHNlZ21lbnRhdGlvbnVwaWQgQVMgdXBpZCxcbiAgICBDQVNUKGZyb21faXNvODYwMV90aW1lc3RhbXAocmVnZXhwX2V4dHJhY3QoYWRtYXJrZXJzLCAnU1RBUlQtREFURT1cIihbXlwiXSspXCInLCAxKSkgQVMgdGltZXN0YW1wKDMpKSBBUyBzdGFydGVkX2F0XG4gIEZST00gXCJmYXN0X2xha2VcIi5cIm1lZGlhdGFpbG9yX2Fkc1wiIFdIRVJFIGV2ZW50dHlwZSA9ICdBRF9NQVJLRVJfRk9VTkQnXG4pLFxuZmlsbHMgQVMgKFxuICBTRUxFQ1QgcmVxdWVzdGlkIEFTIHJlcXVlc3RfaWQsXG4gICAgVFJZX0NBU1QoanNvbl9leHRyYWN0X3NjYWxhcihhdmFpbCwgJyQub3JpZ2luYXZhaWxkdXJhdGlvbicpIEFTIGRvdWJsZSkgQVMgYXZhaWxfc2Vjb25kcyxcbiAgICBUUllfQ0FTVChqc29uX2V4dHJhY3Rfc2NhbGFyKGF2YWlsLCAnJC5maWxsZWRkdXJhdGlvbicpIEFTIGRvdWJsZSkgQVMgZmlsbGVkX3NlY29uZHNcbiAgRlJPTSBcImZhc3RfbGFrZVwiLlwibWVkaWF0YWlsb3JfYWRzXCIgV0hFUkUgZXZlbnR0eXBlID0gJ0ZJTExFRF9BVkFJTCdcbilcblxuU0VMRUNUIGRhdGVfZm9ybWF0KG1pbihtLnN0YXJ0ZWRfYXQpLCAnJVktJW0tJWQnKSBBUyBkYXksIG0uY29uZmlndXJhdGlvbiwgbS5zZXNzaW9uX2lkLFxuICBjb3VudChESVNUSU5DVCBtLmV2aWQpIEFTIGJyZWFrcywgbWluKG0uc3RhcnRlZF9hdCkgQVMgZmlyc3RfYnJlYWtfYXQsIG1heChtLnN0YXJ0ZWRfYXQpIEFTIGxhc3RfYnJlYWtfYXRcbkZST00gbWFya2VycyBtIExFRlQgSk9JTiAoU0VMRUNUIERJU1RJTkNUIHNlc3Npb25faWQgRlJPTSByZXF1ZXN0cykgciBPTiByLnNlc3Npb25faWQgPSBtLnNlc3Npb25faWRcbldIRVJFIHIuc2Vzc2lvbl9pZCBJUyBOVUxMIEFORCBtLmV2aWQgSVMgTk9UIE5VTExcbkdST1VQIEJZIG0uY29uZmlndXJhdGlvbiwgbS5zZXNzaW9uX2lkXG5IQVZJTkcgY291bnQoRElTVElOQ1QgbS5ldmlkKSA+PSAzIiwiY2F0YWxvZyI6ImF3c2RhdGFjYXRhbG9nIiwic2NoZW1hIjoiZmFzdF9sYWtlIiwiY29sdW1ucyI6W3sibmFtZSI6ImRheSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoiY29uZmlndXJhdGlvbiIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoic2Vzc2lvbl9pZCIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoiYnJlYWtzIiwidHlwZSI6ImJpZ2ludCJ9LHsibmFtZSI6ImZpcnN0X2JyZWFrX2F0IiwidHlwZSI6InRpbWVzdGFtcCgzKSJ9LHsibmFtZSI6Imxhc3RfYnJlYWtfYXQiLCJ0eXBlIjoidGltZXN0YW1wKDMpIn1dLCJydW5Bc0ludm9rZXIiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7fX0= */"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
     "LakeWorkGroupA1356543": {
       "Properties": {
         "Description": "FAST Channels (fast) lake queries",
@@ -2039,6 +2557,395 @@
         ]
       },
       "Type": "AWS::IAM::Policy"
+    },
+    "QuotaAlarmsAdInsertionRequestsAlarmDD6C5AE5": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "MediaTailor ad insertion requests of every playback configuration in the account are above 80% of the 10,000/s quota (L-32FBC51C): request an increase in Service Quotas (runbook R7)",
+        "AlarmName": "fast-account-ad-insertion-requests",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "EvaluationPeriods": 3,
+        "Metrics": [
+          {
+            "Expression": "SELECT SUM(Requests) FROM SCHEMA(\"AWS/MediaTailor\", ConfigurationName)",
+            "Id": "expr_1",
+            "Label": "ad-insertion-requests per minute",
+            "Period": 60,
+            "ReturnData": true
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 480000,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "QuotaAlarmsChannelAssemblyRequestsAlarm0E3A6DAB": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "Channel Assembly requests of every channel in the account are above 80% of the 400/s quota: request an increase in Service Quotas (runbook R7)",
+        "AlarmName": "fast-account-channel-assembly-requests",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "EvaluationPeriods": 3,
+        "Metrics": [
+          {
+            "Expression": "SELECT SUM(RequestCount) FROM SCHEMA(\"AWS/MediaTailor\", Channel)",
+            "Id": "expr_1",
+            "Label": "channel-assembly-requests per minute",
+            "Period": 60,
+            "ReturnData": true
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 19200,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ZeroAdsAlarmB6328B9B": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "AlarmDescription": "Sessions saw at least three ad breaks but requested no ads: possible ad suppression by a direct caller (see the detector's log for the session ids)",
+        "AlarmName": "fast-zero-ads-sessions",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "ops.zero_ads_sessions"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ZeroAdsSessions",
+        "Namespace": "FastChannels",
+        "OKActions": [
+          {
+            "Fn::GetStackOutput": {
+              "OutputName": "PublishOutputRefObservabilityTopicFFC7823B457E5C0B",
+              "Region": "us-east-1",
+              "StackName": "FastChannels-Media"
+            }
+          }
+        ],
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ZeroAdsDetectorFAD25C08": {
+      "DependsOn": [
+        "ZeroAdsDetectorRoleDefaultPolicy77B74653",
+        "ZeroAdsDetectorRole98E1C3DF"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Count the sessions that saw ad breaks without requesting ads (hourly)",
+        "Environment": {
+          "Variables": {
+            "ADS_LOG_GROUP": "/aws/vendedlogs/mediatailor/fast",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "ops.zero_ads_sessions"
+          }
+        },
+        "Handler": "fast_channels.functions.ops.zero_ads_sessions.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ZeroAdsDetectorLogs26DC62CF"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ZeroAdsDetectorRole98E1C3DF",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ZeroAdsDetectorLogs26DC62CF": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ZeroAdsDetectorRole98E1C3DF": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ZeroAdsDetectorRoleDefaultPolicy77B74653": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ZeroAdsDetectorLogs26DC62CF",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:GetQueryResults",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "logs:StartQuery",
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fast"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ZeroAdsDetectorRoleDefaultPolicy77B74653",
+        "Roles": [
+          {
+            "Ref": "ZeroAdsDetectorRole98E1C3DF"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ZeroAdsScheduleAD8E86B1": {
+      "Properties": {
+        "Description": "Count the zero-ad sessions of fast every hour",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(1 hour)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "ZeroAdsDetectorFAD25C08",
+              "Arn"
+            ]
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 1
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "ZeroAdsScheduleRoleF09EA709",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "ZeroAdsScheduleRoleDefaultPolicyFBE9B115": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ZeroAdsDetectorFAD25C08",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ZeroAdsDetectorFAD25C08",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ZeroAdsScheduleRoleDefaultPolicyFBE9B115",
+        "Roles": [
+          {
+            "Ref": "ZeroAdsScheduleRoleF09EA709"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ZeroAdsScheduleRoleF09EA709": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
     }
   },
   "Rules": {
