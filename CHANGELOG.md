@@ -50,7 +50,13 @@ All notable changes to this project are documented here. The format follows
   cap, the reservation and its ledger money event, so liability never exceeds the budget. A subscription filter on the
   stage's MediaTailor log group counts our tracker's `BEACON_FIRED` impressions once per `(sid, evid, crid)` and fills
   once per `(sid, evid)`, delivers their reservations and sends `pds.delivery` records to the lake (`pds_delivery`); a
-  sweeper releases reservations without an impression after two hours. `/select` makes the reservations from M2-04.
+  sweeper releases reservations without an impression after two hours.
+- **`POST /select`** ([docs/pds.md](docs/pds.md#pod-rules)): the pod rules on the snapshot (tier-0 lines first, the
+  floor, the break of record for prefetch rounding), every own-book line ad in the pod or among its standalones
+  reserved before it is answered (a line that cannot be is left out, `unreserved`), our tracker on every ad, and a
+  `pds.select` decision record into the lake (`pds_select`). Alarms on Prebid Server's log: more than 1% of breaks
+  without the `/policy` patch, more than 0.5% of pods from the module's house fallback. The shared `/select` examples'
+  house bids carry no `adomain`, as the own book's.
 - **Release Controller: the apply path** (`modules.release`, `FastChannels-<prefix>-Release`,
   [docs/release-controller.md](docs/release-controller.md)). CDK renders and validates the release bundle;
   `Custom::DesiredState` stores it by digest and puts `Desired State Rendered` on the bus; the state machine

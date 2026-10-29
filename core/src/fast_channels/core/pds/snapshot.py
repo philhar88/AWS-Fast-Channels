@@ -57,6 +57,9 @@ class SnapshotBase(BaseModel):
     shed: frozenset[str] = Field(default=frozenset(), description="Bidders a runbook took out of the allow-list.")
     floor_cpm: Decimal = Field(default=Decimal(0), ge=0, description="Price floor for paid bids, CPM.")
     lines: tuple[Line, ...] = Field(default=(), description="The own book's direct lines.")
+    breaks_ms: tuple[int, ...] = Field(
+        default=(), description="The break lengths of the schedule of record (the default ladder's 30.03 s grid)."
+    )
 
     @field_serializer("shed")
     def _sorted(self, shed: frozenset[str]) -> list[str]:

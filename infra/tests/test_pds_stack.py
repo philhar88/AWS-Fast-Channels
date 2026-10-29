@@ -1,4 +1,4 @@
-"""The Pod Decision Service (M2-02, M2-03): its state in the Data stack and the Pds stack beside the guidance."""
+"""The Pod Decision Service (M2-02 to M2-04): its state in the Data stack and the Pds stack beside the guidance."""
 
 import json
 from collections.abc import Callable
@@ -30,6 +30,7 @@ NETWORK: dict[str, Any] = {
     "cloudfront_domain": "d111111abcdef8.cloudfront.net",
     "target_group_arn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pbs/0123456789abcd",
     "simulator_code_key": "simulator/0123456789abcdef.zip",
+    "container_log_group": "fastm-pbs-PrebidContainerLogGroup",
 }
 EXTRA = {NETWORK_CONTEXT: NETWORK}
 PDS = {
@@ -62,6 +63,7 @@ LINES = [
 OWN_BOOK = "fast_channels.functions.pds.ownbook.handler"
 DELIVERY = "fast_channels.functions.pds.delivery.handler"
 SWEEPER = "fast_channels.functions.pds.sweeper.handler"
+SELECT = "fast_channels.functions.pds.select.handler"
 
 
 def resources(template: Template, kind: str) -> dict[str, dict[str, Any]]:
@@ -174,7 +176,7 @@ def test_the_load_balancer_answers_only_prebid_server_at_pds(deployment: GetDepl
         conditions = {c["Field"]: c for c in rule["Conditions"]}
         paths.extend(conditions["path-pattern"]["PathPatternConfig"]["Values"])
         assert conditions["http-request-method"]["HttpRequestMethodConfig"]["Values"] == ["POST"]
-    assert sorted(paths) == ["/ownbook/openrtb", "/policy"]
+    assert sorted(paths) == ["/ownbook/openrtb", "/policy", "/select"]
     aliases = resources(template, "AWS::Lambda::Alias")
     assert {a["Name"] for a in aliases.values()} == {"live"}
     assert all(g["TargetType"] == "lambda" for g in groups.values())
@@ -209,6 +211,7 @@ def test_the_publisher_runs_on_deploy_and_hourly_with_the_demo_demand(deployment
     base = SnapshotBase.model_validate_json(publisher["Environment"]["Variables"]["PDS_SNAPSHOT_BASE"])
     assert base.demand == {"amt": {"placementId": "fastm-demo"}}
     assert base.lines == ()
+    assert base.breaks_ms == (30030, 60060, 90090, 120120), "the 30.03 s grid of the default ladder"
     schedules = {s["ScheduleExpression"] for s in resources(template, "AWS::Scheduler::Schedule").values()}
     assert schedules == {"rate(1 hour)", "rate(15 minutes)"}
     assert template.find_resources("Custom::Trigger")
@@ -257,7 +260,7 @@ def test_the_own_book_is_warm_and_reads_the_snapshot_and_budgets(deployment: Get
     [batch] = [s for s in granted if s["Action"] == "dynamodb:BatchGetItem"]
     assert batch["Condition"] == {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["BUDGET#*"]}}
     gate = json.dumps(only(template, "AWS::StepFunctions::StateMachine"))
-    assert gate.count("ProvisionedConcurrentExecutions") == 2, "both functions are warmed"
+    assert gate.count("ProvisionedConcurrentExecutions") == 3, "the three functions are warmed"
 
 
 def test_delivery_reads_the_impression_beacons_of_the_stages_mediatailor_log(deployment: GetDeployment) -> None:
@@ -334,7 +337,14 @@ def test_policy_records_flow_into_the_lake(deployment: GetDeployment) -> None:
     columns = {c["Name"]: c["Type"] for c in delivery["StorageDescriptor"]["Columns"]}
     assert set(columns) == set(DeliveryRecord.model_fields) | {name for name, _ in LOG_FIELDS}
     assert (columns["impression"], columns["fill"], columns["enr"]) == ("boolean", "boolean", "bigint")
-    assert {s["DeliveryStreamName"] for s in streams.values()} == {"fastm-pds-policy", "fastm-pds-delivery"}
+    assert {s["DeliveryStreamName"] for s in streams.values()} == {
+        "fastm-pds-policy",
+        "fastm-pds-select",
+        "fastm-pds-delivery",
+    }
+    [select] = [t for t in tables if t["Name"] == "pds_select"]
+    columns = {c["Name"]: c["Type"] for c in select["StorageDescriptor"]["Columns"]}
+    assert (columns["reserved"], columns["reason"], columns["below_floor"]) == ("array<string>", "string", "bigint")
 
 
 def test_the_census_gate_warms_the_functions_while_channels_run(deployment: GetDeployment) -> None:
@@ -384,3 +394,55 @@ def test_template_snapshot(
     d = deployment(overrides, extra=EXTRA)
 
     assert normalized(d.template(d.stage.pds)) == snapshot_json
+
+
+def test_select_reserves_line_ads_and_answers_with_our_tracker(deployment: GetDeployment) -> None:
+    d = deployment(PDS, extra=EXTRA)
+    template = d.template(d.stage.pds)
+    name, select = function(template, SELECT)
+
+    assert "VpcConfig" not in select
+    assert (select["MemorySize"], select["Timeout"]) == (1024, 3)
+    assert set(select["Environment"]["Variables"]) >= {
+        "PDS_CONFIG_BUCKET",
+        "PDS_TABLE",
+        "LEDGER_TABLE",
+        "CONTENT_BASE_URL",
+    }
+    keys = sorted(
+        (json.dumps(s["Action"]), s["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"])
+        for s in statements(template, name[:-8] + "Role")
+        if "Condition" in s
+    )
+    assert keys == [
+        ('"dynamodb:BatchGetItem"', ["BUDGET#*"]),
+        ('"dynamodb:PutItem"', ["RES#*"]),
+        ('"dynamodb:PutItem"', ["pds/*"]),
+        ('"dynamodb:UpdateItem"', ["BUDGET#*", "CAP#*"]),
+    ]
+
+
+def test_the_module_fallback_alarms_watch_prebid_servers_log(deployment: GetDeployment) -> None:
+    d = deployment(PDS, extra=EXTRA)
+    template = d.template(d.stage.pds)
+    filters = {
+        f["MetricTransformations"][0]["MetricName"]: f for f in resources(template, "AWS::Logs::MetricFilter").values()
+    }
+
+    assert set(filters) == {"Pods", "PolicyFallbacks", "SelectFallbacks"}
+    assert {f["LogGroupName"] for f in filters.values()} == {"fastm-pbs-PrebidContainerLogGroup"}
+    assert filters["Pods"]["FilterPattern"] == '"fast-ctv-pod" -"warmup"'
+    assert filters["PolicyFallbacks"]["FilterPattern"] == '"fast-ctv-pod" -"warmup" "POLICY_"'
+    assert filters["SelectFallbacks"]["FilterPattern"] == '"fast-ctv-pod" -"warmup" "SELECT_FALLBACK"'
+    assert {f["MetricTransformations"][0]["MetricNamespace"] for f in filters.values()} == {
+        "FastChannels/PrebidServer/fastm"
+    }
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    policy, select = alarms["fastm-pds-policy-fallbacks"], alarms["fastm-pds-select-fallbacks"]
+    assert (policy["Threshold"], select["Threshold"]) == (1, 0.5)
+    assert policy["ComparisonOperator"] == "GreaterThanThreshold"
+    [expression] = [m["Expression"] for m in policy["Metrics"] if "Expression" in m]
+    assert expression == "IF(pods >= 100, 100 * FILL(fallbacks, 0) / pods, 0)"
+
+    without = deployment(PDS, extra={NETWORK_CONTEXT: {**NETWORK, "container_log_group": None}})
+    assert not resources(without.template(without.stage.pds), "AWS::Logs::MetricFilter")

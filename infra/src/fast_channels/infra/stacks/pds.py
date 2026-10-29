@@ -8,11 +8,13 @@ from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.ledger import ledger_table
 from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
 from fast_channels.core.pds.book import Line
-from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord
+from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord, SelectRecord
 from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, SnapshotBase, demo_demand
+from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.config import DemandMode
 from fast_channels.infra.constructs.alerts import alert_topic_arn, dead_letter_alarm
 from fast_channels.infra.constructs.observability import census_parameter_name
@@ -25,7 +27,8 @@ from fast_channels.infra.constructs.pds import (
     ReleaseSweeper,
     SnapshotPublisher,
 )
-from fast_channels.infra.constructs.pds.delivery import allow_table
+from fast_channels.infra.constructs.pds.alarms import ModuleAlarms
+from fast_channels.infra.constructs.pds.delivery import allow_ledger, allow_table
 from fast_channels.infra.constructs.queues import dead_letter_queue
 
 if TYPE_CHECKING:
@@ -37,13 +40,17 @@ if TYPE_CHECKING:
 
 POLICY_HANDLER = "fast_channels.functions.pds.policy.handler"
 OWN_BOOK_HANDLER = "fast_channels.functions.pds.ownbook.handler"
+SELECT_HANDLER = "fast_channels.functions.pds.select.handler"
 
 
 def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
-    """What the deployment puts in the snapshot: in demo mode, the guidance's bidder simulator as the demand and the
-    synthetic direct lines (``modules.pds.demo_lines``) in the own book."""
+    """What the deployment puts in the snapshot: the break lengths of the default ladder's grid and, in demo mode, the
+    guidance's bidder simulator as the demand and the synthetic direct lines (``modules.pds.demo_lines``) in the own
+    book."""
+    grid = config.ladder(config.ladders.default).grid
+    breaks_ms = tuple(grid.gop_exact(gops) for gops in BREAK_SLATE_GOPS)
     if config.modules.demand.mode is not DemandMode.DEMO:
-        return SnapshotBase()
+        return SnapshotBase(breaks_ms=breaks_ms)
     lines = tuple(
         Line(
             id=line.id,
@@ -58,7 +65,7 @@ def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
         )
         for line in config.modules.pds.demo_lines
     )
-    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines)
+    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines, breaks_ms=breaks_ms)
 
 
 class PdsStack(Stack):
@@ -166,6 +173,27 @@ class PdsStack(Stack):
         self.own_book.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
         allow_table(self.own_book.function, prefix, ["BatchGetItem"], ["BUDGET#*"])
         self.service.add_endpoint(names.Endpoint.OWN_BOOK, self.own_book)
+        self.select = PdsFunction(
+            self,
+            "Select",
+            handler=SELECT_HANDLER,
+            description="PDS POST /select: the pod of one break, its line ads reserved, our trackers",
+            environment={
+                "FAST_PREFIX": prefix,
+                "PDS_CONFIG_BUCKET": bucket.bucket_name,
+                "PDS_TABLE": names.table_name(prefix),
+                "LEDGER_TABLE": ledger_table(prefix),
+                "CONTENT_BASE_URL": content_base_url,
+            },
+            log_retention=retention,
+            removal_policy=removal,
+        )
+        self.select.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
+        allow_table(self.select.function, prefix, ["BatchGetItem"], ["BUDGET#*"])
+        allow_table(self.select.function, prefix, ["UpdateItem"], ["BUDGET#*", "CAP#*"])
+        allow_table(self.select.function, prefix, ["PutItem"], ["RES#*"])
+        allow_ledger(self.select.function, prefix)
+        self.service.add_endpoint(names.Endpoint.SELECT, self.select)
         self.policy_records = DecisionLog(
             self,
             "PolicyRecords",
@@ -196,6 +224,29 @@ class PdsStack(Stack):
                 string_value=self.delivery.function.function.function_arn,
                 description="Read by the release module's stack: the impressions of the sibling configurations",
             )
+        self.select_records = DecisionLog(
+            self,
+            "SelectRecords",
+            prefix=prefix,
+            kind="select",
+            model=SelectRecord,
+            log_group=self.select.function.log_group,
+            lake_bucket=lake,
+            retention_days=config.modules.ops.lake_retention_days,
+            log_retention=retention,
+            removal_policy=removal,
+        )
+        self.module_alarms = (
+            ModuleAlarms(
+                self,
+                "ModuleAlarms",
+                prefix=prefix,
+                log_group_name=network.container_log_group,
+                alert_topic=alerts,
+            )
+            if network.container_log_group
+            else None
+        )
         self.delivery_records = DecisionLog(
             self,
             "DeliveryRecords",
@@ -231,7 +282,7 @@ class PdsStack(Stack):
             self,
             "CensusGate",
             prefix=prefix,
-            functions=[self.policy, self.own_book],
+            functions=[self.policy, self.own_book, self.select],
             concurrency=pds.provisioned_concurrency,
             census_parameter=census_parameter_name(prefix),
             log_retention=retention,
@@ -245,6 +296,7 @@ class PdsStack(Stack):
             "Endpoint": (f"http://{pds_host(prefix)}", "The PDS's base URL in the Prebid Server VPC"),
             "PolicyFunction": (self.policy.function.function.function_name, "POST /policy"),
             "OwnBookFunction": (self.own_book.function.function.function_name, "POST /ownbook/openrtb"),
+            "SelectFunction": (self.select.function.function.function_name, "POST /select"),
             "DeliveryFunction": (self.delivery.function.function.function_name, "Counts our tracker's impressions"),
             "SweeperFunction": (self.sweeper.function.function.function_name, "Releases undelivered reservations"),
             "PublisherFunction": (self.publisher.function.function.function_name, "Publishes the snapshot"),

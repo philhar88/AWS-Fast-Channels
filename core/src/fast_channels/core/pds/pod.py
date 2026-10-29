@@ -86,6 +86,9 @@ class Outcome(StrEnum):
     """Its creative, advertiser domain or IAB category is already in the pod."""
     NO_ROOM = "no_room"
     """The pod's durations are used up."""
+    UNRESERVED = "unreserved"
+    """An own-book line ad whose price could not be reserved: no budget left, the session's cap reached
+    (``core.pds.selection``)."""
 
 
 class PodContext(BaseModel):

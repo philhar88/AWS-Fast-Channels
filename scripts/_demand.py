@@ -659,6 +659,9 @@ class DemandStage:
         groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
         [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
         return DemandNetwork(
+            container_log_group=self.container_log_group(
+                parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]
+            ),
             vpc_id=parameters[Parameter.VPC_ID],
             private_subnets=tuple(Subnet(id=i, az=zones[i], route_table=tables.get(i, main)) for i in ids),
             task_security_group_id=parameters[Parameter.TASK_SECURITY_GROUP],
@@ -668,6 +671,18 @@ class DemandStage:
             target_group_arn=target_group,
             simulator_code_key=simulator_code_key,
         )
+
+    def container_log_group(self, cluster: str, service: str) -> str | None:
+        """The log group of Prebid Server's container (the service's task definition), or None without one."""
+        ecs = self.client("ecs")
+        [found] = ecs.describe_services(cluster=cluster, services=[service])["services"]
+        definition = ecs.describe_task_definition(taskDefinition=found["taskDefinition"])["taskDefinition"]
+        groups = [
+            container["logConfiguration"]["options"]["awslogs-group"]
+            for container in definition["containerDefinitions"]
+            if container.get("logConfiguration", {}).get("logDriver") == "awslogs"
+        ]
+        return str(groups[0]) if groups else None
 
     def deploy_demand_stack(self, demo: DemoIndex | None, content_base_url: str) -> None:
         """``FastChannels-<prefix>-Demand`` (the private zone, and in ``lambda`` mode the simulator with its code), then
