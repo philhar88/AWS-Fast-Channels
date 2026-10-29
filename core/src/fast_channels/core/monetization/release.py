@@ -57,6 +57,10 @@ class ChannelState(_Model):
     """Releases each sibling had, newest first, at most :data:`~fast_channels.core.monetization.names.HISTORY`."""
 
 
+DONE: Final = frozenset({"APPLIED", "PROMOTED", "ROLLED_BACK"})
+"""Statuses of a release that a redelivered event does not apply again."""
+
+
 class ReleaseStatus(_Model):
     """One release: the bundle it applies and how far it got."""
 
@@ -64,7 +68,9 @@ class ReleaseStatus(_Model):
     digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     bundle_key: str
     change_id: str
-    status: Literal["APPLYING", "APPLIED", "FAILED"]
+    status: Literal["APPLYING", "APPLIED", "PROMOTED", "ROLLED_BACK", "FAILED"]
+    """``APPLIED``: its siblings are configured (a channel's first release is then live); ``PROMOTED``: its
+    candidates became stable; ``ROLLED_BACK``: its candidates went back to their last good tree."""
     at: datetime
 
 
@@ -123,6 +129,49 @@ def applied(
             "history": history,
         }
     )
+
+
+def promoted(state: ChannelState) -> ChannelState:
+    """``state`` after a promotion: the candidate (the idle sibling, which the last release configured) becomes
+    stable, and the old stable sibling becomes idle and takes the next release."""
+    if state.stable is None or state.idle is None:
+        raise ValueError(f"{state.channel} was never released")
+    return state.model_copy(update={"stable": state.idle, "idle": state.stable})
+
+
+def last_good(state: ChannelState, sibling: str) -> int | None:
+    """The release ``sibling`` had before its current one (its rollback target), or None."""
+    history = state.history.get(sibling, ())
+    return history[1] if len(history) > 1 else None
+
+
+def rolled_back(state: ChannelState, sibling: str, *, record: SiblingRecord) -> ChannelState:
+    """``state`` after ``sibling`` was remapped to its last good release (``record``): the bad release leaves the
+    sibling's history.
+
+    Raises:
+        ValueError: ``record`` is not the sibling's last good release.
+    """
+    if record.release != last_good(state, sibling):
+        raise ValueError(f"{sibling} rolls back to {last_good(state, sibling)}, not {record.release}")
+    history = state.history[sibling][1:]
+    return state.model_copy(
+        update={
+            "siblings": {**state.siblings, sibling: record},
+            "history": {**state.history, sibling: history},
+        }
+    )
+
+
+def kept_releases(states: Mapping[str, ChannelState]) -> set[int]:
+    """Every release a sibling still keeps (its current tree, the last good one and the one before): the Functions of
+    any other release can be deleted."""
+    return {release for state in states.values() for history in state.history.values() for release in history}
+
+
+def pointer(states: Mapping[str, ChannelState]) -> dict[str, str]:
+    """The release pointer (AppConfig profile ``release``): each released channel's stable sibling."""
+    return {name: state.stable for name, state in sorted(states.items()) if state.stable is not None}
 
 
 class PlaybackPlan(_Model):

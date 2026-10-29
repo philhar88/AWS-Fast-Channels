@@ -109,6 +109,19 @@ class Settings:
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
     release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
     """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
+    release_lock_seconds: int = field(default_factory=lambda: int(_env("RELEASE_LOCK_SECONDS") or 0))
+    """How long the Release Controller's lock outlives an execution that died holding it (its timeout)."""
+    release_profile: str = field(default_factory=lambda: _env("RELEASE_PROFILE"))
+    """The id of the release pointer's AppConfig profile (``release``)."""
+    release_strategy: str = field(default_factory=lambda: _env("RELEASE_STRATEGY"))
+    release_at_once_strategy: str = field(default_factory=lambda: _env("RELEASE_AT_ONCE_STRATEGY"))
+    """The release pointer's strategy for a deployment that moves no viewer or goes back (no bake)."""
+    """The id of the release pointer's deployment strategy (the stage's rollout tier)."""
+    pds_policy_log_group: str = field(default_factory=lambda: _env("PDS_POLICY_LOG_GROUP"))
+    """The PDS ``/policy`` function's log group, where its decision records are (the release smoke test counts
+    them)."""
+    tool_functions: str = field(default_factory=lambda: _env("TOOL_FUNCTIONS"))
+    """JSON of the agent tools' function names by target (the release module's lab smoke test uses them)."""
     release_table: str = field(default_factory=lambda: _env("RELEASE_TABLE"))
     """The Release Controller's state table (``<prefix>-release``)."""
     prefetch_policy: str = field(default_factory=lambda: _env("PREFETCH_POLICY"))

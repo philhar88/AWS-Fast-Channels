@@ -693,9 +693,12 @@
               "Effect": "Deny",
               "Resource": [
                 "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab",
                 "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*",
                 "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
-                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*"
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-lab-p-*/*"
               ],
               "Sid": "OnlyTheReleaseControllerChangesMonetization"
             },

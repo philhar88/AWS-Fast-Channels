@@ -180,7 +180,7 @@ class MediaStack(Stack):
         )
         external_ads = config.ads.url if config.ads.mode is AdsMode.EXTERNAL_VAST else None
         self.channels = tuple(
-            self._channel(channel, config=config, data=data, ads_url=external_ads) for channel in config.channels.iac
+            self._channel(channel, config=config, data=data, ads_url=external_ads) for channel in config.iac_channels
         )
         channels = tuple(channel.exports for channel in self.channels)
         if config.modules.release.enabled:
@@ -266,7 +266,7 @@ class MediaStack(Stack):
             tier=channel.tier,
             brief=channel.brief,
             log_percent=config.observability.mediatailor_log_percent,
-            siblings=config.modules.release.enabled and channel.name in config.modules.release.channels,
+            siblings=channel.name in config.release_channels,
             removal_policy=config.removal_policy,
         )
         # No dependency on AsRunLogging: channels are created stopped, so they log nothing before the stack is
@@ -286,7 +286,7 @@ class MediaStack(Stack):
             **{
                 release_names.channel_parameter_name(prefix, channel.name): channel.channel_url
                 for channel in self.channels
-                if channel.name in config.modules.release.channels
+                if channel.name in config.release_channels
             },
         }
         for name, value in values.items():
@@ -353,5 +353,5 @@ class MediaStack(Stack):
 
 def _kit_ladders(config: FastChannelsConfig) -> list[str]:
     """Built-in ladders whose kit is provisioned at deploy time: the default ladder and every IaC channel's."""
-    used = {config.ladders.default, *(channel.ladder for channel in config.channels.iac)}
+    used = {config.ladders.default, *(channel.ladder for channel in config.iac_channels)}
     return [name for name in config.ladders.builtin if name in used]

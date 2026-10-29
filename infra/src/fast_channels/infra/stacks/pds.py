@@ -262,6 +262,13 @@ class PdsStack(Stack):
                 string_value=self.delivery.function.function.function_arn,
                 description="Read by the release module's stack: the impressions of the sibling configurations",
             )
+            ssm.StringParameter(
+                self,
+                "PolicyLogGroupParameter",
+                parameter_name=names.parameter_name(prefix, names.Published.POLICY_LOG_GROUP),
+                string_value=self.policy.function.log_group.log_group_name,
+                description="Read by the release module's stack: its smoke test counts the decision records",
+            )
         self.select_records = DecisionLog(
             self,
             "SelectRecords",

@@ -81,6 +81,7 @@ def alarm(
     topic: sns.ITopic,
     comparison: cw.ComparisonOperator = cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
     evaluation_periods: int = 1,
+    datapoints_to_alarm: int | None = None,
 ) -> cw.Alarm:
     """Alarm ``name`` on ``metric`` (missing data is not breaching), notifying ``topic`` (:func:`notify`)."""
     created = cw.Alarm(
@@ -91,6 +92,7 @@ def alarm(
         metric=metric,
         threshold=threshold,
         evaluation_periods=evaluation_periods,
+        datapoints_to_alarm=datapoints_to_alarm,
         comparison_operator=comparison,
         treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
     )

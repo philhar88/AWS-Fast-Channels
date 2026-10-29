@@ -3,8 +3,10 @@
 from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack
+from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.flags import DemandMode, Flags
+from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import mediatailor_log_group
 from fast_channels.core.runbooks import Runbook
 from fast_channels.infra.constructs.observability import census_parameter_name
@@ -126,7 +128,16 @@ class OpsStack(Stack):
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,
         )
-        self.appconfig = OpsAppConfig(self, "AppConfig", prefix=prefix, flags=stage_flags(config))
+        release = config.modules.release.enabled
+        self.appconfig = OpsAppConfig(
+            self,
+            "AppConfig",
+            prefix=prefix,
+            flags=stage_flags(config),
+            monitors=[release_names.candidate_alarm(prefix)] if release else (),
+        )
+        if release:
+            self._release_parameters(prefix)
         self.probe = ProbeCanary(
             self,
             "Probe",
@@ -175,3 +186,18 @@ class OpsStack(Stack):
         }
         for name, (value, description) in outputs.items():
             CfnOutput(self, name, value=value, description=description)
+
+    def _release_parameters(self, prefix: str) -> None:
+        """The AppConfig ids the ``Release`` stack (beside the guidance) reads: SSM parameters, not cross-stack
+        references."""
+        for parameter, value in (
+            (release_names.Parameter.APPCONFIG_APPLICATION, self.appconfig.application.application_id),
+            (release_names.Parameter.APPCONFIG_ENVIRONMENT, self.appconfig.environment.environment_id),
+        ):
+            ssm.StringParameter(
+                self,
+                f"ReleaseParameter-{parameter.value}",
+                parameter_name=release_names.parameter_name(prefix, parameter),
+                string_value=value,
+                description="Read by the release module's stack (fast_channels.core.monetization.names)",
+            )

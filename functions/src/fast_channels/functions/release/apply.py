@@ -25,6 +25,7 @@ Nothing here calls ``PutChannelPolicy``: the channel policy is the static patter
 
 import json
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -39,6 +40,7 @@ from fast_channels.core.monetization import names
 from fast_channels.core.monetization.functions import release_tag
 from fast_channels.core.monetization.playback import release_tags, render
 from fast_channels.core.monetization.release import (
+    DONE,
     ReleaseStatus,
     applied,
     differences,
@@ -62,8 +64,9 @@ from fast_channels.functions.settings import settings
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
 
-    from fast_channels.core.monetization.bundle import Bundle, Sibling
+    from fast_channels.core.monetization.bundle import Bundle, MonetizedChannel, Sibling
     from fast_channels.core.monetization.functions import Function
+    from fast_channels.core.monetization.release import ChannelState
 
 logger = Logger()
 DETAIL_LIMIT: Final = 20
@@ -78,7 +81,8 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _ledger(chain: str, action: str, subject: str, *, correlation_id: str, detail: dict[str, Any]) -> None:
+def ledger(chain: str, action: str, subject: str, *, correlation_id: str, detail: dict[str, Any]) -> None:
+    """One Release Controller record (principal ``release-controller``) on ``chain``."""
     append(
         entry(
             chain,
@@ -110,7 +114,7 @@ def prepare(bundle_key: str, digest: str, request: str, execution: str) -> dict[
             Violation(rule=Rule.F3, where=f"bundle {bundle_key}", message="the event's digest is not the bundle's")
         )
     if violations:
-        _ledger(
+        ledger(
             names.BUNDLE_CHAIN,
             "release.reject",
             bundle_key,
@@ -124,7 +128,7 @@ def prepare(bundle_key: str, digest: str, request: str, execution: str) -> dict[
         require_valid(violations)
     release = store.allocate(request)
     previous = store.status(release)
-    if previous is not None and previous.status == "APPLIED":
+    if previous is not None and previous.status in DONE:
         logger.info("bundle already released", extra={"release": release, "digest": digest})
         return {"skip": True, "release": release}
     change_id = previous.change_id if previous else new_record_id(_now(), os.urandom(10))
@@ -155,7 +159,7 @@ def accept(
     )
     bundle = store.bundle(bundle_key)
     chosen = [s.name for s in targets(bundle, store.channels([c.name for c in bundle.channels]))]
-    _ledger(
+    ledger(
         names.BUNDLE_CHAIN,
         "release.accept",
         bundle_key,
@@ -291,11 +295,38 @@ def configure(bundle_key: str, sibling_name: str, release: int, change_id: str) 
 # --- publish --------------------------------------------------------------------------------------------------------
 
 
-def _hls_prefix(configuration: str, configured: dict[str, str]) -> str:
+def _hls_prefix(configuration: str, configured: Mapping[str, str]) -> str:
     if configuration in configured:
         return configured[configuration]
     response = aws.client("mediatailor").get_playback_configuration(Name=configuration)
     return str(response["HlsConfiguration"]["ManifestEndpointPrefix"])
+
+
+def write_plan(channel: MonetizedChannel, state: ChannelState, configured: Mapping[str, str], at: datetime) -> None:
+    """Rewrite ``/plan/playback/<channel>.json`` for the state's stable sibling (``configured``: HLS prefixes this
+    step already knows, by sibling)."""
+    config = settings()
+    config.require("media_bucket", "cdn_base_url")
+    if state.stable is None:
+        raise ValueError(f"{channel.name} has no stable sibling")
+    plan = playback_plan(
+        channel=channel.name,
+        configuration=state.stable,
+        release=state.siblings[state.stable].release,
+        playback=specs.playback_urls(
+            cdn_base=config.cdn_base_url,
+            playback_prefix_hls=_hls_prefix(state.stable, configured),
+            outputs=channel.outputs,
+        ),
+        at=at,
+    )
+    aws.client("s3").put_object(
+        Bucket=config.media_bucket,
+        Key=names.plan_key(channel.name),
+        Body=plan.model_dump_json(indent=2).encode(),
+        ContentType="application/json",
+        CacheControl=names.PLAN_CACHE_CONTROL,
+    )
 
 
 def publish(
@@ -324,27 +355,10 @@ def publish(
             state, channel=channel.name, siblings=siblings, release=release, digest=digest, change_id=change_id, at=at
         )
         store.put_channel(state, version=version)
+        write_plan(channel, state, configured, at)
         assert state.stable  # set by the channel's first release
-        plan = playback_plan(
-            channel=channel.name,
-            configuration=state.stable,
-            release=state.siblings[state.stable].release,
-            playback=specs.playback_urls(
-                cdn_base=config.cdn_base_url,
-                playback_prefix_hls=_hls_prefix(state.stable, configured),
-                outputs=channel.outputs,
-            ),
-            at=at,
-        )
-        aws.client("s3").put_object(
-            Bucket=config.media_bucket,
-            Key=names.plan_key(channel.name),
-            Body=plan.model_dump_json(indent=2).encode(),
-            ContentType="application/json",
-            CacheControl=names.PLAN_CACHE_CONTROL,
-        )
         plans[channel.name] = state.stable
-        _ledger(
+        ledger(
             names.channel_chain(channel.name),
             "release.apply",
             channel.name,
@@ -368,8 +382,7 @@ def publish(
             at=previous.at if previous else at,
         )
     )
-    store.unlock(release)
-    logger.info("release applied", extra={"release": release, "plans": plans})
+    logger.info("release applied", extra={"release": release, "plans": plans})  # the lock is kept for promotion
     return {"release": release, "plans": plans}
 
 
@@ -380,7 +393,7 @@ def fail(release: int | None, change_id: str | None, error: dict[str, Any], exec
         if (previous := store.status(release)) is not None:
             store.put_status(previous.model_copy(update={"status": "FAILED", "at": _now()}))
         store.unlock(release)
-    _ledger(
+    ledger(
         names.BUNDLE_CHAIN,
         "release.fail",
         release_tag(release) if release else "unallocated",

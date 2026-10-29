@@ -333,7 +333,7 @@ def test_publish_records_the_first_release_and_writes_the_stable_siblings_plan(
         "release": 1,
         "plans": {"fastm-demo": "fastm-demo-p-a"},
     }
-    assert state.holder is None
+    assert state.holder == 1  # kept for the promotion steps
     channel, version = state.states["fastm-demo"]
     assert (channel.stable, channel.idle, version) == ("fastm-demo-p-a", "fastm-demo-p-b", 1)
     assert state.statuses[1].status == "APPLIED"

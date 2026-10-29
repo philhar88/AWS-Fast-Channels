@@ -89,6 +89,7 @@ MODULE_OUTPUT_KEYS: Final[dict[Module, tuple[str, ...]]] = {
     Module.RELEASE: (
         "StateMachineArn",
         "BundleBucketName",
+        "BundleKey",
         "StateTableName",
         "DriftFunction",
         "SiblingLogGroup",

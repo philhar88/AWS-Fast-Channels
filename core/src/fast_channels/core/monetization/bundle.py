@@ -185,6 +185,8 @@ class MonetizedChannel(_Model):
 
     name: str
     child_directed: bool = False
+    lab: bool = False
+    """The stage's lab channel (``<prefix>-lab``): smoke tests run on it while the monetized channels are stopped."""
     outputs: tuple[str, ...] = ("hls",)
     """The channel's outputs (rendition profiles): one playback URL each in ``/plan/playback/<channel>.json``."""
     policy_source_arns: tuple[str, ...]
@@ -367,6 +369,7 @@ def build_bundle(
             MonetizedChannel(
                 name=c.name,
                 child_directed=c.child_directed,
+                lab=c.lab,
                 outputs=c.outputs,
                 policy_source_arns=(c.name, f"{c.name}{SIBLING_PATTERN}"),
             )
