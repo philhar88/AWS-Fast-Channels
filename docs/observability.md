@@ -164,7 +164,7 @@ Nested log objects (`avail`, `vastresponse`, `beaconinfo`) are JSON text: read t
 excluded fields never reach the lake: the ADS request headers hold the viewer's address and user agent (and, on
 monetized configurations, header secrets and the playback ticket), the manifest fields hold the viewer's request path
 and query and the session-initialization hook's HTTP exchange, and `cs-uri-query` records the viewer's original
-query (DESIGN §5.7). The CloudWatch Logs copies of the same logs are v3.0's (`/aws/vendedlogs/mediatailor/<prefix>`).
+query, before any edge rewrite. The CloudWatch Logs copies of the same logs are v3.0's (`/aws/vendedlogs/mediatailor/<prefix>`).
 
 ```sql
 SELECT evid, upid, started_at, sessions, ads_requests, filled_avails, filled_seconds

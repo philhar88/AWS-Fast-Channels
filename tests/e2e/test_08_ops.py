@@ -27,7 +27,7 @@ EXCLUDED: Final = {
     "ads": {"requestHeaders", "rawAdsRequest"},
     "manifest": {"mediaTailorPath", "input", "http"},
 }
-"""DESIGN-v2.2 §5.7: fields the lake's copies never hold (``infra.constructs.ops.lake``)."""
+"""Fields the lake's copies never hold (``infra.constructs.ops.lake``)."""
 DELIVERY_TIMEOUT_S: Final = 900
 CENSUS_TIMEOUT_S: Final = 420
 

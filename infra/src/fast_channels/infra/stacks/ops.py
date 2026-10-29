@@ -1,4 +1,4 @@
-"""``FastChannels-<prefix>-Ops``: the ops module (``modules.ops``; DESIGN-v2.2 §18), deployed after Data and Media."""
+"""``FastChannels-<prefix>-Ops``: the ops module (``modules.ops``), deployed after Data and Media."""
 
 from typing import TYPE_CHECKING, Any
 

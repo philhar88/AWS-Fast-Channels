@@ -1,4 +1,4 @@
-"""The per-stage lake (DESIGN-v2.2 §18.4): an S3 bucket, a Glue database of log tables and views, and an Athena
+"""The per-stage lake: an S3 bucket, a Glue database of log tables and views, and an Athena
 workgroup with a bytes-scanned limit.
 
 - :class:`LakeBucket` lives in the Data stack with the deployment's other buckets, so that its access-log and
@@ -7,7 +7,7 @@ workgroup with a bytes-scanned limit.
   workgroup ``<prefix>-lake``, and the vended-log deliveries that copy each IaC playback configuration's MediaTailor
   ad decision server and manifest logs into the bucket.
 
-Privacy (DESIGN-v2.2 §5.7): the ADS log copies drop ``requestHeaders`` (which holds the viewer's address and, on
+Privacy: the ADS log copies drop ``requestHeaders`` (which holds the viewer's address and, on
 monetized configurations, header secrets and the ticket) and ``rawAdsRequest``; the manifest log copies drop
 ``mediaTailorPath``, ``input`` and ``http``. The CloudFront table reads the v3.0 Parquet logs and leaves out
 ``c-ip``, ``cs-uri-query`` (the original viewer query, before any edge rewrite) and ``x-forwarded-for``, so the
@@ -290,7 +290,7 @@ class View:
 _HIVE_TYPES: Final = {"varchar": "string", "bigint": "bigint", "double": "double", "timestamp(3)": "timestamp"}
 
 # Real-time ADS requests carry the break's SCTE-35 event id (evid=) and the content's UPID (upid=); the ad marker's
-# DATERANGE ID is "<start epoch ms>-<segmentation type>-<event id in hex>" (V-P0 P0-11). FILLED_AVAIL joins its
+# DATERANGE ID is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). FILLED_AVAIL joins its
 # MAKING_ADS_REQUEST by requestId within one personalization.
 _BREAK_EVENTS: Final = """
 WITH requests AS (
