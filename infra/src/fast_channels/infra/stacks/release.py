@@ -122,7 +122,7 @@ class ReleaseStack(Stack):
             self,
             "PdsDelivery",
             function_arn=ssm.StringParameter.value_for_string_parameter(
-                self, pds_names.parameter_name(prefix, pds_names.Parameter.DELIVERY_FUNCTION)
+                self, pds_names.parameter_name(prefix, pds_names.Published.DELIVERY_FUNCTION)
             ),
             same_environment=True,
         )

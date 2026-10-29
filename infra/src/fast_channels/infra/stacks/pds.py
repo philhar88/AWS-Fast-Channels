@@ -192,7 +192,7 @@ class PdsStack(Stack):
             ssm.StringParameter(
                 self,
                 "DeliveryFunctionParameter",
-                parameter_name=names.parameter_name(prefix, names.Parameter.DELIVERY_FUNCTION),
+                parameter_name=names.parameter_name(prefix, names.Published.DELIVERY_FUNCTION),
                 string_value=self.delivery.function.function.function_arn,
                 description="Read by the release module's stack: the impressions of the sibling configurations",
             )
