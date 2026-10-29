@@ -50,10 +50,6 @@ class DataExports:
     """The ops module's ledger table, with its stream; ``None`` when the module is off."""
     ledger_archive: s3.IBucket | None = None
     """The ops module's ledger archive (S3 Object Lock); ``None`` when the module is off."""
-    pds_table: dynamodb.ITableV2 | None = None
-    """The Pod Decision Service's table ``<prefix>-pds``; ``None`` when ``modules.pds.enabled`` is false."""
-    pds_config_bucket: s3.IBucket | None = None
-    """The Pod Decision Service's private config bucket (its snapshot); ``None`` when the module is off."""
 
 
 @dataclass(frozen=True, slots=True)

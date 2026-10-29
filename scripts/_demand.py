@@ -689,7 +689,7 @@ class DemandStage:
             self.delete_stack(self.client("cloudformation"), self.pds_stack)
             return
         outputs = self.stack_outputs(f"{self.stage_id}-Data")
-        if "PdsConfigBucketName" not in outputs:
+        if not {"PdsConfigBucketName", "PdsTableName"} <= outputs.keys():
             raise DemandError(
                 f"{self.stage_id}-Data has no PDS table or config bucket: run `make deploy` with modules.pds.enabled "
                 "first"

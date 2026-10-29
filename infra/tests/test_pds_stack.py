@@ -2,18 +2,15 @@
 
 import json
 from collections.abc import Callable
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from fast_channels.core.demand import NETWORK_CONTEXT, DemandNetwork
+from fast_channels.core.demand import NETWORK_CONTEXT
 from fast_channels.core.pds.records import PolicyRecord
 from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, SnapshotBase
-from fast_channels.infra.config import FastChannelsConfig
 from fast_channels.infra.constructs.pds.decisions import LOG_FIELDS
 from fast_channels.infra.constructs.pds.service import census_gate_definition
-from fast_channels.infra.stacks.pds import PdsStack
 
 if TYPE_CHECKING:
     from aws_cdk.assertions import Template
@@ -53,6 +50,21 @@ def only(template: Template, kind: str) -> dict[str, Any]:
     return properties
 
 
+def test_the_pds_stack_reads_the_data_stack_by_parameter_not_by_weak_reference(deployment: GetDeployment) -> None:
+    """The Data stack is also deployed without the guidance's network (make deploy), so it must not owe the Pds
+    stack any output."""
+    d = deployment(PDS, extra=EXTRA)
+    template = d.template(d.stage.pds).to_json()
+
+    text = json.dumps(template)
+    assert "FastChannels-fastm-Data" not in text, "no weak reference to the Data stack"
+    assert '"StackName": "FastChannels-fastm-Demand"' in text, "the zone: Demand and Pds always deploy together"
+    ssm = {p["Default"] for p in template["Parameters"].values() if p["Type"].startswith("AWS::SSM::Parameter")}
+    assert ssm - {"/cdk-bootstrap/hnb659fds/version"} == {"/fastm/pds/config-bucket", "/fastm/pds/lake-bucket"}
+    plain = deployment(PDS)
+    assert plain.template(plain.stage.data).to_json() == d.template(d.stage.data).to_json(), "the same Data stack"
+
+
 def test_the_pds_stack_exists_only_with_the_module_and_the_guidances_network(deployment: GetDeployment) -> None:
     assert deployment(PDS).stage.pds is None
     stage = deployment(PDS, extra=EXTRA).stage
@@ -77,6 +89,8 @@ def test_the_state_is_the_data_stacks(deployment: GetDeployment) -> None:
     assert table["Replicas"][0]["PointInTimeRecoverySpecification"] == {"PointInTimeRecoveryEnabled": True}
     outputs = template.to_json()["Outputs"]
     assert {"PdsTableName", "PdsConfigBucketName"} <= set(outputs)
+    parameters = {p["Name"] for p in resources(template, "AWS::SSM::Parameter").values()}
+    assert {"/fastm/pds/config-bucket", "/fastm/pds/lake-bucket"} <= parameters
     off = deployment({**PDS, "modules.pds.enabled": False})
     assert "PdsTableName" not in off.template(off.stage.data).to_json()["Outputs"]
 
@@ -230,18 +244,3 @@ def test_template_snapshot(
     d = deployment(overrides, extra=EXTRA)
 
     assert normalized(d.template(d.stage.pds)) == snapshot_json
-
-
-def test_the_stack_refuses_a_stage_without_its_state(fresh_deployment: GetDeployment) -> None:
-    d = fresh_deployment(PDS, extra=EXTRA)
-    config = FastChannelsConfig.from_context(d.stage.node, region="us-east-1")
-
-    with pytest.raises(ValueError, match="PDS table"):
-        PdsStack(
-            d.stage,
-            "Broken",
-            config=config,
-            network=DemandNetwork.model_validate(NETWORK),
-            zone=d.stage.demand.dns.zone,
-            data=replace(d.stage.data.exports, pds_table=None),
-        )

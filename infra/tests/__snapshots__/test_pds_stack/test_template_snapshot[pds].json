@@ -10,11 +10,7 @@
     "ConfigBucketName": {
       "Description": "The PDS's private config bucket (snapshot/current.json)",
       "Value": {
-        "Fn::GetStackOutput": {
-          "OutputName": "PublishOutputRefPdsConfigBucketA53270BCC218EB90",
-          "Region": "us-east-1",
-          "StackName": "FastChannels-fastm-Data"
-        }
+        "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
       }
     },
     "Endpoint": {
@@ -34,20 +30,22 @@
       }
     },
     "TableName": {
-      "Description": "The PDS's table",
-      "Value": {
-        "Fn::GetStackOutput": {
-          "OutputName": "PublishOutputRefPdsTableD763FC4102B17653",
-          "Region": "us-east-1",
-          "StackName": "FastChannels-fastm-Data"
-        }
-      }
+      "Description": "The PDS's table (the Data stack's)",
+      "Value": "fastm-pds"
     }
   },
   "Parameters": {
     "BootstrapVersion": {
       "Default": "/cdk-bootstrap/hnb659fds/version",
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/config-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/lake-bucket",
       "Type": "AWS::SSM::Parameter::Value<String>"
     }
   },
@@ -595,11 +593,7 @@
           "Variables": {
             "FAST_PREFIX": "fastm",
             "PDS_CONFIG_BUCKET": {
-              "Fn::GetStackOutput": {
-                "OutputName": "PublishOutputRefPdsConfigBucketA53270BCC218EB90",
-                "Region": "us-east-1",
-                "StackName": "FastChannels-fastm-Data"
-              }
+              "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "pds.policy"
@@ -644,7 +638,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PolicyFunctionCurrentVersion517C64EE991b739a84cdb74410ed7d6fb02de5f5": {
+    "PolicyFunctionCurrentVersion517C64EEa54b2a22aacd23311c88f882c951de7b": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -740,12 +734,9 @@
                 "Fn::Join": [
                   "",
                   [
+                    "arn:aws:s3:::",
                     {
-                      "Fn::GetStackOutput": {
-                        "OutputName": "PublishOutputFnGetAttPdsConfigBucketA53270BCArn4D81191D",
-                        "Region": "us-east-1",
-                        "StackName": "FastChannels-fastm-Data"
-                      }
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
                     },
                     "/snapshot/current.json"
                   ]
@@ -772,7 +763,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "PolicyFunctionCurrentVersion517C64EE991b739a84cdb74410ed7d6fb02de5f5",
+            "PolicyFunctionCurrentVersion517C64EEa54b2a22aacd23311c88f882c951de7b",
             "Version"
           ]
         },
@@ -892,11 +883,15 @@
         "DeliveryStreamType": "DirectPut",
         "ExtendedS3DestinationConfiguration": {
           "BucketARN": {
-            "Fn::GetStackOutput": {
-              "OutputName": "PublishOutputFnGetAttLakeBucketB1D32E10Arn52DE6E6C",
-              "Region": "us-east-1",
-              "StackName": "FastChannels-fastm-Data"
-            }
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:s3:::",
+                {
+                  "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                }
+              ]
+            ]
           },
           "BufferingHints": {
             "IntervalInSeconds": 60,
@@ -1055,24 +1050,25 @@
               "Effect": "Allow",
               "Resource": [
                 {
-                  "Fn::GetStackOutput": {
-                    "OutputName": "PublishOutputFnGetAttLakeBucketB1D32E10Arn52DE6E6C",
-                    "Region": "us-east-1",
-                    "StackName": "FastChannels-fastm-Data"
-                  }
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/*"
+                    ]
+                  ]
                 },
                 {
                   "Fn::Join": [
                     "",
                     [
+                      "arn:aws:s3:::",
                       {
-                        "Fn::GetStackOutput": {
-                          "OutputName": "PublishOutputFnGetAttLakeBucketB1D32E10Arn52DE6E6C",
-                          "Region": "us-east-1",
-                          "StackName": "FastChannels-fastm-Data"
-                        }
-                      },
-                      "/*"
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
                     ]
                   ]
                 }
@@ -1125,11 +1121,7 @@
                 [
                   "s3://",
                   {
-                    "Fn::GetStackOutput": {
-                      "OutputName": "PublishOutputRefLakeBucketB1D32E103B48AD28",
-                      "Region": "us-east-1",
-                      "StackName": "FastChannels-fastm-Data"
-                    }
+                    "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
                   },
                   "/pds/policy/${datehour}/"
                 ]
@@ -1249,11 +1241,7 @@
                 [
                   "s3://",
                   {
-                    "Fn::GetStackOutput": {
-                      "OutputName": "PublishOutputRefLakeBucketB1D32E103B48AD28",
-                      "Region": "us-east-1",
-                      "StackName": "FastChannels-fastm-Data"
-                    }
+                    "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
                   },
                   "/pds/policy/"
                 ]
@@ -1390,11 +1378,7 @@
           "Variables": {
             "FAST_PREFIX": "fastm",
             "PDS_CONFIG_BUCKET": {
-              "Fn::GetStackOutput": {
-                "OutputName": "PublishOutputRefPdsConfigBucketA53270BCC218EB90",
-                "Region": "us-east-1",
-                "StackName": "FastChannels-fastm-Data"
-              }
+              "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
             "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\"}",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
@@ -1440,7 +1424,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PublisherFunctionCurrentVersion0CCBEA0600fc696c5462145d5a83ff8ff970cdf7": {
+    "PublisherFunctionCurrentVersion0CCBEA066027eabc182ffcc730320dd6e75bf443": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -1571,12 +1555,9 @@
                 "Fn::Join": [
                   "",
                   [
+                    "arn:aws:s3:::",
                     {
-                      "Fn::GetStackOutput": {
-                        "OutputName": "PublishOutputFnGetAttPdsConfigBucketA53270BCArn4D81191D",
-                        "Region": "us-east-1",
-                        "StackName": "FastChannels-fastm-Data"
-                      }
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
                     },
                     "/snapshot/current.json"
                   ]
@@ -1591,12 +1572,9 @@
                   "Fn::Join": [
                     "",
                     [
+                      "arn:aws:s3:::",
                       {
-                        "Fn::GetStackOutput": {
-                          "OutputName": "PublishOutputFnGetAttPdsConfigBucketA53270BCArn4D81191D",
-                          "Region": "us-east-1",
-                          "StackName": "FastChannels-fastm-Data"
-                        }
+                        "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
                       },
                       "/snapshot/current.json"
                     ]
@@ -1606,12 +1584,9 @@
                   "Fn::Join": [
                     "",
                     [
+                      "arn:aws:s3:::",
                       {
-                        "Fn::GetStackOutput": {
-                          "OutputName": "PublishOutputFnGetAttPdsConfigBucketA53270BCArn4D81191D",
-                          "Region": "us-east-1",
-                          "StackName": "FastChannels-fastm-Data"
-                        }
+                        "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
                       },
                       "/snapshot/history/*"
                     ]
@@ -1623,11 +1598,15 @@
               "Action": "s3:ListBucket",
               "Effect": "Allow",
               "Resource": {
-                "Fn::GetStackOutput": {
-                  "OutputName": "PublishOutputFnGetAttPdsConfigBucketA53270BCArn4D81191D",
-                  "Region": "us-east-1",
-                  "StackName": "FastChannels-fastm-Data"
-                }
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    }
+                  ]
+                ]
               }
             }
           ],
@@ -1708,7 +1687,7 @@
       "Properties": {
         "ExecuteOnHandlerChange": true,
         "HandlerArn": {
-          "Ref": "PublisherFunctionCurrentVersion0CCBEA0600fc696c5462145d5a83ff8ff970cdf7"
+          "Ref": "PublisherFunctionCurrentVersion0CCBEA066027eabc182ffcc730320dd6e75bf443"
         },
         "InvocationType": "RequestResponse",
         "ServiceToken": {

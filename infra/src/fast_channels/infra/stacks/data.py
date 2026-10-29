@@ -7,9 +7,12 @@ from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 from fast_channels.core.naming import agentcore_name, source_location_name
+from fast_channels.core.pds.names import Parameter as PdsParameter
+from fast_channels.core.pds.names import parameter_name as pds_parameter
 from fast_channels.infra.config import FastChannelsConfig, Removal
 from fast_channels.infra.constructs.ops import LakeBucket, LedgerStorage
 from fast_channels.infra.constructs.pds import ConfigBucket, PdsTable
@@ -90,6 +93,20 @@ class DataStack(Stack):
             self.pds_config = ConfigBucket(
                 self, "PdsConfig", logs_bucket=self.storage.logs_bucket, removal_policy=config.removal_policy
             )
+            if self.lake is None:
+                raise ValueError("modules.pds needs modules.ops (the lake)")
+            # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
+            for parameter, value in (
+                (PdsParameter.CONFIG_BUCKET, self.pds_config.bucket.bucket_name),
+                (PdsParameter.LAKE_BUCKET, self.lake.bucket.bucket_name),
+            ):
+                ssm.StringParameter(
+                    self,
+                    f"Pds{parameter.name.title().replace('_', '')}Parameter",
+                    parameter_name=pds_parameter(config.prefix, parameter),
+                    string_value=value,
+                    description=f"FAST Channels ({config.prefix}): for the Pds stack",
+                )
         self.memory: agentcore.Memory | None = None
         if config.agent.enabled:
             self.memory = agentcore.Memory(
@@ -141,10 +158,6 @@ class DataStack(Stack):
             lake_bucket=bucket("LakeBucket", self.lake.bucket) if self.lake is not None else None,
             ledger_table=_with_stream(scope, "LedgerTable", self.ledger.table) if self.ledger is not None else None,
             ledger_archive=bucket("LedgerArchive", self.ledger.archive) if self.ledger is not None else None,
-            pds_table=_plain_table(scope, "PdsTable", self.pds_table) if self.pds_table is not None else None,
-            pds_config_bucket=bucket("PdsConfigBucket", self.pds_config.bucket)
-            if self.pds_config is not None
-            else None,
         )
 
     def _outputs(self) -> None:
@@ -168,12 +181,6 @@ class DataStack(Stack):
             outputs["PdsConfigBucketName"] = self.pds_config.bucket.bucket_name
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)
-
-
-def _plain_table(scope: Construct, id: str, table: dynamodb.TableV2) -> dynamodb.ITableV2:
-    """``table`` imported by name (no index, no stream)."""
-    cfn = cast("dynamodb.CfnGlobalTable", table.node.default_child)
-    return dynamodb.TableV2.from_table_attributes(scope, id, table_name=cfn.ref)
 
 
 def _with_stream(scope: Construct, id: str, table: dynamodb.TableV2) -> dynamodb.ITableV2:

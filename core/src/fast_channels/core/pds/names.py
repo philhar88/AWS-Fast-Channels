@@ -52,5 +52,21 @@ def decision_table(record: str) -> str:
     return f"pds_{record}"
 
 
+class Parameter(StrEnum):
+    """The SSM parameters ``/<prefix>/pds/<name>`` the Data stack writes for the Pds stack.
+
+    The Pds stack exists only in a synth with the guidance's network, so it cannot take weak references to the Data
+    stack: the Data stack's own deploy (``make deploy``, without that network) would drop the outputs they need.
+    """
+
+    CONFIG_BUCKET = "config-bucket"
+    LAKE_BUCKET = "lake-bucket"
+
+
+def parameter_name(prefix: str, parameter: Parameter) -> str:
+    """``/<prefix>/pds/<parameter>``."""
+    return f"/{prefix}/pds/{parameter.value}"
+
+
 DECISIONS_PREFIX: Final = "pds/"
 """Key prefix of the decision records in the lake bucket: ``pds/<record>/<yyyy>/<MM>/<dd>/<HH>/``."""

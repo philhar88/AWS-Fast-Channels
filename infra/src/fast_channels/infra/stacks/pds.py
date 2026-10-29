@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, RemovalPolicy, Stack, Tags
 from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
+from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
@@ -28,7 +30,6 @@ if TYPE_CHECKING:
 
     from fast_channels.core.demand import DemandNetwork
     from fast_channels.infra.config import FastChannelsConfig
-    from fast_channels.infra.exports import DataExports
 
 POLICY_HANDLER = "fast_channels.functions.pds.policy.handler"
 
@@ -51,7 +52,6 @@ class PdsStack(Stack):
         config: deployment configuration (``modules.pds``, ``modules.demand.mode``, log retention, removal).
         network: the guidance's VPC, private subnets and task security group.
         zone: the stage's private zone (the Demand stack's).
-        data: the Data stack (the lake bucket, the PDS table and config bucket).
     """
 
     def __init__(
@@ -62,12 +62,9 @@ class PdsStack(Stack):
         config: FastChannelsConfig,
         network: DemandNetwork,
         zone: route53.IHostedZone,
-        data: DataExports,
         **kwargs: Any,
     ) -> None:
         super().__init__(scope, id, description=f"FAST Channels ({config.prefix}): Pod Decision Service", **kwargs)
-        if data.lake_bucket is None or data.pds_table is None or data.pds_config_bucket is None:
-            raise ValueError("the Pds stack needs the Data stack's lake, PDS table and config bucket")
         Tags.of(self).add(names.MODULE_TAG, names.MODULE)
         prefix, pds = config.prefix, config.modules.pds
         # Its log groups and queues go with the stack (like the Demand stack's): destroy-demand leaves nothing of it.
@@ -81,7 +78,21 @@ class PdsStack(Stack):
             private_subnet_route_table_ids=[subnet.route_table for subnet in network.private_subnets],
         )
         alerts = sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, prefix))
-        bucket = data.pds_config_bucket
+        # The Data stack's state, by SSM parameter (resolved at deploy) and by name: no weak reference.
+        bucket = s3.Bucket.from_bucket_name(
+            self,
+            "ConfigBucket",
+            ssm.StringParameter.value_for_string_parameter(
+                self, names.parameter_name(prefix, names.Parameter.CONFIG_BUCKET)
+            ),
+        )
+        lake = s3.Bucket.from_bucket_name(
+            self,
+            "LakeBucket",
+            ssm.StringParameter.value_for_string_parameter(
+                self, names.parameter_name(prefix, names.Parameter.LAKE_BUCKET)
+            ),
+        )
         self.publisher = SnapshotPublisher(
             self,
             "Publisher",
@@ -113,7 +124,7 @@ class PdsStack(Stack):
             kind="policy",
             model=PolicyRecord,
             log_group=self.policy.function.log_group,
-            lake_bucket=data.lake_bucket,
+            lake_bucket=lake,
             retention_days=config.modules.ops.lake_retention_days,
             log_retention=retention,
             removal_policy=removal,
@@ -147,7 +158,7 @@ class PdsStack(Stack):
             "PolicyFunction": (self.policy.function.function.function_name, "POST /policy"),
             "PublisherFunction": (self.publisher.function.function.function_name, "Publishes the snapshot"),
             "ConfigBucketName": (bucket.bucket_name, "The PDS's private config bucket (snapshot/current.json)"),
-            "TableName": (data.pds_table.table_name, "The PDS's table"),
+            "TableName": (names.table_name(prefix), "The PDS's table (the Data stack's)"),
         }
         for name, (value, description) in outputs.items():
             CfnOutput(self, name, value=value, description=description)
