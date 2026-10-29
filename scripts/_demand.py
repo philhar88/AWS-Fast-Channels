@@ -664,6 +664,7 @@ class DemandStage:
         if demand.mode == "demo" and demand.simulator == "lambda":
             key = self.simulator_package(self.simulator_creatives(demo, content_base_url))
         network = self.network(key)
+        self.check_pds_state()
         log(f"deploying {', '.join(self.beside_stacks())}")
         run(
             [
@@ -680,6 +681,19 @@ class DemandStage:
             env=self.cdk_environment(),
             stream=True,
         )
+
+    def check_pds_state(self) -> None:
+        """With ``modules.pds.enabled`` the Data stack must hold the PDS's table and bucket (``make deploy`` first);
+        without it, a Pds stack left from before is deleted."""
+        if not self.config.modules.pds.enabled:
+            self.delete_stack(self.client("cloudformation"), self.pds_stack)
+            return
+        outputs = self.stack_outputs(f"{self.stage_id}-Data")
+        if "PdsConfigBucketName" not in outputs:
+            raise DemandError(
+                f"{self.stage_id}-Data has no PDS table or config bucket: run `make deploy` with modules.pds.enabled "
+                "first"
+            )
 
     def start_census_gate(self) -> str:
         """Run the census gate once with the census's last count, so a stage deployed without running channels

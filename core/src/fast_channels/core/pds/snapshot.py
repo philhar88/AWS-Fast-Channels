@@ -1,9 +1,9 @@
 """The PDS snapshot: everything a ``/policy`` or ``/select`` decision reads besides the request and per-viewer state.
 
 The snapshot publisher writes it to the PDS's private config bucket (never the CDN, never the ingest bucket) as
-``snapshot/current.json``, with a copy under ``snapshot/<version>.json``. Each function loads it at cold start and
-looks for a newer one every :data:`REFRESH_SECONDS`. A function that has never loaded one serves :data:`EMPTY`: no
-third-party bidder and no viewer address, the fail-safe answer. It holds no per-viewer data.
+``snapshot/current.json``, with a copy under ``snapshot/history/<version>.json``. Each function loads it at cold start
+and looks for a newer one every :data:`REFRESH_SECONDS`, off the request path. A function that has never loaded one
+serves :data:`EMPTY`: no third-party bidder and no viewer address, the fail-safe answer. It holds no per-viewer data.
 """
 
 import hashlib
@@ -14,7 +14,7 @@ from functools import cached_property
 from ipaddress import IPv4Network, IPv6Network, ip_network
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_serializer, field_validator
 
 from fast_channels.core.pds.policy import Demand
 from fast_channels.core.pds.xff import IpNetwork, origin_facing_networks
@@ -45,6 +45,11 @@ class SnapshotBase(BaseModel):
     )
     shed: frozenset[str] = Field(default=frozenset(), description="Bidders a runbook took out of the allow-list.")
     floor_cpm: Decimal = Field(default=Decimal(0), ge=0, description="Price floor for paid bids, CPM.")
+
+    @field_serializer("shed")
+    def _sorted(self, shed: frozenset[str]) -> list[str]:
+        # Sorted, so the same content always serializes, and hashes, the same.
+        return sorted(shed)
 
 
 class Snapshot(SnapshotBase):
@@ -79,19 +84,33 @@ EMPTY: Final = Snapshot(version="19700101T000000Z-000000000000", generated_at=da
 """What a function serves before it has loaded any snapshot."""
 
 
-def _content(base: SnapshotBase, origin_facing: tuple[str, ...], ip_ranges: str | None) -> dict[str, Any]:
-    return {**base.model_dump(mode="json"), "origin_facing": sorted(origin_facing), "ip_ranges": ip_ranges}
+def from_ip_ranges(document: dict[str, Any] | None) -> tuple[tuple[str, ...], str | None]:
+    """CloudFront's origin-facing networks and the ``syncToken`` of an ip-ranges.json document (none for ``None``)."""
+    if not document:
+        return (), None
+    networks = tuple(str(network) for network in origin_facing_networks(document))
+    sync = document.get("syncToken")
+    return networks, str(sync) if sync is not None else None
 
 
-def build(base: SnapshotBase, ip_ranges: dict[str, Any] | None, *, now: datetime) -> Snapshot:
-    """A snapshot of ``base`` with CloudFront's origin-facing networks from an ip-ranges.json document (``None``
-    when it could not be read: no network, so no viewer address until a later publish)."""
-    networks = tuple(str(network) for network in origin_facing_networks(ip_ranges)) if ip_ranges else ()
-    sync = str(ip_ranges.get("syncToken")) if ip_ranges and ip_ranges.get("syncToken") is not None else None
-    content = _content(base, networks, sync)
+def build(
+    base: SnapshotBase, *, origin_facing: tuple[str, ...] = (), ip_ranges: str | None = None, now: datetime
+) -> Snapshot:
+    """A snapshot of ``base`` with CloudFront's origin-facing networks (none: no viewer address until a later
+    publish) and the ``syncToken`` of the ip-ranges.json they came from.
+
+    Its version ends with a digest of the content the functions act on: the sync token is left out, because AWS
+    republishes ip-ranges.json for any service's change.
+    """
+    content = {**base.model_dump(mode="json"), "origin_facing": sorted(str(ip_network(n)) for n in origin_facing)}
     digest = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
     return Snapshot.model_validate(
-        {**content, "version": f"{now.astimezone(UTC):%Y%m%dT%H%M%SZ}-{digest}", "generated_at": now}
+        {
+            **content,
+            "ip_ranges": ip_ranges,
+            "version": f"{now.astimezone(UTC):%Y%m%dT%H%M%SZ}-{digest}",
+            "generated_at": now,
+        }
     )
 
 

@@ -5,15 +5,18 @@ from ipaddress import ip_network
 import pytest
 from pydantic import ValidationError
 
+from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
 from fast_channels.core.pds.policy import Demand
 from fast_channels.core.pds.snapshot import (
     EMPTY,
     HISTORY_PREFIX,
+    Snapshot,
     SnapshotBase,
     build,
     demo_demand,
     digest,
+    from_ip_ranges,
     history_key,
 )
 
@@ -27,10 +30,15 @@ RANGES = {
     "ipv6_prefixes": [{"ipv6_prefix": "2600:9000:1000::/36", "service": "CLOUDFRONT_ORIGIN_FACING"}],
 }
 BASE = SnapshotBase(demand=demo_demand("fastm"), shed=frozenset({"other"}), floor_cpm=Decimal("0.5"))
+NETWORKS, SYNC = from_ip_ranges(RANGES)
+
+
+def snapshot_at(now: datetime, base: SnapshotBase = BASE, sync: str | None = SYNC) -> Snapshot:
+    return build(base, origin_facing=NETWORKS, ip_ranges=sync, now=now)
 
 
 def test_a_snapshot_carries_the_configuration_and_the_origin_facing_networks() -> None:
-    snapshot = build(BASE, RANGES, now=NOW)
+    snapshot = snapshot_at(NOW)
 
     assert snapshot.version.startswith("20261029T130405Z-")
     assert snapshot.origin_facing == ("130.176.0.0/18", "2600:9000:1000::/36")
@@ -43,18 +51,26 @@ def test_a_snapshot_carries_the_configuration_and_the_origin_facing_networks() -
 
 
 def test_the_digest_follows_the_content_not_the_time() -> None:
-    first, later = build(BASE, RANGES, now=NOW), build(BASE, RANGES, now=datetime(2026, 10, 30, tzinfo=UTC))
-    changed = build(BASE.model_copy(update={"floor_cpm": Decimal(1)}), RANGES, now=NOW)
+    first, later = snapshot_at(NOW), snapshot_at(datetime(2026, 10, 30, tzinfo=UTC), sync="1793279999")
+    changed = snapshot_at(NOW, BASE.model_copy(update={"floor_cpm": Decimal(1)}))
 
     assert first.version != later.version
-    assert digest(first) == digest(later) != digest(changed)
+    assert digest(first) == digest(later) != digest(changed), "a new ip-ranges.json alone changes nothing"
+
+
+def test_shed_bidders_serialize_sorted() -> None:
+    many = SnapshotBase(shed=frozenset({"zeta", "alpha", "mid"}))
+
+    assert many.model_dump(mode="json")["shed"] == ["alpha", "mid", "zeta"]
+    assert '"shed":["alpha","mid","zeta"]' in many.model_dump_json()
 
 
 def test_without_ip_ranges_there_is_no_network() -> None:
-    snapshot = build(BASE, None, now=NOW)
+    snapshot = build(BASE, now=NOW)
 
     assert (snapshot.origin_facing, snapshot.ip_ranges, snapshot.networks) == ((), None, ())
-    assert build(BASE, {"prefixes": RANGES["prefixes"]}, now=NOW).ip_ranges is None
+    assert from_ip_ranges(None) == ((), None)
+    assert from_ip_ranges({"prefixes": RANGES["prefixes"]}) == (("130.176.0.0/18",), None)
 
 
 def test_the_empty_snapshot_is_fail_safe() -> None:
@@ -63,7 +79,7 @@ def test_the_empty_snapshot_is_fail_safe() -> None:
 
 
 def test_a_snapshot_is_strict() -> None:
-    snapshot = build(BASE, RANGES, now=NOW)
+    snapshot = snapshot_at(NOW)
     data = snapshot.model_dump(mode="json")
 
     with pytest.raises(ValidationError):
@@ -76,14 +92,11 @@ def test_a_snapshot_is_strict() -> None:
 
 
 def test_resource_names() -> None:
-    assert [names.function_name("fastm", e) for e in names.Endpoint] == [
-        "fastm-pds-policy",
-        "fastm-pds-select",
-        "fastm-pds-ownbook",
-    ]
+    assert [e.function_suffix for e in names.Endpoint] == ["policy", "select", "ownbook"]
+    assert f"{names.RECORD}.fastm.fast.internal" == pds_host("fastm")
     assert names.table_name("fastm") == "fastm-pds"
     assert names.census_gate("fastm") == "fastm-pds-census-gate"
-    assert names.publisher_function("fastm") == "fastm-pds-publisher"
+    assert names.publisher_alarm("fastm") == "fastm-pds-publisher-dead-letters"
     assert (names.decision_stream("fastm", "policy"), names.decision_table("policy")) == (
         "fastm-pds-policy",
         "pds_policy",

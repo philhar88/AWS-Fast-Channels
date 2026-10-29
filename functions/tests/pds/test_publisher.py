@@ -12,7 +12,7 @@ import pytest
 from botocore.response import StreamingBody
 from botocore.stub import ANY, Stubber
 
-from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot, SnapshotBase, build, demo_demand
+from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot, SnapshotBase, build, demo_demand, from_ip_ranges
 from fast_channels.functions import aws
 from fast_channels.functions.pds import publisher
 from fast_channels.functions.settings import settings
@@ -110,7 +110,15 @@ def test_the_first_publish_writes_the_snapshot_and_its_history(s3: Stubber, monk
 
 def test_an_unchanged_snapshot_is_not_written_again(s3: Stubber, monkeypatch: pytest.MonkeyPatch) -> None:
     serve(monkeypatch, ranges())
-    published(s3, build(BASE, RANGES, now=datetime(2026, 10, 1, tzinfo=UTC)))
+    published(
+        s3,
+        build(
+            BASE,
+            origin_facing=from_ip_ranges(RANGES)[0],
+            ip_ranges=from_ip_ranges(RANGES)[1],
+            now=datetime(2026, 10, 1, tzinfo=UTC),
+        ),
+    )
 
     snapshot, was_written = publisher.publish(BUCKET, BASE, now=NOW)
 
@@ -131,7 +139,12 @@ def test_without_ip_ranges_the_published_networks_are_kept(
     s3: Stubber, monkeypatch: pytest.MonkeyPatch, answer: httpx.Response | Exception
 ) -> None:
     serve(monkeypatch, answer)
-    before = build(BASE, RANGES, now=datetime(2026, 10, 1, tzinfo=UTC))
+    before = build(
+        BASE,
+        origin_facing=from_ip_ranges(RANGES)[0],
+        ip_ranges=from_ip_ranges(RANGES)[1],
+        now=datetime(2026, 10, 1, tzinfo=UTC),
+    )
     published(s3, before)
     written(s3)
 
@@ -143,6 +156,16 @@ def test_without_ip_ranges_the_published_networks_are_kept(
         before.ip_ranges,
         frozenset({"amt"}),
     )
+
+
+def test_a_first_publish_without_ip_ranges_has_no_network(s3: Stubber, monkeypatch: pytest.MonkeyPatch) -> None:
+    serve(monkeypatch, httpx.ConnectTimeout("slow"))
+    published(s3, None)
+    written(s3)
+
+    snapshot, was_written = publisher.publish(BUCKET, BASE, now=NOW)
+
+    assert was_written and snapshot.origin_facing == () and snapshot.ip_ranges is None
 
 
 def test_an_invalid_published_snapshot_is_replaced(s3: Stubber, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,8 +198,15 @@ def test_the_published_body_is_the_snapshot(s3: Stubber, monkeypatch: pytest.Mon
     s3.add_response(
         "put_object", {}, {"Bucket": BUCKET, "Key": SNAPSHOT_KEY, "Body": ANY, "ContentType": "application/json"}
     )
-    aws.client("s3").meta.events.register("before-parameter-build.s3.PutObject", lambda params, **_: capture(**params))
 
-    snapshot, _ = publisher.publish(BUCKET, BASE, now=NOW)
+    def handler(params: dict[str, Any], **_: Any) -> None:
+        capture(**params)
+
+    events = aws.client("s3").meta.events
+    events.register("before-parameter-build.s3.PutObject", handler)
+    try:
+        snapshot, _ = publisher.publish(BUCKET, BASE, now=NOW)
+    finally:
+        events.unregister("before-parameter-build.s3.PutObject", handler)
 
     assert [Snapshot.model_validate(json.loads(b)) for b in bodies] == [snapshot, snapshot]

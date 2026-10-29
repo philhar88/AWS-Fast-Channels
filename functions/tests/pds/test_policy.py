@@ -19,7 +19,8 @@ XFF = f"{VIEWER}, 130.176.12.7, 3.81.20.30, 130.176.40.9"
 TV = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36"
 SNAPSHOT = build(
     SnapshotBase(demand=demo_demand("fastm")),
-    {"syncToken": "1", "prefixes": [{"ip_prefix": "130.176.0.0/18", "service": "CLOUDFRONT_ORIGIN_FACING"}]},
+    origin_facing=("130.176.0.0/18",),
+    ip_ranges="1",
     now=datetime(2026, 10, 29, tzinfo=UTC),
 )
 

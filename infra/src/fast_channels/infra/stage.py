@@ -175,6 +175,7 @@ class FastChannelsStage(Stage):
             self.pds = PdsStack(
                 self, "Pds", config=config, network=network, zone=self.demand.dns.zone, data=self.data.exports, **stacks
             )
+            self.pds.add_stack_dependency(self.data, "The PDS's table and config bucket are the Data stack's")
             self.pds.add_stack_dependency(self.demand, "The PDS's record is in the Demand stack's private zone")
             if self.ops is not None:
                 self.pds.add_stack_dependency(self.ops, "The decision records' tables are in the lake's database")

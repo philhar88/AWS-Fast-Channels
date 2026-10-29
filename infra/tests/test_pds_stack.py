@@ -58,7 +58,11 @@ def test_the_pds_stack_exists_only_with_the_module_and_the_guidances_network(dep
     stage = deployment(PDS, extra=EXTRA).stage
 
     assert stage.pds.stack_name == "FastChannels-fastm-Pds"
-    assert {s.stack_name for s in stage.pds.dependencies} == {"FastChannels-fastm-Demand", "FastChannels-fastm-Ops"}
+    assert {s.stack_name for s in stage.pds.dependencies} == {
+        "FastChannels-fastm-Data",
+        "FastChannels-fastm-Demand",
+        "FastChannels-fastm-Ops",
+    }
     assert deployment({**PDS, "modules.pds.enabled": False}, extra=EXTRA).stage.pds is None
 
 
@@ -187,7 +191,16 @@ def test_the_census_gate_warms_the_functions_while_channels_run(deployment: GetD
     assert rule["EventPattern"]["detail-type"] == ["Census Changed"]
 
     cold = deployment({**PDS, "modules.pds.provisioned_concurrency": 0}, extra=EXTRA)
-    assert not cold.template(cold.stage.pds).find_resources("AWS::StepFunctions::StateMachine")
+    assert cold.template(cold.stage.pds).find_resources("AWS::StepFunctions::StateMachine"), "it releases what was set"
+
+
+def test_without_provisioned_concurrency_the_gate_only_releases() -> None:
+    definition = census_gate_definition(functions=["arn:f1"], parameter="/p", concurrency=0)
+    states = definition["States"]
+
+    assert not [name for name in states if name.startswith("Provision")]
+    assert states["AnyChannel"]["Choices"][0]["Next"] == "Release0"
+    assert states["AnyChannel"]["Default"] == "Release0"
 
 
 def test_census_gate_definition() -> None:

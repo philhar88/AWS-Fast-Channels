@@ -15,7 +15,7 @@ from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
 from constructs import Construct
 
-from fast_channels.core.pds.names import publisher_function
+from fast_channels.core.pds.names import publisher_alarm
 from fast_channels.core.pds.snapshot import HISTORY_PREFIX, SNAPSHOT_KEY, SnapshotBase
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.alerts import dead_letter_alarm
@@ -70,7 +70,11 @@ class ConfigBucket(Construct):
             server_access_logs_prefix="s3/pds-config/",
             target_object_key_format=s3.TargetObjectKeyFormat.partitioned_prefix(s3.PartitionDateSource.EVENT_TIME),
             lifecycle_rules=[
-                s3.LifecycleRule(id="expire-old-versions", noncurrent_version_expiration=Duration.days(7)),
+                s3.LifecycleRule(
+                    id="expire-old-versions",
+                    noncurrent_version_expiration=Duration.days(7),
+                    expired_object_delete_marker=True,
+                ),
                 s3.LifecycleRule(id="expire-history", prefix=HISTORY_PREFIX, expiration=Duration.days(HISTORY_DAYS)),
                 s3.LifecycleRule(id="abort-uploads", abort_incomplete_multipart_upload_after=Duration.days(1)),
             ],
@@ -139,10 +143,9 @@ class SnapshotPublisher(Construct):
             [bucket.arn_for_objects(SNAPSHOT_KEY), bucket.arn_for_objects(f"{HISTORY_PREFIX}*")],
             why=f"Each published version is kept under {HISTORY_PREFIX}<version>.json",
         )
-        # A missing snapshot reads as 404, not 403, with ListBucket on the bucket.
-        self.function.allow(
-            ["s3:ListBucket"], [bucket.bucket_arn], conditions={"StringLike": {"s3:prefix": ["snapshot/*"]}}
-        )
+        # A GetObject of a missing key is a 404 only for a caller with ListBucket on the bucket (S3 evaluates no
+        # s3:prefix for it), so the first publish can tell "none yet" from "denied". The bucket holds only snapshots.
+        self.function.allow(["s3:ListBucket"], [bucket.bucket_arn])
         self.trigger = triggers.Trigger(
             self,
             "OnDeploy",
@@ -188,7 +191,7 @@ class SnapshotPublisher(Construct):
             self,
             "DeadLettersAlarm",
             queue=self.dead_letters,
-            name=f"{publisher_function(prefix)}-dead-letters",
+            name=publisher_alarm(prefix),
             description="A scheduled PDS snapshot publish failed after its retries: the snapshot may be stale",
             topic=alert_topic,
         )

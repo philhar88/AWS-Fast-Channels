@@ -177,6 +177,32 @@ def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def test_the_pds_needs_its_state_in_the_data_stack(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation = stub("cloudformation")
+    data = "FastChannels-fastcix-Data"
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(data, {})]}, {"StackName": data})
+    with pytest.raises(_demand.DemandError, match="make deploy"):
+        stage.check_pds_state()
+
+    outputs = {"PdsConfigBucketName": "b", "PdsTableName": "fastcix-pds"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(data, outputs)]}, {"StackName": data})
+    stage.check_pds_state()
+
+
+def test_a_pds_stack_the_module_no_longer_has_is_deleted(fastci: Any, stub: Any) -> None:
+    modules = fastci.modules.model_copy(update={"pds": fastci.modules.pds.model_copy(update={"enabled": False})})
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand"]
+    cloudformation = Stubber(stage.client("cloudformation"))
+    name = {"StackName": "FastChannels-fastcix-Pds"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
+    cloudformation.add_response("delete_stack", {}, name)
+    cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
+    with cloudformation:
+        stage.check_pds_state()
+    cloudformation.assert_no_pending_responses()
+
+
 def test_both_census_gates_start_with_the_last_count(stage: _demand.DemandStage, stub: Any) -> None:
     ssm, cloudformation, stepfunctions = stub("ssm"), stub("cloudformation"), stub("stepfunctions")
     ssm.add_response(

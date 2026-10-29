@@ -35,8 +35,7 @@ from constructs import Construct
 
 from fast_channels.core.demand import SCALE_IN_AFTER_SECONDS
 from fast_channels.core.events import DETAIL_TYPES, CensusChanged, event_source
-from fast_channels.core.pbs_config import pds_host, private_zone
-from fast_channels.core.pds.names import ALIAS, Endpoint, census_gate
+from fast_channels.core.pds.names import ALIAS, RECORD, Endpoint, census_gate
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.functions import FastFunction
 from fast_channels.infra.grants import allow
@@ -151,7 +150,7 @@ class PdsService(Construct):
             self,
             "Record",
             zone=zone,
-            record_name=pds_host(prefix).removesuffix(f".{private_zone(prefix)}"),
+            record_name=RECORD,
             target=route53.RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.load_balancer)),
         )
         nag.acknowledge(self.load_balancer, {"AwsSolutions-ELB2": WHY_LOGS})
@@ -177,14 +176,25 @@ class PdsService(Construct):
 
 def census_gate_definition(*, functions: Sequence[str], parameter: str, concurrency: int) -> dict[str, Any]:
     """The gate's JSONata state machine: provisioned concurrency on the ``live`` alias of each function in
-    ``functions`` (ARNs) while any channel runs."""
+    ``functions`` (ARNs) while any channel runs. With ``concurrency`` 0 every event releases it, so turning it off
+    also removes what an earlier configuration set.
+
+    Overlapping executions are possible (a stop, a start and a stop within 15 minutes): the first stop's execution
+    then releases 15 minutes after it, while no channel runs, which only shortens the grace period. A channel that
+    starts between a release's census read and its delete runs cold until the next census change.
+    """
     retry = [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2}]
     absent = ["Lambda.ResourceNotFoundException", "Lambda.ProvisionedConcurrencyConfigNotFoundException"]
     states: dict[str, Any] = {
         "AnyChannel": {
             "Type": "Choice",
-            "Choices": [{"Condition": "{% $states.input.detail.running > 0 %}", "Next": "Provision0"}],
-            "Default": "WaitBeforeRelease",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input.detail.running > 0 %}",
+                    "Next": "Provision0" if concurrency else "Release0",
+                }
+            ],
+            "Default": "WaitBeforeRelease" if concurrency else "Release0",
         },
         "WaitBeforeRelease": {"Type": "Wait", "Seconds": SCALE_IN_AFTER_SECONDS, "Next": "StillNoChannel"},
         "StillNoChannel": {
@@ -204,17 +214,18 @@ def census_gate_definition(*, functions: Sequence[str], parameter: str, concurre
     }
     for index, function in enumerate(functions):
         last = index == len(functions) - 1
-        states[f"Provision{index}"] = {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig",
-            "Arguments": {
-                "FunctionName": function,
-                "Qualifier": ALIAS,
-                "ProvisionedConcurrentExecutions": concurrency,
-            },
-            "Retry": retry,
-            **({"End": True} if last else {"Next": f"Provision{index + 1}"}),
-        }
+        if concurrency:
+            states[f"Provision{index}"] = {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig",
+                "Arguments": {
+                    "FunctionName": function,
+                    "Qualifier": ALIAS,
+                    "ProvisionedConcurrentExecutions": concurrency,
+                },
+                "Retry": retry,
+                **({"End": True} if last else {"Next": f"Provision{index + 1}"}),
+            }
         following = {"End": True} if last else {"Next": f"Release{index + 1}"}
         states[f"Release{index}"] = {
             "Type": "Task",

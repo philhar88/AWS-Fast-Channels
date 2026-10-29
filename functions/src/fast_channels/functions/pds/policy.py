@@ -13,7 +13,7 @@ import time
 from functools import cache
 from typing import TYPE_CHECKING, Any
 
-from aws_lambda_powertools import Logger, Metrics
+from aws_lambda_powertools import Logger, Metrics, single_metric
 from aws_lambda_powertools.event_handler import ALBResolver, Response, content_types
 from aws_lambda_powertools.metrics import MetricUnit
 from pydantic import ValidationError
@@ -70,8 +70,10 @@ def _answer(request: PolicyRequest, started: float) -> Response[str]:
     body = decision.response.model_dump_json()
     record = policy_record(request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3))
     logger.info("decision", extra={**record.model_dump(mode="json"), "snapshot": snapshot.version})
-    metrics.add_dimension(name="mode", value=decision.response.mode.value)
-    metrics.add_metric(name="PolicyDecisions", unit=MetricUnit.Count, value=1)
+    with single_metric(
+        name="PolicyDecisions", unit=MetricUnit.Count, value=1, default_dimensions=metrics.default_dimensions
+    ) as by_mode:
+        by_mode.add_dimension(name="mode", value=decision.response.mode.value)
     if decision.response.device.ip is None and decision.response.device.ipv6 is None:
         metrics.add_metric(name="PolicyNoViewerIp", unit=MetricUnit.Count, value=1)
     return _json(200, body)
@@ -84,4 +86,4 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
 
 
 if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):  # pragma: no cover - load the snapshot during init, not on a request
-    store().get()
+    store().load()

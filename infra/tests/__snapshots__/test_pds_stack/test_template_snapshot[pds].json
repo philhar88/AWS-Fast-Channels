@@ -2,7 +2,7 @@
   "Description": "FAST Channels (fastm): Pod Decision Service",
   "Outputs": {
     "CensusGateArn": {
-      "Description": "Keeps the PDS functions warm while channels run",
+      "Description": "Sets the functions' provisioned concurrency with the running channels",
       "Value": {
         "Ref": "CensusGateStateMachine76333E59"
       }
@@ -1621,13 +1621,6 @@
             },
             {
               "Action": "s3:ListBucket",
-              "Condition": {
-                "StringLike": {
-                  "s3:prefix": [
-                    "snapshot/*"
-                  ]
-                }
-              },
               "Effect": "Allow",
               "Resource": {
                 "Fn::GetStackOutput": {

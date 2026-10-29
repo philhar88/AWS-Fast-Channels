@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from aws_cdk import CfnOutput, Stack, Tags
+from aws_cdk import CfnOutput, RemovalPolicy, Stack, Tags
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_sns as sns
 
@@ -70,7 +70,8 @@ class PdsStack(Stack):
             raise ValueError("the Pds stack needs the Data stack's lake, PDS table and config bucket")
         Tags.of(self).add(names.MODULE_TAG, names.MODULE)
         prefix, pds = config.prefix, config.modules.pds
-        retention, removal = config.observability.log_retention, config.removal_policy
+        # Its log groups and queues go with the stack (like the Demand stack's): destroy-demand leaves nothing of it.
+        retention, removal = config.observability.log_retention, RemovalPolicy.DESTROY
         vpc = ec2.Vpc.from_vpc_attributes(
             self,
             "GuidanceVpc",
@@ -117,35 +118,31 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
-        self.census_gate: PdsCensusGate | None = None
-        if pds.provisioned_concurrency:
-            dead_letters = dead_letter_queue(self, "DeadLetters", removal_policy=removal)
-            dead_letter_alarm(
-                self,
-                "DeadLettersAlarm",
-                queue=dead_letters,
-                name=f"{prefix}-pds-dead-letters",
-                description="A Census Changed event could not reach the PDS census gate: its functions may stay "
-                "cold, or warm without channels",
-                topic=alerts,
-            )
-            self.census_gate = PdsCensusGate(
-                self,
-                "CensusGate",
-                prefix=prefix,
-                functions=[self.policy],
-                concurrency=pds.provisioned_concurrency,
-                census_parameter=census_parameter_name(prefix),
-                log_retention=retention,
-                dead_letters=dead_letters,
-            )
-            CfnOutput(
-                self,
-                "CensusGateArn",
-                value=self.census_gate.state_machine.state_machine_arn,
-                description="Keeps the PDS functions warm while channels run",
-            )
+        dead_letters = dead_letter_queue(self, "DeadLetters", removal_policy=removal)
+        dead_letter_alarm(
+            self,
+            "DeadLettersAlarm",
+            queue=dead_letters,
+            name=f"{prefix}-pds-dead-letters",
+            description="A Census Changed event could not reach the PDS census gate: its functions may stay cold, or "
+            "warm without channels",
+            topic=alerts,
+        )
+        self.census_gate = PdsCensusGate(
+            self,
+            "CensusGate",
+            prefix=prefix,
+            functions=[self.policy],
+            concurrency=pds.provisioned_concurrency,
+            census_parameter=census_parameter_name(prefix),
+            log_retention=retention,
+            dead_letters=dead_letters,
+        )
         outputs = {
+            "CensusGateArn": (
+                self.census_gate.state_machine.state_machine_arn,
+                "Sets the functions' provisioned concurrency with the running channels",
+            ),
             "Endpoint": (f"http://{pds_host(prefix)}", "The PDS's base URL in the Prebid Server VPC"),
             "PolicyFunction": (self.policy.function.function.function_name, "POST /policy"),
             "PublisherFunction": (self.publisher.function.function.function_name, "Publishes the snapshot"),

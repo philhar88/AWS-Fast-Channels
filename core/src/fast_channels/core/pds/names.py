@@ -11,6 +11,8 @@ MODULE_TAG: Final = tag_key("module")
 """``fast:module=pds`` marks what the module deploys (inventory)."""
 ALIAS: Final = "live"
 """The alias every PDS function serves from; provisioned concurrency is set on it."""
+RECORD: Final = "pds"
+"""The service's record in the stage's private zone: ``pds.<prefix>.fast.internal`` (``core.pbs_config.pds_host``)."""
 
 
 class Endpoint(StrEnum):
@@ -25,11 +27,6 @@ class Endpoint(StrEnum):
         return {"/policy": "policy", "/select": "select", "/ownbook/openrtb": "ownbook"}[self.value]
 
 
-def function_name(prefix: str, endpoint: Endpoint) -> str:
-    """``<prefix>-pds-policy``, ``<prefix>-pds-select``, ``<prefix>-pds-ownbook``."""
-    return f"{prefix}-pds-{endpoint.function_suffix}"
-
-
 def table_name(prefix: str) -> str:
     """The PDS's DynamoDB table (lines, budgets, caps, sessions, reservations)."""
     return f"{prefix}-pds"
@@ -40,9 +37,9 @@ def census_gate(prefix: str) -> str:
     return f"{prefix}-pds-census-gate"
 
 
-def publisher_function(prefix: str) -> str:
-    """The snapshot publisher."""
-    return f"{prefix}-pds-publisher"
+def publisher_alarm(prefix: str) -> str:
+    """The snapshot publisher's dead-letter alarm."""
+    return f"{prefix}-pds-publisher-dead-letters"
 
 
 def decision_stream(prefix: str, record: str) -> str:

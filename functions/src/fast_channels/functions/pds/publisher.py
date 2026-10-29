@@ -15,7 +15,15 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
-from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot, SnapshotBase, build, digest, history_key
+from fast_channels.core.pds.snapshot import (
+    SNAPSHOT_KEY,
+    Snapshot,
+    SnapshotBase,
+    build,
+    digest,
+    from_ip_ranges,
+    history_key,
+)
 from fast_channels.core.pds.xff import origin_facing_networks
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
@@ -62,13 +70,13 @@ def current(bucket: str) -> Snapshot | None:
 def publish(bucket: str, base: SnapshotBase, *, now: datetime) -> tuple[Snapshot, bool]:
     """Build the snapshot and write it if it changed; returns it and whether it was written."""
     published = current(bucket)
-    document = ip_ranges()
-    if document is None and published is not None:
-        document = {
-            "syncToken": published.ip_ranges,
-            "prefixes": [{"ip_prefix": n, "service": "CLOUDFRONT_ORIGIN_FACING"} for n in published.origin_facing],
-        }
-    snapshot = build(base, document, now=now)
+    if (document := ip_ranges()) is not None:
+        networks, sync = from_ip_ranges(document)
+    elif published is not None:
+        networks, sync = published.origin_facing, published.ip_ranges
+    else:
+        networks, sync = (), None
+    snapshot = build(base, origin_facing=networks, ip_ranges=sync, now=now)
     if published is not None and digest(published) == digest(snapshot):
         return published, False
     body = snapshot.model_dump_json(indent=1).encode()
