@@ -16,13 +16,14 @@ from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
 from constructs import Construct
 
+from fast_channels.core.ledger import ledger_table
 from fast_channels.core.pds.names import Parameter, parameter_name, publisher_alarm, table_name
 from fast_channels.core.pds.snapshot import HISTORY_PREFIX, SNAPSHOT_KEY, SnapshotBase
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.alerts import dead_letter_alarm
 from fast_channels.infra.constructs.functions import FastFunction
-from fast_channels.infra.constructs.pds.delivery import allow_ledger, allow_table, ledger_table_name
+from fast_channels.infra.constructs.pds.delivery import allow_ledger, allow_table
 from fast_channels.infra.constructs.queues import dead_letter_queue
 
 if TYPE_CHECKING:
@@ -127,7 +128,7 @@ class SnapshotPublisher(Construct):
                 "PDS_SNAPSHOT_BASE": base.model_dump_json(),
                 "MEDIA_BUCKET": media_bucket.bucket_name,
                 "PDS_TABLE": table_name(prefix),
-                "LEDGER_TABLE": ledger_table_name(prefix),
+                "LEDGER_TABLE": ledger_table(prefix),
             },
             timeout=Duration.minutes(1),
             memory_size=256,

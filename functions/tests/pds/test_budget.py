@@ -9,6 +9,7 @@ import pytest
 from botocore.stub import ANY, Stubber
 
 from fast_channels.core.pds.book import Book, Line
+from fast_channels.core.pds.delivery import home_shard
 from fast_channels.functions.pds.budget import ATTEMPTS, Budgets
 from fast_channels.functions.pds.store import CLIENT_CONFIG, Refreshed
 
@@ -66,8 +67,8 @@ def test_a_line_is_exhausted_when_no_shard_has_its_price() -> None:
             {"RequestItems": {TABLE: {"Keys": ANY, "ProjectionExpression": "pk, sk, remaining"}}},
         )
         assert budgets.load() == {
-            "direct-1": (Decimal("0.007"), Decimal("0.008")),
-            "direct-2": (Decimal("0.005"), Decimal(0)),
+            "direct-1": {0: Decimal("0.007"), 3: Decimal("0.008")},
+            "direct-2": {1: Decimal("0.005"), 2: Decimal(0)},
         }
 
     assert budgets.exhausted(BOOK) == frozenset({"direct-2"})
@@ -89,7 +90,7 @@ def test_unprocessed_keys_are_asked_again_a_few_times() -> None:
         )
         for _ in range(ATTEMPTS - 1):
             stubber.add_response("batch_get_item", {"Responses": {TABLE: []}, "UnprocessedKeys": left})
-        assert budgets.load() == {"direct-1": (Decimal(1),)}
+        assert budgets.load() == {"direct-1": {0: Decimal(1)}}
         stubber.assert_no_pending_responses()
 
 
@@ -102,7 +103,7 @@ def test_a_failed_read_keeps_what_was_read(caplog: pytest.LogCaptureFixture) -> 
         stubber.add_client_error("batch_get_item", service_error_code="ProvisionedThroughputExceededException")
         budgets.load()
         now[0] += 10
-        assert budgets.get() == {"direct-1": (Decimal(1),)}
+        assert budgets.get() == {"direct-1": {0: Decimal(1)}}
 
     assert [getattr(r, "refreshed", None) for r in caplog.records if r.getMessage() == "refresh failed"] == ["budget"]
 
@@ -119,3 +120,17 @@ def test_the_refresh_base_needs_a_fetch() -> None:
         Plain(0, every=1).load()
     assert Plain(0, every=1)._describe(0) == {}
     assert Plain(7, every=1).current == 7
+
+
+def test_a_break_reserves_from_its_home_shard_or_one_that_has_the_amount(monkeypatch: pytest.MonkeyPatch) -> None:
+    budgets = Budgets(TABLE, lines=lambda: LINES, client=client(), spawn=lambda target: None)
+    budgets._value = {"direct-1": {0: Decimal("0.007"), 1: Decimal("0.02"), 3: Decimal("0.008")}}
+    line = LINES[0]
+    homes = {n: next(f"s.{e}" for e in range(100) if home_shard(f"s.{e}") == n) for n in range(4)}
+
+    assert budgets.shard(line, homes[3], line.insertion) == 3
+    assert budgets.shard(line, homes[0], line.insertion) == 1, "the home shard has less than the price"
+    assert budgets.shard(line, homes[2], line.insertion) == 1, "an unread shard is skipped"
+    assert budgets.shard(line, homes[3], line.insertion * 2) == 1, "two ads of the line need twice the price"
+    assert budgets.shard(line, homes[3], Decimal("0.03")) is None
+    assert budgets.shard(LINES[1], homes[0], LINES[1].insertion) is None, "nothing read"

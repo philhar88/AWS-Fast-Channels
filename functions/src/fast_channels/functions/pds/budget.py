@@ -2,8 +2,9 @@
 
 The view reads the lines' budget shards (``BUDGET#<line>`` / ``S#<n>``) with ``BatchGetItem``. A line is
 *exhausted* when no shard has its price (``cpm / 1000``) left, or when its shards cannot be read: without them no
-reservation could succeed, so the own book does not bid it. The reservation that ``/select`` makes is what enforces
-the budget; this view only stops the own book bidding a line that could not be reserved.
+reservation could succeed, so the own book does not bid it. ``/select`` reserves from the shard :meth:`Budgets.shard`
+picks: the break's home shard if it has the amount, else another that has. The reservation is what enforces the
+budget; this view only keeps the own book from bidding a line that could not be reserved.
 """
 
 import time
@@ -13,7 +14,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import boto3
 
-from fast_channels.core.pds.delivery import BUDGET_SHARDS, budget_key
+from fast_channels.core.pds.delivery import BUDGET_SHARDS, budget_key, home_shard
+from fast_channels.functions.pds.reservations import item_key
 from fast_channels.functions.pds.store import CLIENT_CONFIG, Refreshed, Spawn, spawn_thread
 
 if TYPE_CHECKING:
@@ -26,12 +28,8 @@ BATCH: Final = 100
 ATTEMPTS: Final = 3
 """Calls per batch while DynamoDB leaves keys unprocessed."""
 
-type Remaining = Mapping[str, tuple[Decimal, ...]]
-"""Line id -> what each of its shards has left, in shard order (shards not read are missing)."""
-
-
-def _key(key: Mapping[str, str]) -> dict[str, dict[str, str]]:
-    return {name: {"S": value} for name, value in key.items()}
+type Remaining = Mapping[str, Mapping[int, Decimal]]
+"""Line id -> shard -> what it has left (shards not read are missing)."""
 
 
 class Budgets(Refreshed[Remaining]):
@@ -70,13 +68,22 @@ class Budgets(Refreshed[Remaining]):
     def exhausted(self, book: Book) -> frozenset[str]:
         """The lines of ``book`` that no shard can reserve one impression of."""
         remaining = self.get()
-        unread = Decimal(-1)
         return frozenset(
-            line.id for line in book.lines if max(remaining.get(line.id, ()), default=unread) < line.insertion
+            line.id
+            for line in book.lines
+            if max(remaining.get(line.id, {}).values(), default=Decimal(-1)) < line.insertion
         )
 
+    def shard(self, line: Line, decision: str, amount: Decimal) -> int | None:
+        """The shard to reserve ``amount`` of ``line`` from in break ``decision``: its home shard if that has the
+        amount left, else the first that has; None when none has (or none was read)."""
+        shards = self.get().get(line.id, {})
+        home = home_shard(decision)
+        candidates = [home, *(n for n in sorted(shards) if n != home)]
+        return next((n for n in candidates if shards.get(n, Decimal(-1)) >= amount), None)
+
     def _fetch(self) -> Remaining:
-        keys = [_key(budget_key(line.id, n)) for line in self._lines() for n in range(BUDGET_SHARDS)]
+        keys = [item_key(budget_key(line.id, n)) for line in self._lines() for n in range(BUDGET_SHARDS)]
         found: dict[str, dict[int, Decimal]] = {}
         for start in range(0, len(keys), BATCH):
             request: dict[str, Any] = {
@@ -92,4 +99,4 @@ class Budgets(Refreshed[Remaining]):
                         )
                 if not (request := response.get("UnprocessedKeys") or {}):
                     break
-        return {line: tuple(shards[n] for n in sorted(shards)) for line, shards in found.items()}
+        return found

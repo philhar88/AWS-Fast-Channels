@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from aws_cdk import CfnOutput, Stack
 
 from fast_channels.core.flags import DemandMode, Flags
+from fast_channels.core.naming import mediatailor_log_group
 from fast_channels.core.runbooks import Runbook
 from fast_channels.infra.constructs.observability import census_parameter_name
 from fast_channels.infra.constructs.ops import (
@@ -111,7 +112,7 @@ class OpsStack(Stack):
             self,
             "ZeroAds",
             prefix=prefix,
-            ads_log_group=f"/aws/vendedlogs/mediatailor/{prefix}",
+            ads_log_group=mediatailor_log_group(prefix),
             topic=media.alert_topic,
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,

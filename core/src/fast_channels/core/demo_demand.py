@@ -22,7 +22,7 @@ from xml.sax.saxutils import escape, quoteattr
 from pydantic import BaseModel, ConfigDict, Field
 
 from fast_channels.core.naming import ladder_path
-from fast_channels.core.timeline import DEMO_AD_GOPS
+from fast_channels.core.timeline import DEMO_AD_GOPS, whole_seconds
 
 __all__ = [
     "DEMO_AD_GOPS",
@@ -194,7 +194,7 @@ def simulator_creatives(index: DemoIndex, *, beacon_url: str) -> list[dict[str, 
             "crid": c.crid,
             "adomain": [c.adomain],
             "price": float(c.price),
-            "dur": round(c.duration_ms / 1000),
+            "dur": whole_seconds(c.duration_ms),
             "w": c.width,
             "h": c.height,
             "adm": vast_ad(c),

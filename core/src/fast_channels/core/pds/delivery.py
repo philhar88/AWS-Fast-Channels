@@ -184,7 +184,7 @@ def _tracker(uri: str, host: str) -> dict[str, str] | Ignored:
         return Ignored.MALFORMED
     if kind != TRACKER_EVENT:
         return Ignored.OTHER_EVENT
-    return {"sid": match["sid"], "evid": match["evid"], "crid": crid, "enr": enr or "0"}
+    return {"sid": match["sid"], "evid": match["evid"], "crid": crid, "enr": enr}
 
 
 def beacon(event: Mapping[str, Any], *, host: str) -> Beacon | Ignored:

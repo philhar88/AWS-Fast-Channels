@@ -81,6 +81,12 @@ def is_agent_owned(name: str, prefix: str) -> bool:
     return name.startswith(agent_namespace(prefix))
 
 
+def mediatailor_log_group(prefix: str) -> str:
+    """The stage's MediaTailor vended-log group: every playback configuration's ad decision server, manifest and
+    transcode logs."""
+    return f"/aws/vendedlogs/mediatailor/{prefix}"
+
+
 def ladder_path(ladder_version: str) -> str:
     """S3-key and name-safe form of a ladder version (``standard@0123abcd45`` -> ``standard_0123abcd45``).
 

@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fast_channels.core.demo_demand import DemoIndex, vast_ad
 from fast_channels.core.pds.models import NAME_PATTERN, OWN_BOOK, Money
+from fast_channels.core.timeline import whole_seconds
 
 HOUSE_PRICE: Final = Decimal("0.01")
 """A house ad's bid: below any paid bid, so a filler never takes a slot that a sale could fill."""
@@ -55,7 +56,7 @@ class Creative(BaseModel):
     @property
     def seconds(self) -> int:
         """Whole seconds, rounded half up (``bid.dur``)."""
-        return (self.duration_ms + 500) // 1000
+        return whole_seconds(self.duration_ms)
 
 
 class Line(BaseModel):
@@ -148,9 +149,9 @@ def house_creatives(document: str) -> tuple[Creative, ...]:
     return tuple(seen.values())
 
 
-def book(lines: Sequence[Line], *, house: Sequence[Creative], index: DemoIndex | None) -> Book:
-    """The own book of ``lines`` on the ladder of ``index`` (the kit's demo creatives): a line creative that the kit
-    did not encode is left out, and a line left with none bids nothing.
+def book(lines: Sequence[Line], *, ladder_version: str, house: Sequence[Creative], index: DemoIndex | None) -> Book:
+    """The own book of ``lines`` on one ladder's kit: its house ads and its demo creatives (``index``; None when the
+    kit has none). A line creative that the kit did not encode is left out, and a line left with none bids nothing.
 
     Raises:
         pydantic.ValidationError: two lines serve one creative, or share an id.
@@ -171,7 +172,7 @@ def book(lines: Sequence[Line], *, house: Sequence[Creative], index: DemoIndex |
         if (c := encoded.get(crid)) is not None
     )
     return Book(
-        ladder_version=index.ladder_version if index is not None else None,
+        ladder_version=ladder_version,
         lines=tuple(lines),
         creatives=creatives,
         house=tuple(house),

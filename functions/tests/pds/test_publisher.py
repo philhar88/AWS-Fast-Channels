@@ -200,23 +200,25 @@ def test_without_lines_the_demo_index_is_not_read(s3: Stubber, ssm: Stubber) -> 
     assert (own.lines, own.creatives, len(own.house)) == ((), (), 2)
 
 
-def test_a_kit_without_demo_creatives_bids_house_only(s3: Stubber, ssm: Stubber) -> None:
+@pytest.mark.parametrize(("code", "status"), [("NoSuchKey", 404), ("AccessDenied", 403)])
+def test_a_kit_without_demo_creatives_bids_house_only(s3: Stubber, ssm: Stubber, code: str, status: int) -> None:
+    """Without s3:ListBucket, S3 answers a missing key with AccessDenied."""
     kit(s3, ssm, demo=False)
-    s3.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    s3.add_client_error("get_object", service_error_code=code, http_status_code=status)
 
     own = publisher.own_book(LINED, None, prefix="fastm", media_bucket=MEDIA)
 
-    assert (own.ladder_version, own.creatives, len(own.house)) == (None, (), 2)
+    assert (own.ladder_version, own.creatives, len(own.house)) == (LADDER, (), 2)
 
 
-@pytest.mark.parametrize("failure", ["parameter", "pod", "invalid-pod", "index-denied"])
+@pytest.mark.parametrize("failure", ["parameter", "pod", "invalid-pod", "index-error"])
 def test_an_unreadable_kit_keeps_the_published_creatives(s3: Stubber, ssm: Stubber, failure: str) -> None:
     kept = Book(ladder_version="standard@0000000000", house=(), creatives=())
     snapshot = build(LINED, own=kept, now=NOW)
     match failure:
         case "parameter":
             ssm.add_client_error("get_parameter", service_error_code="ParameterNotFound", http_status_code=400)
-        case "pod" | "invalid-pod" | "index-denied":
+        case "pod" | "invalid-pod" | "index-error":
             ssm.add_response("get_parameter", {"Parameter": {"Name": "/fastm/pds/ladder-version", "Value": LADDER}})
             if failure == "pod":
                 s3.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
@@ -224,7 +226,7 @@ def test_an_unreadable_kit_keeps_the_published_creatives(s3: Stubber, ssm: Stubb
                 s3.add_response("get_object", body(b"<VAST"))
             else:
                 s3.add_response("get_object", body(POD.encode()))
-                s3.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
+                s3.add_client_error("get_object", service_error_code="InternalError", http_status_code=500)
 
     own = publisher.own_book(LINED, snapshot, prefix="fastm", media_bucket=MEDIA)
 

@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from fast_channels.core.pds.book import BidRequest, response
 from fast_channels.core.pds.names import Endpoint
 from fast_channels.functions.pds.budget import Budgets
-from fast_channels.functions.pds.store import SnapshotStore
+from fast_channels.functions.pds.store import snapshot_store
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
@@ -31,11 +31,8 @@ metrics = Metrics()
 app = ALBResolver()
 
 
-@cache
-def store() -> SnapshotStore:
-    """The function's snapshot store (one per execution environment)."""
-    settings().require("pds_config_bucket")
-    return SnapshotStore(settings().pds_config_bucket)
+store = snapshot_store
+"""The function's snapshot store (one per execution environment)."""
 
 
 @cache

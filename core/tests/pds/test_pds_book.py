@@ -65,7 +65,7 @@ DIRECT2 = Line(
     per_session=4,
 )
 HOUSE = house_creatives(vast_pod(creatives=KIT, content_base_url=CDN, fill_ms=120_120))
-OWN = book((DIRECT1, DIRECT2), house=HOUSE, index=INDEX)
+OWN = book((DIRECT1, DIRECT2), ladder_version=LADDER, house=HOUSE, index=INDEX)
 
 
 def request(*durations: list[Any] | None) -> BidRequest:
@@ -114,15 +114,15 @@ def test_the_book_takes_the_lines_creatives_from_the_kits_demo_index() -> None:
     assert OWN.line_of("direct2") is DIRECT2
     assert OWN.line_of("house1") is None
     assert DIRECT1.insertion == Decimal("0.008")
-    without = book((DIRECT1,), house=HOUSE, index=None)
-    assert (without.ladder_version, without.creatives, without.lines) == (None, (), (DIRECT1,))
+    without = book((DIRECT1,), ladder_version=LADDER, house=HOUSE, index=None)
+    assert (without.ladder_version, without.creatives, without.lines) == (LADDER, (), (DIRECT1,))
 
 
 def test_a_line_whose_creative_the_kit_lacks_bids_nothing() -> None:
     partial = demo_index(
         LADDER, {"direct2": ("demo-direct2", f"{CDN}/ads/x/demo-direct2/main.m3u8", 30030)}, width=1920, height=1080
     )
-    own = book((DIRECT1, DIRECT2), house=(), index=partial)
+    own = book((DIRECT1, DIRECT2), ladder_version=LADDER, house=(), index=partial)
     placed = bids(request([30]), own)
     assert [b["crid"] for b in placed] == ["direct2"]
 

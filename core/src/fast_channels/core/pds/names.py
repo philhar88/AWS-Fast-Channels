@@ -49,9 +49,6 @@ def dead_letter_alarm(prefix: str, function: str) -> str:
 
 PENDING_INDEX: Final = "pending"
 """The table's sparse index of open reservations: partition ``pending`` (``RESERVED``), sort ``pending_at``."""
-ADS_LOG_GROUP_PREFIX: Final = "/aws/vendedlogs/mediatailor/"
-"""The stage's MediaTailor log group is ``/aws/vendedlogs/mediatailor/<prefix>``; its ``BEACON_FIRED`` events are
-delivery."""
 
 
 def decision_stream(prefix: str, record: str) -> str:

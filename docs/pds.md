@@ -220,8 +220,9 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
 - **`pds.select`**: the break and its budget, every bid at or above the floor with its outcome (bids below it are
   counted), the pod, the standalones, the filled duration, latency;
 - **`pds.delivery`**: the break and the creative, the configuration that fired it, when, the tracker's HTTP status,
-  whether it was the ad's first impression and the break's first fill, and what it did to the reservation
-  (`delivered`, `late`, `unreserved` for a house or third-party ad, `repeat`), with the line and its price.
+  what it did to the reservation (`delivered`, `late`, `unreserved` for a house or third-party ad, `repeat`) with
+  the line and its price, and whether it was the first firing seen for the ad (`impression`) and for the break
+  (`fill`). A failed batch is retried, so count fills and impressions as distinct keys rather than by the flags.
 
 Records never hold the ticket, the viewer's address, User-Agent or headers, or the catalog context itself.
 
@@ -275,12 +276,13 @@ GROUP BY 1, 2, 3
 Filter on `record`: each function log message keeps its trailing newline and Firehose's message extraction adds one,
 so every other line of the lake objects is empty, and Athena reads it as a row of nulls.
 
-Delivery, by line and hour:
+Delivery by hour: fills and impressions as distinct keys (a record is one firing of the tracker), and what the
+lines' delivered ads cost:
 
 ```sql
-SELECT line, datehour, count_if(impression) AS impressions, count_if(credit IN ('delivered', 'late')) AS line_ads,
-       sum(CASE WHEN credit IN ('delivered', 'late') THEN CAST(amount AS decimal(12, 6)) END) AS delivered_usd
+SELECT datehour, count(DISTINCT decision_id) AS fills, count(DISTINCT decision_id || '/' || crid) AS impressions,
+       sum(CASE WHEN credit IN ('delivered', 'late') THEN CAST(amount AS decimal(12, 6)) END) AS lines_usd
 FROM "<prefix>_lake".pds_delivery
-WHERE record = 'pds.delivery' AND line IS NOT NULL
-GROUP BY 1, 2 ORDER BY 2, 1
+WHERE record = 'pds.delivery'
+GROUP BY 1 ORDER BY 1
 ```

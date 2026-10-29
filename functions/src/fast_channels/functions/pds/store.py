@@ -13,6 +13,7 @@ snapshot (no third-party bidder, no viewer address, no own book).
 import threading
 import time
 from collections.abc import Callable
+from functools import cache
 from typing import Any, Final
 
 import boto3
@@ -22,6 +23,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 
 from fast_channels.core.pds.snapshot import EMPTY, REFRESH_SECONDS, SNAPSHOT_KEY, Snapshot
+from fast_channels.functions.settings import settings
 
 RETRY_SECONDS: Final = 5.0
 """After a failed refresh, how soon the next one is tried."""
@@ -160,3 +162,10 @@ class SnapshotStore(Refreshed[Snapshot]):
 
     def _describe(self, value: Snapshot) -> dict[str, Any]:
         return {"snapshot": value.version}
+
+
+@cache
+def snapshot_store() -> SnapshotStore:
+    """The function's snapshot store (one per execution environment), on ``PDS_CONFIG_BUCKET``."""
+    settings().require("pds_config_bucket")
+    return SnapshotStore(settings().pds_config_bucket)

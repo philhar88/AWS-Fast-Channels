@@ -20,7 +20,9 @@ from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
 from constructs import Construct
 
-from fast_channels.core.pds.names import ADS_LOG_GROUP_PREFIX, PENDING_INDEX, dead_letter_alarm, table_name
+from fast_channels.core.ledger import ledger_table
+from fast_channels.core.naming import mediatailor_log_group
+from fast_channels.core.pds.names import PENDING_INDEX, dead_letter_alarm, table_name
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs import alerts
@@ -46,11 +48,6 @@ IMPRESSIONS: Final = logs.FilterPattern.all(
 """The ADS log events the delivery function reads: impression beacons (ours among them)."""
 
 
-def ledger_table_name(prefix: str) -> str:
-    """The ops module's ledger (``<prefix>-ledger``)."""
-    return f"{prefix}-ledger"
-
-
 def allow_table(function: FastFunction, prefix: str, actions: Sequence[str], keys: Sequence[str]) -> None:
     """Allow ``actions`` on the PDS table's items whose partition keys match ``keys`` (``BUDGET#*``, ...)."""
     function.allow(
@@ -64,7 +61,7 @@ def allow_ledger(function: FastFunction, prefix: str) -> None:
     """Allow appending to the ledger's ``pds/*`` chains (a put of a new entry, never an update)."""
     function.allow(
         ["dynamodb:PutItem"],
-        [arn(function, "dynamodb", "table", ledger_table_name(prefix))],
+        [arn(function, "dynamodb", "table", ledger_table(prefix))],
         conditions={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["pds/*"]}},
     )
 
@@ -113,7 +110,7 @@ class DeliveryCounter(Construct):
             environment={
                 "FAST_PREFIX": prefix,
                 "PDS_TABLE": table_name(prefix),
-                "LEDGER_TABLE": ledger_table_name(prefix),
+                "LEDGER_TABLE": ledger_table(prefix),
                 "CONTENT_BASE_URL": content_base_url,
             },
             timeout=Duration.minutes(1),
@@ -129,7 +126,7 @@ class DeliveryCounter(Construct):
         allow_table(self.function, prefix, ["PutItem"], ["IMP#*", "FILL#*"])
         allow_table(self.function, prefix, ["GetItem", "UpdateItem"], ["RES#*", "BUDGET#*"])
         allow_ledger(self.function, prefix)
-        log_group = logs.LogGroup.from_log_group_name(self, "AdsLogs", f"{ADS_LOG_GROUP_PREFIX}{prefix}")
+        log_group = logs.LogGroup.from_log_group_name(self, "AdsLogs", mediatailor_log_group(prefix))
         self.subscription = logs.SubscriptionFilter(
             self,
             "Impressions",
@@ -182,7 +179,7 @@ class ReleaseSweeper(Construct):
             environment={
                 "FAST_PREFIX": prefix,
                 "PDS_TABLE": table_name(prefix),
-                "LEDGER_TABLE": ledger_table_name(prefix),
+                "LEDGER_TABLE": ledger_table(prefix),
             },
             timeout=Duration.minutes(5),
             memory_size=256,

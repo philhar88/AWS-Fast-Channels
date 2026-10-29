@@ -37,6 +37,12 @@ DEMO_AD_GOPS: Final = 15
 """Length in GOPs of the demand module's demo creatives (``core/demo_demand.py``): 30.03 s, one 30 s slot of the
 stored requests. Only kits of a stage with ``modules.demand.mode: demo`` encode them."""
 
+
+def whole_seconds(ms: int) -> int:
+    """``ms`` in whole seconds, rounded half up, as MediaTailor rounds ``avail_duration_secs`` (an ad's ``bid.dur``)."""
+    return (ms + 500) // 1000
+
+
 KIT_SPEC: Final = f"breaks={'+'.join(map(str, BREAK_SLATE_GOPS))};ads={'+'.join(map(str, HOUSE_AD_GOPS))}"
 """Identifies the kit's slate and house-ad lengths; part of a kit's fingerprint, so changing them re-provisions it."""
 

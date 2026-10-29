@@ -28,6 +28,7 @@ from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
+from fast_channels.core.ledger import ledger_table
 from fast_channels.infra import nag
 from fast_channels.infra.config import LedgerLock
 from fast_channels.infra.constructs.alerts import PERIOD, alarm, dead_letter_alarm
@@ -79,7 +80,7 @@ class LedgerStorage(Construct):
         self.table = dynamodb.TableV2(
             self,
             "Table",
-            table_name=f"{prefix}-ledger",
+            table_name=ledger_table(prefix),
             partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
             billing=dynamodb.Billing.on_demand(),

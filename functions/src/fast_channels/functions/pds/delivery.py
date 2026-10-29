@@ -3,12 +3,15 @@
 A subscription filter on ``/aws/vendedlogs/mediatailor/<prefix>`` sends the impression beacons here. For each firing
 of our tracker (our CDN host and path only; ``core.pds.delivery.beacon``) the function:
 
-1. counts the impression once per ``(sid, evid, crid)`` and the fill once per ``(sid, evid)``, with conditional puts
-   (``IMP#`` and ``FILL#`` items), so a repeated beacon counts once;
-2. credits the impression to the ad's reservation, if it has one: RESERVED (or RELEASED, late) to DELIVERED, with the
-   ledger's money event (``reservations.deliver``); this step runs for repeated beacons too, so a retry after a
-   failure finishes the job;
+1. credits the impression to the ad's reservation, if it has one: RESERVED (or RELEASED, late) to DELIVERED, with
+   the ledger's money event (``reservations.deliver``). It is idempotent, so it runs for every firing;
+2. counts the fill once per ``(sid, evid)`` and the impression once per ``(sid, evid, crid)``, with conditional puts
+   (``FILL#``, then ``IMP#``), so a repeated beacon counts once;
 3. logs a ``pds.delivery`` record, which a subscription carries into the lake.
+
+A batch that fails is retried from the start: the reservation is credited once, and the impression put comes last, so
+a retried firing is still the impression. Its fill flag can be lost when only the impression put failed, so the lake
+counts fills and impressions as distinct keys, the flags marking the first firing seen.
 
 A failed batch is retried by Lambda (asynchronous invocation) and then goes to the dead-letter queue.
 """
@@ -69,11 +72,11 @@ def _first(table: str, key: dict[str, str], at: datetime) -> bool:
 def count(fired: Beacon, *, table: str, ledger_table: str) -> DeliveryRecord:
     """Count one firing of our tracker and credit it to its reservation."""
     decision = fired.decision_id
-    impression = _first(table, impression_key(decision, fired.crid), fired.at)
-    fill = impression and _first(table, fill_key(decision), fired.at)
     credit, item = deliver(
         aws.client("dynamodb"), table=table, ledger_table=ledger_table, decision=decision, crid=fired.crid, at=fired.at
     )
+    fill = _first(table, fill_key(decision), fired.at)
+    impression = _first(table, impression_key(decision, fired.crid), fired.at)
     return DeliveryRecord(
         decision_id=decision,
         sid=fired.sid,

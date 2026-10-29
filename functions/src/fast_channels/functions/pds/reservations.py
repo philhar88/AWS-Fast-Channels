@@ -4,8 +4,9 @@ Each change of money is one ``TransactWriteItems`` over the PDS table and the le
 reservation and its money event change together or not at all:
 
 - :func:`set_budgets` (the snapshot publisher) gives each line's shards their share of its budget;
-- :func:`reserve` (``/select``) takes the price of a break's line ads from a shard, counts them against the line's
-  per-session cap and writes their reservations; a shard's ``remaining`` never goes below zero;
+- :func:`reserve` (``/select``) takes the price of a break's line ads from a shard (the caller picks one with
+  ``budget.Budgets.shard``), counts them against the line's per-session cap and writes their reservations; a shard's
+  ``remaining`` never goes below zero;
 - :func:`deliver` (the delivery function) marks a reservation DELIVERED when MediaTailor fires our tracker;
 - :func:`release` (the sweeper) gives back the price of a reservation that saw no impression in two hours.
 
@@ -21,6 +22,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
 
+from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 
 from fast_channels.core.ledger import LedgerKind, entry_item
@@ -42,6 +44,8 @@ from fast_channels.functions.ops.ledger import entry
 
 if TYPE_CHECKING:
     from fast_channels.core.pds.book import Line
+
+logger = Logger(child=True)
 
 ATTEMPTS: Final = 2
 """Transactions per reservation: a cancelled one is retried once without the ads it refused."""
@@ -92,7 +96,8 @@ def _n(value: Decimal | int) -> dict[str, str]:
     return {"N": str(value)}
 
 
-def _key(key: Mapping[str, str]) -> dict[str, dict[str, str]]:
+def item_key(key: Mapping[str, str]) -> dict[str, dict[str, str]]:
+    """A key (``core.pds.delivery``) as DynamoDB's low-level API takes it."""
     return {name: _s(value) for name, value in key.items()}
 
 
@@ -151,7 +156,7 @@ def set_budgets(
     changed: dict[str, list[int]] = {}
     for line in lines:
         for shard, cap in enumerate(shard_caps(line.budget)):
-            key = _key(budget_key(line.id, shard))
+            key = item_key(budget_key(line.id, shard))
             item = client.get_item(TableName=table, Key=key, ConsistentRead=True).get("Item")
             old = Decimal(item["cap"]["N"]) if item is not None and "cap" in item else None
             if old == cap:
@@ -194,9 +199,11 @@ def set_budgets(
             try:
                 client.transact_write_items(TransactItems=[write, ledger])
             except ClientError as error:
-                if _cancellation(error) is None:
+                if ((_cancellation(error) or ["None"])[0]) != FAILED_CONDITION:
                     raise
-                continue  # another run (the deploy's, the hourly one) changed the shard first: the next run sees it
+                # Another run (the deploy's, the hourly one) changed the shard first: the next run sees it.
+                logger.info("budget shard changed meanwhile", extra={"line": line.id, "shard": shard})
+                continue
             changed.setdefault(line.id, []).append(shard)
     return changed
 
@@ -213,7 +220,7 @@ def _reserve_actions(
             {
                 "Update": {
                     "TableName": table,
-                    "Key": _key(budget_key(line.id, hold.shard)),
+                    "Key": item_key(budget_key(line.id, hold.shard)),
                     "UpdateExpression": "SET remaining = remaining - :amount",
                     "ConditionExpression": "remaining >= :amount",
                     "ExpressionAttributeValues": {":amount": _n(hold.amount)},
@@ -226,7 +233,7 @@ def _reserve_actions(
                 {
                     "Update": {
                         "TableName": table,
-                        "Key": _key(cap_key(sid, line.id)),
+                        "Key": item_key(cap_key(sid, line.id)),
                         "UpdateExpression": "ADD n :count SET #ttl = :ttl",
                         "ConditionExpression": "attribute_not_exists(n) OR n <= :most",
                         "ExpressionAttributeNames": {"#ttl": "ttl"},
@@ -245,7 +252,7 @@ def _reserve_actions(
                     "Put": {
                         "TableName": table,
                         "Item": {
-                            **_key(reservation_key(decision, crid)),
+                            **item_key(reservation_key(decision, crid)),
                             "state": _s(State.RESERVED),
                             "line": _s(line.id),
                             "shard": _n(hold.shard),
@@ -377,7 +384,7 @@ def _transition(
         {
             "Update": {
                 "TableName": table,
-                "Key": _key(reservation_key(decision, crid)),
+                "Key": item_key(reservation_key(decision, crid)),
                 "UpdateExpression": f"SET #state = :to, {stamp} = :at REMOVE pending, pending_at",
                 "ConditionExpression": "#state = :was",
                 "ExpressionAttributeNames": {"#state": "state"},
@@ -387,7 +394,7 @@ def _transition(
         {
             "Update": {
                 "TableName": table,
-                "Key": _key(budget_key(line, shard)),
+                "Key": item_key(budget_key(line, shard)),
                 "ExpressionAttributeValues": {":amount": _n(amount)},
                 **budget,
             }
@@ -409,7 +416,7 @@ def _transition(
 
 def _reservation(client: Any, table: str, decision: str, crid: str) -> dict[str, Any] | None:
     item: dict[str, Any] | None = client.get_item(
-        TableName=table, Key=_key(reservation_key(decision, crid)), ConsistentRead=True
+        TableName=table, Key=item_key(reservation_key(decision, crid)), ConsistentRead=True
     ).get("Item")
     return item
 

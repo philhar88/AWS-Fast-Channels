@@ -8,6 +8,7 @@ from aws_cdk import aws_mediatailor as mediatailor
 from constructs import Construct
 
 from fast_channels.core import specs
+from fast_channels.core.naming import mediatailor_log_group
 from fast_channels.infra.constructs.channel_assembly._cfn import override, with_tokens
 from fast_channels.infra.constructs.logs import deliver, vended_log_group
 
@@ -50,7 +51,7 @@ class MediaTailorLogs(Construct):
         self.log_group = vended_log_group(
             self,
             "Logs",
-            name=f"/aws/vendedlogs/mediatailor/{prefix}",
+            name=mediatailor_log_group(prefix),
             delivery_sources=f"{prefix}-*",
             retention=log_retention,
             removal_policy=removal_policy,

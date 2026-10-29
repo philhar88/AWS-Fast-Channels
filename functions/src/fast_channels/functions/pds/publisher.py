@@ -13,7 +13,7 @@ It runs when the stack deploys and every hour (AWS changes its ranges without no
 An unchanged snapshot is not written again. When ip-ranges.json cannot be read, or holds no origin-facing network, the
 networks of the current snapshot are kept; when the kit cannot be read, its creatives are.
 
-Each run also gives the lines' budget shards their share of the budgets (``reservations.set_budgets``).
+Each run then gives the lines' budget shards their share of the budgets (``reservations.set_budgets``).
 """
 
 from collections.abc import Callable
@@ -90,6 +90,9 @@ def _read(bucket: str, key: str) -> bytes:
 def kit(media_bucket: str, ladder_version: str, *, demo: bool) -> tuple[tuple[Creative, ...], DemoIndex | None]:
     """The house ads of a ladder's kit and, with ``demo``, its demo creatives (None when the kit has none).
 
+    The publisher may read only the kits' two documents, not list the bucket, so S3 answers a missing demo index with
+    AccessDenied rather than NoSuchKey: either means the kit has none, and the house ads are still bid.
+
     Raises:
         ClientError: the kit's VAST pod cannot be read.
         ValueError: it is not a pod of inline streaming ads.
@@ -100,9 +103,12 @@ def kit(media_bucket: str, ladder_version: str, *, demo: bool) -> tuple[tuple[Cr
     try:
         return house, DemoIndex.model_validate_json(_read(media_bucket, demo_index_key(ladder_version)))
     except ClientError as error:
-        if error.response["Error"]["Code"] not in {"NoSuchKey", "404"}:
+        if error.response["Error"]["Code"] not in {"NoSuchKey", "404", "AccessDenied", "403"}:
             raise
-        logger.warning("the kit has no demo creatives: the lines bid nothing", extra={"ladder": ladder_version})
+        logger.warning(
+            "the kit has no demo creatives (missing or unreadable): the lines bid nothing",
+            extra={"ladder": ladder_version, "error": error.response["Error"]["Code"]},
+        )
         return house, None
 
 
@@ -113,7 +119,7 @@ def own_book(base: SnapshotBase, published: Snapshot | None, *, prefix: str, med
         parameter = parameter_name(prefix, Parameter.LADDER_VERSION)
         ladder = aws.client("ssm").get_parameter(Name=parameter)["Parameter"]["Value"]
         house, index = kit(media_bucket, ladder, demo=bool(base.lines))
-        return book(base.lines, house=house, index=index)
+        return book(base.lines, ladder_version=ladder, house=house, index=index)
     except (ClientError, ValueError) as error:
         logger.warning("the kit is unavailable", extra={"error": type(error).__name__, "detail": str(error)[:300]})
     if published is None:
@@ -158,14 +164,15 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     config.require("pds_config_bucket", "pds_snapshot_base", "prefix", "media_bucket", "pds_table", "ledger_table")
     base = SnapshotBase.model_validate_json(config.pds_snapshot_base)
     now = datetime.now(UTC)
-    budgets = set_budgets(
-        aws.client("dynamodb"), table=config.pds_table, ledger_table=config.ledger_table, lines=base.lines, now=now
-    )
     snapshot, written = publish(
         config.pds_config_bucket,
         base,
         now=now,
         own=lambda published: own_book(base, published, prefix=config.prefix, media_bucket=config.media_bucket),
+    )
+    # After the snapshot: a budget fault fails the run (and the deploy) without holding back the rest of it.
+    budgets = set_budgets(
+        aws.client("dynamodb"), table=config.pds_table, ledger_table=config.ledger_table, lines=base.lines, now=now
     )
     result = {
         "version": snapshot.version,
