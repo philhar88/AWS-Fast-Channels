@@ -244,6 +244,8 @@ class DemandStage:
     stage: str | None
     """The stage file (``stages/<stage>.json``) the repository's stacks are synthesized with, if any."""
     session: boto3.Session
+    modules: list[str] | None = None
+    """Only these modules of the stage on (``--modules``), or all the stage names."""
     _clients: dict[tuple[str, str], Any] = field(default_factory=dict, init=False, repr=False)
 
     @property
@@ -278,7 +280,7 @@ class DemandStage:
     def repository_context(self) -> list[str]:
         """CDK CLI context arguments for the repository's app: the stage file under this prefix."""
         if self.stage:
-            return stage_args.arguments(stage_args.with_prefix(stage_args.load(self.stage), self.prefix))
+            return stage_args.arguments(stage_args.resolve(self.stage, self.prefix, self.modules))
         return ["-c", f"fast-channels.prefix={self.prefix}"]
 
     @property
@@ -713,6 +715,43 @@ class DemandStage:
             )["executionArn"]
             log(f"PDS census gate started with running={running}: {gate}")
         return str(execution)
+
+    def warm_running_tasks(self, timeout_s: int = 1200) -> dict[str, str]:
+        """Warm every running task of the guidance's service that no warm-up build has named yet, and wait for the
+        builds; returns task ARN -> build status. A first deploy starts its tasks before the Demand stack and its
+        warm-up rule exist, so the rule never sees them; tasks a later deploy starts are the rule's."""
+        parameters = self.parameters()
+        cluster, service = parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]
+        ecs, codebuild = self.client("ecs"), self.client("codebuild")
+        project = names.warmup_project(self.prefix)
+        tasks = ecs.list_tasks(cluster=cluster, serviceName=service, desiredStatus="RUNNING")["taskArns"]
+        recent = codebuild.list_builds_for_project(projectName=project, sortOrder="DESCENDING")["ids"][:50]
+        warmed = {
+            variable["value"]
+            for build in (codebuild.batch_get_builds(ids=recent)["builds"] if recent else [])
+            for variable in build.get("environment", {}).get("environmentVariables", [])
+            if variable["name"] == "TASK_ARN"
+        }
+        builds = {
+            task: codebuild.start_build(
+                projectName=project,
+                environmentVariablesOverride=[{"name": "TASK_ARN", "value": task, "type": "PLAINTEXT"}],
+            )["build"]["id"]
+            for task in tasks
+            if task not in warmed
+        }
+        log(f"warming {len(builds)} of {len(tasks)} running tasks ({len(tasks) - len(builds)} already warmed)")
+        deadline = time.monotonic() + timeout_s
+        states: dict[str, str] = {}
+        while builds:
+            found = codebuild.batch_get_builds(ids=list(builds.values()))["builds"]
+            states = {task: next(b["buildStatus"] for b in found if b["id"] == build) for task, build in builds.items()}
+            if all(status != "IN_PROGRESS" for status in states.values()) or time.monotonic() > deadline:
+                break
+            time.sleep(15)
+        if failed := {task: status for task, status in states.items() if status != "SUCCEEDED"}:
+            raise DemandError(f"warm-up builds did not succeed: {failed}")
+        return states
 
     def herd(self, rate: int, seconds: int) -> dict[str, Any]:
         """A break herd through the guidance's CloudFront (the warm-up project with another rate and duration):

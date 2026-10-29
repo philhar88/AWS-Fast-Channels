@@ -111,6 +111,8 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
   [tests/e2e/README.md](tests/e2e/README.md)), or through the manual **End-to-end** workflow
   (`.github/workflows/e2e.yml`, AWS access through an OIDC role), which deploys a throwaway stage, runs the tests and
   destroys it. A run costs a few US dollars. Their offline tests (`-m "not e2e"`) run with `uv run pytest`.
+  The demand module has a leg of its own (`leg: demand`; [docs/demand.md](docs/demand.md#deploy-and-destroy)).
+  `MODULES=a,b` keeps only those modules of a stage on, for `make` and `scripts/prebid_guidance.py`.
 - **Release gate**: a release is tagged only after a green end-to-end run on the release branch.
 
 When you experiment in AWS, use a prefix of your own (`make deploy PREFIX=<you>-exp`) so that your stacks never collide

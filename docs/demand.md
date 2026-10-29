@@ -212,7 +212,8 @@ Undeliverable events of both rules go to the dead-letter queue `<prefix>-demand-
 stage's alert topic.
 
 `deploy-demand` starts the gate once with the census's current count, so a stage with no channel running scales to
-zero 15 minutes after its deploy. A later guidance deploy resets the minimum to `ECSTaskMinCapacity` (= `tasks.min`)
+zero 15 minutes after its deploy. It then warms the running tasks that no warm-up build has named and waits for them:
+a first deploy starts its tasks before the warm-up rule exists. A later guidance deploy resets the minimum to `ECSTaskMinCapacity` (= `tasks.min`)
 until the next census change. P0-21 measured scale-from-zero at about 3 minutes to all-healthy and the JIT warm-up at
 2–3 minutes: open a daypart at least 10 minutes before its first break.
 
@@ -281,6 +282,13 @@ where it stopped when run again. The guidance's six KMS keys are scheduled for d
 are the only residue. The Pod Decision Service's table and config bucket are the Data stack's and stay until
 `make destroy`. `inventory` lists anything else tagged `fast:module=demand` or `pds` for the prefix, or named for it,
 and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
+
+**The demand leg** (BUILD-PLAN §12.3 `e2e-demand`; the `End-to-end` workflow with `leg: demand`, or the same
+steps locally) deploys `STAGE=fastci MODULES=ops,demand` (the `fastci` stage with only those modules on), runs
+`make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`. It then destroys the demand module, the stage and the
+ledger archive, and fails on any residue but KMS keys pending deletion. A run takes about two and a half hours and
+costs a few US dollars. The tests take a few minutes and must start within the census gate's 15 minutes: the leg runs
+no channel, so the gate then scales Prebid Server to zero.
 
 A stage with Prebid Server deployed costs about $120–150 a month while idle (two NAT gateways, the load balancers, the
 web ACL, the Valkey cache minimum). Destroy throwaway stages right after use.

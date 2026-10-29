@@ -322,6 +322,21 @@ def test_stage_prefix_resolution(capsys: pytest.CaptureFixture[str]) -> None:
     assert capsys.readouterr().out.splitlines() == ["fastm", "fastx"]
 
 
+def test_a_stage_can_keep_only_some_modules_on(capsys: pytest.CaptureFixture[str]) -> None:
+    """The demand leg deploys ``fastci`` with ops and demand only (``MODULES=ops,demand``)."""
+    stage = stage_args.resolve("fastci", "fastcix", ["ops", "demand"])
+    config = shipped_with(
+        {f"modules.{name}": value for name, value in stage["modules"].items()} | {"prefix": "fastcix"}
+    )
+
+    assert {name for name in ModulesConfig.model_fields if config.modules.enabled(name)} == {"ops", "demand"}
+    assert config.modules.demand.simulator == "lambda", "the stage's own settings of a kept module stay"
+    assert stage_args.main(["context", "fastci", "--modules", "ops,demand"]) == 0
+    assert '"models":{"enabled":false}' in capsys.readouterr().out
+    with pytest.raises(stage_args.StageError, match="are not modules of the stage"):
+        stage_args.resolve("fastci", None, ["ops", "nothing"])
+
+
 def test_a_stage_under_another_prefix_expands_it() -> None:
     config = shipped_with(stage_overrides("fastci", "--prefix", "fastci-pr7"))
 

@@ -110,6 +110,13 @@ All notable changes to this project are documented here. The format follows
   target: probe auctions without a ticket through the guidance's CloudFront, at 50/s per healthy target for 150 s,
   with a pinned, checksum-verified vegeta on CodeBuild. Undeliverable events go to a dead-letter queue that alarms. `prebid_guidance.py herd` replays a break
   herd.
+- **Demand: the e2e demand leg** (BUILD-PLAN §12.3 `e2e-demand`): the `End-to-end` workflow's `leg: demand` (job
+  `e2e-demand`, up to 4 hours) deploys `STAGE=fastci MODULES=ops,demand` and the demand module, runs
+  `tests/e2e/test_11_demand_edge.py` (grid durations, the origin rule group, off-grid 400, an account without the
+  module calling no third party, a small herd), then destroys and inventories everything. `MODULES=a,b`
+  (`stage_args.py --modules`, `prebid_guidance.py --modules`) keeps only those modules of a stage on.
+  `deploy-demand` now also warms the running tasks no warm-up build has named (a first deploy starts them before the
+  warm-up rule exists) and waits for them.
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a
