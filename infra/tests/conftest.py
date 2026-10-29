@@ -34,11 +34,12 @@ WEAK_REFERENCE_OUTPUT = "PublishOutput"
 """Name prefix of the outputs behind weak cross-stack references (``Fn::GetStackOutput``)."""
 
 
-def context(overrides: Overrides | None = None) -> dict[str, Any]:
-    """cdk.json context plus ``-c fast-channels.<path>=<value>``-style overrides, with bundling disabled. The key
-    ``as-run-router`` (``-c as-run-router=true``, ``make as-run-router``) is passed as it is."""
+def context(overrides: Overrides | None = None, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """cdk.json context plus ``-c fast-channels.<path>=<value>``-style overrides and other ``extra`` context (such as
+    the guidance's network), with bundling disabled. The key ``as-run-router`` (``-c as-run-router=true``,
+    ``make as-run-router``) is passed as it is."""
     dotted = {k if k == AS_RUN_ROUTER else f"fast-channels.{k}": v for k, v in (overrides or {}).items()}
-    return {**CDK_CONTEXT, "aws:cdk:bundling-stacks": [], **dotted}
+    return {**CDK_CONTEXT, "aws:cdk:bundling-stacks": [], **dotted, **(extra or {})}
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +62,10 @@ def deploy(
     region: str = "us-east-1",
     account: str | None = ACCOUNT,
     outdir: Path | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> Deployment:
     """A new, unsynthesized deployment (tests may still add constructs to its stacks)."""
-    app = App(context=context(overrides), outdir=str(outdir) if outdir else None)
+    app = App(context=context(overrides, extra), outdir=str(outdir) if outdir else None)
     return Deployment(app, build(app, account=account, region=region))
 
 
@@ -78,10 +80,12 @@ def deployment() -> Callable[..., Deployment]:
     """Cached deployments by (overrides, region); do not add constructs to them."""
     cache: dict[str, Deployment] = {}
 
-    def get(overrides: Overrides | None = None, *, region: str = "us-east-1") -> Deployment:
-        key = json.dumps([overrides or {}, region], sort_keys=True)
+    def get(
+        overrides: Overrides | None = None, *, region: str = "us-east-1", extra: Mapping[str, Any] | None = None
+    ) -> Deployment:
+        key = json.dumps([overrides or {}, region, extra or {}], sort_keys=True)
         if key not in cache:
-            cache[key] = deploy(overrides, region=region)
+            cache[key] = deploy(overrides, region=region, extra=extra)
         return cache[key]
 
     return get

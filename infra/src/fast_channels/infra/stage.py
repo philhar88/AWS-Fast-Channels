@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aws_cdk import Aspects, Environment, Stage, Tags
 
+from fast_channels.core.demand import NETWORK_CONTEXT, DemandNetwork
 from fast_channels.core.tags import Owner, resource_tags
 from fast_channels.infra.config import FastChannelsConfig, Removal, TransactionSearchMode
 from fast_channels.infra.constructs.functions import (
@@ -16,6 +17,7 @@ from fast_channels.infra.stacks.as_run import AsRunRouterStack
 from fast_channels.infra.stacks.baseline import AccountBaselineStack
 from fast_channels.infra.stacks.crawl import CrawlStack
 from fast_channels.infra.stacks.data import DataStack
+from fast_channels.infra.stacks.demand import DemandStack
 from fast_channels.infra.stacks.demand_build import DemandBuildStack
 from fast_channels.infra.stacks.demand_edge import DemandEdgeStack
 from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
@@ -44,8 +46,9 @@ class FastChannelsStage(Stage):
     ``modules.crawl.enabled``, after Media), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
     us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (if
     ``observability.transaction_search`` is ``enable``), DemandEdge (in us-east-1) and DemandBuild (if
-    ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), and
-    AsRun (the account's as-run router, only with ``as_run_router``).
+    ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), Demand
+    beside the guidance once ``scripts/prebid_guidance.py`` passes its network (context
+    ``fast-channels:demand-network``), and AsRun (the account's as-run router, only with ``as_run_router``).
 
     Cross-stack references are weak (``Fn::GetStackOutput``, cdk.json), so stateless stacks can be refactored
     without export locks. Every Lambda function and state machine in the stage gets the
@@ -141,20 +144,37 @@ class FastChannelsStage(Stage):
 
         self.demand_edge: DemandEdgeStack | None = None
         self.demand_build: DemandBuildStack | None = None
+        self.demand: DemandStack | None = None
         if config.modules.demand.enabled:
-            self.demand_edge = DemandEdgeStack(
-                self,
-                "DemandEdge",
-                stack_name=f"{self.stage_name}-DemandEdge" + ("" if env.region == EDGE_REGION else f"-{env.region}"),
-                config=config,
-                env=Environment(account=env.account, region=EDGE_REGION),
-                **stacks,
-            )
-            self.demand_build = DemandBuildStack(self, "DemandBuild", config=config, **stacks)
+            self._demand_stacks(config, env, stacks)
 
         Aspects.of(self).add(FunctionLogGroups(log_groups))
         for key, value in tags.items():
             Tags.of(self).add(key, value)
+
+    def _demand_stacks(self, config: FastChannelsConfig, env: Environment, stacks: dict[str, Any]) -> None:
+        """DemandEdge (in us-east-1), DemandBuild, and Demand once the deploy script passes the guidance's network."""
+        self.demand_edge = DemandEdgeStack(
+            self,
+            "DemandEdge",
+            stack_name=f"{self.stage_name}-DemandEdge" + ("" if env.region == EDGE_REGION else f"-{env.region}"),
+            config=config,
+            env=Environment(account=env.account, region=EDGE_REGION),
+            **stacks,
+        )
+        self.demand_build = DemandBuildStack(self, "DemandBuild", config=config, **stacks)
+        if (network := self.node.try_get_context(NETWORK_CONTEXT)) is not None:
+            self.demand = DemandStack(
+                self,
+                "Demand",
+                config=config,
+                network=(
+                    DemandNetwork.model_validate_json(network)
+                    if isinstance(network, str)
+                    else DemandNetwork.model_validate(network)
+                ),
+                **stacks,
+            )
 
     def _as_run_router(self, config: FastChannelsConfig, tags: dict[str, str]) -> AsRunRouterStack:
         """The account's as-run router stack, after Media (whose custom resource creates the as-run log group)."""

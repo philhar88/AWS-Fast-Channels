@@ -76,6 +76,17 @@ All notable changes to this project are documented here. The format follows
   runs a smoke test; `make destroy-demand` removes all of it, including what the guidance's templates retain, and
   prints the inventory. The demand module needs a prefix of at most 10 characters (the bootstrap qualifier).
 
+- **Demand: the bidder simulator and the demo creatives** ([docs/demand.md](docs/demand.md#demo-demand-and-the-bidder-simulator)).
+  In `modules.demand.mode: demo` every ladder kit also encodes ten 30.03 s demo creatives from the brand stills in
+  `assets/demo`: `sim1`–`sim8` for the simulator (`sim3` and `sim4` share an advertiser) and `direct1`–`direct2` for
+  the own book's direct lines. The stills are CDK file assets, which MediaConvert reads object by object, so nothing
+  is written to the ingest bucket. The kit indexes them in `ads/<ladder>/demo/creatives.json`. `deploy-demand` renders
+  the simulator's creatives from that index (overlay O5) for either mode: the guidance's simulator stack
+  (`guidance_stack`), or the same handler as a Lambda target of an internal load balancer in the Prebid Server VPC
+  (`lambda`, `sim.<prefix>.fast.internal`). The new stack `FastChannels-<prefix>-Demand` holds the stage's private zone
+  `<prefix>.fast.internal` and the `lambda` simulator. `deploy-demand` deploys it once the guidance is up, and
+  `destroy-demand` deletes it first. The smoke test also sends the simulator a 4-slot request and checks every demo
+  creative's renditions against the ladder.
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a

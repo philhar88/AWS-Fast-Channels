@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from aws_cdk import aws_sqs as sqs
 
+from fast_channels.core.demand import NETWORK_CONTEXT
+
 GLOBAL_MODELS = {
     "agent.model": "global.anthropic.claude-haiku-5-5",
     "agent.allowed_models": ["global.anthropic.claude-haiku-5-5"],
@@ -62,6 +64,31 @@ def test_no_unacknowledged_findings(
     deployment.app.synth()  # raises ValidationFailed listing every unacknowledged finding
 
     # cdk-nag v3 reports only plugins with findings; a clean synth writes an empty list.
+    reports = json.loads((tmp_path / "validation-report.json").read_text())["pluginReports"]
+    assert [v for r in reports for v in r.get("violations", [])] == []
+
+
+@pytest.mark.parametrize("simulator", ["lambda", "guidance_stack"])
+def test_no_unacknowledged_findings_beside_the_guidance(
+    fresh_deployment: Callable[..., Any], tmp_path: Path, simulator: str
+) -> None:
+    """The ``fastm`` stage with the Demand stack, which exists once the guidance is deployed."""
+    network = {
+        "vpc_id": "vpc-0123456789abcdef0",
+        "private_subnets": [
+            {"id": "subnet-0aaaaaaaaaaaaaaa1", "az": "us-east-1a", "route_table": "rtb-0aaaaaaaaaaaaaaa1"},
+            {"id": "subnet-0bbbbbbbbbbbbbbb2", "az": "us-east-1b", "route_table": "rtb-0bbbbbbbbbbbbbbb2"},
+        ],
+        "task_security_group_id": "sg-0123456789abcdef0",
+        "simulator_code_key": "simulator/0123456789abcdef.zip",
+    }
+    deployment = fresh_deployment(
+        {**FASTM, "modules.demand.simulator": simulator}, outdir=tmp_path, extra={NETWORK_CONTEXT: network}
+    )
+    assert deployment.stage.demand is not None
+
+    deployment.app.synth()
+
     reports = json.loads((tmp_path / "validation-report.json").read_text())["pluginReports"]
     assert [v for r in reports for v in r.get("violations", [])] == []
 

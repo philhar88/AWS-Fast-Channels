@@ -319,9 +319,11 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.bootstrap()
             apply(pin, stage.checkout)
             image = stage.build_image(pin)
-            stage.render_into_checkout(base)
+            demo = stage.demo_index()
+            stage.render_into_checkout(base, demo)
             stage.deploy_guidance(image)
             stage.write_parameters(stage.discover(image))
+            stage.deploy_demand_stack(demo, base)
             if not args.no_smoke:
                 return report_smoke(stage)
         case "outputs":

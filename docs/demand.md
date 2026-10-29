@@ -6,13 +6,14 @@ Prebid Server on AWS](https://github.com/aws-solutions-library-samples/prebid-se
 one VAST 4.2 pod. The decision is recorded in [ADR-0020](adr/0020-demand-through-the-prebid-server-guidance.md).
 
 **Status (Phase 1, in progress):** the pinned guidance with its overlays, the Prebid Server configuration renderer,
-the fast-ctv module, the origin gate, the image build and the deploy and destroy scripts are in place. The simulator,
-the census-gated scaling and the Pod Decision Service follow.
+the fast-ctv module, the origin gate, the image build, the deploy and destroy scripts, the bidder simulator and the
+demo creatives are in place. The census-gated scaling and the Pod Decision Service follow.
 
 - [How a break is sold](#how-a-break-is-sold)
 - [The guidance and its overlays](#the-guidance-and-its-overlays)
 - [Prebid Server configuration](#prebid-server-configuration)
 - [The fast-ctv module](#the-fast-ctv-module)
+- [Demo demand and the bidder simulator](#demo-demand-and-the-bidder-simulator)
 - [Deploy and destroy](#deploy-and-destroy)
 - [Rules the configuration relies on](#rules-the-configuration-relies-on)
 
@@ -144,6 +145,57 @@ without the module. The contract tests (`tests/pbs`) run the jar with the stage'
 | PDS contract | Every `/policy` and `/select` call validates against the contract's strict models, and `/select` is answered by the Pod Decision Service's own pod rules; a break without an event id asks neither |
 | Durations | Every break length on the grid has a pod; 31 s and 300 s are refused with 400 |
 
+## Demo demand and the bidder simulator
+
+In `modules.demand.mode: demo` the stage carries simulated demand, labelled as such everywhere it shows: ten demo
+creatives, a bidder simulator that bids them, and the own book's synthetic direct lines (`modules.pds.demo_lines`,
+served by the Pod Decision Service).
+
+**The demo creatives** (`fast_channels.core.demo_demand`) are part of the ladder kit. With demo mode on, every kit
+also encodes one 30.03 s ad (`DEMO_AD_GOPS` = 15 GOPs, one 30 s slot of the stored requests) per brand still in
+`assets/demo` (`scripts/render_brand_assets.py --demo`), through the same ingest pipeline as the house ads, so their
+renditions are the ladder's:
+
+| Creative | Served by | Advertiser domain | Simulated CPM |
+|---|---|---|---|
+| `sim1` … `sim8` | the bidder simulator (`amt`) | `brand-a.example` … `brand-h.example`; `sim3` and `sim4` share `brand-c.example`, so the pod's advertiser separation shows | $12.50–35.00 (the Phase-0 break table's) |
+| `direct1`, `direct2` | the own book's synthetic direct lines | `direct1.example`, `direct2.example` | the line's |
+
+- The stills stay CDK file assets. The MediaConvert role may read each one, object by object, and nothing is written
+  to the ingest bucket, whose rule ingests any video file under any key (a synth test checks that no demand role
+  can write to it).
+- Turning demo mode on adds the stills' digest to the kit's fingerprint, so the kit re-provisions once, with ten more
+  encodes of 30 s.
+- The kit writes their index, `ads/<ladder>/demo/creatives.json`: each creative's id, advertiser, domain, price, the
+  immutable creative id MediaTailor caches it by, its HLS copy under `ads/<ladder>/<creative id>/`, its duration
+  and size.
+
+**The bidder simulator** is the guidance's `handler.py` with overlay O5. The deploy script renders its
+`video_creatives.json` from the index: one inline VAST 4.2 ad per `sim*` creative (no impression of its own, so the
+fast-ctv module's notices and our tracker are its impressions), with a billing notice on the CDN's beacon. Without
+the index (a stage without the Media stack) the simulator bids the guidance's own creatives. Two modes:
+
+| `modules.demand.simulator` | Where it runs | Reached by |
+|---|---|---|
+| `guidance_stack` (default) | the guidance's simulator stack `<prefix>-pbs-sim`: its own VPC with two NAT gateways and an internal load balancer | VPC peering from the Prebid Server VPC (the stack's outputs become the guidance's parameters) |
+| `lambda` | `<prefix>-demand-simulator`, a Lambda target of an internal load balancer in the Prebid Server VPC (`FastChannels-<prefix>-Demand`) | `http://sim.<prefix>.fast.internal/`, a record in the stage's private zone; the load balancer admits only the Prebid Server tasks' security group |
+
+**`FastChannels-<prefix>-Demand`** holds what runs beside the guidance, in its VPC:
+
+- the private zone `<prefix>.fast.internal` (where `pds.` and `sim.` are named);
+- in `lambda` mode, the simulator.
+
+It exists in the app only with the CDK context `fast-channels:demand-network`, which `deploy` passes after the
+guidance is up. It is read from `/<prefix>/demand/*`, with each private subnet's zone and route table from EC2.
+`make deploy` therefore leaves it alone, and `destroy` deletes it before the guidance. The simulator's code package is
+uploaded to the guidance's assets bucket under its content hash (`simulator/<hash>.zip`).
+
+**The smoke test** in demo mode also checks:
+
+- **The simulator:** a direct 4-slot pod request returns one bid per slot, each a demo creative.
+- **The demo creatives:** each multivariant on the CDN has the ladder's variants in order: codec, size, frame rate
+  and the nominal `BANDWIDTH`.
+
 ## Deploy and destroy
 
 ```bash
@@ -178,15 +230,17 @@ order (DESIGN §4.3):
 5. **The SSM contract** `/<prefix>/demand/`: `cloudfront-domain`, `settings-bucket`, `stored-requests-bucket`,
    `cluster-arn`, `service-arn`, `task-security-group-id`, `vpc-id`, `private-subnet-ids`, `alb-arn`, `web-acl-arn`,
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
-6. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
+6. **`FastChannels-<prefix>-Demand`**, with the guidance's network as context: the private zone, and in `lambda` mode
+   the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)).
+7. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
    VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs
    `POLICY_UNAVAILABLE`); the same POST without the secret, and a request to another path, are blocked at the edge
-   (403); an off-grid duration is refused (400).
+   (403); an off-grid duration is refused (400). In demo mode the simulator and the demo creatives are checked too.
 
 `upload-config` uploads a changed configuration to the guidance's `current/` prefix and stored-data bucket and forces
 a new ECS deployment, which overlay O7 runs at full capacity.
 
-`destroy` deletes the guidance's stacks, then what their templates retain (the S3 buckets with every object version,
+`destroy` deletes the Demand stack and the guidance's stacks, then what the guidance's templates retain (the S3 buckets with every object version,
 the container, DataSync, Lambda and Container Insights log groups, inactive task definitions), the SSM contract, the
 bootstrap (its retained bucket and repository too) and the repository's two stacks. It records what the templates
 retain (`build/prebid-guidance/<prefix>-retained.json`) before it deletes anything, so an interrupted destroy picks up

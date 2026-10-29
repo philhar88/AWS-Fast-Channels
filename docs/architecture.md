@@ -30,13 +30,14 @@ One CDK `Stage` (`FastChannelsStage`) holds a deployment. Its id is `FastChannel
 | `…-Edge-<region>` | Media | CloudFront standard-logs-v2 delivery, CDN alert topic and 5xx alarm, in us-east-1 | Only when the deployment region is not us-east-1 (otherwise these live in Media); one per deployment region |
 | `…-DemandEdge` | Demand | The two origin secrets and the WAF rule group the Prebid Server guidance's web ACL references first, in us-east-1 ([demand.md](demand.md)) | Only with `modules.demand.enabled`; named `…-DemandEdge-<region>` outside us-east-1 |
 | `…-DemandBuild` | Demand | The Prebid Server image repository, its x86 CodeBuild project, and the CloudFormation execution policy of the guidance's dedicated CDK bootstrap | Only with `modules.demand.enabled` |
+| `…-Demand` | Demand | Beside the guidance, in its VPC: the private zone `<prefix>.fast.internal` and, in `lambda` mode, the bidder simulator behind an internal load balancer | Only once `make deploy-demand` has deployed the guidance (it passes the guidance's network as context) |
 | `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only with `observability.transaction_search: enable`. One per account and region, termination protected, retained |
 | `FastChannels-AsRun` | Account | The as-run router: the one subscription on the as-run log, putting every event on the default event bus for `observability.as_run: shared` deployments; its alarms and dead-letter queue ([ADR-0032](adr/0032-shared-as-run-router.md)) | Only by `make as-run-router`, never by `make deploy` or `make destroy`. One per account and region, termination protected |
 
 The demand module's Prebid Server is the AWS guidance, deployed as its own CDK app (`<prefix>-pbs`, and
 `<prefix>-pbs-sim` with the guidance's simulator) by `make deploy-demand`, never by `make deploy`.
 
-Dependencies run Data → Media → (Models →) Operator; DemandEdge and DemandBuild depend on nothing. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
+Dependencies run Data → Media → (Models →) Operator; DemandEdge and DemandBuild depend on nothing; Demand follows the guidance. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
 refactored without export locks, and they also cross regions for the Edge stack. Memory lives in the Data stack so
 that an Operator rollback can never get stuck on a Memory that is still `CREATING`.
 

@@ -7,8 +7,11 @@ _review.md "agent ladder customisation"): the filler slate, an ad-break slate pe
 
 * ``begin``: record the ladder version as PROVISIONING (keeping any previous kit until the new one is ready) and
   return the IngestRequests of its kit, which the state machine runs as child executions.
-* ``ready``: write the VAST pod ``ads/<ladder>/vast.xml`` and the ``ads/b.gif`` beacon, mark the ladder READY
-  with its kit and publish ``Ladder Ready``.
+* ``ready``: write the VAST pod ``ads/<ladder>/vast.xml`` and the ``ads/b.gif`` beacon (and, with demo creatives,
+  their index ``ads/<ladder>/demo/creatives.json``), mark the ladder READY with its kit and publish ``Ladder Ready``.
+
+With the demand module in demo mode the kit also holds the demo creatives (``fast_channels.core.demo_demand``): one
+``DEMO_AD_GOPS`` ad per brand still, which the bidder simulator and the own book's synthetic direct lines serve.
 * ``failed``: mark the ladder FAILED and publish ``Ladder Failed``.
 """
 
@@ -21,6 +24,7 @@ from aws_lambda_powertools.metrics import MetricUnit
 from pydantic import BaseModel, ValidationError
 
 from fast_channels.core.cost import encode_cost_per_minute
+from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.events import LadderFailed, LadderReady
 from fast_channels.core.ingest import AssetKind, IngestRequest
 from fast_channels.core.ladder import Ladder
@@ -28,7 +32,7 @@ from fast_channels.core.mediaconvert import GeneratorInput
 from fast_channels.core.naming import digest
 from fast_channels.core.specs import Creative, vast_key, vast_pod
 from fast_channels.core.tags import Owner
-from fast_channels.core.timeline import BREAK_SLATE_GOPS, HOUSE_AD_GOPS
+from fast_channels.core.timeline import BREAK_SLATE_GOPS, DEMO_AD_GOPS, HOUSE_AD_GOPS
 from fast_channels.functions import aws
 from fast_channels.functions.ingest.notify import put_event
 from fast_channels.functions.ingest.publish import summarize_cause
@@ -57,11 +61,13 @@ metrics = Metrics()
 
 
 class KitImages(BaseModel):
-    """Brand stills of the kit (S3 URIs of 1920x1080 PNGs), in the order the house ads use ``HOUSE_AD_GOPS``."""
+    """Brand stills of the kit (S3 URIs of 1920x1080 PNGs), in the order the house ads use ``HOUSE_AD_GOPS``, and the
+    demo creatives' stills by creative id (demand demo mode only)."""
 
     filler: str
     break_slate: str
     house_ads: tuple[str, ...]
+    demo: dict[str, str] = {}
 
 
 def break_label(gops: int) -> str:
@@ -70,6 +76,10 @@ def break_label(gops: int) -> str:
 
 def house_ad_label(number: int) -> str:
     return f"house-ad-{number}"
+
+
+def demo_label(crid: str) -> str:
+    return f"demo-{crid}"
 
 
 def child_name(parent: str, label: str) -> str:
@@ -82,9 +92,11 @@ def child_name(parent: str, label: str) -> str:
 
 
 def kit_requests(ladder_version: str, images: KitImages, correlation_id: str) -> list[IngestRequest]:
-    """The ingest requests of a kit: filler, break slates, then house ads."""
+    """The ingest requests of a kit: filler, break slates, house ads, then the demo creatives (if any)."""
     if len(images.house_ads) != len(HOUSE_AD_GOPS):
         raise ValueError(f"{len(HOUSE_AD_GOPS)} house-ad images are required, got {len(images.house_ads)}")
+    if images.demo and (missing := sorted({c.crid for c in DEMO_CREATIVES} - images.demo.keys())):
+        raise ValueError(f"demo stills missing for {missing}")
     stills = [
         (FILLER_LABEL, images.filler, FILLER_GOPS, AssetKind.SLATE),
         *((break_label(gops), images.break_slate, gops, AssetKind.SLATE) for gops in BREAK_SLATE_GOPS),
@@ -92,6 +104,7 @@ def kit_requests(ladder_version: str, images: KitImages, correlation_id: str) ->
             (house_ad_label(n), image, gops, AssetKind.AD)
             for n, (image, gops) in enumerate(zip(images.house_ads, HOUSE_AD_GOPS, strict=True), start=1)
         ),
+        *((demo_label(c.crid), images.demo[c.crid], DEMO_AD_GOPS, AssetKind.AD) for c in DEMO_CREATIVES if images.demo),
     ]
     return [
         IngestRequest(
@@ -198,12 +211,23 @@ def ready(kit: Mapping[str, Any], assets: Sequence[Mapping[str, Any]]) -> dict[s
         cache_control=VAST_CACHE_CONTROL,
     )
     store.write(BEACON_KEY, BEACON_GIF, cache_control=BEACON_CACHE_CONTROL)
+    demo = {c.crid: by_label[demo_label(c.crid)] for c in DEMO_CREATIVES if demo_label(c.crid) in by_label}
+    if demo:
+        encoded = {
+            crid: (ad["creative"]["creative_id"], ad["creative"]["hls_uri"], ad["duration_ms"])
+            for crid, ad in demo.items()
+        }
+        index = demo_index(ladder_version, encoded, width=kit["width"], height=kit["height"])
+        store.write(
+            demo_index_key(ladder_version), index.model_dump_json(indent=2).encode(), cache_control=VAST_CACHE_CONTROL
+        )
     summary = {
         "filler": by_label[FILLER_LABEL]["vod_source"],
         "break_slates": {str(gops): by_label[break_label(gops)]["vod_source"] for gops in BREAK_SLATE_GOPS},
         "house_ads": [c.creative_id for c in creatives],
         "vast_key": key,
         "vast_url": f"{config.content_base_url.rstrip('/')}/{key}",
+        **({"demo_key": demo_index_key(ladder_version)} if demo else {}),
     }
     values = {
         "status": LadderStatus.READY.value,

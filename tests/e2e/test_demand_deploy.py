@@ -2,6 +2,7 @@
 Stubber standing in for AWS. The live deploy, smoke and destroy run in the e2e demand leg."""
 
 import io
+import json
 import zipfile
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,8 @@ import pytest
 from botocore.stub import Stubber
 
 from fast_channels.core.demand import Parameter
+from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
+from fast_channels.core.ladder import Ladder
 
 REGION = "us-east-1"
 LOCK = """
@@ -322,6 +325,20 @@ def test_deleted_network_resources_are_not_residue(stage: _demand.DemandStage, s
     assert not stage.gone(endpoint, REGION)
 
 
+def test_a_deleted_peering_connection_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    ec2 = stub("ec2")
+    arn = "arn:aws:ec2:us-east-1:123456789012:vpc-peering-connection/pcx-1"
+    for code in ("deleted", "active"):
+        ec2.add_response(
+            "describe_vpc_peering_connections",
+            {"VpcPeeringConnections": [{"VpcPeeringConnectionId": "pcx-1", "Status": {"Code": code}}]},
+            {"VpcPeeringConnectionIds": ["pcx-1"]},
+        )
+
+    assert stage.gone(arn, REGION)
+    assert not stage.gone(arn, REGION)
+
+
 def test_a_key_pending_deletion_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
     kms = stub("kms")
     arn = "arn:aws:kms:us-east-1:123456789012:key/k1"
@@ -356,3 +373,160 @@ def test_doctor_lists_the_tools(capsys: pytest.CaptureFixture[str], monkeypatch:
 
     assert prebid_guidance.main(["doctor"]) == 1
     assert "cdk              MISSING: x" in capsys.readouterr().out
+
+
+STANDARD = Ladder.builtin("standard")
+
+
+def demo() -> Any:
+    encoded = {
+        c.crid: (f"demo-{c.crid}-x", f"https://media.example.com/ads/standard/demo-{c.crid}-x/main.m3u8", 30030)
+        for c in DEMO_CREATIVES
+    }
+    return demo_index(STANDARD.version, encoded, width=1920, height=1080)
+
+
+def stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
+    return {
+        "StackName": name,
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+        "Outputs": [{"OutputKey": k, "OutputValue": v} for k, v in outputs.items()],
+    }
+
+
+def test_the_demo_index_comes_from_the_media_bucket(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation, s3 = stub("cloudformation"), stub("s3")
+    data = {"MediaBucketName": "fastcix-media"}
+    media = {"DefaultLadderVersion": STANDARD.version, "ContentBaseUrl": "https://media.example.com"}
+    cloudformation.add_response(
+        "describe_stacks",
+        {"Stacks": [stack("FastChannels-fastcix-Data", data)]},
+        {"StackName": "FastChannels-fastcix-Data"},
+    )
+    cloudformation.add_response(
+        "describe_stacks",
+        {"Stacks": [stack("FastChannels-fastcix-Media", media)]},
+        {"StackName": "FastChannels-fastcix-Media"},
+    )
+    s3.add_response(
+        "get_object",
+        {"Body": io.BytesIO(demo().model_dump_json().encode())},
+        {"Bucket": "fastcix-media", "Key": demo_index_key(STANDARD.version)},
+    )
+
+    assert stage.demo_index() == demo()
+
+
+def test_a_demand_only_stage_has_no_demo_index(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation = stub("cloudformation")
+    cloudformation.add_client_error(
+        "describe_stacks", "ValidationError", expected_params={"StackName": "FastChannels-fastcix-Data"}
+    )
+
+    assert stage.demo_index() is None
+
+
+def test_the_simulator_creatives_bill_on_the_cdn_beacon(stage: _demand.DemandStage) -> None:
+    rendered = stage.simulator_creatives(demo(), "https://media.example.com/")
+
+    assert rendered is not None
+    creatives = json.loads(rendered)
+    assert [c["crid"] for c in creatives] == [f"sim{n}" for n in range(1, 9)]
+    assert creatives[0]["burl"].startswith("https://media.example.com/ads/b.gif?seat=amt&cr=sim1&p=${AUCTION_PRICE}")
+    assert stage.simulator_creatives(None, "https://media.example.com") is None
+
+
+def test_the_simulator_package_holds_the_handler_and_the_creatives(
+    stage: _demand.DemandStage, stub: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handler = tmp_path / _demand.SIMULATOR_HANDLER
+    handler.mkdir(parents=True)
+    (handler / "handler.py").write_text("def lambda_handler(event, context): ...\n")
+    (handler / "bid_response.json").write_text("{}")
+    monkeypatch.setattr(type(stage), "checkout", property(lambda self: tmp_path))
+    uploaded: list[dict[str, Any]] = []
+    s3 = stub("s3")
+    for _ in range(2):
+        s3.add_response("put_object", {}, None)
+    stage.client("s3").meta.events.register(
+        "provide-client-params.s3.PutObject", lambda params, **_: uploaded.append(params)
+    )
+
+    key = stage.simulator_package('[{"crid": "sim1"}]')
+    again = stage.simulator_package('[{"crid": "sim1"}]')
+
+    assert key == again, "the key is the package's content hash"
+    assert key.startswith("simulator/") and key.endswith(".zip")
+    assert uploaded[0]["Bucket"] == "fastcix-cdk-assets-123456789012-us-east-1"
+    body = uploaded[0]["Body"]
+    with zipfile.ZipFile(io.BytesIO(body if isinstance(body, bytes) else body.getvalue())) as package:
+        assert sorted(package.namelist()) == ["bid_response.json", "handler.py", "video_creatives.json"]
+
+
+def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm, ec2 = stub("ssm"), stub("ec2")
+    values = {"vpc-id": "vpc-1", "private-subnet-ids": "subnet-a,subnet-b", "task-security-group-id": "sg-1"}
+    page = {"Parameters": [{"Name": f"/fastcix/demand/{k}", "Value": v} for k, v in values.items()]}
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ec2.add_response(
+        "describe_subnets",
+        {
+            "Subnets": [
+                {"SubnetId": "subnet-a", "AvailabilityZone": "us-east-1a"},
+                {"SubnetId": "subnet-b", "AvailabilityZone": "us-east-1b"},
+            ]
+        },
+        {"SubnetIds": ["subnet-a", "subnet-b"]},
+    )
+    ec2.add_response(
+        "describe_route_tables",
+        {
+            "RouteTables": [
+                {"RouteTableId": "rtb-0a", "Associations": [{"SubnetId": "subnet-a"}]},
+                {"RouteTableId": "rtb-0b", "Associations": [{"Main": True}]},
+            ]
+        },
+        {"Filters": [{"Name": "vpc-id", "Values": ["vpc-1"]}]},
+    )
+
+    network = stage.network("simulator/0123456789abcdef.zip")
+
+    assert [(s.id, s.az, s.route_table) for s in network.private_subnets] == [
+        ("subnet-a", "us-east-1a", "rtb-0a"),
+        ("subnet-b", "us-east-1b", "rtb-0b"),
+    ]
+    assert (network.vpc_id, network.task_security_group_id) == ("vpc-1", "sg-1")
+
+
+def test_the_simulator_smoke_wants_one_demo_bid_per_slot(stage: _demand.DemandStage, stub: Any) -> None:
+    def answer(crids: list[str]) -> dict[str, Any]:
+        bids = [{"impid": f"s{n}", "crid": c, "adomain": ["x"], "price": 1, "dur": 30} for n, c in enumerate(crids, 1)]
+        body = json.dumps({"id": "smoke", "seatbid": [{"bid": bids}]})
+        return {"Payload": io.BytesIO(json.dumps({"statusCode": 200, "body": body}).encode())}
+
+    lam = stub("lambda")
+    lam.add_response("invoke", answer(["sim1", "sim2", "sim3", "sim4"]), None)
+    lam.add_response("invoke", answer(["sim1", "sim2", "sim3", "banner_creative_1"]), None)
+    lam.add_response("invoke", answer(["sim1", "sim2"]), None)
+
+    good = stage.simulator_smoke(demo())
+    assert good["passed"] and good["function"] == "fastcix-demand-simulator"
+    assert [b["crid"] for b in good["bids"]] == ["sim1", "sim2", "sim3", "sim4"]
+    assert not stage.simulator_smoke(demo())["passed"], "not a demo creative"
+    assert not stage.simulator_smoke(demo())["passed"], "a slot without a bid"
+
+
+def test_the_smoke_counts_the_simulator_and_the_creatives() -> None:
+    results: dict[str, Any] = {
+        **{f"{s}s": {"status": 200, "content_type": "application/xml", "vast_4_2": True} for s in (30, 60, 90, 120)},
+        "no-secret": {"status": 403},
+        "off-grid-31s": {"status": 400},
+        "other-path": {"status": 403},
+        "simulator": {"passed": True},
+        "demo-creatives": {"passed": True},
+    }
+
+    assert _demand.smoke_passed(results)
+    for check in ("simulator", "demo-creatives"):
+        assert not _demand.smoke_passed({**results, check: {"passed": False}}), check
