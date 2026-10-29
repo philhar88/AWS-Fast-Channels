@@ -9,7 +9,7 @@ CDK := npx cdk
 # targets the operator scripts at its prefix; PREFIX=<name> alone deploys cdk.json under another prefix, and with
 # STAGE replaces the stage's prefix. A stage that cannot be read stops make before any command runs.
 ifdef STAGE
-STAGE_OPTS := $(STAGE) $(if $(PREFIX),--prefix $(PREFIX))
+STAGE_OPTS := $(STAGE) $(if $(PREFIX),--prefix $(PREFIX)) $(if $(MODULES),--modules $(MODULES))
 STAGE_CONTEXT := $(shell uv run python scripts/stage_args.py context $(STAGE_OPTS) || echo STAGE-ERROR)
 ifneq ($(findstring STAGE-ERROR,$(STAGE_CONTEXT)),)
 $(error STAGE=$(STAGE): see the error above)
@@ -88,7 +88,7 @@ eval: ## Run the agent model-conformance suite (MODEL=<bedrock model id>; TASK=s
 trace: ## Find every log line for a correlation id (ID=<asset id, session id or execution name>)
 	uv run python scripts/trace.py $(ID) $(PREFIX_OPT)
 
-DEMAND_ARGS := $(if $(STAGE),--stage $(STAGE)) $(if $(PREFIX),--prefix $(PREFIX))
+DEMAND_ARGS := $(if $(STAGE),--stage $(STAGE)) $(if $(PREFIX),--prefix $(PREFIX)) $(if $(MODULES),--modules $(MODULES))
 
 deploy-demand: console ## Deploy the demand module of STAGE: its stacks, the guidance's bootstrap, image and stacks; smoke
 	uv run python scripts/prebid_guidance.py deploy $(DEMAND_ARGS) $(DEMAND_OPTS)

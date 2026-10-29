@@ -216,16 +216,19 @@ def apply(pin: Pin, directory: Path, *, module: Path | None = MODULE_SOURCES) ->
     return applied
 
 
-def stage_config(stage: str | None, prefix: str | None, region: str) -> FastChannelsConfig:
-    """The configuration of ``stage`` (``stages/<stage>.json`` over cdk.json), optionally under another ``prefix``,
-    validated for ``region``. Loads the CDK (a Node.js process), as ``cdk synth`` does."""
+def stage_config(
+    stage: str | None, prefix: str | None, region: str, modules: list[str] | None = None
+) -> FastChannelsConfig:
+    """The configuration of ``stage`` (``stages/<stage>.json`` over cdk.json), optionally under another ``prefix``
+    and with only ``modules`` on, validated for ``region``. Loads the CDK (a Node.js process), as ``cdk synth``
+    does."""
     from aws_cdk import App  # noqa: PLC0415 - only render-config needs the CDK
 
     from fast_channels.infra.config import FastChannelsConfig  # noqa: PLC0415
 
     context = dict(json.loads((REPO / "cdk.json").read_text())["context"])
     if stage:
-        context |= stage_args.context(stage_args.with_prefix(stage_args.load(stage), prefix))
+        context |= stage_args.context(stage_args.resolve(stage, prefix, modules))
     elif prefix:
         context["fast-channels.prefix"] = json.dumps(prefix)
     return FastChannelsConfig.from_context(App(context=context).node, region=region)
@@ -289,10 +292,11 @@ STAGE_COMMANDS: Final = {
 def demand_stage(args: argparse.Namespace) -> DemandStage:
     """The stage the command acts on."""
     region = args.region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
-    config = stage_config(args.stage, args.prefix, region)
+    modules = args.modules.split(",") if args.modules else None
+    config = stage_config(args.stage, args.prefix, region, modules)
     if not config.modules.demand.enabled:
         raise GuidanceError(f"stage {config.prefix}: modules.demand is off")
-    return DemandStage(config, args.stage, boto3.Session(region_name=region))
+    return DemandStage(config, args.stage, boto3.Session(region_name=region), modules=modules)
 
 
 def content_base_url(args: argparse.Namespace, prefix: str) -> str:
@@ -326,6 +330,7 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.write_parameters(stage.discover(image))
             stage.deploy_demand_stack(demo, base)
             stage.start_census_gate()
+            stage.warm_running_tasks()
             if not args.no_smoke:
                 return report_smoke(stage)
         case "outputs":
@@ -378,6 +383,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for command in [rendering, *(commands.add_parser(name, help=text) for name, text in STAGE_COMMANDS.items())]:
         command.add_argument("--stage", help="a stage (stages/<name>.json); default: cdk.json alone")
         command.add_argument("--prefix", help="deployment prefix (replaces the stage's)")
+        command.add_argument("--modules", help="comma-separated modules of the stage to keep on (others off)")
         command.add_argument("--region", help="deployment region (default: AWS_REGION, else us-east-1)")
         command.add_argument("--content-base-url", help="the stage's ContentBaseUrl (default: its Media stack output)")
     rendering.add_argument("--out", type=Path, help="output directory (default build/prebid-guidance/<prefix>-config)")

@@ -13,6 +13,11 @@ on:
         description: Keep the stage after the tests (for debugging)
         type: boolean
         default: false
+      leg:
+        description: "v3: the v3.0.0 leg; demand: the demand module (fastci with ops and demand only)"
+        type: choice
+        options: [v3, demand]
+        default: v3
 
 permissions:
   contents: read
@@ -32,6 +37,7 @@ env:
 
 jobs:
   e2e:
+    if: inputs.leg == 'v3'
     runs-on: ubuntu-24.04-arm
     environment: e2e
     timeout-minutes: 120
@@ -64,3 +70,51 @@ jobs:
       - name: Destroy
         if: always() && !inputs.keep
         run: npx cdk destroy '**' --force -c "fast-channels.prefix=$PREFIX"
+
+  # The demand module (BUILD-PLAN §12.3 e2e-demand): the stage's repository stacks with ops and demand, the Prebid
+  # Server guidance on its own bootstrap, the synthetic edge tests (pods are empty until the Pod Decision Service),
+  # then everything destroyed and inventoried. Costs about US$2-4 per run.
+  e2e-demand:
+    if: inputs.leg == 'demand'
+    runs-on: ubuntu-24.04-arm
+    environment: e2e
+    timeout-minutes: 240
+    steps:
+      - name: Check the prefix
+        run: |
+          pattern='^[a-z][a-z0-9-]{0,8}[a-z0-9]$'  # FastChannelsConfig.prefix, at most 10 with demand
+          [[ "$PREFIX" =~ $pattern ]] || { echo "::error::the prefix input must match $pattern"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_E2E_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 14400
+      - run: uv sync --locked --all-packages && npm ci
+      - name: Deploy the stage
+        run: make deploy STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+      - name: Deploy the demand module
+        run: make deploy-demand STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+      - name: Demand tests
+        run: uv run pytest tests/e2e/test_11_demand_edge.py -m e2e --prefix "$PREFIX" -v
+      - name: Destroy the demand module
+        if: always() && !inputs.keep
+        run: make destroy-demand STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+      - name: Destroy the stage
+        if: always() && !inputs.keep
+        run: |
+          make destroy STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+          uv run python scripts/ledger_verify.py purge --prefix "$PREFIX" --apply --bypass-governance
+      - name: Inventory
+        if: always() && !inputs.keep
+        run: |
+          uv run python scripts/cleanup.py --prefix "$PREFIX"
+          uv run python scripts/prebid_guidance.py inventory --stage fastci --modules ops,demand --prefix "$PREFIX"

@@ -4,6 +4,7 @@
     uv run python scripts/stage_args.py context fastm                  # -c 'fast-channels.prefix="fastm"' -c ...
     uv run python scripts/stage_args.py prefix fastm                   # fastm
     uv run python scripts/stage_args.py context fastm --prefix fastx   # the same stage under another prefix
+    uv run python scripts/stage_args.py context fastci --modules ops,demand   # only these modules on
 
 A stage is ``stages/<name>.json``: a partial ``fast-channels`` configuration, a JSON object whose keys are top-level
 fields of the block in cdk.json (``prefix``, ``observability``, ``modules``, ...). Each key becomes one
@@ -79,6 +80,25 @@ def with_prefix(stage: dict[str, Any], prefix: str | None) -> dict[str, Any]:
     return {**stage, "prefix": prefix}
 
 
+def with_modules(stage: dict[str, Any], modules: list[str] | None) -> dict[str, Any]:
+    """``stage`` with only ``modules`` on, when given: every other module the stage names is turned off (the
+    configuration still refuses a module whose dependencies are off)."""
+    if modules is None:
+        return stage
+    named = stage.get("modules", {})
+    if unknown := sorted(set(modules) - set(named)):
+        raise StageError(f"--modules {unknown} are not modules of the stage ({', '.join(named)})")
+    return {
+        **stage,
+        "modules": {name: value if name in modules else {"enabled": False} for name, value in named.items()},
+    }
+
+
+def resolve(name: str, prefix: str | None = None, modules: list[str] | None = None) -> dict[str, Any]:
+    """Stage ``name`` under ``prefix`` (when given) with only ``modules`` on (when given)."""
+    return with_modules(with_prefix(load(name), prefix), modules)
+
+
 def context(stage: dict[str, Any]) -> dict[str, str]:
     """CDK context entries: ``fast-channels.<key>`` -> the key's value as compact JSON."""
     return {f"{CONTEXT_KEY}.{key}": json.dumps(value, separators=(",", ":")) for key, value in stage.items()}
@@ -94,9 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("output", choices=("context", "prefix"), help="what to print")
     parser.add_argument("stage", help=f"a stage: {', '.join(stage_names())} (stages/<name>.json)")
     parser.add_argument("--prefix", help="deploy the stage under this prefix instead of its own")
+    parser.add_argument("--modules", help="comma-separated modules to keep on (the others are turned off)")
     args = parser.parse_args(argv)
     try:
-        stage = with_prefix(load(args.stage), args.prefix)
+        stage = resolve(args.stage, args.prefix, args.modules.split(",") if args.modules else None)
     except StageError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

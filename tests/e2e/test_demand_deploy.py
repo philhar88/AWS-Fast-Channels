@@ -119,6 +119,47 @@ def test_the_image_tag_is_the_contexts_content(tmp_path: Path) -> None:
     assert _demand.context_digest(tmp_path) != first
 
 
+def test_running_tasks_without_a_warm_up_are_warmed(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm, ecs, codebuild = stub("ssm"), stub("ecs"), stub("codebuild")
+    cluster = "arn:aws:ecs:us-east-1:123456789012:cluster/c"
+    service = "arn:aws:ecs:us-east-1:123456789012:service/c/s"
+    old, new = (f"arn:aws:ecs:us-east-1:123456789012:task/c/{t}" for t in ("old", "new"))
+    page = {
+        "Parameters": [
+            {"Name": "/fastcix/demand/cluster-arn", "Value": cluster},
+            {"Name": "/fastcix/demand/service-arn", "Value": service},
+        ]
+    }
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ecs.add_response(
+        "list_tasks", {"taskArns": [old, new]}, {"cluster": cluster, "serviceName": service, "desiredStatus": "RUNNING"}
+    )
+    project = "fastcix-pbs-warmup"
+    codebuild.add_response(
+        "list_builds_for_project", {"ids": [f"{project}:1"]}, {"projectName": project, "sortOrder": "DESCENDING"}
+    )
+    environment = {
+        "type": "ARM_CONTAINER",
+        "image": "i",
+        "computeType": "BUILD_GENERAL1_SMALL",
+        "environmentVariables": [{"name": "TASK_ARN", "value": old, "type": "PLAINTEXT"}],
+    }
+    codebuild.add_response(
+        "batch_get_builds", {"builds": [{"id": f"{project}:1", "environment": environment}]}, {"ids": [f"{project}:1"]}
+    )
+    override = [{"name": "TASK_ARN", "value": new, "type": "PLAINTEXT"}]
+    codebuild.add_response(
+        "start_build",
+        {"build": {"id": f"{project}:2"}},
+        {"projectName": project, "environmentVariablesOverride": override},
+    )
+    codebuild.add_response(
+        "batch_get_builds", {"builds": [{"id": f"{project}:2", "buildStatus": "SUCCEEDED"}]}, {"ids": [f"{project}:2"]}
+    )
+
+    assert stage.warm_running_tasks() == {new: "SUCCEEDED"}, "the task the rule already warmed is left alone"
+
+
 def test_console_bucket() -> None:
     url = "https://us-east-1.console.aws.amazon.com/s3/home?region=us-east-1&bucket=fastcix-pbs-bucket83908e77-abc"
 
