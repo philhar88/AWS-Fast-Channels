@@ -26,7 +26,7 @@ from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings, qualification
-from fast_channels.core.naming import is_agent_owned
+from fast_channels.core.naming import PREFIX_PATTERN, check_prefix, is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
@@ -776,9 +776,10 @@ class ModulesConfig(_Section):
 class FastChannelsConfig(_Section):
     """FAST Channels deployment configuration (cdk.json context ``fast-channels``)."""
 
-    prefix: str = Field(default="fast", pattern=r"^[a-z][a-z0-9-]{0,14}[a-z0-9]$")
-    """Name prefix of every resource and value of the ``fast:app`` tag. Change it to deploy several copies in one
-    account and region."""
+    prefix: str = Field(default="fast", pattern=PREFIX_PATTERN)
+    """Name prefix of every resource and value of the ``fast:app`` tag: 2-16 lowercase letters and digits, starting
+    with a letter, without hyphens. Change it to deploy several copies in one account and region. Names and IAM grants
+    are scoped by ``<prefix>-*``, so a prefix with a hyphen (``fast-x``) would fall inside another's (``fast-*``)."""
     removal: Removal = Removal.DESTROY
     """``destroy`` (demo: delete data with the stacks) or ``retain`` (production: keep data, enable deletion and
     termination protection)."""
@@ -791,6 +792,12 @@ class FastChannelsConfig(_Section):
     observability: ObservabilityConfig = ObservabilityConfig()
     notifications: NotificationsConfig = NotificationsConfig()
     modules: ModulesConfig = ModulesConfig()
+
+    @field_validator("prefix", mode="before")
+    @classmethod
+    def _isolated_prefix(cls, prefix: object) -> object:
+        """Says why a prefix is refused (the pattern alone would not)."""
+        return check_prefix(prefix) if isinstance(prefix, str) else prefix
 
     @property
     def removal_policy(self) -> RemovalPolicy:

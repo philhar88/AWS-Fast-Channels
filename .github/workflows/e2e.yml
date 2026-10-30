@@ -44,7 +44,7 @@ jobs:
     steps:
       - name: Check the prefix
         run: |
-          pattern='^[a-z][a-z0-9-]{0,14}[a-z0-9]$'  # FastChannelsConfig.prefix
+          pattern='^[a-z][a-z0-9]{1,15}$'  # FastChannelsConfig.prefix (core.naming.PREFIX_PATTERN): no hyphen
           [[ "$PREFIX" =~ $pattern ]] || { echo "::error::the prefix input must match $pattern"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -82,7 +82,7 @@ jobs:
     steps:
       - name: Check the prefix
         run: |
-          pattern='^[a-z][a-z0-9-]{0,8}[a-z0-9]$'  # FastChannelsConfig.prefix, at most 10 with demand
+          pattern='^[a-z][a-z0-9]{1,9}$'  # FastChannelsConfig.prefix, at most 10 with demand
           [[ "$PREFIX" =~ $pattern ]] || { echo "::error::the prefix input must match $pattern"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0

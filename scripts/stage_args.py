@@ -29,8 +29,9 @@ REPO: Final = Path(__file__).resolve().parents[1]
 STAGES: Final = REPO / "stages"
 CDK_JSON: Final = REPO / "cdk.json"
 CONTEXT_KEY: Final = "fast-channels"
-PREFIX: Final = re.compile(r"[a-z][a-z0-9-]{0,14}[a-z0-9]")
-"""``FastChannelsConfig.prefix``."""
+PREFIX: Final = re.compile(r"[a-z][a-z0-9]{1,15}")
+"""``FastChannelsConfig.prefix`` (``core.naming.PREFIX_PATTERN``): no hyphen, since names and IAM grants are scoped by
+``<prefix>-*``."""
 _NAME: Final = re.compile(r"[a-z][a-z0-9-]*")
 
 
@@ -67,7 +68,10 @@ def load(name: str) -> dict[str, Any]:
         raise StageError(f"{path}: {unknown} are not {CONTEXT_KEY} fields")
     prefix = stage.get("prefix")
     if not isinstance(prefix, str) or not PREFIX.fullmatch(prefix):
-        raise StageError(f"{path}: prefix must be a deployment prefix matching {PREFIX.pattern}, got {prefix!r}")
+        raise StageError(
+            f"{path}: prefix must be a deployment prefix matching {PREFIX.pattern} (no hyphen: names and IAM grants "
+            f"are scoped by <prefix>-*), got {prefix!r}"
+        )
     return stage
 
 
@@ -76,7 +80,10 @@ def with_prefix(stage: dict[str, Any], prefix: str | None) -> dict[str, Any]:
     if prefix is None:
         return stage
     if not PREFIX.fullmatch(prefix):
-        raise StageError(f"--prefix must match {PREFIX.pattern}, got {prefix!r}")
+        raise StageError(
+            f"--prefix must match {PREFIX.pattern} (no hyphen: names and IAM grants are scoped by <prefix>-*), "
+            f"got {prefix!r}"
+        )
     return {**stage, "prefix": prefix}
 
 

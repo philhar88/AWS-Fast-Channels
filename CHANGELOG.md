@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### BREAKING
+
+- **Deployment prefixes have no hyphen** (`prefix`: 2-16 lowercase letters and digits, starting with a letter). A
+  deployment's resource names and IAM grants are scoped by `<prefix>-*`, so a prefix such as `fast-x` fell inside
+  the grants of the deployment `fast`: `fast-*` matched `fast-x-*` resources. Synth now refuses such a prefix and says
+  why. A v3.0.0 deployment whose prefix has a hyphen must be redeployed under a new prefix, because resource names
+  derive from it. The shipped prefixes (`fast` and the stages) comply. `stages/*.json`, `scripts/stage_args.py`
+  `--prefix` and the e2e workflow's prefix input apply the same rule.
+
 ### Added
 
 - **Modules configuration**: a `modules` section in the `fast-channels` block with one validated section per optional

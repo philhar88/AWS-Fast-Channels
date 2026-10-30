@@ -15,6 +15,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_ssm as ssm
 from aws_cdk.assertions import Template
 
+from fast_channels.core.naming import check_prefix
 from fast_channels.infra.app import build
 from fast_channels.infra.config import ConfigError, FastChannelsConfig, ModulesConfig
 from fast_channels.infra.stage import FastChannelsStage, stage_id
@@ -315,6 +316,16 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
     assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day
 
 
+def test_shipped_prefixes_are_hyphen_free_so_none_falls_inside_anothers_grants() -> None:
+    """cdk.json's prefix and every stage file's pass ``core.naming.check_prefix``: no shipped deployment's
+    ``<prefix>-*`` names and grants cover another's resources."""
+    prefixes = [json.loads(CDK_JSON.read_text())["context"]["fast-channels"]["prefix"]]
+    prefixes += [stage_args.load(name)["prefix"] for name in STAGES]
+
+    assert [check_prefix(prefix) for prefix in prefixes] == prefixes
+    assert [(a, b) for a in prefixes for b in prefixes if a != b and b.startswith(f"{a}-")] == []
+
+
 def test_stage_prefix_resolution(capsys: pytest.CaptureFixture[str]) -> None:
     assert stage_args.main(["prefix", "fastm"]) == 0
     assert stage_args.main(["prefix", "fastm", "--prefix", "fastx"]) == 0
@@ -338,10 +349,10 @@ def test_a_stage_can_keep_only_some_modules_on(capsys: pytest.CaptureFixture[str
 
 
 def test_a_stage_under_another_prefix_expands_it() -> None:
-    config = shipped_with(stage_overrides("fastci", "--prefix", "fastci-pr7"))
+    config = shipped_with(stage_overrides("fastci", "--prefix", "fastcipr7"))
 
-    assert (config.prefix, config.channels.iac[0].name) == ("fastci-pr7", "fastci-pr7-demo")
-    assert config.modules.release.channels == ("fastci-pr7-demo",)
+    assert (config.prefix, config.channels.iac[0].name) == ("fastcipr7", "fastcipr7-demo")
+    assert config.modules.release.channels == ("fastcipr7-demo",)
 
 
 @pytest.mark.parametrize(
@@ -355,6 +366,8 @@ def test_a_stage_under_another_prefix_expands_it() -> None:
         ({"bad": '{"prefix": "bad", "modulez": {}}'}, ["prefix", "bad"], "['modulez'] are not fast-channels fields"),
         ({"bad": '{"modules": {}}'}, ["prefix", "bad"], "prefix must be a deployment prefix matching"),
         ({"bad": '{"prefix": "fast_m"}'}, ["context", "bad"], "got 'fast_m'"),
+        ({"bad": '{"prefix": "fastm-x"}'}, ["context", "bad"], "(no hyphen: names and IAM grants are scoped by"),
+        ({}, ["context", "fastm", "--prefix", "fastm-x"], "--prefix must match [a-z][a-z0-9]{1,15} (no hyphen"),
     ],
 )
 def test_unusable_stages_fail_before_any_command_runs(

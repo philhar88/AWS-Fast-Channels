@@ -160,6 +160,16 @@ def test_prefix_override_needs_matching_channel_names(load_config: Load) -> None
     assert (config.prefix, config.channels.iac[0].name) == ("acme", "acme-news")
 
 
+def test_a_prefix_with_a_hyphen_is_refused_with_the_reason(load_config: Load) -> None:
+    message = config_error(load_config, with_shipped(**{"prefix": "fast-x", "channels.iac.0.name": "fast-x-demo"}))
+
+    assert (
+        "  - fast-channels.prefix: 'fast-x' is not a deployment prefix: use 2-16 lowercase letters and digits, "
+        "starting with a letter, without hyphens; resource names and IAM grants are scoped by '<prefix>-*', so the "
+        "grants of a deployment 'fast' ('fast-*') would cover the resources of 'fast-x'"
+    ) in message
+
+
 def test_whole_block_as_json_string(load_config: Load) -> None:
     config = load_config({"fast-channels": json.dumps({"prefix": "demo", "agent": {"enabled": False}})})
 
@@ -180,7 +190,7 @@ def test_errors_list_every_problem_with_its_path(load_config: Load) -> None:
     )
 
     assert message.splitlines()[0] == "invalid FAST Channels configuration:"
-    assert "  - fast-channels.prefix: String should match pattern" in message
+    assert "  - fast-channels.prefix: 'Fast!' is not a deployment prefix: use 2-16 lowercase letters" in message
     assert "  - fast-channels.agent: model 'anthropic.unknown' is not in allowed_models" in message
     assert "  - fast-channels.observability.log_retention_days: CloudWatch Logs supports retention of" in message
     assert "  - fast-channels.typo: Extra inputs are not permitted" in message
@@ -474,9 +484,9 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ),
         ({"modules.ops.ledger_retention_days": 0}, "greater than or equal to 1"),
         (
-            {**modules_on("ops", "demand"), "prefix": "fast-demand-xyz"},
+            {**modules_on("ops", "demand"), "prefix": "fastdemandxyz"},
             "fast-channels.modules.demand: the Prebid Server guidance deploys onto a CDK bootstrap qualified by the "
-            "prefix, at most 10 characters; 'fast-demand-xyz' is 15",
+            "prefix, at most 10 characters; 'fastdemandxyz' is 13",
         ),
         (
             {
