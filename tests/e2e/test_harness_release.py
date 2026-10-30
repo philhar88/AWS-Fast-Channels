@@ -6,10 +6,11 @@ from typing import Any
 
 import harness_release
 import pytest
-from harness_release import LOOKUP_BUDGET_MS, add_lookup, rig_template
+from harness_release import LOOKUP_BUDGET_MS, LOOKUP_KEY, add_lookup, rig_template
 
 from fast_channels.core.monetization.bundle import Bundle, ChannelInput, HookTree, SiblingContext, Step, build_bundle
 from fast_channels.core.monetization.functions import (
+    CacheScope,
     CustomOutputConfiguration,
     Function,
     FunctionType,
@@ -70,10 +71,11 @@ def test_the_lookup_ends_the_pair_siblings_pre_ads_tree(other: int | None) -> No
     assert executor.timeout_milliseconds == min(2000, (other or 0) + LOOKUP_BUDGET_MS)
     lookup = looked.function("fastm_pa_e2e_lookup")
     assert lookup is not None and lookup.http_request_configuration is not None
-    assert lookup.http_request_configuration.url == f"{{% '{ORIGIN}lookup/' & scte.event_id %}}"
+    assert lookup.http_request_configuration.url == f"{ORIGIN}lookup/all"
     assert lookup.http_request_configuration.headers == {"x-fast-e2e-key": "k"}
     cache = lookup.http_request_configuration.cache
-    assert cache is not None and cache.key == "{% 'e2e|v1|' & scte.event_id %}" and cache.ttl_maximum_seconds == 1
+    assert cache is not None and cache.key == LOOKUP_KEY and cache.ttl_maximum_seconds == 1
+    assert lookup.http_request_configuration.cache_scope is CacheScope.GLOBAL
     order = [f.function_id for f in looked.functions]
     assert all(order.index(r.function_id) < order.index(f.function_id) for f in looked.functions for r in f.steps)
 

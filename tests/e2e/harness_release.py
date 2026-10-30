@@ -5,7 +5,7 @@ stage's prefix, and deletes it.
 - :class:`Rig`: a CloudFormation stack ``<prefix>-e2e-release-rig`` with
   - the **origin**, a Lambda function behind an API Gateway HTTP API (its permission scoped to the API; low
     throttling): a VOD source with ad markers (``/vod/<key>/``), an empty VAST (``/vast``) and a lookup whose latency
-    the test sets (``/lookup/<evid>``, the function's ``DELAY_MS``). Each run has its own key: the lookup and the VAST
+    the test sets (``/lookup/all``, the function's ``DELAY_MS``). Each run has its own key: the lookup and the VAST
     need it in ``x-fast-e2e-key`` (the Function step and the ADS request send it), the VOD source in its path (an
     origin request carries no header); anything else is refused (403). An account guardrail removes a Lambda
     permission open to everyone (it did to a function URL's, fastm 2026-10-29), so the rig opens none;
@@ -41,6 +41,7 @@ from fast_channels.core.monetization import names
 from fast_channels.core.monetization.bundle import Bundle, bundle_document, root_stem
 from fast_channels.core.monetization.functions import (
     Cache,
+    CacheScope,
     Function,
     FunctionRef,
     FunctionType,
@@ -347,13 +348,22 @@ class Rig:
 # --- a release with a lookup ---------------------------------------------------------------------------------------
 
 
+LOOKUP_KEY: Final = "{% 'e2e|v1|all' %}"
+"""Scope ``global``: the lookup's answer is the same for every session and break, and the pair siblings of every
+channel share it (a ``break`` key would name each one's channel, validator R-F8)."""
+LOOKUP_CACHE_REASON: Final = (
+    "e2e: the lookup answers the same for everyone, only its latency matters; 1 s, so that every break after the "
+    "latency changes meets the new latency"
+)
+
+
 def add_lookup(bundle: Bundle, url: str, headers: Mapping[str, str] | None = None) -> Bundle:
-    """``bundle`` with a PRE_ADS step that GETs ``url/<the break's SCTE-35 event id>`` at the end of the pair
+    """``bundle`` with a PRE_ADS step that GETs ``url/all`` at the end of the pair
     siblings' PRE_ADS tree (a new tree where they have none), within the 2,000 ms the request-path hooks share; other
     modules' steps stay as they are.
 
-    Each break has its own cache entry (``Cache.Key`` of the event id, 1 s): the lookup is called once per break,
-    and the time it turns slow is the time its breaks meet it.
+    Its answer is cached for 1 s for everyone (scope ``global``): breaks are minutes apart, so each calls the
+    lookup, and the time it turns slow is the time its breaks meet it.
 
     Raises:
         AssertionError: the pair siblings map different PRE_ADS trees, or too little of the budget is left.
@@ -373,11 +383,13 @@ def add_lookup(bundle: Bundle, url: str, headers: Mapping[str, str] | None = Non
         description="e2e: a lookup whose latency the test sets (test_12_release)",
         http_request_configuration=HttpRequestConfiguration(
             method_type="GET",
-            url=f"{{% '{url}/' & scte.event_id %}}",
+            url=f"{url}/all",
             headers=dict(headers) if headers else None,
             request_timeout_milliseconds=budget - LOOKUP_MARGIN_MS,
             output={"temp.e2e": "{% $substring($string(response.statusCode), 0, 3) %}"},
-            cache=Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=1, key="{% 'e2e|v1|' & scte.event_id %}"),
+            cache=Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=1, key=LOOKUP_KEY),
+            cache_scope=CacheScope.GLOBAL,
+            cache_reason=LOOKUP_CACHE_REASON,
         ),
     )
     step, commit = FunctionRef(function_id=lookup.function_id), {"adsRequest.headers.x-fast-e2e": reexport("temp.e2e")}
