@@ -325,8 +325,10 @@ Prebid's *Setting up Prebid Video in FreeWheel*:
 - The ad server decides the break as one unit: one price for the whole pod.
 - The auction adds up to 1,300 ms before the ad request.
 - The auction is MediaTailor's Function request, which carries no viewer IP, so `/policy` sets no `device.ip`.
-- A cache write that misses the exitpoint's extra 150 ms (a cold cache function at a herd) gives that break no bid.
-  The ad server then serves its house ad.
+- A break answers no bid when the cache write does not finish within the exitpoint's time. That happens when the
+  cache function is cold, or when `/select` is slow and leaves no time for the write. The ad server then serves its
+  house ad. In the end-to-end run this hit 2 of 9 breaks: one write timed out at 304 ms, and once `/select` took
+  370 ms.
 
 ## Deploy and destroy
 
