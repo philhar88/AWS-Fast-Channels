@@ -9,6 +9,8 @@ FAST Channels v3.0.0 airs channels with preconditioned house ads. The optional m
 - a per-task model registry;
 - the operations they need: a lake, a hash-chained ledger, detectors, runbooks and a probe.
 
+![The optional modules around one monetized channel; the experimental ad-server chain is dashed](images/architecture-modules.png)
+
 Every module is off by default, behind `modules.<name>.enabled` in [`cdk.json`](../cdk.json). With every module off
 a deployment is v3.0.0's, which snapshot tests of every shipped template check (`infra/tests/test_snapshots.py`).
 
@@ -151,7 +153,7 @@ See [demand.md](demand.md#deploy-and-destroy) for the details.
 Destroy in reverse:
 
 ```bash
-make destroy-demand STAGE=fastm   # Release, Pds, Demand, the guidance with what it retains, its bootstrap, DemandEdge/-Build
+make destroy-demand STAGE=fastm   # Release, Pds, Demand, the guidance and what it retains, DemandEdge/-Build
 make destroy STAGE=fastm          # the repository's stacks
 uv run python scripts/ledger_verify.py purge --prefix fastm --apply   # with ops: the Object-Locked ledger archive
 ```
@@ -175,23 +177,25 @@ These figures were measured on development stages in October 2026.
   binds, at about 37,000 concurrent viewers per account at 70 % of the default quotas
   ([delivery-and-multi-cdn.md](delivery-and-multi-cdn.md#capacity)). The ops module alarms at 80 % of that quota and
   of Channel Assembly's.
-- **A monetized break.** Two Prebid Server tasks (the tier minimum, `tasks.min`), each with its PDS sidecar,
-  answered a 400-session real-time break herd with no fallback beyond one `/select` at its timeout:
-
-  | Call | p99 |
-  |---|---|
-  | `/policy` at the fast-ctv module | 18 ms |
-  | `/select` | 134 ms |
-
-  The `/select` time is bound by the reservation's DynamoDB transaction.
-  - With prefetch, the same herd spreads over the retrieval window: break-3 `/select` p95 28 ms.
-  - Past about 400 real-time sessions per playback configuration per break, the reservation's four budget shards
-    start to contend. Revisit `modules.pds` reservations then ([pds.md](pds.md#reservations-and-delivery)).
-- **More traffic.** Raise `modules.demand.tasks.min` and `max`, and add dayparts so the tasks are warm before the
-  break. A new task gets its warm-up and ALB slow start before it takes its share
+- **A monetized break.** A Prebid Server task (2 vCPU, with its PDS sidecar) decides about 25 auctions a second
+  with no fallback. The first `/policy` fallbacks appear near 50 a second. Size the tasks from the auctions that
+  arrive per second at a break's peak, divided by 25, and at least the tier minimum `tasks.min`
+  ([demand.md](demand.md#sizing-prebid-server-for-a-break)):
+  - **In real time** a break's requests spread over about one playlist poll (3–6 s): 400 viewers of one configuration
+    over 4 s are 100 auctions a second, so 4 tasks.
+  - **With prefetch** the requests spread over the 90 s shaping window, which divided the peak by about 16 in the
+    herds. Late and mid-break joiners still ask in real time.
+  - **The calls' p99** in a measured 400-session herd: `/policy` 18 ms at the fast-ctv module, `/select` 134 ms. The
+    `/select` time is bound by the reservation's DynamoDB transaction; past about 400 real-time sessions per playback
+    configuration per break, the lines' four budget shards start to contend
+    ([pds.md](pds.md#reservations-and-delivery)).
+- **More traffic.** The census gate scales by channels, not viewers. Set `modules.demand.tasks.min`, `max` and
+  dayparts from the audience you expect in real time, so the tasks are warm before the break. A new task gets its
+  warm-up and ALB slow start before it takes its share
   ([demand.md](demand.md#scaling-the-census-gate-dayparts-and-warm-up)).
-- **The ad-server mode (experimental).** A real-time break needs about 0.06–0.08 ready Prebid Cache instances per session. Set
-  `pod_cache_concurrency` from the audience of the largest break ([demand.md](demand.md#the-cache-function)).
+- **The ad-server mode (experimental).** A real-time break needs about 0.06–0.08 ready Prebid Cache instances
+  per session. Set `pod_cache_concurrency` from the audience of the largest break
+  ([demand.md](demand.md#the-cache-function)).
 
 ## How each module fails safe
 
