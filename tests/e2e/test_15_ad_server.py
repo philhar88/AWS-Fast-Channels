@@ -39,7 +39,6 @@ from harness_ad_server import (
     decisions,
     per_break,
     pod_media,
-    provisioned,
     running_tasks,
     warmups,
     watch,
@@ -48,7 +47,6 @@ from playback import break_windows
 
 from fast_channels.core.demand import Parameter, origin_secret, parameter_path, warmup_project
 from fast_channels.core.monetization import names
-from fast_channels.core.pds.names import ALIAS as PDS_ALIAS
 
 pytestmark = pytest.mark.e2e
 
@@ -73,7 +71,6 @@ class AdServerStage:
     ads_log_group: str
     cluster: str
     service: str
-    pds_functions: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -97,7 +94,7 @@ def ad_server(stage: Stage) -> AdServerStage:
     parameters = _parameters(stage)
     if Parameter.AD_SERVER_URL.value not in parameters:
         pytest.skip(f"stage {stage.prefix} has no mock ad server (modules.demand.ad_server is not mock)")
-    demand, pds = (_outputs(stage, f"{stage_id(stage.prefix)}-{stack}") for stack in ("Demand", "Pds"))
+    demand = _outputs(stage, f"{stage_id(stage.prefix)}-Demand")
     secrets = stage.session.client("secretsmanager", region_name=EDGE_REGION)
     secret = str(secrets.get_secret_value(SecretId=origin_secret(stage.prefix, "a"))["SecretString"])
     return AdServerStage(
@@ -110,7 +107,6 @@ def ad_server(stage: Stage) -> AdServerStage:
         ads_log_group=names.log_group(stage.prefix),
         cluster=parameters[Parameter.CLUSTER_ARN.value],
         service=parameters[Parameter.SERVICE_ARN.value],
-        pds_functions=tuple(pds[key] for key in ("PolicyFunction", "OwnBookFunction", "SelectFunction") if key in pds),
     )
 
 
@@ -193,21 +189,20 @@ def run(ad_server: AdServerStage, tv: Player, channel: Channel, tools: Tools, re
 
 
 def wait_until_warm(ad_server: AdServerStage) -> None:
-    """Until Prebid Server runs and every running task's warm-up succeeded, and the PDS's functions are provisioned."""
+    """Until Prebid Server runs and every running task's warm-up succeeded. The Pod Decision Service is a sidecar of
+    each task (M2-x3): Prebid Server starts only once it is healthy, so a running task has it."""
     stage = ad_server.stage
     ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
-    lambda_ = stage.session.client("lambda", region_name=stage.region)
     last: dict[str, Any] = {}
 
     def ready() -> bool | None:
         tasks = running_tasks(ecs, cluster=ad_server.cluster, service=ad_server.service)
         warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
-        concurrency = provisioned(lambda_, ad_server.pds_functions, PDS_ALIAS)
-        last.update(tasks=len(tasks), warmups=sorted(warmed.values()), concurrency=sorted(concurrency.values()))
+        last.update(tasks=len(tasks), warmups=sorted(warmed.values()))
         if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
             raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
         warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
-        return True if warm and set(concurrency.values()) <= {"READY"} else None
+        return True if warm else None
 
     wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
 

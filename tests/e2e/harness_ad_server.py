@@ -248,19 +248,6 @@ def warmups(codebuild: Any, project: str, tasks: Sequence[str]) -> dict[str, str
     return status
 
 
-def provisioned(lambda_: Any, functions: Iterable[str], alias: str) -> dict[str, str]:
-    """The provisioned-concurrency status of each function's ``alias`` (``NONE`` while it has none)."""
-    status: dict[str, str] = {}
-    for function in functions:
-        try:
-            config = lambda_.get_provisioned_concurrency_config(FunctionName=function, Qualifier=alias)
-        except lambda_.exceptions.ProvisionedConcurrencyConfigNotFoundException:
-            status[function] = "NONE"
-        else:
-            status[function] = str(config["Status"])
-    return status
-
-
 @dataclass
 class Logs:
     """CloudWatch Logs reads of one run's window."""
