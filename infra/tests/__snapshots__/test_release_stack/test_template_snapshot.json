@@ -111,6 +111,462 @@
     }
   },
   "Resources": {
+    "AdsErrorsFastmDemoPAAdsErrors8DA48059": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-a: most ad decision server requests failed (non-200, empty or timed out) for 30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
+        "AlarmName": "fastm-demo-p-a-ads-errors",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 2,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-demo-p-a: share of ADS requests that failed",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-a"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Errors",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-a"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Latency",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "SampleCount"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "AdsErrorsFastmDemoPBAdsErrors37C82AA6": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-b: most ad decision server requests failed (non-200, empty or timed out) for 30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
+        "AlarmName": "fastm-demo-p-b-ads-errors",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 2,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-demo-p-b: share of ADS requests that failed",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-b"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Errors",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-b"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Latency",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "SampleCount"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "AdsErrorsFastmDemoPZAdsErrors58B01063": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-z: most ad decision server requests failed (non-200, empty or timed out) for 30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
+        "AlarmName": "fastm-demo-p-z-ads-errors",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 2,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-demo-p-z: share of ADS requests that failed",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-z"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Errors",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-z"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Latency",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "SampleCount"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "AdsErrorsFastmLabPAAdsErrorsE743D2B2": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-a: most ad decision server requests failed (non-200, empty or timed out) for 30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
+        "AlarmName": "fastm-lab-p-a-ads-errors",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 2,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-p-a: share of ADS requests that failed",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-a"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Errors",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-a"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Latency",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "SampleCount"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "AdsErrorsFastmLabPBAdsErrors043C4619": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-b: most ad decision server requests failed (non-200, empty or timed out) for 30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
+        "AlarmName": "fastm-lab-p-b-ads-errors",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 2,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-p-b: share of ADS requests that failed",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-b"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Errors",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-b"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Latency",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "SampleCount"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "AdsErrorsFastmLabPZAdsErrorsABFF852A": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-z: most ad decision server requests failed (non-200, empty or timed out) for 30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
+        "AlarmName": "fastm-lab-p-z-ads-errors",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 2,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-p-z: share of ADS requests that failed",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-z"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Errors",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-z"
+                  }
+                ],
+                "MetricName": "AdDecisionServer.Latency",
+                "Namespace": "AWS/MediaTailor"
+              },
+              "Period": 900,
+              "Stat": "SampleCount"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
     "ControllerApply033D6DE8": {
       "DependsOn": [
         "ControllerApplyRoleDefaultPolicy2FFEE881",

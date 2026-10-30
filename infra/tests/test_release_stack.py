@@ -548,6 +548,38 @@ def test_a_real_time_herd_with_policy_fallbacks_names_its_cause(deployment: GetD
     assert "fastm-pds-burst-real-time" not in names_
 
 
+def test_each_sibling_alarms_when_most_of_its_ads_requests_fail_for_30_minutes(deployment: GetDeployment) -> None:
+    """A broken route (a missing stored request, Prebid Server down, the origin gate refusing) plays the slate and
+    raises no hook or marker alarm: more than half of a sibling's requests failing in two consecutive 15-minute
+    periods of at least 5 does. It notifies the alert topic and is not one of the candidate alarm's children."""
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    found = sorted(n.removesuffix("-ads-errors") for n in alarms if n.endswith("-ads-errors"))
+    assert found == [s.name for s in sorted(d.stage.release.rendered.bundle.siblings, key=lambda s: s.name)]
+    for name in found:
+        alarm = alarms[f"{name}-ads-errors"]
+        assert (alarm["EvaluationPeriods"], alarm["DatapointsToAlarm"], alarm["Threshold"]) == (2, 2, 0.5)
+        assert (alarm["ComparisonOperator"], alarm["TreatMissingData"]) == ("GreaterThanThreshold", "notBreaching")
+        assert alarm["AlarmActions"] and alarm["OKActions"], "it notifies the alert topic"
+        [expression] = [m for m in alarm["Metrics"] if "Expression" in m]
+        assert expression["Expression"] == "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)"
+        stats = {
+            m["Id"]: (m["MetricStat"]["Metric"]["MetricName"], m["MetricStat"]["Stat"], m["MetricStat"]["Period"])
+            for m in alarm["Metrics"]
+            if "MetricStat" in m
+        }
+        assert stats == {
+            "errors": ("AdDecisionServer.Errors", "Sum", 900),
+            "requests": ("AdDecisionServer.Latency", "SampleCount", 900),  # a sample per request, failed or not
+        }
+        [dimension] = next(m for m in alarm["Metrics"] if m["Id"] == "errors")["MetricStat"]["Metric"]["Dimensions"]
+        assert dimension == {"Name": "ConfigurationName", "Value": name}
+    assert "fastm-lab-x-ads-errors" not in alarms, "lab-x makes no ad request"
+    [candidate] = resources(template, "AWS::CloudWatch::CompositeAlarm").values()
+    assert "AdsErrors" not in json.dumps(candidate["AlarmRule"]), "a remap or a pointer rollback mends no route"
+
+
 def test_the_siblings_log_is_reconciled_with_mediatailors_counts_every_hour(deployment: GetDeployment) -> None:
     d = deployment(RELEASE, extra=EXTRA)
     template = d.template(d.stage.release)

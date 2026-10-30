@@ -385,6 +385,10 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   back as the release its candidate runs. A rotation can create a tree again under a new number (`recreated_from`).
   The timed-out check used to read the old number's Functions, the promotion marked the old number, and the
   rollback left the candidate where it was.
+- **Release Controller: a broken ad route raises an alarm.** No alarm counted a monetized sibling's
+  `AdDecisionServer.Errors`, so a route that fails every request (a missing stored request, Prebid Server down,
+  the origin gate refusing) played the slate and lost the revenue silently. `<sibling>-ads-errors` fires when more
+  than half of a sibling's ad requests fail in two consecutive 15-minute periods.
 
 ## [3.0.0] - 2026-10-16
 
