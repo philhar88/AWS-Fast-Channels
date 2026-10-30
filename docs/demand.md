@@ -227,7 +227,7 @@ together with no other healthy target; the census gate's warm-up before the firs
 `deploy-demand` starts the gate once with the census's current count, so a stage with no channel running scales to
 zero 15 minutes after its deploy. It then warms the running tasks that no warm-up build has named and waits for them:
 a first deploy starts its tasks before the warm-up rule exists. A later guidance deploy resets the minimum to `ECSTaskMinCapacity` (= `tasks.min`)
-until the next census change. P0-21 measured scale-from-zero at about 3 minutes to all-healthy and the JIT warm-up at
+until the next census change. We measured scale-from-zero at about 3 minutes to all-healthy and the JIT warm-up at
 2–3 minutes: open a daypart at least 10 minutes before its first break.
 
 The warm-up waits for the target's health because load on a task that is not yet listening, or is still being
@@ -345,7 +345,7 @@ auction's deadline: the exitpoint's extra 150 ms. In the ad-server mode, the gui
 gives that function its memory and an alias `live` with provisioned concurrency, which the guidance's four Lambda target
 groups invoke instead of the function ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)).
 
-Measured on a throwaway stage with 100 smart-TV sessions (lane D's herd driver, 2026-10-30):
+Measured on a throwaway stage with 100 smart-TV sessions (October 2026):
 
 | Cache function | Break | Pods cached | Peak instances | Notes |
 |---|---|---|---|---|
@@ -370,7 +370,7 @@ make destroy-demand STAGE=fastm    # everything deploy-demand created, then the 
 
 `scripts/prebid_guidance.py` runs each step on its own as well (`doctor`, `bootstrap`, `build-image`, `outputs`,
 `upload-config`, `smoke`, `destroy`, `inventory`; `--stage`, `--prefix`, `--content-base-url`). `deploy` runs, in
-order (DESIGN §4.3):
+order:
 
 1. **The repository's stacks** `FastChannels-<prefix>-DemandEdge` (us-east-1: origin secrets A and B, the rule group)
    and `-DemandBuild` (the image repository `<prefix>-pbs`, with `modules.pds` the sidecar's `<prefix>-pds`, the
@@ -430,7 +430,7 @@ are the only residue. The Pod Decision Service's table and config bucket are the
 `make destroy`. `inventory` lists anything else tagged `fast:module=demand` or `pds` for the prefix, or named for it,
 and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
 
-**The demand leg** (BUILD-PLAN §12.3 `e2e-demand`; the `End-to-end` workflow with `leg: demand`, or the same
+**The demand leg** (the `End-to-end` workflow with `leg: demand`, or the same
 steps locally) deploys `STAGE=fastci MODULES=ops,demand` (the `fastci` stage with only those modules on), runs
 `make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`. It then destroys the demand module, the stage and the
 ledger archive, and fails on any residue but KMS keys pending deletion. A run takes about two and a half hours and

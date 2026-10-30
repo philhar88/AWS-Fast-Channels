@@ -8,7 +8,7 @@ gate (CONTRIBUTING.md). The manual GitHub workflow `.github/workflows/e2e.yml` r
 uv run pytest tests/e2e -m e2e --prefix <prefix> -v      # against FastChannels-<prefix>-* (about 40 minutes)
 uv run pytest tests/e2e -m e2e -v                        # the prefix in cdk.json (fast-channels.prefix)
 uv run pytest tests/e2e -m e2e --prefix <prefix> -k agent   # one part only
-uv run pytest tests/e2e/test_12_release.py -m e2e --prefix <prefix> --releases -v   # the release module's rollouts (M3-04)
+uv run pytest tests/e2e/test_12_release.py -m e2e --prefix <prefix> --releases -v   # the release module's rollouts
 uv run pytest tests/e2e -m "not e2e"                     # offline unit tests of the helpers and scripts
 ```
 

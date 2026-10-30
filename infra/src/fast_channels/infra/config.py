@@ -601,7 +601,7 @@ class DemandModule(_Module):
     """Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any
     MediaTailor egress address's rate)."""
     ad_server: AdServer = AdServer.NONE
-    """Experimental in v4.0.0. Where the monetized pair siblings send a break's ad request (M8-09): ``none`` (the
+    """Experimental in v4.0.0. Where the monetized pair siblings send a break's ad request: ``none`` (the
     default: Prebid Server answers the pod as VAST), ``mock`` (the demo's GAM-like ad server), ``gam`` or ``freewheel``
     (``ad_server_tag``). With an ad server,
     a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the

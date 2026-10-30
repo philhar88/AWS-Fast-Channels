@@ -3,7 +3,8 @@
 **Status:** Proposed. Supersedes [0020](0020-demand-through-the-prebid-server-guidance.md)'s placement of the Pod
 Decision Service (Lambda functions behind an internal load balancer, kept warm by census-gated provisioned
 concurrency) and amends 0020's deployment of the guidance: with `modules.pds` on, the guidance's own app is deployed
-through a thin wrapper that adds the sidecar. It is accepted when the demand leg (M8-08) passes on it.
+through a thin wrapper that adds the sidecar. It is accepted when the MediaTailor-driven demand leg
+(`tests/e2e/test_14_demand_pods.py`) passes on it.
 
 ## Context
 

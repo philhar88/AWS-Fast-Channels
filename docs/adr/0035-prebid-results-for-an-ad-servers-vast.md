@@ -1,9 +1,10 @@
 # 0035 — Prebid results for an ad server's VAST: one cached pod per break
 
-**Status:** Proposed. **Experimental in v4.0.0** (owner, 2026-10-30): off by default (`ad_server: none`), and no
-default end-to-end leg runs it. M8-09's leg passed on 2026-10-30 (run 4). While the mode is enabled, its pre-warmed
-cache function costs about $124 a month; scaling it with the census gate is deferred on branch
-`am/m8-09b-cache-census`.
+**Status:** Accepted, as an experimental mode of v4.0.0: off by default (`ad_server: none`), and no default
+end-to-end leg runs it. Its leg (`tests/e2e/test_15_ad_server.py` on the `fastciads` stage) passed in October
+2026: every prefetched break was filled from its cached pod, with one auction per session and break. While the
+mode is enabled, its pre-warmed cache function costs about $124 a month; scaling it with the census gate is
+deferred.
 
 ## Context
 
