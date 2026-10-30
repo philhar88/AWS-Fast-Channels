@@ -2863,6 +2863,7 @@
             {
               "Action": [
                 "logs:GetQueryResults",
+                "mediatailor:ListFunctions",
                 "secretsmanager:GetRandomPassword",
                 "wafv2:ListRuleGroups",
                 "xray:PutTelemetryRecords",
@@ -2875,7 +2876,8 @@
               "Action": [
                 "dynamodb:DeleteItem",
                 "dynamodb:GetItem",
-                "dynamodb:PutItem"
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem"
               ],
               "Effect": "Allow",
               "Resource": {
@@ -2905,6 +2907,7 @@
             },
             {
               "Action": [
+                "mediatailor:GetPlaybackConfiguration",
                 "mediatailor:PutPlaybackConfiguration",
                 "mediatailor:TagResource"
               ],
@@ -2913,6 +2916,31 @@
                 "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
                 "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*"
               ]
+            },
+            {
+              "Action": [
+                "mediatailor:GetFunction",
+                "mediatailor:PutFunction",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/plan/playback/*"
+                  ]
+                ]
+              }
             },
             {
               "Action": "mediatailor:DescribeChannel",

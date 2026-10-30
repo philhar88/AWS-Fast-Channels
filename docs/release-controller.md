@@ -180,12 +180,20 @@ aws stepfunctions start-execution --state-machine-arn <RotationStateMachineArn> 
 2. **Admit.** That slot gets a new value (Secrets Manager), which the rule group admits beside the current one.
 3. **Probe.** After a minute, a probe POST with the new value through the guidance's CloudFront must not be blocked;
    it is retried until the change has reached CloudFront.
-4. **Switch.** Every configured sibling sends the new value: `PutPlaybackConfiguration` of its own release, the same
-   call as a remap, so live sessions use it at their next break. The slot is recorded.
+4. **Switch.**
+   - Some Function trees carry the origin secret themselves: the ad-server route's auction
+     ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)). Functions are immutable, so each such tree that
+     a sibling keeps (its current tree and its history) is created again under a new release, with the new value
+     and its slot in `fast:origin-slot`. The sibling's record and history then name the new release, and a channel
+     whose stable sibling moved gets its plan rewritten. A retried switch creates nothing twice.
+   - Every configured sibling then sends the new value: `PutPlaybackConfiguration` of its own release, the same
+     call as a remap, so live sessions use it at their next break.
+   - The slot is recorded.
 5. **Verify.** While a monetized channel is on air, the siblings' ad requests since the switch must have been
    answered (no `ERROR_ADS_INVALID_RESPONSE`) and a break filled; it is retried for one break.
-6. **Retire.** The old slot gets a value nobody has seen, which the rule group admits instead of the old one. The lock
-   is given back.
+6. **Retire.** If a Function that a sibling keeps still carries the old value (`fast:origin-slot`), the rotation
+   fails here, and both values stay admitted. Otherwise the old slot gets a value nobody has seen, which the rule
+   group admits instead of the old one. The lock is given back.
 
 A failure is ledgered (`rotation.fail` on the chain `release/rotation`), gives the lock back and raises
 `<prefix>-release-rotation-failed`. Every value a sibling may send is still admitted at that point, so the rotation

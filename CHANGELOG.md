@@ -303,6 +303,8 @@ All notable changes to this project are documented here. The format follows
     rule group lets only `GET` and `HEAD /cache?uuid=<uuid4>` through.
   - `mock` deploys a GAM-like ad server that answers only requests with the origin secret. `gam` and `freewheel` are
     configuration and setup instructions; they are not tested live.
+  - A rotation of the origin secret creates every kept auction tree again with the new value, under a new release.
+    It does not retire the old value while a Function a sibling keeps still carries it.
   - The `fastciads` stage runs the end-to-end leg. With `none`, the default, nothing changes.
 
 ### Fixed

@@ -98,7 +98,10 @@ We needed to settle five things:
 - **No viewer IP.** The auction is MediaTailor's Function request, which carries no viewer IP, so `/policy` sets no
   `device.ip` on this route. The direct route keeps it.
 - **The origin secret sits in the auction Function.** A rotation must therefore re-create the trees that carry the old
-  value under a new release before that value is retired. The release module's rotation does this.
+  value under a new release before that value is retired. The release module's rotation does this:
+  - its switch creates each kept tree that carries the secret again under a new release, with the new value;
+  - each such Function is tagged with its slot (`fast:origin-slot`);
+  - its retire refuses while a kept Function still carries the old value.
 - **What the ad server sees.** A third-party ad server gets the targeting and its own tag's parameters, nothing of
   ours.
 - **The Prebid Cache TTL** (300 s) outlives a prefetch's retrieval-to-break gap (about 140 s) plus the break, so

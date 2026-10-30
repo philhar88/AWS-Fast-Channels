@@ -206,23 +206,24 @@ ORIGIN_SLOT_TAG: Final = tag_key("origin-slot")
 before it retires the slot)."""
 
 
-def put_functions(bundle_key: str, release: int, change_id: str, siblings: list[str]) -> dict[str, Any]:
+def put_functions(
+    bundle_key: str, release: int, change_id: str, siblings: list[str], *, slot: str | None = None
+) -> dict[str, Any]:
     """The Function trees ``siblings`` map, with the ids of ``release``, children before the executors that run
-    them. A demand-origin request (the ad-server route's auction) gets the current origin secret and the release in
-    its headers here, and a ``fast:origin-slot`` tag."""
+    them. A demand-origin request (the ad-server route's auction) gets the origin secret of ``slot`` (default: the
+    current one) and the release in its headers here, and a ``fast:origin-slot`` tag."""
     config = settings()
     config.require("prefix")
     tags = release_tags(config.prefix, release=release, change_id=change_id)
     bundle = store.bundle(bundle_key)
     created: list[str] = []
     existing: list[str] = []
-    slot: str | None = None
     secret: SecretStr | None = None
     for function in mapped_functions(bundle, [_sibling(bundle, name) for name in siblings]):
         http = function.http_request_configuration
         origin = http is not None and bool(http.demand_origin)
         if origin and secret is None:
-            slot = store.origin_slot()
+            slot = slot or store.origin_slot()
             secret = store.secret(slot)
         released = function.released(release, tags={**tags, **({ORIGIN_SLOT_TAG: slot} if origin and slot else {})})
         if origin and secret is not None:

@@ -7,11 +7,15 @@ when ``modules.release.secret_rotation_days`` days have passed; a rotation also 
 1. ``begin``: hold the Release Controller's lock (no release applies meanwhile) and choose the other slot;
 2. ``admit``: give the other slot a new value and admit it at the WAF, beside the current one;
 3. ``probe``: once the WAF change reached CloudFront, a probe POST with the new value is not blocked;
-4. ``switch``: every configured sibling sends the new value (``PutPlaybackConfiguration`` of its own release, the
-   call class of a remap: live sessions use it at their next break), and the slot is recorded;
+4. ``switch``: a Function tree that carries the origin secret itself (the ad-server route's auction, M8-09) is
+   immutable, so each one a sibling keeps is created again under a new release with the new value, and the
+   sibling's record and history name it; then every configured sibling sends the new value
+   (``PutPlaybackConfiguration`` of its own release, the call class of a remap: live sessions use it at their next
+   break), and the slot is recorded;
 5. ``verify``: while a monetized channel is on air, its siblings' ad requests since the switch were answered and a
    break was filled;
-6. ``retire``: the old slot gets a value nobody has seen, which the WAF admits instead of the old one.
+6. ``retire``: unless a Function a sibling keeps still carries the old value (``fast:origin-slot``), the old slot
+   gets a value nobody has seen, which the WAF admits instead of the old one.
 
 The lock is then given back. A failure at any step gives the lock back and leaves admitted every value a sibling
 may send: the rotation can be run again. No secret value is ever logged or ledgered.
@@ -26,15 +30,19 @@ from aws_lambda_powertools import Logger
 
 from fast_channels.core.demand import ORIGIN_HEADER, ORIGIN_SECRET_SLOTS, origin_rule_group, origin_secret
 from fast_channels.core.monetization import names
+from fast_channels.core.monetization.functions import RELEASE_SUFFIX, release_tag, released_id
 from fast_channels.core.monetization.playback import render
+from fast_channels.core.monetization.release import ChannelState, mapped_functions
 from fast_channels.core.monetization.validators import check_rendered, require_valid
 from fast_channels.functions import aws
-from fast_channels.functions.release import apply, promote, smoke, store
+from fast_channels.functions.release import apply, promote, reaper, smoke, store
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
     from pydantic import SecretStr
+
+    from fast_channels.core.monetization.bundle import Bundle
 
 logger = Logger()
 ROTATION: Final = store.ROTATION
@@ -190,11 +198,104 @@ def probe(target: str) -> dict[str, Any]:
     return {"status": response.status_code}
 
 
+def _origin_functions(bundle: Bundle, sibling: str) -> list[str]:
+    """The stems of the Functions ``sibling`` runs in ``bundle`` that carry the origin secret (``DemandOrigin``)."""
+    found = next((s for s in bundle.siblings if s.name == sibling), None)
+    return [
+        f.function_id
+        for f in (mapped_functions(bundle, [found]) if found else [])
+        if f.http_request_configuration is not None and f.http_request_configuration.demand_origin
+    ]
+
+
+def origin_trees(states: Mapping[str, ChannelState], change_id: str) -> dict[int, list[str]]:
+    """Each release a sibling keeps (its current tree and its history) whose tree for that sibling carries the origin
+    secret, with those siblings. A release this rotation created (its ``change_id``) carries the new value already."""
+    found: dict[int, set[str]] = {}
+    for state in states.values():
+        for sibling, history in sorted(state.history.items()):
+            for release in history:
+                status = store.status(release)
+                if status is None or status.change_id == change_id:
+                    continue
+                if _origin_functions(store.bundle(status.bundle_key), sibling):
+                    found.setdefault(release, set()).add(sibling)
+    return {release: sorted(siblings) for release, siblings in sorted(found.items())}
+
+
+def _renumbered(
+    state: ChannelState, moved: Mapping[tuple[str, int], int], change_id: str, at: datetime
+) -> ChannelState:
+    """``state`` with each (sibling, release) of ``moved`` on its new release, in its record and its history."""
+    siblings = {
+        name: record.model_copy(update={"release": moved[(name, record.release)], "change_id": change_id, "at": at})
+        if (name, record.release) in moved
+        else record
+        for name, record in state.siblings.items()
+    }
+    history = {name: tuple(moved.get((name, r), r) for r in kept) for name, kept in state.history.items()}
+    return state.model_copy(update={"siblings": siblings, "history": history})
+
+
+def recreate(target: str, change_id: str) -> dict[str, str]:
+    """Each tree a sibling keeps that carries the origin secret, created again under a new release with ``target``'s
+    value (Functions are immutable), and the sibling's record and history moved to it; the plan of a channel whose
+    stable sibling moved is rewritten. Run again, it allocates and creates nothing twice. Returns the moves, as
+    ``<sibling>@<old release>`` -> new release."""
+    config = settings()
+    config.require("release_channels")
+    channels = list(config.release_channels)
+    moved: dict[tuple[str, int], int] = {}
+    for release, siblings in origin_trees(store.channels(channels), change_id).items():
+        status = store.status(release)
+        assert status is not None  # origin_trees read it
+        new = store.allocate(f"rotation#{change_id}#{release_tag(release)}")
+        store.put_status(status.model_copy(update={"release": new, "change_id": change_id, "at": _now()}))
+        apply.put_functions(status.bundle_key, new, change_id, siblings, slot=target)
+        moved |= {(sibling, release): new for sibling in siblings}
+    for channel in channels:
+        state, version = store.channel(channel)
+        if state is None or (after := _renumbered(state, moved, change_id, _now())) == state:
+            continue
+        store.put_channel(after, version=version)
+        if state.stable is not None and after.siblings[state.stable] != state.siblings[state.stable]:
+            status = store.status(after.siblings[state.stable].release)
+            assert status is not None
+            bundle = store.bundle(status.bundle_key)
+            apply.write_plan(next(c for c in bundle.channels if c.name == channel), after, {}, _now())
+    return {f"{sibling}@{release_tag(old)}": release_tag(new) for (sibling, old), new in sorted(moved.items())}
+
+
+def kept_origin_functions(slot: str) -> list[str]:
+    """The Functions a sibling keeps (its current tree and its history) that carry ``slot``'s value
+    (``fast:origin-slot``)."""
+    config = settings()
+    config.require("prefix", "release_channels")
+    kept: set[str] = set()
+    for state in store.channels(list(config.release_channels)).values():
+        for sibling, history in state.history.items():
+            for release in history:
+                if (status := store.status(release)) is not None:
+                    bundle = store.bundle(status.bundle_key)
+                    kept |= {released_id(stem, release) for stem in _origin_functions(bundle, sibling)}
+    if not kept:  # no kept tree carries the secret itself (no ad-server route): nothing to list
+        return []
+    return sorted(
+        f["FunctionId"]
+        for f in reaper.functions(config.prefix)
+        if (f.get("Tags") or {}).get(apply.ORIGIN_SLOT_TAG) == slot
+        and RELEASE_SUFFIX.search(f["FunctionId"])
+        and f["FunctionId"] in kept
+    )
+
+
 def switch(target: str, change_id: str) -> dict[str, Any]:
-    """Every configured sibling sends ``target``'s value; the slot is recorded."""
+    """Every tree that carries the origin secret is created again with ``target``'s value (:func:`recreate`), then
+    every configured sibling sends ``target``'s value; the slot is recorded."""
     config = settings()
     config.require("prefix", "release_channels")
     secret = store.secret(target)
+    recreated = recreate(target, change_id)
     switched: list[str] = []
     for state in store.channels(list(config.release_channels)).values():
         for name, record in sorted(state.siblings.items()):
@@ -218,7 +319,7 @@ def switch(target: str, change_id: str) -> dict[str, Any]:
         "rotation.switch",
         f"slot-{target}",
         correlation_id=change_id,
-        detail={"slot": target, "siblings": switched},
+        detail={"slot": target, "siblings": switched, **({"recreated": recreated} if recreated else {})},
     )
     return {"switched": switched, "at": _now().timestamp()}
 
@@ -242,7 +343,14 @@ def verify(siblings: list[str], since: float) -> dict[str, Any]:
 
 
 def retire(current: str, change_id: str) -> dict[str, str]:
-    """``current`` (the old value) gets a value nobody has seen, admitted instead of it; the lock is given back."""
+    """``current`` (the old value) gets a value nobody has seen, admitted instead of it; the lock is given back.
+
+    Raises:
+        RefusedError: a Function a sibling keeps still carries ``current``'s value; retiring it would refuse that
+            tree's requests at the origin. Both values stay admitted.
+    """
+    if carrying := kept_origin_functions(current):
+        raise RefusedError(f"{len(carrying)} Functions a sibling keeps still carry slot {current}: {carrying[:5]}")
     _new_value(current)
     admit_values({slot: store.secret(slot) for slot in ORIGIN_SECRET_SLOTS})
     apply.ledger(
