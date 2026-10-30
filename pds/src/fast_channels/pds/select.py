@@ -132,6 +132,8 @@ def _reserver(request: SelectRequest, started: float) -> Reserve:
             return everything
         finally:
             window.add("reserve_ms", (time.perf_counter() - reserving) * 1000)
+        for reason in done.refused.values():  # budget, cap, or conflict: concurrent breaks on the same shard
+            counters.add("LineAdsRefused", dimension=("reason", reason.value))
         return frozenset(refused | set(done.refused))
 
     return reserve_lines
