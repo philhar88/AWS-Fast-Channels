@@ -241,7 +241,7 @@ vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s
 ## An ad server in front: Prebid results for its VAST
 
 With `modules.demand.ad_server` set, an ad server decides the break and Prebid's results reach it as key-values: the
-standard Prebid video flow for an ad server ([ADR 0034](adr/0034-prebid-results-for-an-ad-servers-vast.md)). The
+standard Prebid video flow for an ad server ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)). The
 default, `none`, is the direct route above, unchanged.
 
 | Field | Default | Meaning |

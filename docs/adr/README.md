@@ -36,5 +36,5 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |
 | [0033](0033-prefetch-single-schedules.md) | Ad prefetch with rolling SINGLE schedules from the schedule of record | Accepted |
 | [0034](0034-every-function-request-cached-by-scope.md) | Every Function request declares how its answers may be reused, and is cached by that scope | Accepted |
-| [0034](0034-prebid-results-for-an-ad-servers-vast.md) | Prebid results for an ad server's VAST: one cached pod per break | Proposed |
+| [0035](0035-prebid-results-for-an-ad-servers-vast.md) | Prebid results for an ad server's VAST: one cached pod per break | Proposed |
 | [0036](0036-pds-sidecar-in-the-prebid-server-task.md) | The Pod Decision Service as a sidecar in the Prebid Server task | Proposed |

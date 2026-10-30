@@ -1,4 +1,4 @@
-# 0034 — Prebid results for an ad server's VAST: one cached pod per break
+# 0035 — Prebid results for an ad server's VAST: one cached pod per break
 
 **Status:** Proposed (accepted when M8-09's end-to-end leg passes)
 
@@ -57,7 +57,7 @@ We needed to settle five things:
   | Body | only the stored request `fast-adsrv-pod-<seconds>s` |
   | Headers | `X-Fast-Pc`, `X-Fast-Sid` and the viewer's `User-Agent` |
   | Added at apply | `X-Fast-Origin` and `X-Fast-Fv`, so the bundle never holds the secret |
-  | Cache | `session_break`, keyed on the session and the event id, 30 s ([ADR 0033](0033-every-function-request-cached-by-scope.md)) |
+  | Cache | `session_break`, keyed on the session and the event id, 30 s ([ADR 0034](0034-every-function-request-cached-by-scope.md)) |
   | Timeouts | 1,200 ms request, 1,300 ms tree budget; with the 2,000 ms ADS timeout the Live maximum needs 3,300 ms (the siblings have 6,000) |
 
   The root commits the answer's targeting to the three player parameters for this break, or empty values when there

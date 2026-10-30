@@ -291,7 +291,7 @@ All notable changes to this project are documented here. The format follows
   that does not name exactly its scope's identifiers (a `break` key also names its channel) and a TTL that outlives
   the scope. R-F4 now admits `session.uuid` in session-scoped keys. The crawl lookup is `title`. Scope and reason
   stay in the bundle and are not sent to `PutFunction`.
-- **Prebid results for an ad server's VAST** (`modules.demand.ad_server`, ADR 0034,
+- **Prebid results for an ad server's VAST** (`modules.demand.ad_server`, ADR 0035,
   [docs/demand.md](docs/demand.md#an-ad-server-in-front-prebid-results-for-its-vast)): with `mock`, `gam` or
   `freewheel`, the pair siblings ask an ad server for the break instead of Prebid Server.
   - A PRE_ADS Function runs the break's auction once per session and break (scope `session_break`), through the

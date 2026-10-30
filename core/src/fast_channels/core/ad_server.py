@@ -1,4 +1,4 @@
-"""Prebid results for an ad server's VAST (M8-09, ADR 0034): the standard Prebid video ad-server flow, for a break.
+"""Prebid results for an ad server's VAST (M8-09, ADR 0035): the standard Prebid video ad-server flow, for a break.
 
 With ``modules.demand.ad_server`` set, the monetized pair siblings call an ad server instead of Prebid Server:
 
