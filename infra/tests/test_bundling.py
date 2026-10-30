@@ -1,5 +1,7 @@
 """Real (uv) bundling of the shared Lambda code asset; the other tests skip bundling."""
 
+import marshal
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,7 +9,7 @@ from aws_cdk import App, FileSystem, Stack
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk.assertions import Template
 
-from fast_channels.infra.bundling import REPO_ROOT, workspace_code
+from fast_channels.infra.bundling import LAMBDA_TASK_ROOT, REPO_ROOT, compile_bytecode, workspace_code
 
 PACKAGES = (REPO_ROOT / "core/src", REPO_ROOT / "functions/src")
 
@@ -52,3 +54,22 @@ def test_asset_hash_is_the_fingerprint_of_the_bundle(bundle: tuple[Path, str]) -
     directory, asset_hash = bundle
 
     assert FileSystem.fingerprint(str(directory)) == asset_hash
+
+
+def test_compiled_bytecode_is_deterministic_unchecked_and_names_the_task_root(tmp_path: Path) -> None:
+    """``compile_bytecode`` (the Pds stack's functions): unchecked hash-based ``.pyc`` files, the same bytes from
+    the same sources, whose code objects name ``/var/task``."""
+    source = tmp_path / "pkg" / "module.py"
+    source.parent.mkdir()
+    source.write_text("CONSTANT = frozenset({'a', 'b', 'c', 'd'})\n\ndef f():\n    return 'x' in CONSTANT\n")
+    compiled = source.parent / "__pycache__" / f"module.{sys.implementation.cache_tag}.pyc"
+
+    compile_bytecode(tmp_path)
+    first = compiled.read_bytes()
+    compiled.unlink()
+    compile_bytecode(tmp_path)
+
+    assert compiled.read_bytes() == first
+    assert int.from_bytes(first[4:8], "little") == 0b01  # hash-based, the source is never checked
+    code = marshal.loads(first[16:])
+    assert code.co_filename == f"{LAMBDA_TASK_ROOT}/pkg/module.py"

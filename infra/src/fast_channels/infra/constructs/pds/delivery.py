@@ -105,6 +105,7 @@ class DeliveryCounter(Construct):
         self.function = FastFunction(
             self,
             "Function",
+            compiled=True,  # the Pds stack's one code asset: precompiled, for the endpoints' cold starts
             handler=DELIVERY_HANDLER,
             description="PDS: count our tracker's impressions (BEACON_FIRED) and deliver their reservations",
             environment={
@@ -174,6 +175,7 @@ class ReleaseSweeper(Construct):
         self.function = FastFunction(
             self,
             "Function",
+            compiled=True,  # the Pds stack's one code asset: precompiled, for the endpoints' cold starts
             handler=SWEEPER_HANDLER,
             description="PDS: release reservations that saw no impression in two hours",
             environment={

@@ -85,6 +85,7 @@ class PdsFunction(Construct):
         self.function = FastFunction(
             self,
             "Function",
+            compiled=True,  # a cold start is on the module's deadline
             handler=handler,
             description=description,
             environment=environment,

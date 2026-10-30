@@ -1723,7 +1723,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "OwnBookFunctionCurrentVersionCD3D78F8cef176d814ec54e4e370c47dce00b320": {
+    "OwnBookFunctionCurrentVersionCD3D78F8589aceca2518e3c2bbe8e63c45f9054d": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -1860,7 +1860,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "OwnBookFunctionCurrentVersionCD3D78F8cef176d814ec54e4e370c47dce00b320",
+            "OwnBookFunctionCurrentVersionCD3D78F8589aceca2518e3c2bbe8e63c45f9054d",
             "Version"
           ]
         },
@@ -1943,7 +1943,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PolicyFunctionCurrentVersion517C64EEbec34aa18aae76d2478ce01fd4f1b186": {
+    "PolicyFunctionCurrentVersion517C64EE3e06a5cb690ba70bf462b9bd8779fcb7": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -2068,7 +2068,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "PolicyFunctionCurrentVersion517C64EEbec34aa18aae76d2478ce01fd4f1b186",
+            "PolicyFunctionCurrentVersion517C64EE3e06a5cb690ba70bf462b9bd8779fcb7",
             "Version"
           ]
         },
@@ -2732,7 +2732,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PublisherFunctionCurrentVersion0CCBEA0600b66b81dba8dc576d11fa67a0e2ec05": {
+    "PublisherFunctionCurrentVersion0CCBEA063be1fc3fc255c43313f0c6e64a524696": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -3054,7 +3054,7 @@
       "Properties": {
         "ExecuteOnHandlerChange": true,
         "HandlerArn": {
-          "Ref": "PublisherFunctionCurrentVersion0CCBEA0600b66b81dba8dc576d11fa67a0e2ec05"
+          "Ref": "PublisherFunctionCurrentVersion0CCBEA063be1fc3fc255c43313f0c6e64a524696"
         },
         "InvocationType": "RequestResponse",
         "ServiceToken": {
@@ -3233,7 +3233,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "SelectFunctionCurrentVersion7190FF88350b1824ff0ee5b3b44ff5502301ce63": {
+    "SelectFunctionCurrentVersion7190FF888ec22c8cd9511999f9e169d926833a7d": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -3407,7 +3407,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "SelectFunctionCurrentVersion7190FF88350b1824ff0ee5b3b44ff5502301ce63",
+            "SelectFunctionCurrentVersion7190FF888ec22c8cd9511999f9e169d926833a7d",
             "Version"
           ]
         },
