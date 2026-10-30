@@ -263,8 +263,9 @@ class ReleaseController(Construct):
         )
         self.promote.allow(["cloudwatch:DescribeAlarms"], ["*"])
         for reader in (self.promote, self.smoke):
-            # the candidates' PRE_ADS request latency (Function.Latency): a timed-out request is no error
+            # the candidates' PRE_ADS request latency (Function.Latency) against their timeouts in the release's bundle
             reader.allow(["cloudwatch:GetMetricStatistics"], ["*"])
+        self.smoke.allow(["s3:GetObject"], [self.bucket.arn_for_objects("release/*")], why="the bundles")
         self._drift_schedule(topic)
         self.desired_state = self._function(
             "DesiredState", "desired_state", "Release Controller: publish the rendered bundle", {}

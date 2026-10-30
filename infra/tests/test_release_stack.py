@@ -443,6 +443,23 @@ def test_a_probe_opens_its_own_session_and_waits_for_its_logs_before_its_verdict
     assert breaks == {"Smoke": 2, "Soak": 3}
 
 
+def test_the_judge_and_the_pointer_poll_read_the_request_timeouts_and_latency(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    states = _definition(template)["States"]
+    inner = states["SmokeAndSoak"]["ItemProcessor"]["States"]
+    for probe in ("Smoke", "Soak"):
+        payload = inner[f"{probe}Judge"]["Arguments"]["Payload"]
+        assert (payload["bundle_key"], payload["release"]) == ("{% $bundle_key %}", "{% $release %}")
+        assert "$states.input.failures" in inner[f"{probe}Failed"]["Cause"]  # the ledgered reason says what failed
+    poll = states["Pointer"]["Arguments"]["Payload"]
+    assert {"bundle_key", "release", "candidates"} <= set(poll), poll
+    for role in ("ControllerSmokeRole", "ControllerPromoteRole"):
+        granted = [s for r, s in statements(template) if r.startswith(role)]
+        assert any("cloudwatch:GetMetricStatistics" in actions(s) and s["Resource"] == "*" for s in granted), role
+        assert any("s3:GetObject" in actions(s) and "release/*" in json.dumps(s["Resource"]) for s in granted), role
+
+
 def test_a_failed_smoke_rolls_back_and_stops_the_lab_only_if_it_started_it(deployment: GetDeployment) -> None:
     d = deployment(RELEASE, extra=EXTRA)
     states = _definition(d.template(d.stage.release))["States"]
