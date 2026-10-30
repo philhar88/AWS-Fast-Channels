@@ -89,6 +89,8 @@ def test_the_switch_creates_them_again_with_the_new_value_and_moves_the_records(
     assert {n: r.release for n, r in after.siblings.items()} == {PAIR[0]: 3, PAIR[1]: 4, SIBLINGS[2]: 1}
     assert after.history == {PAIR[0]: (3,), PAIR[1]: (4, 3), SIBLINGS[2]: (1,)}
     assert (state.statuses[3].change_id, state.statuses[4].bundle_key) == ("x1", released.key)
+    assert (state.statuses[3].recreated_from, state.statuses[4].recreated_from) == (1, 2)
+    assert state.statuses[1].recreated_from is None
     mapping = {
         p["Name"]: (p["FunctionMapping"], p["AdDecisionServerConfiguration"]["HttpRequest"]["Headers"]) for p in puts
     }

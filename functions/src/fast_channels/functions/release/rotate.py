@@ -250,7 +250,9 @@ def recreate(target: str, change_id: str) -> dict[str, str]:
         status = store.status(release)
         assert status is not None  # origin_trees read it
         new = store.allocate(f"rotation#{change_id}#{release_tag(release)}")
-        store.put_status(status.model_copy(update={"release": new, "change_id": change_id, "at": _now()}))
+        store.put_status(
+            status.model_copy(update={"release": new, "change_id": change_id, "at": _now(), "recreated_from": release})
+        )
         apply.put_functions(status.bundle_key, new, change_id, siblings, slot=target)
         moved |= {(sibling, release): new for sibling in siblings}
     for channel in channels:

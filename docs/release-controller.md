@@ -196,7 +196,11 @@ aws stepfunctions start-execution --state-machine-arn <RotationStateMachineArn> 
    group admits instead of the old one. The lock is given back.
 
 A failure is ledgered (`rotation.fail` on the chain `release/rotation`), gives the lock back and raises
-`<prefix>-release-rotation-failed`. Every value a sibling may send is still admitted at that point, so the rotation
+`<prefix>-release-rotation-failed`. A switch that fails after it re-created trees, but before it re-put every
+sibling, leaves the state naming the new releases while those siblings still map the old trees and send the old
+value. That value is still admitted, so nothing is refused, but the drift check reports those siblings until the
+rotation runs again. The new run re-creates the trees once more, under new numbers. A re-created release's record
+names the release it came from (`recreated_from`). Every value a sibling may send is still admitted at that point, so the rotation
 can simply run again. No secret value is logged or ledgered. The rotation assumes that everyone who could read the
 ADS logs before the switch knows the old value (MediaTailor logs the request headers; the module's log group leaves
 them out).

@@ -72,6 +72,9 @@ class ReleaseStatus(_Model):
     """``APPLIED``: its siblings are configured (a channel's first release is then live); ``PROMOTED``: its
     candidates became stable; ``ROLLED_BACK``: its candidates went back to their last good tree."""
     at: datetime
+    recreated_from: int | None = Field(default=None, ge=1)
+    """The release whose trees an origin-secret rotation created again under this number, with the new value (the
+    ad-server route's auction carries the secret itself); None for a release the controller applied."""
 
 
 def targets(bundle: Bundle, state: Mapping[str, ChannelState]) -> list[Sibling]:
