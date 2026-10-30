@@ -79,6 +79,9 @@ augmenting. dont fork the whole pbs guidance for this".
     deploy one), and Prebid Server's dependency on it;
   - the task's CPU and memory, as overrides of the L1 task definition;
   - the sidecar's grants on the task role;
+  - a DynamoDB gateway endpoint in the guidance's VPC, whose policy admits only item calls on the PDS table and the
+    ledger (the guidance calls no DynamoDB), so reservations do not go out through a NAT gateway;
+  - ALB slow start on the guidance's Prebid Server target groups (below);
   - the sidecar's S3 reads (the snapshot object; with the crawl module the catalog-context objects) in the policy of
     the guidance VPC's S3 gateway endpoint, for the account's resources only. That endpoint lets requests through only
     to the guidance's own buckets, so S3 refused the snapshot read (`AccessDenied`) whatever the task role allowed,
@@ -90,9 +93,10 @@ augmenting. dont fork the whole pbs guidance for this".
   augments right after construction, not from an Aspect: an Aspect that adds constructs during synthesis is
   discouraged by CDK, and its constructs might escape the guidance's own `ConditionAspect`. `PIN.toml [relied_on]`
   hashes the upstream files the wrapper relies on (`prebid_server_stack.py`, `ecs_task_construct.py`,
-  `alb_entry_deployment.py`, `stack_constants.py`, `vpc_construct.py`; `app.py` and `cloudfront_entry_deployment.py`
-  are pinned as patched), so an upstream change fails `verify` before it reaches a deploy. A CI test synthesizes the pinned guidance
-  through the wrapper.
+  `alb_entry_deployment.py`, `stack_constants.py`, `vpc_construct.py`; `app.py`, `cloudfront_entry_deployment.py` and
+  `ecs_service_construct.py` are pinned as patched), so an upstream change fails `verify` before it reaches a deploy.
+  The wrapper finds every construct it relies on before it adds anything, and a CI test synthesizes the pinned
+  guidance through it.
 - **The task: 2 vCPU and 6 GiB,** the guidance's 2 vCPU shared by both containers with equal weights, and 2 GiB
   more memory. Prebid Server's JVM sizes its heap from the task's memory (a quarter by default), and the sidecar needs
   about 100 MB. Weights favouring Prebid Server starved the sidecar while a new task warmed (below).
@@ -124,8 +128,8 @@ augmenting. dont fork the whole pbs guidance for this".
 ## Evidence
 
 A throwaway stage (October 2026): Prebid Server 4.4.0, 2 tasks, demo demand with two direct lines, MediaTailor
-sessions on a monetized channel polling every 6 s (`herd.py`), a 120.12 s break each. Every herd: 0 policy
-fallbacks, 0 select fallbacks, 0 empty pods.
+sessions on a monetized channel polling every 6 s (`herd.py`), a 120.12 s break each. Every herd at the shipped
+budgets (50 and 200 ms; 80 and 200 ms before them): 0 policy fallbacks, 0 select fallbacks, 0 empty pods.
 
 | Herd | Auctions | Module `policy_ms` p50/p95/p99/max | Module `select_ms` p50/p95/p99/max | Reservation p50 / p99 | Arrival spread |
 |---|---|---|---|---|---|
@@ -144,8 +148,9 @@ fallbacks, 0 select fallbacks, 0 empty pods.
   - the pool's queue wait max 3-10 ms, the event loop's lag p99 1-3 ms (max 21 ms);
   - 1-3% of a vCPU over a herd minute; resident memory 92-106 MB;
   - Prebid Server's container 530-790 MB beside it.
-- **Startup:** the loads take 0.33-0.61 s before uvicorn listens. The first DynamoDB call (DNS, TCP, TLS) takes
-  38-42 ms, the next 4-5 ms.
+- **Startup:** the loads take 0.33-0.61 s before uvicorn listens. The first DynamoDB call (DNS, TCP, TLS, over NAT)
+  takes 38-42 ms, the next 4-5 ms; the loop's refresh tick keeps that connection open between breaks (budget reads
+  at p50 5 ms, 12 a minute).
 - **DynamoDB:** the guidance's VPC had no DynamoDB endpoint, so reservations went out through a NAT gateway. A
   gateway endpoint (the wrapper adds it; its policy admits only item calls on the PDS table and the ledger) halved
   the 400-session reservation p50 (43-46 to 23-24 ms) and cut its p99 by a fifth to a half. The remaining 22-24 ms
