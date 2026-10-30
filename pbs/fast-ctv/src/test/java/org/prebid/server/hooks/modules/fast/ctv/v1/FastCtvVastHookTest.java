@@ -9,6 +9,8 @@ import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.execution.timeout.TimeoutFactory;
 import org.prebid.server.hooks.execution.v1.exitpoint.ExitpointPayloadImpl;
 import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
+import org.prebid.server.hooks.modules.fast.ctv.core.ModuleContext;
+import org.prebid.server.hooks.modules.fast.ctv.core.PodShape;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyPatch;
@@ -20,6 +22,7 @@ import org.prebid.server.hooks.v1.auction.AuctionInvocationContext;
 import org.prebid.server.hooks.v1.exitpoint.ExitpointPayload;
 import org.prebid.server.model.CaseInsensitiveMultiMap;
 import org.prebid.server.model.HttpRequestContext;
+import org.prebid.server.proto.openrtb.ext.request.ExtRequest;
 import org.prebid.server.vertx.httpclient.HttpClient;
 import org.prebid.server.vertx.httpclient.model.HttpClientResponse;
 
@@ -235,6 +238,40 @@ public class FastCtvVastHookTest {
         when(context.timeout()).thenReturn(new TimeoutFactory(Clock.systemUTC()).create(150));
         when(context.moduleContext()).thenReturn(policy);
         return hook.call(ExitpointPayloadImpl.of(MultiMap.caseInsensitiveMultiMap(), "{}"), context).result();
+    }
+
+    @Test
+    public void aRejectedAuctionIsAnEmptyVastAndALineThatIsNoFallback() {
+        final List<String> lines = new ArrayList<>();
+        final FastCtvVastHook hook = new FastCtvVastHook(mock(SelectClient.class), new PodRenderer(),
+                new TrackerTemplate(TRACKER),
+                MAPPER, lines::add, HousePod.parse("[]", MAPPER));
+        final PodShape.Result refused = new PodShape(30, 120).apply(BidRequest.builder().id("r")
+                .ext(rejectedExt()).imp(List.of()).build());
+        final AuctionInvocationContext context = mock(AuctionInvocationContext.class);
+        when(context.auctionContext()).thenReturn(AuctionContext.builder()
+                .httpRequest(mediaTailorRequest(TICKET))
+                .bidRequest(refused.request()).bidResponse(BidResponse.builder().seatbid(List.of()).build())
+                .requestRejected(true).build());
+        when(context.timeout()).thenReturn(new TimeoutFactory(Clock.systemUTC()).create(150));
+        when(context.moduleContext()).thenReturn(new ModuleContext(null, refused));
+
+        final InvocationResult<ExitpointPayload> result =
+                hook.call(ExitpointPayloadImpl.of(MultiMap.caseInsensitiveMultiMap(), "{}"), context).result();
+
+        assertThat(body(result)).isEqualTo(PodRenderer.EMPTY_VAST);
+        assertThat(lines).singleElement().satisfies(line -> {
+            assertThat(line).contains("\"select\":\"REJECTED\"")
+                    .doesNotContain("POLICY_").doesNotContain("SELECT_FALLBACK");
+            assertThat(line).contains("pod_s is not whole seconds");
+        });
+    }
+
+    private static ExtRequest rejectedExt() {
+        final ExtRequest ext = ExtRequest.of(null);
+        ext.addProperty(PodShape.EXT,
+                MAPPER.createObjectNode().put(PodShape.SLOT_FIELD, 30).put(PodShape.POD_FIELD, ""));
+        return ext;
     }
 
     private static String body(InvocationResult<ExitpointPayload> result) {

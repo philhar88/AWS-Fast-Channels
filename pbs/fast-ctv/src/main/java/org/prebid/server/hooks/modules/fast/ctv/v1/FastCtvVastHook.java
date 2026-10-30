@@ -1,5 +1,6 @@
 package org.prebid.server.hooks.modules.fast.ctv.v1;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.iab.openrtb.request.Imp;
@@ -10,6 +11,7 @@ import org.prebid.server.hooks.execution.v1.InvocationResultImpl;
 import org.prebid.server.hooks.execution.v1.exitpoint.ExitpointPayloadImpl;
 import org.prebid.server.hooks.modules.fast.ctv.core.Candidate;
 import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
+import org.prebid.server.hooks.modules.fast.ctv.core.ModuleContext;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodCache;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
@@ -112,9 +114,19 @@ public class FastCtvVastHook implements ExitpointHook {
         try {
             final AuctionContext auction = context.auctionContext();
             requestId = auction.getBidRequest().getId();
+            // The request's own ask when the policy hook did not shape it; else ext.fast as that hook found it
             ask = podCache != null ? podCache.ask(auction.getBidRequest()) : null;
+            final ModuleContext state = context.moduleContext() instanceof ModuleContext found ? found : null;
+            final JsonNode fast = state != null && state.shape() != null ? state.shape().fast() : null;
+            if (podCache != null && fast != null) {
+                ask = podCache.ask(auction.getBidRequest(), fast);
+            }
             final Signals signals = Signals.of(auction.getHttpRequest());
-            final PolicyDecision policy = context.moduleContext() instanceof PolicyDecision decision ? decision : null;
+            if (auction.isRequestRejected() || state != null && state.refused()) {
+                return Future.succeededFuture(rejected(payload, signals, state, ask, requestId));
+            }
+            final PolicyDecision policy = state != null ? state.policy()
+                    : context.moduleContext() instanceof PolicyDecision decision ? decision : null;
             final List<Imp> imps = auction.getBidRequest().getImp();
             final List<Candidate> candidates = renderer.candidates(auction.getBidResponse(), imps);
             final Map<String, Candidate> byRef = new LinkedHashMap<>();
@@ -221,6 +233,27 @@ public class FastCtvVastHook implements ExitpointHook {
         if (log != null) {
             log.accept(mapper.createObjectNode().put("evt", "fast-ctv-pod")
                     .put("error", error.getClass().getSimpleName()).toString());
+        }
+        return ask != null
+                ? json(payload, podCache.answer(requestId, null, null, null, 0).toString())
+                : xml(payload, PodRenderer.EMPTY_VAST);
+    }
+
+    /**
+     * A rejected auction (the pod refused, {@code PodShape}): an empty VAST, so MediaTailor airs the slate without an
+     * error, and one {@code fast-ctv-pod} line saying why (not a fallback: the fallback alarms do not count it).
+     */
+    private InvocationResult<ExitpointPayload> rejected(ExitpointPayload payload, Signals signals, ModuleContext state,
+                                                        PodCache.Ask ask, String requestId) {
+        if (log != null) {
+            final ObjectNode line = mapper.createObjectNode().put("evt", "fast-ctv-pod")
+                    .put("sid", signals.sid())
+                    .put("evid", signals.evid())
+                    .put("pc", signals.pc())
+                    .put("select", "REJECTED")
+                    .put("refused", state != null && state.shape() != null ? state.shape().refused() : null);
+            line.putPOJO("winners", List.of());
+            log.accept(line.toString());
         }
         return ask != null
                 ? json(payload, podCache.answer(requestId, null, null, null, 0).toString())
