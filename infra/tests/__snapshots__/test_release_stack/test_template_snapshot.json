@@ -4138,6 +4138,11 @@
               "Resource": "*"
             },
             {
+              "Action": "logs:DescribeLogGroups",
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:*"
+            },
+            {
               "Action": [
                 "logs:FilterLogEvents",
                 "logs:GetLogEvents",

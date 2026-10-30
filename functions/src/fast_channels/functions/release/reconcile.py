@@ -92,10 +92,29 @@ def logged(start: datetime, end: datetime) -> dict[str, dict[str, int]]:
     return found
 
 
+def created(group: str) -> datetime | None:
+    """When the log group ``group`` was created (None if it does not exist)."""
+    pages = aws.client("logs").get_paginator("describe_log_groups").paginate(logGroupNamePrefix=group)
+    found = next((g for page in pages for g in page["logGroups"] if g["logGroupName"] == group), None)
+    return datetime.fromtimestamp(found["creationTime"] / 1000, UTC) if found else None
+
+
 def reconcile(siblings: Sequence[str], at: datetime) -> dict[str, Any]:
     """Each sibling's counted and logged requests and avails over the hour :func:`window` gives, and the requests'
-    shortfall."""
+    shortfall.
+
+    An hour that began before the siblings' log group existed is skipped (``skipped``): Logs Insights refuses a query
+    that ends before a group's creation, and requests made before the siblings' deliveries existed were never
+    logged. The first hour reconciled on a new stage starts after the group's creation.
+    """
     start, end = window(at)
+    config = settings()
+    config.require("prefix")
+    born = created(names.log_group(config.prefix))
+    if born is None or born > start:
+        reason = "no siblings' log group yet" if born is None else f"the siblings' log group was created {born}"
+        logger.info("hour skipped", extra={"start": start.isoformat(), "reason": reason})
+        return {"start": start.isoformat(), "end": end.isoformat(), "unlogged_requests": 0, "skipped": reason}
     by_metrics, by_log = counted(siblings, start, end), logged(start, end)
     missing = {
         sibling: max(0, by_metrics[sibling]["requests"] - by_log.get(sibling, {}).get("requests", 0))
@@ -125,5 +144,6 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     scheduled = event.get("scheduled_time")
     at = datetime.fromisoformat(scheduled.replace("Z", "+00:00")) if scheduled else datetime.now(UTC)
     result = reconcile(config.release_siblings, at)
-    metrics.add_metric(name="UnloggedAdsRequests", unit=MetricUnit.Count, value=result["unlogged_requests"])
+    if "skipped" not in result:  # an hour not measured has no datapoint (the alarm treats it as not breaching)
+        metrics.add_metric(name="UnloggedAdsRequests", unit=MetricUnit.Count, value=result["unlogged_requests"])
     return result
