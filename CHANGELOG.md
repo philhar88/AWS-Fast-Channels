@@ -122,16 +122,16 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   settings; the `scheduler.plan` record of Claude Haiku 5.5 is committed. The recommender's record format, with its
   deterministic faithfulness check, is defined. With the registry on, the scheduler's ModelSpec parameter is retired:
   the agent falls back to its entry as deployed.
-- **Demand: the pinned Prebid Server guidance** ([docs/demand.md](docs/demand.md), ADR-0020, ADR-0002
-  exception A). `vendor/prebid-guidance/PIN.toml` pins the AWS Guidance for Deploying a Prebid Server on AWS at
-  v1.4.0, with the SHA-256 of every upstream file its overlays patch or rely on. Five overlays add a stack-name prefix
-  and a dedicated CDK bootstrap (O1), a customer WAF rule group (O2), the fast-ctv module's build hook (O4), simulator
-  creatives from configuration (O5) and 100% minimum healthy ECS deployments (O7). `scripts/prebid_guidance.py
-  checkout|verify|apply` refuses a moved tag, a changed upstream file or a patch that does not apply, and the CI job
-  `guidance-overlays` applies the overlays on every run. `render-config` renders a stage's Prebid Server configuration
-  (`fast_channels.core.pbs_config`): one stored request per route (`fast-pod`, and `fast-pod-kids`), a template
-  pod for the own book only that the fast-ctv module shapes to the break, the stage's account with the module's execution plan and Activity Controls, and the application
-  configuration.
+- **Demand: the pinned Prebid Server guidance** ([docs/demand.md](docs/demand.md), ADR-0020, ADR-0002 exception A).
+  `vendor/prebid-guidance/PIN.toml` pins the AWS Guidance for Deploying a Prebid Server on AWS at v1.4.0, with the
+  SHA-256 of every upstream file its overlays patch or rely on. Five overlays add a stack-name prefix and a dedicated
+  CDK bootstrap (O1), a customer WAF rule group (O2), the fast-ctv module's build hook (O4), simulator creatives from
+  configuration (O5) and 100% minimum healthy ECS deployments (O7). `scripts/prebid_guidance.py checkout|verify|apply`
+  refuses a moved tag, a changed upstream file or a patch that does not apply, and the CI job `guidance-overlays`
+  applies the overlays on every run. `render-config` renders a stage's Prebid Server configuration
+  (`fast_channels.core.pbs_config`): one stored request per route (`fast-pod`, and `fast-pod-kids`), a template pod for
+  the own book only that the fast-ctv module shapes to the break, the stage's account with the module's execution plan
+  and Activity Controls, and the application configuration.
 - **Demand: the fast-ctv Prebid Server module** (`pbs/fast-ctv`, [docs/demand.md](docs/demand.md#the-fast-ctv-module),
   ADR-0001 amended). A policy hook adds third-party demand only on a positive, in-time `/policy` answer from the Pod
   Decision Service (contract version 1, strict both ways; never in `SAFE` or `KIDS` breaks), and an exitpoint hook
@@ -152,39 +152,38 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   `modules.demand.tasks`, the rule group, the simulator per mode), writes the SSM contract `/<prefix>/demand/*` and
   runs a smoke test; `make destroy-demand` removes all of it, including what the guidance's templates retain, and
   prints the inventory. The demand module needs a prefix of at most 10 characters (the bootstrap qualifier).
-- **Demand: the bidder simulator and the demo creatives** ([docs/demand.md](docs/demand.md#demo-demand-and-the-bidder-simulator)).
-  In `modules.demand.mode: demo` every ladder kit also encodes ten 30.03 s demo creatives from the brand stills in
-  `assets/demo`: `sim1`–`sim8` for the simulator (`sim3` and `sim4` share an advertiser) and `direct1`–`direct2` for
-  the own book's direct lines. The stills are CDK file assets, which MediaConvert reads object by object, so nothing
-  is written to the ingest bucket. The kit indexes them in `ads/<ladder>/demo/creatives.json`. `deploy-demand` renders
-  the simulator's creatives from that index (overlay O5) for either mode: the guidance's simulator stack
-  (`guidance_stack`), or the same handler as a Lambda target of an internal load balancer in the Prebid Server VPC
-  (`lambda`, `sim.<prefix>.fast.internal`). The new stack `FastChannels-<prefix>-Demand` holds the stage's private zone
-  `<prefix>.fast.internal` and the `lambda` simulator. `deploy-demand` deploys it once the guidance is up, and
-  `destroy-demand` deletes it first. The smoke test also sends the simulator a 4-slot request and checks every demo
-  creative's renditions against the ladder.
-- **Demand: census-gated scaling and warm-up** ([docs/demand.md](docs/demand.md#scaling-the-census-gate-dayparts-and-warm-up)).
-  Prebid Server runs only while the stage airs. The census gate (Step Functions, SDK calls only) raises the guidance's
-  ECS service to `tasks.min` when the census's `Census Changed` event reports the first running channel, and scales it
-  to zero 15 minutes after the last one stopped, unless a channel started again. `modules.demand.dayparts` become
-  Application Auto Scaling scheduled actions. Every new task, from any scale-out, gets a warm-up once it is a healthy
-  target: probe auctions without a ticket through the guidance's CloudFront, at 50/s per healthy target for 150 s,
-  with a pinned, checksum-verified vegeta on CodeBuild. Undeliverable events go to a dead-letter queue that alarms. `prebid_guidance.py herd` replays a break
-  herd.
-- **Demand: Prebid Server Java 4.4.0, the only supported release** (`core.pbs_config.PBS_VERSION`, ADR-0020
-  amended). The image builds 4.4.0 on Corretto 25, not the guidance's 3.43.0: guidance overlay O6 makes the JDK a
-  build argument, and O4 ports the guidance's `amt` adapter configuration to 4.x. The rendered configuration adds
-  the two settings 4.x requires. CI builds and tests the module and the contract on 4.4.0 (`make pbs-test
-  pbs-contract`). The OpenRTB 2.6 content fields reach bidders first-class; 3.43.0 drops them, and there is no
-  setting to select it. The guidance's log analytics stays off: its reporter logs every request header, the ticket
-  and the origin secret included. See [docs/demand.md](docs/demand.md#the-fast-ctv-module).
-- **Demand: the e2e demand leg**: the `End-to-end` workflow's `leg: demand` (job
-  `e2e-demand`, up to 4 hours) deploys `STAGE=fastci MODULES=ops,demand` and the demand module, runs
-  `tests/e2e/test_11_demand_edge.py` (the grid's break lengths and one off it, the empty pod of a missing
-  duration, the origin rule group, an account without the module calling no third party, a small herd), then destroys and inventories everything. `MODULES=a,b`
-  (`stage_args.py --modules`, `prebid_guidance.py --modules`) keeps only those modules of a stage on.
-  `deploy-demand` now also warms the running tasks no warm-up build has named (a first deploy starts them before the
-  warm-up rule exists) and waits for them.
+- **Demand: the bidder simulator and the demo creatives**
+  ([docs/demand.md](docs/demand.md#demo-demand-and-the-bidder-simulator)). In `modules.demand.mode: demo` every ladder
+  kit also encodes ten 30.03 s demo creatives from the brand stills in `assets/demo`: `sim1`–`sim8` for the simulator
+  (`sim3` and `sim4` share an advertiser) and `direct1`–`direct2` for the own book's direct lines. The stills are CDK
+  file assets, which MediaConvert reads object by object, so nothing is written to the ingest bucket. The kit indexes
+  them in `ads/<ladder>/demo/creatives.json`. `deploy-demand` renders the simulator's creatives from that index (overlay
+  O5) for either mode: the guidance's simulator stack (`guidance_stack`), or the same handler as a Lambda target of an
+  internal load balancer in the Prebid Server VPC (`lambda`, `sim.<prefix>.fast.internal`). The new stack
+  `FastChannels-<prefix>-Demand` holds the stage's private zone `<prefix>.fast.internal` and the `lambda` simulator.
+  `deploy-demand` deploys it once the guidance is up, and `destroy-demand` deletes it first. The smoke test also sends
+  the simulator a 4-slot request and checks every demo creative's renditions against the ladder.
+- **Demand: census-gated scaling and warm-up**
+  ([docs/demand.md](docs/demand.md#scaling-the-census-gate-dayparts-and-warm-up)). Prebid Server runs only while the
+  stage airs. The census gate (Step Functions, SDK calls only) raises the guidance's ECS service to `tasks.min` when the
+  census's `Census Changed` event reports the first running channel, and scales it to zero 15 minutes after the last one
+  stopped, unless a channel started again. `modules.demand.dayparts` become Application Auto Scaling scheduled actions.
+  Every new task, from any scale-out, gets a warm-up once it is a healthy target: probe auctions without a ticket
+  through the guidance's CloudFront, at 25/s per healthy target for 150 s, with a pinned, checksum-verified vegeta on
+  CodeBuild. Undeliverable events go to a dead-letter queue that alarms. `prebid_guidance.py herd` replays a break herd.
+- **Demand: Prebid Server Java 4.4.0** (`core.pbs_config.PBS_VERSION`, ADR-0020). The image builds 4.4.0 on
+  Corretto 25: guidance overlay O6 makes the JDK a build argument, and O4 ports the guidance's `amt` adapter
+  configuration to 4.x. The rendered configuration adds the two settings 4.x requires. CI builds and tests the module
+  and the contract on 4.4.0 (`make pbs-test pbs-contract`). The OpenRTB 2.6 content fields reach bidders
+  first-class. The guidance's log analytics stays off: its reporter logs every request header, the ticket and the
+  origin secret included. See [docs/demand.md](docs/demand.md#the-fast-ctv-module).
+- **Demand: the e2e demand leg**: the `End-to-end` workflow's `leg: demand` (job `e2e-demand`, up to 4 hours)
+  deploys `STAGE=fastci MODULES=ops,demand,pds,release,crawl`, runs `tests/e2e/test_11_demand_edge.py` to
+  `test_14_demand_pods.py` (below), then destroys and inventories everything. `test_11` covers the break lengths
+  from 30 to 120 s and the empty pod of one outside them, the origin rule group, an account without the module
+  calling no third party, and a small herd. `MODULES=a,b` (`stage_args.py --modules`, `prebid_guidance.py
+  --modules`) keeps only those modules of a stage on. `deploy-demand` also warms the running tasks no warm-up build
+  has named (a first deploy starts them before the warm-up rule exists) and waits for them.
 - **Prebid results for an ad server's VAST, experimental** (`modules.demand.ad_server`, ADR 0035,
   [docs/demand.md](docs/demand.md#an-ad-server-in-front-prebid-results-for-its-vast)): with `mock`, `gam` or
   `freewheel`, the pair siblings ask an ad server for the break instead of Prebid Server. The mode is off by default
@@ -252,22 +251,28 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   documented Functions limits and the JSONata allow-list that MediaTailor does not enforce when a function is put,
   the body template, the cache keys, the channel-policy pattern and the rollout strategy. The bundle's JSON Schema
   is `contracts/monetization-bundle.schema.json`.
-- **Demand: the MediaTailor-driven smoke** (BUILD-PLAN M8-08, §12.3): the `e2e-demand` leg deploys
-  `MODULES=ops,demand,pds,release,crawl` and runs `tests/e2e/test_12_release.py`, `test_13_crawl.py` and the new
-  `test_14_demand_pods.py` after the edge tests. That test waits until Prebid Server is warm (the PDS is its sidecar),
-  airs a 30.03 s break and two of 120.12 s, and plays four viewers on the stable sibling of the channel's playback
-  plan, two late joiners after the second break's retrieval closed and one viewer 40 s into the second break. From the siblings' ADS log, the module's
-  lines, the PDS's records and the simulator's log it checks that every ad server request (a prefetch retrieval or a
-  real-time request) is an auction answered with XML and rendered from `/select`; a retrieved break is filled from
-  its retrieval with no second request and none of its winners skipped as not ready; a late joiner is asked in real
-  time and served; a mid-break joiner is asked for the rest of that break (ADR-0021, M3-07): slate for what aired, then its pod, every ad from its first segment, and its next break is served; pods are stitched in `sequence` order; where a winner was new at its break, it is replaced in its position by
-  a standalone and a partial pod is kept at threshold 121 with the break slate after it (with prefetch these skip,
-  saying why); the decision records carry MediaTailor's session id; no client header reaches the simulator, which gets the viewers'
-  address masked and never whole; delivery is counted from `BEACON_FIRED`; crawl covers at least 99% of the enriched
-  arm's breaks; no requested break is empty unless nothing was eligible; no break falls back (a fallback would have to
-  be SAFE and still a pod of the own book's or house ads); and the stable sibling's silent-loss alarm (M3-04) never
-  fires. Overlay O5's `sim-bid-request` line
-  now also has the X-Forwarded-For entry count and `device.ip`/`device.ipv6` as the request body carries them.
+- **Demand: the MediaTailor-driven smoke** (`tests/e2e/test_14_demand_pods.py`, in the demand leg). It waits until
+  Prebid Server is warm (the PDS is its sidecar), airs a 30.03 s break and two of 120.12 s, and plays four viewers on
+  the stable sibling of the channel's playback plan, two late joiners after the second break's retrieval closed, and
+  one viewer 40 s into the second break. From the siblings' ADS log, the module's lines, the PDS's records and the
+  simulator's log it checks that:
+  - every ad server request (a prefetch retrieval or a real-time request) is one auction, answered with XML and
+    rendered from `/select`;
+  - a retrieved break is filled from its retrieval, with no second request and none of its winners skipped as not
+    ready;
+  - a late joiner is asked in real time and served, and a mid-break joiner is asked for the rest of that break
+    (ADR-0021): slate for what aired, then its pod, every ad from its first segment;
+  - pods are stitched in `sequence` order; where a winner was new at its break it is replaced in its position by a
+    standalone, and a partial pod is kept at threshold 121 with the break slate after it (with prefetch these skip,
+    saying why);
+  - the decision records carry MediaTailor's session id; no client header reaches the simulator, which gets the
+    viewers' address masked and never whole;
+  - delivery is counted from `BEACON_FIRED`; crawl covers at least 99% of the enriched arm's breaks;
+  - no requested break is empty unless nothing was eligible, and none falls back; the stable sibling's silent-loss
+    alarm never fires.
+
+  Overlay O5's `sim-bid-request` line has the X-Forwarded-For entry count and `device.ip`/`device.ipv6` as the
+  request body carries them.
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a
@@ -276,16 +281,16 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 - **Release Controller: the apply path** (`modules.release`, `FastChannels-<prefix>-Release`,
   [docs/release-controller.md](docs/release-controller.md)). CDK renders and validates the release bundle;
   `Custom::DesiredState` stores it by digest and puts `Desired State Rendered` on the bus; the state machine
-  `<prefix>-release` validates it again and, one release at a time, creates the MediaTailor Functions its siblings
-  map (an id is never updated), configures the idle sibling `<channel>-p-<s>` (all siblings on a channel's first
-  release) with the origin secret read at apply, creates its vended-log deliveries without the fields that may hold the secret or a ticket, rewrites
-  `/plan/playback/<channel>.json` and ledgers the release. The siblings' log group has its own KMS key, whose
-  policy lets only named roles decrypt. An hourly drift check (alarm `<prefix>-release-drift`), per-sibling hook
-  alarms and a zero-ad-sessions detector watch the siblings. With the module on, every other role of the stage is
+  `<prefix>-release` validates it again and, one release at a time, creates the MediaTailor Functions its siblings map
+  (an id is never updated), configures the idle sibling `<channel>-p-<s>` (all siblings on a channel's first release)
+  with the origin secret read at apply, creates its vended-log deliveries without the fields that may hold the secret or
+  a ticket, rewrites `/plan/playback/<channel>.json` and ledgers the release. The siblings' log group has its own KMS
+  key, whose policy lets only named roles decrypt. An hourly drift check (alarm `<prefix>-release-drift`), per-sibling
+  hook alarms and a zero-ad-sessions detector watch the siblings. With the module on, every other role of the stage is
   denied the writes the controller owns (managed policy `ReleaseGuard`), and the controller never changes a channel
   policy. `deploy-demand` deploys the stack after Pds; deleting it reaps what the controller created. The Media stack
-  writes the SSM parameters `/<prefix>/release/*` it reads. The Pod Decision Service's delivery function also counts
-  the siblings' impressions, through a subscription filter on their log group.
+  writes the SSM parameters `/<prefix>/release/*` it reads. The Pod Decision Service's delivery function also counts the
+  siblings' impressions, through a subscription filter on their log group.
 - **Release Controller: smoke gate, promotion and rollback** (`modules.release`,
   [docs/release-controller.md](docs/release-controller.md#promotion-and-rollback), ADRs 0019, 0021, 0023). After a
   release configures a channel's idle sibling, a probe session smoke-tests it for two breaks and soaks it for three
@@ -357,10 +362,26 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   1,000 characters. It reads no session or player value and fails open.
 - **Content metadata in bid requests and the uplift holdout** (`crawl` module): the Pod Decision Service's `/policy`
   answer fills OpenRTB 2.6 `app.content` from a copy of the catalog context objects (refreshed every 30 s, with the
-  `x-fast-ctx` header for a title the copy lacks), the OpenRTB 2.6 fields first-class. PSEUDONYMOUS breaks get no field that names the title, SAFE
-  breaks none. A `crawl-v1` holdout (`modules.crawl.holdout_percent`, 20 %) gets no enrichment; the arm (`enr`) and
-  where the metadata was found (`ctx`) are in the `pds.policy` record, and the arm in our impression tracker. The
-  lake view `v_crawl_kpis` reports coverage, bids, fill and price by hour, playback configuration and arm.
+  `x-fast-ctx` header for a title the copy lacks), the OpenRTB 2.6 fields first-class. PSEUDONYMOUS breaks get no field
+  that names the title, SAFE breaks none. A `crawl-v1` holdout (`modules.crawl.holdout_percent`, 20 %) gets no
+  enrichment; the arm (`enr`) and where the metadata was found (`ctx`) are in the `pds.policy` record, and the arm in
+  our impression tracker. The lake view `v_crawl_kpis` reports coverage, bids, fill and price by hour, playback
+  configuration and arm.
+
+### Changed
+
+Descoped before the release (the owner, 2026-10-30; each is a two-way door):
+
+- **Prebid Server Java 4.4.0 only.** The demand module builds 4.4.0 and nothing else: no release switch, no build or
+  CI job for the 3.43.0 the guidance ships.
+- **One stored request per route** (`fast-pod`, `fast-pod-kids`, and the ad-server route's) instead of one per break
+  length: the POST body sends the break's length (`ext.fast.pod_s`) and the fast-ctv module shapes the pod. A stage
+  deployed from the pre-release branch upgrades in this order: `deploy-demand` (it uploads the new stored requests
+  and deletes nothing), the Release stack's rollout (every sibling sends the new body), then `upload-config --prune`,
+  which deletes the per-length `fast-pod-<n>s` objects except any a live configuration still names
+  ([docs/demand.md](docs/demand.md)).
+- **The ad-server mode is experimental** and off by default (`modules.demand.ad_server: none`); no default
+  end-to-end leg runs it.
 
 ### Fixed
 

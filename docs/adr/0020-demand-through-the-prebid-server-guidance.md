@@ -1,8 +1,7 @@
 # 0020 — Programmatic demand through the AWS Prebid Server guidance
 
-**Status:** Proposed (amends [0001](0001-python-cdk-and-uv-workspace.md) and
-[0002](0002-l2-constructs-over-solutions-constructs.md), exception A). It is accepted when the demand and Pod Decision
-Service modules pass their end-to-end legs. Its placement of the Pod Decision Service is superseded, and its
+**Status:** Accepted on 2026-10-30 (amends [0001](0001-python-cdk-and-uv-workspace.md) and
+[0002](0002-l2-constructs-over-solutions-constructs.md), exception A): the MediaTailor-driven demand leg (`tests/e2e/test_11_demand_edge.py` to `test_14_demand_pods.py`, #65) passed on a fresh stage on 2026-10-30: 37 passed, 7 skipped (five gated on `--releases`, and the first-sight checks, which prefetch makes moot), with Prebid Server Java 4.4.0, one stored request, the sidecar, prefetch, late joiners and a mid-break joiner. Its placement of the Pod Decision Service is superseded, and its
 deployment of the guidance amended (a wrapper of the guidance's app adds the sidecar), by
 [0036](0036-pds-sidecar-in-the-prebid-server-task.md). Amended on 2026-10-30, twice: Prebid Server Java 4.4.0 is the only
 supported release, and `modules.demand.pbs_version` is gone (see "The Prebid Server Java release" below); and one

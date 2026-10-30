@@ -46,7 +46,8 @@ DEMAND = {"color": "#ED7100", "style": "bold"}
 RELEASE = {"color": "#7AA116", "style": "bold"}
 RECORDS = {"color": "#8C4FFF", "style": "dotted"}
 EXPERIMENTAL = {"color": "#ED7100", "style": "dashed"}
-EXPERIMENTAL_CLUSTER = {"style": "dashed", "pencolor": "#ED7100", "fontcolor": "#ED7100"}
+EXPERIMENTAL_CLUSTER = {"style": "dashed", "pencolor": "#ED7100", "fontcolor": "#ED7100", "labelloc": "b"}
+"""Its title at the bottom: the dashed edges enter it from the top and the left."""
 
 
 def main() -> None:
@@ -147,7 +148,8 @@ def _module_nodes() -> dict[str, Any]:
         nodes["edge"] = WAF("Origin rule\n(origin secret)")
         nodes["guidance_cdn"] = CloudFront("Guidance\nCloudFront")
         nodes["alb"] = ElbApplicationLoadBalancer("Load balancer")
-        with Cluster("Prebid Server task (ECS Fargate, census-gated)"):
+        # Two lines: a narrow title, so the OpenRTB arrow to the bidders passes beside it
+        with Cluster("Prebid Server task\n(ECS Fargate, census-gated)"):
             nodes["prebid"] = ElasticContainerServiceContainer("Prebid Server 4.4.0\n+ fast-ctv module")
             nodes["sidecar"] = ElasticContainerServiceContainer(
                 "pds: Pod Decision Service\nsidecar (/policy, /select,\nown book)"

@@ -1,10 +1,10 @@
 # 0036 — The Pod Decision Service as a sidecar in the Prebid Server task
 
-**Status:** Proposed. Supersedes [0020](0020-demand-through-the-prebid-server-guidance.md)'s placement of the Pod
-Decision Service (Lambda functions behind an internal load balancer, kept warm by census-gated provisioned
-concurrency) and amends 0020's deployment of the guidance: with `modules.pds` on, the guidance's own app is deployed
-through a thin wrapper that adds the sidecar. It is accepted when the MediaTailor-driven demand leg
-(`tests/e2e/test_14_demand_pods.py`) passes on it.
+**Status:** Accepted on 2026-10-30: the MediaTailor-driven demand leg (`tests/e2e/test_11_demand_edge.py` to `test_14_demand_pods.py`, #65) passed on a fresh stage on 2026-10-30: 37 passed, 7 skipped (five gated on `--releases`, and the first-sight checks, which prefetch makes moot), with Prebid Server Java 4.4.0, one stored request, the sidecar, prefetch, late joiners and a mid-break joiner; every break's `/policy` was applied and none fell back. Supersedes
+[0020](0020-demand-through-the-prebid-server-guidance.md)'s placement of the Pod Decision Service (Lambda functions
+behind an internal load balancer, kept warm by census-gated provisioned concurrency) and amends 0020's deployment of
+the guidance: with `modules.pds` on, the guidance's own app is deployed through a thin wrapper that adds the
+sidecar.
 
 ## Context
 
