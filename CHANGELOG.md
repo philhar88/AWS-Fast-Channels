@@ -252,6 +252,22 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   documented Functions limits and the JSONata allow-list that MediaTailor does not enforce when a function is put,
   the body template, the cache keys, the channel-policy pattern and the rollout strategy. The bundle's JSON Schema
   is `contracts/monetization-bundle.schema.json`.
+- **Demand: the MediaTailor-driven smoke** (BUILD-PLAN M8-08, §12.3): the `e2e-demand` leg deploys
+  `MODULES=ops,demand,pds,release,crawl` and runs `tests/e2e/test_12_release.py`, `test_13_crawl.py` and the new
+  `test_14_demand_pods.py` after the edge tests. That test waits until Prebid Server is warm (the PDS is its sidecar),
+  airs a 30.03 s break and two of 120.12 s, and plays four viewers on the stable sibling of the channel's playback
+  plan, two late joiners after the second break's retrieval closed and one viewer 40 s into the second break. From the siblings' ADS log, the module's
+  lines, the PDS's records and the simulator's log it checks that every ad server request (a prefetch retrieval or a
+  real-time request) is an auction answered with XML and rendered from `/select`; a retrieved break is filled from
+  its retrieval with no second request and none of its winners skipped as not ready; a late joiner is asked in real
+  time and served; a mid-break joiner is asked for the rest of that break (ADR-0021, M3-07): slate for what aired, then its pod, every ad from its first segment, and its next break is served; pods are stitched in `sequence` order; where a winner was new at its break, it is replaced in its position by
+  a standalone and a partial pod is kept at threshold 121 with the break slate after it (with prefetch these skip,
+  saying why); the decision records carry MediaTailor's session id; no client header reaches the simulator, which gets the viewers'
+  address masked and never whole; delivery is counted from `BEACON_FIRED`; crawl covers at least 99% of the enriched
+  arm's breaks; no requested break is empty unless nothing was eligible; no break falls back (a fallback would have to
+  be SAFE and still a pod of the own book's or house ads); and the stable sibling's silent-loss alarm (M3-04) never
+  fires. Overlay O5's `sim-bid-request` line
+  now also has the X-Forwarded-For entry count and `device.ip`/`device.ipv6` as the request body carries them.
 - **Static channel-policy pattern** for the release module: a channel in `modules.release.channels` also admits
   its sibling playback configurations by `ArnLike` `<channel>-p-?`, set when the channel is created, and so does
   every agent channel created while the module is on. The channel update guard treats adding the pattern as a

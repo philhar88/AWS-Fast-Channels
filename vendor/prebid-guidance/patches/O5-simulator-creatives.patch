@@ -3,8 +3,9 @@ O5: bidder simulator creatives from configuration (FAST Channels overlay on the 
 The shipped video creatives are 5, 15 and 30 s progressive 360x360 MP4s that all share adomain amazon.com, which
 cannot fill a CTV pod stitched into an HLS ladder. When video_creatives.json sits beside the handler, its list
 replaces the shipped one: 30.03 s HLS creatives preconditioned on the channel ladder, each with its own crid and
-advertiser domain, and their burl/nurl. The handler also logs one line per request with the header names it received
-(never their values), for the header-isolation contract tests.
+advertiser domain, and their burl/nurl. The handler also logs one line per request for the contract tests: the header
+names it received (never their values), how many X-Forwarded-For entries arrived, and device.ip and device.ipv6 as the
+request body carries them.
 
 diff --git a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py b/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
 --- a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
@@ -24,20 +25,28 @@ diff --git a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
  
  def lambda_handler(event, _):
      try:
-@@ -68,6 +76,12 @@
+@@ -68,6 +76,20 @@
  
      # Parse incoming bid request to build a matching response
      bid_request = parse_bid_request(event)
-+    # Overlay O5: one line per request with header names only, for the header-isolation contract tests
++    # Overlay O5: one line per request for the header-isolation and viewer-address contract tests: the header names
++    # (never a header's value), how many X-Forwarded-For entries arrived (the load balancer appends one), and the
++    # device address exactly as the request body carries it (Prebid Server masks it for every bidder but the own book)
++    headers = event.get("headers") or {}
++    forwarded = ",".join(str(value) for name, value in headers.items() if str(name).lower() == "x-forwarded-for")
++    device = (bid_request or {}).get("device") or {}
 +    logger.info(json.dumps({
 +        "evt": "sim-bid-request",
 +        "imps": len((bid_request or {}).get("imp") or []),
-+        "header_names": sorted(str(name).lower() for name in (event.get("headers") or {})),
++        "header_names": sorted(str(name).lower() for name in headers),
++        "xff_entries": len([entry for entry in forwarded.split(",") if entry.strip()]),
++        "device_ip": device.get("ip"),
++        "device_ipv6": device.get("ipv6"),
 +    }))
      if bid_request:
          bid_response = build_dynamic_response(bid_request)
      else:
-@@ -126,12 +140,14 @@
+@@ -126,12 +148,14 @@
                  "impid": imp_id,
                  "price": creative['price'],
                  "adm": creative['adm'],

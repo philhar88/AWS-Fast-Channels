@@ -45,6 +45,8 @@ class Module(StrEnum):
 
     OPS = "Ops"
     RELEASE = "Release"
+    PDS = "Pds"
+    CRAWL = "Crawl"
 
 
 type StackKind = Plane | Module
@@ -96,6 +98,15 @@ MODULE_OUTPUT_KEYS: Final[dict[Module, tuple[str, ...]]] = {
         "SiblingLogGroup",
         "Siblings",
     ),
+    Module.PDS: (
+        "PolicyFunction",
+        "OwnBookFunction",
+        "SelectFunction",
+        "DeliveryFunction",
+        "ConfigBucketName",
+        "TableName",
+    ),
+    Module.CRAWL: ("CatalogContextBucketName", "CatalogContextBaseUrl", "CatalogContextPublisherName"),
 }
 """Outputs of each module stack."""
 

@@ -315,6 +315,19 @@ def crawl_environment(config: FastChannelsConfig) -> dict[str, str] | None:
     }
 
 
+def prebid_log_group(definition: Mapping[str, Any]) -> str | None:
+    """The log group of Prebid Server's container in an ECS task definition: ``Prebid-Container``'s, else that of its
+    only container that logs to CloudWatch; None without one."""
+    groups = {
+        container["name"]: container["logConfiguration"]["options"]["awslogs-group"]
+        for container in definition["containerDefinitions"]
+        if container.get("logConfiguration", {}).get("logDriver") == "awslogs"
+    }
+    if PREBID_CONTAINER in groups:
+        return str(groups[PREBID_CONTAINER])
+    return str(next(iter(groups.values()))) if len(groups) == 1 else None
+
+
 def console_bucket(url: str) -> str:
     """The bucket of an S3 console URL output (``...?region=<r>&bucket=<name>``)."""
     return parse_qs(urlsplit(url).query)["bucket"][0]
@@ -1005,14 +1018,7 @@ class DemandStage:
             log(f"no service {service}: the fallback alarms are left out")
             return None
         definition = ecs.describe_task_definition(taskDefinition=services[0]["taskDefinition"])["taskDefinition"]
-        groups = {
-            container["name"]: container["logConfiguration"]["options"]["awslogs-group"]
-            for container in definition["containerDefinitions"]
-            if container.get("logConfiguration", {}).get("logDriver") == "awslogs"
-        }
-        if PREBID_CONTAINER in groups:
-            return str(groups[PREBID_CONTAINER])
-        return str(next(iter(groups.values()))) if len(groups) == 1 else None
+        return prebid_log_group(definition)
 
     def deploy_demand_stack(self, demo: DemoIndex | None, content_base_url: str) -> None:
         """``FastChannels-<prefix>-Demand`` (the private zone, and in ``lambda`` mode the simulator with its code), then

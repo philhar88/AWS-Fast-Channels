@@ -95,7 +95,9 @@ sibling, Prebid Server 4.4.0.
 - Retrieval transcodes cost money for breaks that do not air, bounded by the horizon and by deleting the schedules of
   re-planned breaks. A sibling with no sessions (an idle sibling outside smoke tests) retrieves nothing.
 - A session that joins after a break's retrieval window gets real-time insertion for that break, with its first-sight
-  risk; the per-slot standalones (ad buffet) cover it.
+  risk; the per-slot standalones (ad buffet) cover it. The risk is for creatives no session retrieved: a late joiner's
+  pod is the one the other sessions' retrievals made ready (the late joiners of `tests/e2e/test_14_demand_pods.py`).
+  First sight on a real-time request is measured in P0-02 and in the same-stage control of the evidence above.
 - The controller writes up to 24 schedules per sibling and channel; the ownership guard exempts the prefetcher.
 - A RECURRING fallback for breaks the schedule of record cannot describe is not built.
 - See [release-controller.md](../release-controller.md#prefetch).
