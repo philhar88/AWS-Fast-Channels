@@ -275,7 +275,12 @@ order (DESIGN §4.3):
 5. **The SSM contract** `/<prefix>/demand/`: `cloudfront-domain`, `settings-bucket`, `stored-requests-bucket`,
    `cluster-arn`, `service-arn`, `task-security-group-id`, `vpc-id`, `private-subnet-ids`, `alb-arn`, `web-acl-arn`,
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
-6. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
+6. **The configuration**: the rendered files are compared with what the guidance serves (`current/` in its settings
+   bucket, the stored data in its stored-requests bucket), what differs is uploaded, everything is read back and must
+   match, and if anything changed Prebid Server's tasks roll (overlay O7 keeps full capacity). The guidance uploads
+   its configuration directory only when its stack is created, so without this a changed setting (a timeout, the house
+   ads) would never reach an existing stage.
+7. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
    `lambda` mode the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)), the census
    gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)). With
    `modules.pds.enabled`, **`FastChannels-<prefix>-Pds`** follows with the same context: the PDS beside its sidecar
@@ -284,13 +289,13 @@ order (DESIGN §4.3):
    **`FastChannels-<prefix>-Release`** follows: the Release Controller, whose bundle names the guidance's CloudFront
    domain ([docs/release-controller.md](release-controller.md#deploy-and-destroy)). Then one run of the census
    gate with the current count.
-7. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
+8. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
    VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs
    `POLICY_UNAVAILABLE`); the same POST without the secret, and a request to another path, are blocked at the edge
    (403); an off-grid duration is refused (400). In demo mode the simulator and the demo creatives are checked too.
 
-`upload-config` uploads a changed configuration to the guidance's `current/` prefix and stored-data bucket and forces
-a new ECS deployment, which overlay O7 runs at full capacity.
+`upload-config` runs step 6 alone: it uploads what changed in the rendered configuration, verifies every object in
+S3, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.
 
 `destroy` deletes the Release, Pds and Demand stacks and the guidance's stacks, then what the guidance's templates retain (the
 S3 buckets with every object version, the container, DataSync, Lambda and Container Insights log groups, inactive task

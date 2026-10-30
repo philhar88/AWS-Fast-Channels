@@ -1190,26 +1190,73 @@ class DemandStage:
             found |= {p["Name"].rsplit("/", 1)[1]: p["Value"] for p in page["Parameters"]}
         return found
 
-    def upload_config(self, content_base_url: str) -> None:
-        """Upload the rendered configuration (``current/`` and the stored data) and force a new deployment, which
-        overlay O7 keeps at full capacity."""
-        from prebid_guidance import pbs_settings  # noqa: PLC0415
+    def config_objects(self, content_base_url: str) -> dict[tuple[str, str], bytes]:
+        """The stage's rendered configuration where the guidance serves it, (bucket, key) -> bytes: ``current-config/``
+        under the settings bucket's ``prebid-server/current/``, the stored data at its path in the stored-requests
+        bucket."""
+        from prebid_guidance import pbs_settings  # noqa: PLC0415 - the CLI module imports this one
 
         values = self.parameters()
-        s3 = self.client("s3")
+        objects: dict[tuple[str, str], bytes] = {}
         for rel, content in render(pbs_settings(self.config, content_base_url, self.house_ads())).items():
             if rel.startswith("current-config/"):
-                bucket, key = values[Parameter.SETTINGS_BUCKET], f"prebid-server/current/{rel.split('/', 1)[1]}"
+                location = (values[Parameter.SETTINGS_BUCKET], f"prebid-server/current/{rel.split('/', 1)[1]}")
             else:
-                bucket, key = values[Parameter.STORED_REQUESTS_BUCKET], rel
-            s3.put_object(Bucket=bucket, Key=key, Body=content.encode())
+                location = (values[Parameter.STORED_REQUESTS_BUCKET], rel)
+            objects[location] = content.encode()
+        return objects
+
+    def sync_config(self, content_base_url: str) -> list[str]:
+        """Upload every rendered object S3 does not hold byte for byte, then read every one back and refuse a
+        mismatch; returns the keys it uploaded.
+
+        Raises:
+            DemandError: an object in S3 is not the rendered one after the upload.
+        """
+        s3 = self.client("s3")
+
+        def held(bucket: str, key: str) -> bytes | None:
+            try:
+                body: bytes = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            except ClientError as error:
+                if error.response["Error"]["Code"] in {"NoSuchKey", "404"}:
+                    return None
+                raise
+            return body
+
+        objects = self.config_objects(content_base_url)
+        uploaded = []
+        for (bucket, key), content in objects.items():
+            if held(bucket, key) != content:
+                s3.put_object(Bucket=bucket, Key=key, Body=content)
+                uploaded.append(key)
+        if differ := [key for (bucket, key), content in objects.items() if held(bucket, key) != content]:
+            raise DemandError(f"the guidance's configuration is not the rendered one after the upload: {differ}")
+        return uploaded
+
+    def roll(self) -> None:
+        """Force a new deployment of Prebid Server's service (its tasks read the configuration at startup), which
+        overlay O7 keeps at full capacity, and wait until it is stable."""
+        values = self.parameters()
         ecs = self.client("ecs")
         cluster, service = values[Parameter.CLUSTER_ARN], values[Parameter.SERVICE_ARN]
         ecs.update_service(cluster=cluster, service=service, forceNewDeployment=True)
-        log("configuration uploaded; waiting for the new deployment")
+        log("waiting for the new deployment")
         ecs.get_waiter("services_stable").wait(
             cluster=cluster, services=[service], WaiterConfig={"Delay": 15, "MaxAttempts": 80}
         )
+
+    def upload_config(self, content_base_url: str) -> list[str]:
+        """Sync the rendered configuration (:meth:`sync_config`) and, if anything changed, roll the tasks; returns the
+        keys uploaded. ``deploy`` runs it after every guidance deploy: the guidance uploads its configuration
+        directory only when its stack is created, so a changed setting would otherwise never reach an existing
+        stage."""
+        if uploaded := self.sync_config(content_base_url):
+            log(f"configuration changed ({', '.join(uploaded)}): rolling Prebid Server's tasks")
+            self.roll()
+        else:
+            log("configuration in S3 is the rendered one")
+        return uploaded
 
     # ----- smoke ---------------------------------------------------------------------------------------------------
 

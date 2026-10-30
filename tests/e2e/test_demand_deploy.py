@@ -13,6 +13,7 @@ import _demand
 import boto3
 import prebid_guidance
 import pytest
+from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from fast_channels.core.demand import Parameter
@@ -894,3 +895,93 @@ def test_the_smoke_counts_the_simulator_and_the_creatives() -> None:
     assert _demand.smoke_passed(results)
     for check in ("simulator", "demo-creatives"):
         assert not _demand.smoke_passed({**results, check: {"passed": False}}), check
+
+
+class FakeS3:
+    """The guidance's two buckets in memory; ``corrupt`` keys read back other bytes than were put."""
+
+    def __init__(self, objects: dict[tuple[str, str], bytes], corrupt: frozenset[str] = frozenset()) -> None:
+        self.objects, self.corrupt = dict(objects), corrupt
+        self.puts: list[str] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
+        if (Bucket, Key) not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
+        body = b"stale" if Key in self.corrupt else self.objects[Bucket, Key]
+        return {"Body": io.BytesIO(body)}
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
+        self.objects[Bucket, Key] = Body
+        self.puts.append(Key)
+        return {}
+
+
+CONFIG_PARAMETERS: Final = {
+    Parameter.SETTINGS_BUCKET: "fastcix-pbs-settings",
+    Parameter.STORED_REQUESTS_BUCKET: "fastcix-pbs-stored",
+    Parameter.CLUSTER_ARN: "arn:aws:ecs:us-east-1:123456789012:cluster/fastcix-pbs",
+    Parameter.SERVICE_ARN: "arn:aws:ecs:us-east-1:123456789012:service/fastcix-pbs/svc",
+}
+
+
+@pytest.fixture
+def config_stage(stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch) -> _demand.DemandStage:
+    monkeypatch.setattr(stage, "parameters", lambda: {k.value: v for k, v in CONFIG_PARAMETERS.items()})
+    monkeypatch.setattr(stage, "house_ads", lambda: ())
+    return stage
+
+
+def with_s3(stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, s3: FakeS3) -> list[str]:
+    """``stage`` on ``s3``; returns the list its rolls append to."""
+    rolls: list[str] = []
+    original = stage.client
+    monkeypatch.setattr(
+        stage, "client", lambda service, region=None: s3 if service == "s3" else original(service, region)
+    )
+    monkeypatch.setattr(stage, "roll", lambda: rolls.append("rolled"))
+    return rolls
+
+
+def test_an_unchanged_configuration_is_left_alone_and_the_tasks_keep_running(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first deploy: the guidance uploaded the same files when its stack was created."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3(rendered)
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert config_stage.upload_config("https://cdn.example") == []
+    assert (s3.puts, rolls) == ([], [])
+    assert ("fastcix-pbs-settings", "prebid-server/current/prebid-config.yaml") in rendered
+    assert any(bucket == "fastcix-pbs-stored" and key.startswith("stored_requests/") for bucket, key in rendered)
+
+
+def test_a_changed_setting_reaches_an_existing_stage_and_rolls_the_tasks(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guidance's own upload runs only at its stack's creation: a new timeout would otherwise never apply."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    held = dict(rendered)
+    config = ("fastcix-pbs-settings", "prebid-server/current/prebid-config.yaml")
+    held[config] = held[config].replace(b"policy-timeout-ms: 50", b"policy-timeout-ms: 80")
+    account = next(location for location in held if location[1].startswith("stored_accounts/"))
+    del held[account]
+    s3 = FakeS3(held)
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted([config[1], account[1]])
+    assert s3.objects == rendered
+    assert rolls == ["rolled"]
+
+
+def test_an_upload_that_does_not_read_back_is_refused(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    key = "prebid-server/current/prebid-config.yaml"
+    s3 = FakeS3({}, corrupt=frozenset({key}))
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    with pytest.raises(_demand.DemandError, match="not the rendered one"):
+        config_stage.upload_config("https://cdn.example")
+    assert len(s3.puts) == len(rendered) and rolls == []

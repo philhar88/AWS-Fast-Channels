@@ -313,7 +313,7 @@ STAGE_COMMANDS: Final = {
     "build-image": "build the Prebid Server image on the stage's x86 CodeBuild project",
     "deploy": "deploy the demand module: repository stacks, bootstrap, image, guidance, SSM contract, smoke",
     "outputs": "write the SSM contract /<prefix>/demand/* from the deployed guidance",
-    "upload-config": "upload the rendered configuration and roll the tasks (full capacity throughout)",
+    "upload-config": "sync the rendered configuration, verify it in S3, and roll the tasks if it changed",
     "smoke": "synthetic MediaTailor POSTs through the guidance's CloudFront and WAF",
     "herd": "a break herd of probe auctions through the guidance's CloudFront (the warm-up project)",
     "destroy": "destroy the demand module, including what the guidance's templates retain",
@@ -362,6 +362,8 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.render_into_checkout(base, demo)
             stage.deploy_guidance(image, pds)
             stage.write_parameters(stage.discover(image))
+            # The guidance uploads its configuration only when its stack is created: sync it on every deploy.
+            stage.upload_config(base)
             stage.deploy_demand_stack(demo, base)
             stage.start_census_gate()
             stage.warm_running_tasks()
