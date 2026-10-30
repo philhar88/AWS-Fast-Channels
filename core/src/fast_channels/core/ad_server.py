@@ -22,7 +22,7 @@ import re
 from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Final
+from typing import Final
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
@@ -46,6 +46,7 @@ from fast_channels.core.monetization.playback import (
     PBS_AUCTION_PATH,
     AdsRoute,
 )
+from fast_channels.core.pbs_config import CTV_PRICE_GRANULARITY
 
 NAME: Final = "ad-server"
 
@@ -72,17 +73,6 @@ POD_CACHE_SECONDS: Final = 300
 the break, so MediaTailor can still follow the Wrapper."""
 STORED_REQUEST_PREFIX: Final = {False: "fast-adsrv-pod-", True: "fast-adsrv-pod-kids-"}
 """Stored requests of the ad-server route (the same pods as ``fast-pod-*`` plus the pod-cache ask)."""
-CTV_PRICE_GRANULARITY: Final[Mapping[str, Any]] = {
-    "precision": 2,
-    "ranges": [
-        {"min": 0, "max": 20, "increment": 0.10},
-        {"min": 20, "max": 50, "increment": 0.50},
-        {"min": 50, "max": 100, "increment": 1.00},
-    ],
-}
-"""``hb_pb`` buckets for CTV: 10 cents up to $20, 50 cents up to $50, $1 up to $100 (CTV CPMs run well above web
-display's, so Prebid's ``medium`` and ``high`` granularities cap too low). One line item per bucket matches it."""
-
 AUCTION: Final = "pa_auction"
 BLANK: Final = "ps_hb"
 AUCTION_REQUEST_TIMEOUT_MS: Final = 1200
