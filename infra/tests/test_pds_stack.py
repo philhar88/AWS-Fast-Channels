@@ -394,12 +394,13 @@ def test_the_census_gate_warms_the_functions_while_channels_run(deployment: GetD
     rule = only(template, "AWS::Events::Rule")
     assert rule["EventPattern"]["detail-type"] == ["Census Changed"]
 
-    cold = deployment({**PDS, "modules.pds.provisioned_concurrency": 0}, extra=EXTRA)
+    none = {"policy": 0, "select": 0, "ownbook": 0}
+    cold = deployment({**PDS, "modules.pds.provisioned_concurrency": none}, extra=EXTRA)
     assert cold.template(cold.stage.pds).find_resources("AWS::StepFunctions::StateMachine"), "it releases what was set"
 
 
 def test_without_provisioned_concurrency_the_gate_only_releases() -> None:
-    definition = census_gate_definition(functions=["arn:f1"], parameter="/p", concurrency=0)
+    definition = census_gate_definition(functions=[("arn:f1", 0), ("arn:f2", 0)], parameter="/p")
     states = definition["States"]
 
     assert not [name for name in states if name.startswith("Provision")]
@@ -409,18 +410,23 @@ def test_without_provisioned_concurrency_the_gate_only_releases() -> None:
 
 def test_census_gate_definition() -> None:
     definition = census_gate_definition(
-        functions=["arn:f1", "arn:f2"], parameter="/fastm/ops/running-channels", concurrency=2
+        functions=[("arn:f1", 20), ("arn:f2", 30), ("arn:f3", 0)], parameter="/fastm/ops/running-channels"
     )
     states = definition["States"]
 
-    assert states["Provision0"]["Next"] == "Provision1" and states["Provision1"]["End"]
+    assert states["Provision0"]["Next"] == "Provision1" and states["Provision1"]["Next"] == "Provision2"
     assert states["Provision1"]["Arguments"] == {
         "FunctionName": "arn:f2",
         "Qualifier": "live",
-        "ProvisionedConcurrentExecutions": 2,
+        "ProvisionedConcurrentExecutions": 30,
     }
+    assert states["Provision0"]["Arguments"]["ProvisionedConcurrentExecutions"] == 20
+    unprovision = states["Provision2"]  # a count of 0 removes what an earlier configuration set
+    assert unprovision["Resource"].endswith(":deleteProvisionedConcurrencyConfig") and unprovision["End"]
+    assert unprovision["Catch"][0]["Next"] == "Unprovisioned2" and states["Unprovisioned2"]["End"]
+    assert states["Release1"]["Next"] == "Release2" and states["Release2"]["End"]
     assert states["Release0"]["Next"] == "Release1" and states["Released0"]["Next"] == "Release1"
-    assert states["Release1"]["End"] and states["Released1"]["End"]
+    assert states["Released2"]["End"]
     assert states["WaitBeforeRelease"]["Seconds"] == 900
 
 

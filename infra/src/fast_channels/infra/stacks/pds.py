@@ -326,8 +326,11 @@ class PdsStack(Stack):
             self,
             "CensusGate",
             prefix=prefix,
-            functions=[self.policy, self.own_book, self.select],
-            concurrency=pds.provisioned_concurrency,
+            functions=[
+                (self.policy, pds.provisioned_concurrency.policy),
+                (self.own_book, pds.provisioned_concurrency.ownbook),
+                (self.select, pds.provisioned_concurrency.select),
+            ],
             census_parameter=census_parameter_name(prefix),
             log_retention=retention,
             dead_letters=dead_letters,
