@@ -242,7 +242,14 @@ Each schedule, `pf-<event id>`, tagged `fast:owner=release-controller`:
 | Consumption | From 20 s before the break to 10 s after it, only into the break with that `scte.event_id` |
 
 - **Create-only.** A schedule is never changed: a moved break's schedule is deleted and created again, and a re-planned
-  break's is deleted, because retrieval transcodes bill whether or not the break airs. MediaTailor removes expired
+  break's is deleted, because retrieval transcodes bill whether or not the break airs.
+- **When a break has moved.** Channel Assembly's approximate start shifts by a second or so between reads, and
+  MediaTailor keeps schedule times in whole seconds.
+  - Before its retrieval opens, a break has moved when its start is more than 3 s (half a 6.006 s segment) from the
+    schedule's, both in whole seconds.
+  - Once retrieval has opened, a break has moved only when it left the consumption window. MediaTailor puts the
+    retrieved ads into the first break of that window with the schedule's `scte.event_id`, so a smaller shift keeps
+    them. Deleting the schedule would throw them away and send every session to a second auction at the break. MediaTailor removes expired
   schedules after at least 7 days; they do not count against its quota of 25 active schedules per configuration.
 - **Never beside RECURRING.** A sibling with a RECURRING schedule gets no SINGLE one; `<prefix>-release-prefetch`
   fires.

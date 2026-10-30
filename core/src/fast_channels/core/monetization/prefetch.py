@@ -8,7 +8,11 @@ The Release Controller's prefetcher builds them from Channel Assembly's schedule
 2. :func:`plan`: against the sibling's existing schedules (``ListPrefetchSchedules`` with ``ScheduleType=ALL``),
    the ``CreatePrefetchSchedule`` requests of the next ``horizon_breaks`` breaks that have none, and the schedules
    to delete: those whose break left the schedule (a re-plan; retrieval transcodes bill whether or not the break
-   airs) or moved (no update exists, so a moved break's schedule is deleted and created again).
+   airs) or moved (no update exists, so a moved break's schedule is deleted and created again). Once a schedule's
+   retrieval has opened, its break has moved only if it left the schedule's consumption window: MediaTailor puts
+   the retrieved ads in the first break of that window whose ``scte.event_id`` matches, so a shift of Channel
+   Assembly's start by a second or two keeps them (deleting the schedule threw them away and sent every session to a
+   second auction at the break, fastcij 2026-10-30).
 
 Every schedule carries rule R-S1's ``DynamicVariables`` (``scte.event_id``, ``scte.segmentation_upid``,
 ``session.avail_duration_ms``) and ``session.avail_duration_secs``, which the POST body's stored-request id uses.
@@ -37,8 +41,9 @@ NAME_PREFIX: Final = "pf-"
 MATCHED_ON: Final = "scte.event_id"
 ACTIVE_LIMIT: Final = 25
 """MediaTailor's quota of active prefetch schedules per playback configuration (expired ones do not count)."""
-MOVED_TOLERANCE: Final = timedelta(seconds=2)
-"""A break whose start moved by more than this gets its schedule deleted and created again."""
+MOVED_TOLERANCE: Final = timedelta(seconds=3)
+"""Half a 6.006 s content segment. Before its retrieval opens, a break whose start moved by more than this, compared at
+the 1 s resolution MediaTailor stores schedule times at (P0-02), gets its schedule deleted and created again."""
 LENGTH_TOLERANCE_MS: Final = 1000
 """``ApproximateDurationSeconds`` is whole seconds: a break is the schedule length within a second of it."""
 _NAME: Final = re.compile(rf"{re.escape(NAME_PREFIX)}(?P<event_id>[0-9]{{1,10}})")
@@ -231,7 +236,7 @@ def plan(
     delete = []
     for name, schedule in active.items():
         found = scheduled.get(event_id_of(name))  # type: ignore[arg-type]  # active holds only pf-<event id> names
-        if found is None or _moved(schedule, found, policy):
+        if found is None or _moved(schedule, found, policy, now):
             delete.append(name)
     remaining = len(active) - len(delete)
     create: list[dict[str, Any]] = []
@@ -254,7 +259,17 @@ def plan(
     return Plan(configuration, create=create, delete=sorted(delete), kept=kept, left_out=left_out)
 
 
-def _moved(schedule: Mapping[str, Any], scheduled: Break, policy: PrefetchPolicy) -> bool:
-    expected = scheduled.start - timedelta(seconds=policy.consumption_lead_s)
-    start: datetime = schedule["Consumption"]["StartTime"]
-    return abs(start - expected) > MOVED_TOLERANCE
+def _stored(at: datetime) -> datetime:
+    """``at`` at the resolution MediaTailor keeps schedule times at (whole seconds, P0-02)."""
+    return at.replace(microsecond=0)
+
+
+def _moved(schedule: Mapping[str, Any], scheduled: Break, policy: PrefetchPolicy, now: datetime) -> bool:
+    """Whether ``scheduled`` no longer fits ``schedule``: once retrieval has opened, only a break that left the
+    consumption window; before, one that moved by more than :data:`MOVED_TOLERANCE` (whole seconds)."""
+    consumption = schedule["Consumption"]
+    opens = (schedule.get("Retrieval") or {}).get("StartTime")
+    if opens is None or opens <= now:  # retrieved, or retrieving: the window decides (no StartTime: retrieved at once)
+        return not consumption["StartTime"] <= scheduled.start <= consumption["EndTime"]
+    expected = _stored(scheduled.start - timedelta(seconds=policy.consumption_lead_s))
+    return abs(_stored(consumption["StartTime"]) - expected) > MOVED_TOLERANCE

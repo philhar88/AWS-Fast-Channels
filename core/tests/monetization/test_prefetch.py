@@ -75,12 +75,15 @@ def brk(event_id: int, minutes: float, content: str = "sintel", duration_ms: int
 
 
 def existing(item: Break, *, consumption_start: datetime | None = None, kind: str = "SINGLE") -> dict[str, Any]:
-    """A ``ListPrefetchSchedules`` item."""
+    """A ``ListPrefetchSchedules`` item, its times in whole seconds as MediaTailor stores them (P0-02)."""
     start = consumption_start or item.start - timedelta(seconds=POLICY.consumption_lead_s)
+    end = item.start + timedelta(milliseconds=item.duration_ms, seconds=POLICY.consumption_tail_s)
+    retrieval = item.start - timedelta(seconds=POLICY.retrieval_lead_s)
     return {
         "Name": item.name,
         "ScheduleType": kind,
-        "Consumption": {"StartTime": start, "EndTime": item.start + timedelta(seconds=70)},
+        "Retrieval": {"StartTime": retrieval.replace(microsecond=0)},
+        "Consumption": {"StartTime": start.replace(microsecond=0), "EndTime": end.replace(microsecond=0)},
     }
 
 
@@ -231,6 +234,39 @@ def test_a_moved_break_is_deleted_and_created_again() -> None:
     result = plan([moved], [stale], configuration=SIBLING, policy=POLICY, now=NOW, tags=TAGS)
     assert result.delete == ["pf-1"] and [r["Name"] for r in result.create] == ["pf-1"]
     assert result.create[0]["Consumption"]["StartTime"] == at(8) - timedelta(seconds=20)
+
+
+def test_a_retrieved_break_keeps_its_schedule_over_a_small_start_shift() -> None:
+    """fastcij run 5 (2026-10-30), pf-1135467694 on fastcij-demo-p-a: created for a break Channel Assembly gave as
+    13:31:53.9 (stored: retrieval 13:29:23, consumption 13:31:33 to 13:32:33). At 13:30:51, with every session
+    retrieved, the break was at 13:31:55.1: 2.1 s from the stored start, over the old 2 s. Its schedule was deleted and
+    created again, and every session made a second, real-time auction at the break."""
+    first = Break(1135467694, "sintel", datetime(2026, 10, 30, 13, 31, 53, 900_000, tzinfo=UTC), 30030, "p-sintel")
+    shifted = Break(first.event_id, first.upid, first.start + timedelta(milliseconds=1200), 30030, first.program)
+    now = datetime(2026, 10, 30, 13, 30, 51, tzinfo=UTC)
+    result = plan([shifted], [existing(first)], configuration=SIBLING, policy=POLICY, now=now, tags=TAGS)
+    assert (result.kept, result.delete, result.create) == (["pf-1135467694"], [], [])
+
+
+@pytest.mark.parametrize(("shift_s", "moved"), [(2.1, False), (2.9, False), (4.0, True), (-4.0, True)])
+def test_before_retrieval_a_break_moved_only_beyond_half_a_segment(shift_s: float, moved: bool) -> None:
+    """Before retrieval opens a new schedule costs nothing, so a real move re-creates it. Starts are compared in whole
+    seconds (MediaTailor's resolution) against half a 6.006 s segment."""
+    first = brk(1, 8)
+    shifted = Break(1, first.upid, first.start + timedelta(seconds=shift_s), first.duration_ms, first.program)
+    result = plan([shifted], [existing(first)], configuration=SIBLING, policy=POLICY, now=NOW, tags=TAGS)
+    assert (result.delete == ["pf-1"]) is moved and (result.kept == ["pf-1"]) is not moved
+
+
+@pytest.mark.parametrize(("shift_s", "moved"), [(15.0, False), (-19.0, False), (-25.0, True), (75.0, True)])
+def test_once_retrieval_opened_only_a_break_out_of_its_consumption_window_moved(shift_s: float, moved: bool) -> None:
+    """MediaTailor puts the retrieved ads in the first break of the consumption window with the schedule's event id
+    (UG, "How prefetching works"): a break still inside the window (20 s before to 10 s after its end) keeps them."""
+    first = brk(1, 8)
+    shifted = Break(1, first.upid, first.start + timedelta(seconds=shift_s), first.duration_ms, first.program)
+    retrieving = first.start - timedelta(seconds=100)  # retrieval opened 50 s ago, sessions retrieved
+    result = plan([shifted], [existing(first)], configuration=SIBLING, policy=POLICY, now=retrieving, tags=TAGS)
+    assert (result.delete == ["pf-1"]) is moved
 
 
 def test_expired_and_foreign_schedules_are_left_alone() -> None:
