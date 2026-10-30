@@ -381,7 +381,7 @@ def check_pds(
 
     decisions = [
         r
-        for r in insights(stage, group("PolicyFunction"), since, end, "fields @message | filter record = 'pds.policy'")
+        for r in insights(stage, pds["DecisionLogGroup"], since, end, "fields @message | filter record = 'pds.policy'")
         if int(r.get("evid", 0)) in breaks
     ]
     retrievals = [r for r in decisions if r["dur_ms"] == 60_000]

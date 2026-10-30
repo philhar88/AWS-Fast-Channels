@@ -639,19 +639,6 @@ class DemoLine(_Section):
     """A guaranteed line: placed first in a pod, ahead of any bid."""
 
 
-class PdsConcurrency(_Section):
-    """Provisioned concurrency of each hot-path function while any channel runs; 0 releases it.
-
-    A channel's 100-session break herd needed at most 8 ``/policy``, 17 ``/select`` and 9 ``/ownbook/openrtb``
-    environments at once with no spillover (fastcid, 2026-10-30); below that, the spilled requests waited for 2 s cold
-    starts, which cascade. The defaults leave room above those peaks.
-    """
-
-    policy: int = Field(default=20, ge=0)
-    select: int = Field(default=30, ge=0)
-    ownbook: int = Field(default=20, ge=0)
-
-
 class PdsModule(_Module):
     """The Pod Decision Service module (``modules.pds``)."""
 
@@ -670,8 +657,6 @@ class PdsModule(_Module):
     or more (DynamoDB has dropped the connection), plus 20-40 ms of the load balancer's (measured, M2-x2)."""
     select_group_timeout_ms: int = Field(default=250, gt=0)
     """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
-    provisioned_concurrency: PdsConcurrency = PdsConcurrency()
-    """Provisioned concurrency per hot-path function while any channel runs (none while none does)."""
     demo_lines: tuple[DemoLine, ...] = Field(default=(), max_length=8)
     """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's
     environment). Each line's budget is split over the own book's budget shards; a line stops serving once

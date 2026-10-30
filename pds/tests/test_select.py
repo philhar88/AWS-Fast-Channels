@@ -1,7 +1,7 @@
-"""``POST /select`` behind the internal load balancer: the pod, its line ads reserved, one decision record (M2-04)."""
+"""``POST /select``: the pod, its line ads reserved, one decision record (M2-04)."""
 
 import json
-from dataclasses import dataclass
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -12,18 +12,20 @@ from botocore.exceptions import ClientError
 
 from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.models import SelectResponse
-from fast_channels.core.pds.snapshot import Snapshot, SnapshotBase, build
-from fast_channels.functions.pds import select
+from fast_channels.core.pds.snapshot import EMPTY, Snapshot, SnapshotBase, build
 from fast_channels.functions.pds.budget import Budgets
 from fast_channels.functions.pds.reservations import Refusal, Reservation, set_budgets
 from fast_channels.functions.settings import settings
+from fast_channels.pds import select, state
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from conftest import Tables
+    from dynamodb_local import Tables
 
-FIXTURES = Path(__file__).parents[3] / "contracts" / "fixtures" / "pds" / "select"
+    from fast_channels.pds.http import Answer
+
+FIXTURES = Path(__file__).parents[2] / "contracts" / "fixtures" / "pds" / "select"
 CDN = "https://d111111abcdef8.cloudfront.net"
 NOW = datetime(2026, 10, 29, 16, tzinfo=UTC)
 DIRECT1 = Line(
@@ -45,20 +47,6 @@ def snapshot_of(*lines: Line, breaks: tuple[int, ...] = (30030, 60060, 90090, 12
     )
     own = Book(lines=lines, creatives=creatives)
     return build(SnapshotBase(lines=lines, breaks_ms=breaks), own=own, now=NOW)
-
-
-@dataclass
-class Context:
-    function_name: str = "fastm-pds-select"
-    function_version: str = "4"
-    memory_limit_in_mb: int = 1024
-    invoked_function_arn: str = "arn:aws:lambda:us-east-1:123456789012:function:fastm-pds-select:live"
-    aws_request_id: str = "request-1"
-    log_group_name: str = "/aws/lambda/fastm-pds-select"
-    log_stream_name: str = "stream"
-
-    def get_remaining_time_in_millis(self) -> int:
-        return 3000
 
 
 class Store:
@@ -88,16 +76,8 @@ def request(name: str = "demo-full-120s.json", **fields: Any) -> dict[str, Any]:
     return data | fields
 
 
-def alb(body: str | None, *, path: str = "/select") -> dict[str, Any]:
-    return {
-        "requestContext": {"elb": {"targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/pds/3"}},
-        "httpMethod": "POST",
-        "path": path,
-        "queryStringParameters": {},
-        "headers": {"content-type": "application/json", "host": "pds.fastm.fast.internal"},
-        "body": body,
-        "isBase64Encoded": False,
-    }
+def ask(body: str) -> Answer:
+    return select.answer(body.encode(), time.perf_counter())
 
 
 def records(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
@@ -137,10 +117,10 @@ def stubbed(environment: None, monkeypatch: pytest.MonkeyPatch) -> list[dict[str
 def test_the_pod_with_its_line_ad_reserved_and_our_trackers(
     stubbed: list[dict[str, Any]], caplog: pytest.LogCaptureFixture
 ) -> None:
-    response = select.handler(alb(json.dumps(request())), Context())
+    response = ask(json.dumps(request()))
 
-    assert response["statusCode"] == 200
-    answer = SelectResponse.model_validate_json(response["body"])
+    assert response.status == 200
+    answer = SelectResponse.model_validate_json(response.body)
     assert [ad.ref for ad in answer.pod] == ["ownbook-s1-direct1", "amt-s2-sim2", "amt-s3-sim3", "ownbook-s4-house2"]
     decision = request()["decision_id"]
     assert answer.trackers["ownbook-s1-direct1"] == [f"{CDN}/ads/b.gif?d={decision}&c=direct1&e=impression&enr=0"]
@@ -154,7 +134,7 @@ def test_the_pod_with_its_line_ad_reserved_and_our_trackers(
     assert [(h.line.id, h.crids, h.shard) for h in asked["holds"]] == [("direct-1", ("direct1",), 0)]
     [record] = records(caplog)
     assert (record["reserved"], record["reason"], record["decision_id"]) == (["direct1"], "filled", decision)
-    assert select.logger.get_correlation_id() == decision
+    assert record["correlation_id"] == decision
 
 
 @pytest.mark.parametrize(("holdout", "enr"), [("0", 1), ("100", 0)])
@@ -165,8 +145,7 @@ def test_the_trackers_carry_the_crawl_arm(
     100 %), the same as the ``/policy`` record's."""
     monkeypatch.setenv("CRAWL_HOLDOUT_PERCENT", holdout)
     settings.cache_clear()
-    response = select.handler(alb(json.dumps(request())), Context())
-    answer = SelectResponse.model_validate_json(response["body"])
+    answer = SelectResponse.model_validate_json(ask(json.dumps(request())).body)
     assert {url.rsplit("&", 1)[1] for urls in answer.trackers.values() for url in urls} == {f"enr={enr}"}
 
 
@@ -181,14 +160,14 @@ def test_the_contract_examples_are_answered_as_they_say(
         deals = case["context"].get("pod", {}).get("tier0_deals", [])
         lines = (DIRECT1,) if "fast-direct-1" in deals else ()
         monkeypatch.setattr(select, "store", lambda lines=lines: Store(snapshot_of(*lines)))
-        response = select.handler(alb(json.dumps(case["request"])), Context())
-        assert json.loads(response["body"]) == case["response"], path.name
+        response = ask(json.dumps(case["request"]))
+        assert json.loads(response.body) == case["response"], path.name
 
 
 def test_a_line_without_budget_is_left_out(stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(select, "budgets", lambda: View(empty=frozenset({"direct-1"})))
 
-    answer = SelectResponse.model_validate_json(select.handler(alb(json.dumps(request())), Context())["body"])
+    answer = SelectResponse.model_validate_json(ask(json.dumps(request())).body)
 
     assert next(ad.ref for ad in answer.pod) == "amt-s1-sim1"
     assert stubbed == [], "no shard has its price: nothing to reserve"
@@ -208,7 +187,7 @@ def test_a_refused_or_failed_reservation_leaves_the_line_out(
 
     monkeypatch.setattr(select, "reserve", broken)
 
-    answer = SelectResponse.model_validate_json(select.handler(alb(json.dumps(request())), Context())["body"])
+    answer = SelectResponse.model_validate_json(ask(json.dumps(request())).body)
 
     assert "ownbook-s1-direct1" not in [ad.ref for ad in answer.pod]
     [record] = records(caplog)
@@ -221,7 +200,7 @@ def test_a_refused_or_failed_reservation_leaves_the_line_out(
 def test_a_prefetched_break_takes_the_schedules_duration() -> None:
     body = request("demo-full-60s.json", dur_ms=60000)
 
-    answer = SelectResponse.model_validate_json(select.handler(alb(json.dumps(body)), Context())["body"])
+    answer = SelectResponse.model_validate_json(ask(json.dumps(body)).body)
 
     assert len(answer.pod) == 2, "two 30.03 s ads fit the 60.06 s break of record"
 
@@ -229,9 +208,9 @@ def test_a_prefetched_break_takes_the_schedules_duration() -> None:
 @pytest.mark.usefixtures("stubbed")
 @pytest.mark.parametrize("body", ["", "not json", json.dumps(request(v=2)), json.dumps(request(decision_id="x.1"))])
 def test_a_request_outside_the_contract_is_refused(body: str) -> None:
-    response = select.handler(alb(body), Context())
+    response = ask(body)
 
-    assert (response["statusCode"], json.loads(response["body"])) == (400, {"error": "invalid request"})
+    assert (response.status, json.loads(response.body)) == (400, {"error": "invalid request"})
 
 
 def test_a_failure_is_a_500(stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,22 +219,24 @@ def test_a_failure_is_a_500(stubbed: list[dict[str, Any]], monkeypatch: pytest.M
 
     monkeypatch.setattr(select, "select_response", broken)
 
-    response = select.handler(alb(json.dumps(request())), Context())
+    response = ask(json.dumps(request()))
 
-    assert (response["statusCode"], json.loads(response["body"])) == (500, {"error": "internal"})
+    assert (response.status, json.loads(response.body)) == (500, {"error": "internal"})
 
 
 @pytest.mark.usefixtures("environment")
-def test_the_helpers_read_the_configuration() -> None:
-    select.budgets.cache_clear()
-    select.dynamodb.cache_clear()
+def test_the_helpers_read_the_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    state.budgets.cache_clear()
+    state.dynamodb.cache_clear()
     try:
         assert select.tracker_base() == f"{CDN}/ads/b.gif"
         assert select.budgets()._table == "fastm-pds"
-        assert select.dynamodb().meta.config.read_timeout == 0.1
+        config = select.dynamodb().meta.config
+        assert (config.read_timeout, config.max_pool_connections) == (0.1, state.WORKERS)
     finally:
-        select.budgets.cache_clear()
-        select.dynamodb.cache_clear()
+        state.budgets.cache_clear()
+        state.dynamodb.cache_clear()
 
 
 def test_a_one_dollar_line_stops_serving_once_its_budget_is_reserved(
@@ -284,7 +265,7 @@ def test_a_one_dollar_line_stops_serving_once_its_budget_is_reserved(
     for evid in range(200):
         view._next = float("-inf")  # read the shards before every break: the test has no clock
         body = request(evid=str(evid), decision_id=f"{request()['sid']}.{evid}")
-        answer = SelectResponse.model_validate_json(select.handler(alb(json.dumps(body)), Context())["body"])
+        answer = SelectResponse.model_validate_json(ask(json.dumps(body)).body)
         served.append(any(ad.ref == "ownbook-s1-direct1" for ad in answer.pod))
 
     assert served.count(True) == 164
@@ -296,7 +277,7 @@ def test_a_one_dollar_line_stops_serving_once_its_budget_is_reserved(
 def test_no_reservation_starts_late(stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(select, "RESERVE_BEFORE_S", -1.0)
 
-    answer = SelectResponse.model_validate_json(select.handler(alb(json.dumps(request())), Context())["body"])
+    answer = SelectResponse.model_validate_json(ask(json.dumps(request())).body)
 
     assert stubbed == []
     assert "ownbook-s1-direct1" not in [ad.ref for ad in answer.pod]
@@ -309,13 +290,13 @@ def test_a_bad_tracker_base_fails_before_anything_is_reserved(
     settings.cache_clear()
     select.tracker_base.cache_clear()
 
-    response = select.handler(alb(json.dumps(request())), Context())
+    response = ask(json.dumps(request()))
 
-    assert response["statusCode"] == 500
+    assert response.status == 500
     assert stubbed == [], "no reservation for an answer that cannot be made"
 
 
-def test_init_opens_the_reservations_connection(environment: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_startup_opens_the_reservations_connection(environment: None, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
     class Client:
@@ -325,12 +306,29 @@ def test_init_opens_the_reservations_connection(environment: None, monkeypatch: 
                 raise ClientError({"Error": {"Code": "ThrottlingException"}}, "BatchGetItem")
             return {}
 
-    monkeypatch.setattr(select, "dynamodb", Client)
-    monkeypatch.setattr(select, "store", lambda: Store(snapshot_of(DIRECT1)))
-    select.warm()
-    select.warm()  # a failure is only logged
-    monkeypatch.setattr(select, "store", lambda: Store(snapshot_of()))
-    select.warm()  # no line: nothing to reserve, nothing to open
+    monkeypatch.setattr(state, "dynamodb", Client)
+    monkeypatch.setattr(state, "store", lambda: Store(snapshot_of(DIRECT1)))
+    state.warm()
+    state.warm()  # a failure is only logged
+    monkeypatch.setattr(state, "store", lambda: Store(snapshot_of()))
+    state.warm()  # no line: nothing to reserve, nothing to open
 
     assert len(calls) == 2
     assert calls[0]["RequestItems"]["fastm-pds"]["Keys"] == [{"pk": {"S": "BUDGET#direct-1"}, "sk": {"S": "S#0"}}]
+
+
+def test_without_a_snapshot_the_answer_is_an_immediate_503(
+    stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The module then renders the auction's house ads, or with none the kit's from its configuration
+    (HOUSE_CONFIG); nothing is reserved or recorded."""
+    monkeypatch.setattr(select, "store", lambda: Store(EMPTY))
+
+    started = time.perf_counter()
+    response = ask(json.dumps(request()))
+    elapsed_ms = (time.perf_counter() - started) * 1000
+
+    assert (response.status, json.loads(response.body)) == (503, {"error": "no snapshot"})
+    assert elapsed_ms < 20, "far inside the module's wait"
+    assert stubbed == []
+    assert records(caplog) == []

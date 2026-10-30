@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 
 class DemandBuildStack(Stack):
-    """The Prebid Server image repository and its x86 build project, and the CloudFormation execution policy of the
-    guidance's dedicated CDK bootstrap.
+    """The Prebid Server image repository (and with ``modules.pds`` the sidecar's) and their x86 build project, and
+    the CloudFormation execution policy of the guidance's dedicated CDK bootstrap.
 
     Deployed before the bootstrap (which takes ``GuidanceExecutionPolicyArn``) and before the guidance (which runs
     the image in ``ImageRepositoryUri``). It takes no references from other stacks.
@@ -38,6 +38,7 @@ class DemandBuildStack(Stack):
             prefix=config.prefix,
             removal_policy=config.removal_policy,
             log_retention=config.observability.log_retention,
+            pds=config.modules.pds.enabled,
         )
         self.execution_policy = GuidanceExecutionPolicy(self, "GuidanceBootstrap", prefix=config.prefix)
         outputs = {
@@ -48,5 +49,10 @@ class DemandBuildStack(Stack):
                 "CloudFormation execution policy of the guidance's dedicated CDK bootstrap",
             ),
         }
+        if self.image.pds_repository is not None:
+            outputs["PdsImageRepositoryUri"] = (
+                self.image.pds_repository.repository_uri,
+                "ECR repository of the PDS sidecar's images",
+            )
         for key, (value, description) in outputs.items():
             CfnOutput(self, key, value=value, description=description)

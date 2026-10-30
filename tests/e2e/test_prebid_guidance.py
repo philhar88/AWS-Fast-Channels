@@ -209,7 +209,7 @@ def test_render_config_writes_the_stage_configuration(tmp_path: Path) -> None:
         ]
     )
     config = (out / "current-config/prebid-config.yaml").read_text()
-    assert '"http://pds.fastm.fast.internal/policy"' in config
+    assert '"http://127.0.0.1:8090/policy"' in config  # the PDS sidecar (ADR-0036)
     assert '"https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}' in config
 
 

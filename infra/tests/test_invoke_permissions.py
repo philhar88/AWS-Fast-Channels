@@ -56,4 +56,4 @@ def test_every_service_principals_invoke_permission_names_its_source(
             for resource in d.template(stack).find_resources("AWS::Lambda::Permission").values()
             if resource["Properties"].get("Principal") == "elasticloadbalancing.amazonaws.com"
         ]
-        assert len(scoped) == (4 if extra else 0), "the PDS's three aliases and the simulator"
+        assert len(scoped) == (1 if extra else 0), "the simulator (the PDS is a sidecar: ADR-0036)"

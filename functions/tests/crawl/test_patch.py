@@ -1,7 +1,6 @@
 """The crawl module's ``/policy`` patch contributor: the PDS's copy of the catalog, the ``crawl-v1`` arm, the header
 fallback, and the policy function with the module on."""
 
-import base64
 import io
 import json
 import threading
@@ -28,9 +27,9 @@ from fast_channels.core.pds.models import Mode, PolicyRequest
 from fast_channels.core.pds.snapshot import SnapshotBase, build, demo_demand
 from fast_channels.functions.crawl import patch
 from fast_channels.functions.crawl.patch import CatalogContexts, CrawlContributor, arm
-from fast_channels.functions.pds import policy
 from fast_channels.functions.pds.store import RETRY_SECONDS
 from fast_channels.functions.settings import settings
+from fast_channels.pds import policy
 
 REPO = Path(__file__).resolve().parents[3]
 BUCKET = "fastm-media-catalogcontextsbucket"
@@ -374,33 +373,9 @@ def test_the_policy_answer_and_record_with_the_module_on(
 ) -> None:
     monkeypatch.setattr(policy, "store", _Snapshot)
     monkeypatch.setattr(policy, "contributor", contributor)
-    event = {
-        "requestContext": {"elb": {"targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/pds/1"}},
-        "httpMethod": "POST",
-        "path": "/policy",
-        "queryStringParameters": {},
-        "headers": {"content-type": "application/json"},
-        "body": base64.b64encode(request().model_dump_json().encode()).decode(),
-        "isBase64Encoded": True,
-    }
-    context = type(
-        "Context",
-        (),
-        {
-            "function_name": "fastm-pds-policy",
-            "function_version": "1",
-            "memory_limit_in_mb": 1024,
-            "invoked_function_arn": "arn:aws:lambda:us-east-1:123456789012:function:fastm-pds-policy:live",
-            "aws_request_id": "r",
-            "log_group_name": "g",
-            "log_stream_name": "s",
-            "get_remaining_time_in_millis": lambda self: 3000,
-        },
-    )()
+    response = policy.answer(request().model_dump_json().encode(), time.perf_counter())
 
-    response = policy.handler(event, context)
-
-    answer = json.loads(response["body"])
+    answer = json.loads(response.body)
     assert answer["app_content"]["title"] == "Tears of Steel"
     [record] = [vars(r) for r in caplog.records if getattr(r, "record", None) == "pds.policy"]
     assert (record["contributors"], record["skipped"], record["contributed"]) == (

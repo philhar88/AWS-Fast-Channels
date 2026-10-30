@@ -18,6 +18,7 @@ from botocore.stub import Stubber
 from fast_channels.core.demand import Parameter
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.pds.sidecar import CONTEXT, Sidecar, sidecar
 from fast_channels.core.specs import vast_key
 
 REGION = "us-east-1"
@@ -317,17 +318,16 @@ def test_a_release_stack_the_module_no_longer_has_is_deleted(fastci: Any) -> Non
     cloudformation.assert_no_pending_responses()
 
 
-def test_both_census_gates_start_with_the_last_count(stage: _demand.DemandStage, stub: Any) -> None:
+def test_the_census_gate_starts_with_the_last_count(stage: _demand.DemandStage, stub: Any) -> None:
+    """Prebid Server's task count follows the running channels; the PDS has no gate of its own (its sidecar runs in
+    those tasks)."""
     ssm, cloudformation, stepfunctions = stub("ssm"), stub("cloudformation"), stub("stepfunctions")
     ssm.add_response(
         "get_parameter",
         {"Parameter": {"Name": "/fastcix/ops/running-channels", "Value": "1"}},
         {"Name": "/fastcix/ops/running-channels"},
     )
-    arns = {
-        "FastChannels-fastcix-Demand": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-census-gate",
-        "FastChannels-fastcix-Pds": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-pds-census-gate",
-    }
+    arns = {"FastChannels-fastcix-Demand": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-census-gate"}
     detail = json.dumps({"detail": {"running": 1, "previous": 1, "correlation_id": "deploy-demand"}})
     for name, arn in arns.items():
         cloudformation.add_response(
@@ -368,6 +368,64 @@ def test_a_redeploy_takes_the_new_image_not_the_previous_parameter(
 
     assert "--no-previous-parameters" in command
     assert command[:3] == [str(_demand.CDK), "deploy", "prebid-server-deployment-on-aws"]
+
+
+def test_with_the_pds_the_guidance_deploys_through_the_wrapper_with_the_sidecar(
+    stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(type(stage), "toolchain", lambda self: Path("/venv"))
+    spec = sidecar(
+        prefix="fastcix",
+        image="i",
+        partition="aws",
+        region="us-east-1",
+        account="123456789012",
+        config_bucket="b",
+        content_base_url="https://cdn",
+        log_retention_days=7,
+    )
+
+    plain = [str(arg) for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
+    command = [
+        str(arg)
+        for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False, with_sidecar=spec)
+    ]
+
+    assert plain[plain.index("--app") + 1] == "/venv/bin/python app.py"
+    assert command[command.index("--app") + 1] == f"/venv/bin/python {_demand.GUIDANCE_APP}"
+    assert Sidecar.model_validate_json(command[command.index(f"{CONTEXT}={spec.model_dump_json()}")].split("=", 1)[1])
+    assert not [arg for arg in plain if arg.startswith(f"{CONTEXT}=")]
+
+
+def test_the_sidecar_reads_its_buckets_and_follows_the_crawl_module(stage: _demand.DemandStage, stub: Any) -> None:
+    """fastci has the crawl module: the sidecar gets its settings and the catalog-context bucket."""
+    ssm = stub("ssm")
+    names = [f"/fastcix/pds/{p}" for p in (*PDS_PARAMETERS, "catalog-context-bucket")]
+    ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
+    found = {"/fastcix/pds/config-bucket": "fastcix-pds-config", "/fastcix/pds/catalog-context-bucket": "ctx"}
+    ssm.add_response(
+        "get_parameters",
+        {"Parameters": [{"Name": k, "Value": v, "Type": "String"} for k, v in found.items()]},
+        {"Names": list(found)},
+    )
+
+    spec = stage.sidecar("123456789012.dkr.ecr.us-east-1.amazonaws.com/fastcix-pds:abc", "https://cdn.example")
+
+    assert spec.environment["PDS_CONFIG_BUCKET"] == "fastcix-pds-config"
+    assert spec.environment["CATALOG_CONTEXT_BUCKET"] == "ctx"
+    assert spec.environment["CRAWL_HOLDOUT_PERCENT"] == str(stage.config.modules.crawl.holdout_percent)
+    assert spec.environment["PBS_VERSION"] == stage.config.modules.demand.pbs_version.value
+    assert spec.environment["CONTENT_BASE_URL"] == "https://cdn.example"
+    assert spec.log_group == "/aws/ecs/fastcix-pds"
+    assert {s["Sid"] for s in spec.statements} >= {"PdsCatalogContextList", "PdsCatalogContexts"}
+
+
+def test_without_the_crawl_module_the_sidecar_has_none_of_its_settings(fastci: Any) -> None:
+    modules = fastci.modules.model_copy(update={"crawl": fastci.modules.crawl.model_copy(update={"enabled": False})})
+    config = fastci.model_copy(update={"modules": modules})
+
+    assert _demand.crawl_environment(config) is None
+    assert _demand.crawl_environment(fastci) is not None
 
 
 def test_the_lambda_simulator_is_reached_through_the_private_zone(stage: _demand.DemandStage) -> None:

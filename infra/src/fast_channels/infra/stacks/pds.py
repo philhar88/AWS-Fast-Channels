@@ -1,49 +1,31 @@
-"""``FastChannels-<prefix>-Pds``: the Pod Decision Service (``modules.pds``), in the Prebid Server guidance's VPC."""
+"""``FastChannels-<prefix>-Pds``: the Pod Decision Service (``modules.pds``) beside the Prebid Server guidance: all of
+it but the sidecar that answers Prebid Server, which runs in the guidance's task (ADR-0036)."""
 
 from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, RemovalPolicy, Stack, Tags
-from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
-from fast_channels.core.crawl.catalog_context import CONTEXT_PREFIX
-from fast_channels.core.ledger import ledger_table
-from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
 from fast_channels.core.pds.book import Line
 from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord, SelectRecord
-from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, SnapshotBase, demo_demand
+from fast_channels.core.pds.snapshot import SnapshotBase, demo_demand
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.config import DemandMode
-from fast_channels.infra.constructs.alerts import alert_topic_arn, dead_letter_alarm
+from fast_channels.infra.constructs.alerts import alert_topic_arn
 from fast_channels.infra.constructs.crawl.kpis import KPIS
-from fast_channels.infra.constructs.observability import census_parameter_name
 from fast_channels.infra.constructs.ops.lake import lake_database_name, view_table
-from fast_channels.infra.constructs.pds import (
-    DecisionLog,
-    DeliveryCounter,
-    PdsCensusGate,
-    PdsFunction,
-    PdsService,
-    ReleaseSweeper,
-    SnapshotPublisher,
-)
+from fast_channels.infra.constructs.pds import DecisionLog, DeliveryCounter, ReleaseSweeper, SnapshotPublisher
 from fast_channels.infra.constructs.pds.alarms import ModuleAlarms
-from fast_channels.infra.constructs.pds.delivery import allow_ledger, allow_table
-from fast_channels.infra.constructs.queues import dead_letter_queue
 
 if TYPE_CHECKING:
-    from aws_cdk import aws_route53 as route53
     from constructs import Construct
 
     from fast_channels.core.demand import DemandNetwork
     from fast_channels.infra.config import FastChannelsConfig
-
-POLICY_HANDLER = "fast_channels.functions.pds.policy.handler"
-OWN_BOOK_HANDLER = "fast_channels.functions.pds.ownbook.handler"
-SELECT_HANDLER = "fast_channels.functions.pds.select.handler"
 
 
 def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
@@ -72,17 +54,19 @@ def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
 
 
 class PdsStack(Stack):
-    """The Pod Decision Service: its internal load balancer at ``pds.<prefix>.fast.internal`` with ``POST /policy``,
-    the snapshot publisher, the decision records into the lake, and the census gate that keeps the functions warm
-    while channels run. Its state (the table ``<prefix>-pds`` and the private config bucket) is the Data stack's.
+    """The Pod Decision Service beside its sidecar: the snapshot publisher, the decision records into the lake (the
+    sidecar's ``pds.policy`` and ``pds.select``, the delivery function's ``pds.delivery``), the delivery counter, the
+    reservations' sweeper and the module's fallback alarms. Its state (the table ``<prefix>-pds`` and the private
+    config bucket) is the Data stack's.
 
-    Like the Demand stack it needs the guidance's network, so ``scripts/prebid_guidance.py`` deploys it after the
-    Demand stack (whose private zone it adds a record to) and deletes it before. ``make deploy`` leaves it alone.
+    The sidecar itself (``/policy``, ``/select``, ``/ownbook/openrtb`` on ``127.0.0.1:8090``) is a container of the
+    guidance's Prebid Server task (``scripts/guidance_app.py``), whose stack creates the sidecar's log group. So
+    ``scripts/prebid_guidance.py`` deploys this stack after the guidance and the Demand stack, and deletes it before.
+    ``make deploy`` leaves it alone.
 
     Args:
         config: deployment configuration (``modules.pds``, ``modules.demand.mode``, log retention, removal).
-        network: the guidance's VPC, private subnets and task security group.
-        zone: the stage's private zone (the Demand stack's).
+        network: the guidance's network and its Prebid Server container's log group (the fallback alarms).
     """
 
     def __init__(
@@ -92,22 +76,13 @@ class PdsStack(Stack):
         *,
         config: FastChannelsConfig,
         network: DemandNetwork,
-        zone: route53.IHostedZone,
         **kwargs: Any,
     ) -> None:
         super().__init__(scope, id, description=f"FAST Channels ({config.prefix}): Pod Decision Service", **kwargs)
         Tags.of(self).add(names.MODULE_TAG, names.MODULE)
-        prefix, pds = config.prefix, config.modules.pds
+        prefix = config.prefix
         # Its log groups and queues go with the stack (like the Demand stack's): destroy-demand leaves nothing of it.
         retention, removal = config.observability.log_retention, RemovalPolicy.DESTROY
-        vpc = ec2.Vpc.from_vpc_attributes(
-            self,
-            "GuidanceVpc",
-            vpc_id=network.vpc_id,
-            availability_zones=[subnet.az for subnet in network.private_subnets],
-            private_subnet_ids=[subnet.id for subnet in network.private_subnets],
-            private_subnet_route_table_ids=[subnet.route_table for subnet in network.private_subnets],
-        )
         alerts = sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, prefix))
         # The Data stack's state, by SSM parameter (resolved at deploy) and by name: no weak reference.
         bucket = s3.Bucket.from_bucket_name(
@@ -146,99 +121,18 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
-        self.service = PdsService(
-            self, "Service", prefix=prefix, vpc=vpc, task_security_group_id=network.task_security_group_id, zone=zone
-        )
         crawl = config.modules.crawl
-        # The crawl module's arm (both functions) and its patch contributor (the policy function).
-        arm = {"CRAWL_HOLDOUT_PERCENT": str(crawl.holdout_percent)} if crawl.enabled else {}
-        contexts = (
-            s3.Bucket.from_bucket_name(
-                self,
-                "CatalogContextBucket",
-                ssm.StringParameter.value_for_string_parameter(
-                    self, names.parameter_name(prefix, names.Parameter.CATALOG_CONTEXT_BUCKET)
-                ),
-            )
-            if crawl.enabled
-            else None
+        # The sidecar's log group, which the guidance stack creates: its pds.policy and pds.select records.
+        self.decision_log_group = logs.LogGroup.from_log_group_name(
+            self, "SidecarLogs", names.sidecar_log_group(prefix)
         )
-        patch = (
-            {
-                **arm,
-                "CATALOG_CONTEXT_BUCKET": contexts.bucket_name,
-                "PBS_VERSION": config.modules.demand.pbs_version.value,
-                **({"PUBLISHER_DOMAIN": crawl.publisher_domain} if crawl.publisher_domain else {}),
-            }
-            if contexts is not None
-            else {}
-        )
-        self.policy = PdsFunction(
-            self,
-            "Policy",
-            handler=POLICY_HANDLER,
-            description="PDS POST /policy: the privacy mode and the bid-request patch of one break",
-            environment={"FAST_PREFIX": prefix, "PDS_CONFIG_BUCKET": bucket.bucket_name, **patch},
-            log_retention=retention,
-            removal_policy=removal,
-        )
-        self.policy.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
-        if contexts is not None:
-            # The copy of the catalog: list the context objects' prefix and read the objects, nothing else.
-            self.policy.function.allow(
-                ["s3:ListBucket"], [contexts.bucket_arn], conditions={"StringEquals": {"s3:prefix": CONTEXT_PREFIX}}
-            )
-            self.policy.function.allow(
-                ["s3:GetObject"],
-                [contexts.arn_for_objects(f"{CONTEXT_PREFIX}*")],
-                why="One object per catalog title, under the context objects' prefix",
-            )
-        self.service.add_endpoint(names.Endpoint.POLICY, self.policy)
-        self.own_book = PdsFunction(
-            self,
-            "OwnBook",
-            handler=OWN_BOOK_HANDLER,
-            description="PDS POST /ownbook/openrtb: the own book's bids (house ads and direct lines)",
-            environment={
-                "FAST_PREFIX": prefix,
-                "PDS_CONFIG_BUCKET": bucket.bucket_name,
-                "PDS_TABLE": names.table_name(prefix),
-            },
-            log_retention=retention,
-            removal_policy=removal,
-        )
-        self.own_book.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
-        allow_table(self.own_book.function, prefix, ["BatchGetItem"], ["BUDGET#*"])
-        self.service.add_endpoint(names.Endpoint.OWN_BOOK, self.own_book)
-        self.select = PdsFunction(
-            self,
-            "Select",
-            handler=SELECT_HANDLER,
-            description="PDS POST /select: the pod of one break, its line ads reserved, our trackers",
-            environment={
-                "FAST_PREFIX": prefix,
-                "PDS_CONFIG_BUCKET": bucket.bucket_name,
-                "PDS_TABLE": names.table_name(prefix),
-                "LEDGER_TABLE": ledger_table(prefix),
-                "CONTENT_BASE_URL": content_base_url,
-                **arm,
-            },
-            log_retention=retention,
-            removal_policy=removal,
-        )
-        self.select.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
-        allow_table(self.select.function, prefix, ["BatchGetItem"], ["BUDGET#*"])
-        allow_table(self.select.function, prefix, ["UpdateItem"], ["BUDGET#*", "CAP#*"])
-        allow_table(self.select.function, prefix, ["PutItem"], ["RES#*"])
-        allow_ledger(self.select.function, prefix)
-        self.service.add_endpoint(names.Endpoint.SELECT, self.select)
         self.policy_records = DecisionLog(
             self,
             "PolicyRecords",
             prefix=prefix,
             kind="policy",
             model=PolicyRecord,
-            log_group=self.policy.function.log_group,
+            log_group=self.decision_log_group,
             lake_bucket=lake,
             retention_days=config.modules.ops.lake_retention_days,
             log_retention=retention,
@@ -261,7 +155,7 @@ class PdsStack(Stack):
             prefix=prefix,
             kind="select",
             model=SelectRecord,
-            log_group=self.select.function.log_group,
+            log_group=self.decision_log_group,
             lake_bucket=lake,
             retention_days=config.modules.ops.lake_retention_days,
             log_retention=retention,
@@ -305,38 +199,11 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
-        dead_letters = dead_letter_queue(self, "DeadLetters", removal_policy=removal)
-        dead_letter_alarm(
-            self,
-            "DeadLettersAlarm",
-            queue=dead_letters,
-            name=f"{prefix}-pds-dead-letters",
-            description="A Census Changed event could not reach the PDS census gate: its functions may stay cold, or "
-            "warm without channels",
-            topic=alerts,
-        )
-        self.census_gate = PdsCensusGate(
-            self,
-            "CensusGate",
-            prefix=prefix,
-            functions=[
-                (self.policy, pds.provisioned_concurrency.policy),
-                (self.own_book, pds.provisioned_concurrency.ownbook),
-                (self.select, pds.provisioned_concurrency.select),
-            ],
-            census_parameter=census_parameter_name(prefix),
-            log_retention=retention,
-            dead_letters=dead_letters,
-        )
         outputs = {
-            "CensusGateArn": (
-                self.census_gate.state_machine.state_machine_arn,
-                "Sets the functions' provisioned concurrency with the running channels",
+            "DecisionLogGroup": (
+                self.decision_log_group.log_group_name,
+                "The sidecar's log group: its pds.policy and pds.select decision records",
             ),
-            "Endpoint": (f"http://{pds_host(prefix)}", "The PDS's base URL in the Prebid Server VPC"),
-            "PolicyFunction": (self.policy.function.function.function_name, "POST /policy"),
-            "OwnBookFunction": (self.own_book.function.function.function_name, "POST /ownbook/openrtb"),
-            "SelectFunction": (self.select.function.function.function_name, "POST /select"),
             "DeliveryFunction": (self.delivery.function.function.function_name, "Counts our tracker's impressions"),
             "SweeperFunction": (self.sweeper.function.function.function_name, "Releases undelivered reservations"),
             "PublisherFunction": (self.publisher.function.function.function_name, "Publishes the snapshot"),
@@ -360,6 +227,6 @@ class PdsStack(Stack):
             self,
             "PolicyLogGroupParameter",
             parameter_name=names.parameter_name(prefix, names.Published.POLICY_LOG_GROUP),
-            string_value=self.policy.function.log_group.log_group_name,
+            string_value=self.decision_log_group.log_group_name,
             description="Read by the release module's stack: its smoke test counts the decision records",
         )

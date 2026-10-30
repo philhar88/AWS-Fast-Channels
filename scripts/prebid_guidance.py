@@ -349,16 +349,18 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.bootstrap()
         case "build-image":
             apply(pin, stage.checkout)
-            print(stage.build_image(pin))
+            print("\n".join(stage.build_images(pin)))
         case "deploy":
             base = content_base_url(args, stage.prefix)
             stage.deploy_repository_stacks()
             stage.bootstrap()
             apply(pin, stage.checkout)
             image = stage.build_image(pin)
+            # With the PDS on, its sidecar joins Prebid Server's task (ADR-0036).
+            pds = stage.sidecar(stage.build_pds_image(), base) if stage.config.modules.pds.enabled else None
             demo = stage.demo_index()
             stage.render_into_checkout(base, demo)
-            stage.deploy_guidance(image)
+            stage.deploy_guidance(image, pds)
             stage.write_parameters(stage.discover(image))
             stage.deploy_demand_stack(demo, base)
             stage.start_census_gate()

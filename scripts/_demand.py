@@ -42,6 +42,8 @@ from fast_channels.core.monetization import names as release_names
 from fast_channels.core.pbs_config import POD_SECONDS, HouseAd, house_ads, render, simulator_host
 from fast_channels.core.pds import names as pds_names
 from fast_channels.core.pds.book import house_creatives
+from fast_channels.core.pds.sidecar import CONTEXT as SIDECAR_CONTEXT
+from fast_channels.core.pds.sidecar import Sidecar, sidecar
 from fast_channels.core.specs import vast_key
 
 if TYPE_CHECKING:
@@ -54,6 +56,12 @@ VENDOR: Final = REPO / "vendor" / "prebid-guidance"
 BUILD: Final = REPO / "build" / "prebid-guidance"
 VENV: Final = BUILD / ".venv"
 CDK: Final = REPO / "node_modules" / ".bin" / "cdk"
+GUIDANCE_APP: Final = REPO / "scripts" / "guidance_app.py"
+"""The guidance's app with the PDS sidecar (ADR-0036), which a stage with ``modules.pds`` deploys it with."""
+PDS_SOURCES: Final = REPO / "pds"
+PDS_PACKAGE: Final = "fast-channels-pds"
+PDS_ROOT: Final = "/opt/pds"
+"""Where the sidecar's image holds its package and dependencies (``PYTHONPATH``)."""
 GUIDANCE_PYTHON: Final = "3.11"
 """The guidance's Lambda runtime; its local bundling installs packages with the deploying interpreter's pip."""
 GUIDANCE_STACK_ID: Final = "prebid-server-deployment-on-aws"
@@ -174,12 +182,57 @@ def lock_requirements(lock: Path) -> tuple[list[str], list[str]]:
     return requirements, local
 
 
+def guidance_toolchain(checkout: Path) -> Path:
+    """The guidance's Python environment for ``checkout`` (its pinned ``poetry.lock``, hashes required), created
+    once per lock."""
+    lock = checkout / "source" / "poetry.lock"
+    stamp = VENV / ".fast-lock"
+    digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+    if stamp.is_file() and stamp.read_text() == digest:
+        return VENV
+    log(f"creating the guidance's Python {GUIDANCE_PYTHON} environment from its poetry.lock")
+    shutil.rmtree(VENV, ignore_errors=True)
+    run(["uv", "venv", "--quiet", "--seed", "--python", GUIDANCE_PYTHON, VENV])
+    requirements, local = lock_requirements(lock)
+    requirements_file = BUILD / "guidance-requirements.txt"
+    requirements_file.write_text("\n".join(requirements) + "\n")
+    environment = {**os.environ, "VIRTUAL_ENV": str(VENV)}
+    run(["uv", "pip", "install", "--quiet", "--require-hashes", "-r", requirements_file], env=environment)
+    helpers = [checkout / "source" / path for path in local if path.startswith("cdk_solution_helper_py")]
+    run(["uv", "pip", "install", "--quiet", "--no-deps", *helpers], env=environment)
+    stamp.write_text(digest)
+    return VENV
+
+
 def context_digest(root: Path) -> str:
     """Content hash of a build context (paths and bytes), the image tag: equal contexts build equal images."""
     digest = hashlib.sha256()
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes() + b"\0")
     return digest.hexdigest()[:16]
+
+
+def pds_image_context(out: Path) -> Path:
+    """The PDS sidecar's Docker build context under ``out``: ``build-image.sh`` and ``context/`` with the Dockerfile
+    and ``site/``, the ``fast-channels-pds`` package and its locked dependencies for x86 with deterministic bytecode
+    under :data:`PDS_ROOT` (``infra.bundling``). The Dockerfile only copies them onto its pinned Python base, so the
+    same lock builds the same image layers."""
+    from fast_channels.infra.bundling import (  # noqa: PLC0415 - CDK's import cost only for this command
+        X86_PLATFORM,
+        compile_bytecode,
+        install_package,
+        normalize_modes,
+    )
+
+    shutil.rmtree(out, ignore_errors=True)
+    site = out / "context" / "site"
+    site.mkdir(parents=True)
+    install_package(PDS_PACKAGE, site, platform=X86_PLATFORM)
+    compile_bytecode(site, under=PDS_ROOT)
+    normalize_modes(site)
+    shutil.copy2(PDS_SOURCES / "Dockerfile", out / "context" / "Dockerfile")
+    shutil.copy2(PDS_SOURCES / "build-image.sh", out / "build-image.sh")
+    return out
 
 
 def zip_directory(root: Path) -> bytes:
@@ -196,6 +249,19 @@ def zip_directory(root: Path) -> bytes:
 
 PREBID_CONTAINER: Final = "Prebid-Container"
 """The guidance's Prebid Server container, whose log the fallback alarms read."""
+
+
+def crawl_environment(config: FastChannelsConfig) -> dict[str, str] | None:
+    """The crawl module's settings in the sidecar's environment (its patch contributor and its arm), or None with the
+    module off."""
+    crawl = config.modules.crawl
+    if not crawl.enabled:
+        return None
+    return {
+        "CRAWL_HOLDOUT_PERCENT": str(crawl.holdout_percent),
+        "PBS_VERSION": config.modules.demand.pbs_version.value,
+        **({"PUBLISHER_DOMAIN": crawl.publisher_domain} if crawl.publisher_domain else {}),
+    }
 
 
 def console_bucket(url: str) -> str:
@@ -379,24 +445,8 @@ class DemandStage:
     # ----- the guidance's toolchain and bootstrap ---------------------------------------------------------------
 
     def toolchain(self) -> Path:
-        """The guidance's Python environment (its pinned ``poetry.lock``, hashes required), once per lock."""
-        lock = self.checkout / "source" / "poetry.lock"
-        stamp = VENV / ".fast-lock"
-        digest = hashlib.sha256(lock.read_bytes()).hexdigest()
-        if stamp.is_file() and stamp.read_text() == digest:
-            return VENV
-        log(f"creating the guidance's Python {GUIDANCE_PYTHON} environment from its poetry.lock")
-        shutil.rmtree(VENV, ignore_errors=True)
-        run(["uv", "venv", "--quiet", "--seed", "--python", GUIDANCE_PYTHON, VENV])
-        requirements, local = lock_requirements(lock)
-        requirements_file = BUILD / "guidance-requirements.txt"
-        requirements_file.write_text("\n".join(requirements) + "\n")
-        environment = {**os.environ, "VIRTUAL_ENV": str(VENV)}
-        run(["uv", "pip", "install", "--quiet", "--require-hashes", "-r", requirements_file], env=environment)
-        helpers = [self.checkout / "source" / path for path in local if path.startswith("cdk_solution_helper_py")]
-        run(["uv", "pip", "install", "--quiet", "--no-deps", *helpers], env=environment)
-        stamp.write_text(digest)
-        return VENV
+        """The guidance's Python environment (:func:`guidance_toolchain`)."""
+        return guidance_toolchain(self.checkout)
 
     def bootstrap(self) -> None:
         """The guidance's dedicated CDK bootstrap: qualifier = prefix, prefixed bucket and repository, our
@@ -484,18 +534,63 @@ class DemandStage:
         if version not in pin.pbs_java_commits:
             raise DemandError(f"PIN.toml [pbs_java.commits] has no commit for Prebid Server Java {version}")
         context = self.build_context(BUILD / f"{self.prefix}-image", release)
-        tag = f"{version}-{context_digest(context)}"
+        return self.build_on_codebuild(
+            project,
+            repository=names.image_repository(self.prefix),
+            repository_uri=repository_uri,
+            context=context,
+            tag=f"{version}-{context_digest(context)}",
+            variables={
+                "PBS_JAVA_REPOSITORY": config["GIT_REPO_URL"],
+                "PBS_JAVA_TAG": version,
+                "PBS_JAVA_COMMIT": pin.pbs_java_commits[version],
+                "PBS_JDK": jdk,
+            },
+        )
+
+    def build_pds_image(self) -> str:
+        """Build the PDS sidecar's image on the same x86 project (skipped when its repository already has the
+        context's tag); returns the image URI."""
+        outputs = self.stack_outputs(self.build_stack)
+        if "PdsImageRepositoryUri" not in outputs:
+            raise DemandError(f"{self.build_stack} has no sidecar repository: is modules.pds on?")
+        context = pds_image_context(BUILD / f"{self.prefix}-pds-image")
+        return self.build_on_codebuild(
+            outputs["ImageBuildProject"],
+            repository=pds_names.image_repository(self.prefix),
+            repository_uri=outputs["PdsImageRepositoryUri"],
+            context=context,
+            tag=context_digest(context),
+            variables={"REPOSITORY_URI": outputs["PdsImageRepositoryUri"]},
+        )
+
+    def build_images(self, pin: Any) -> list[str]:
+        """The Prebid Server image and, with ``modules.pds``, the sidecar's (``build-image``)."""
+        return [self.build_image(pin), *([self.build_pds_image()] if self.config.modules.pds.enabled else [])]
+
+    def build_on_codebuild(
+        self,
+        project: str,
+        *,
+        repository: str,
+        repository_uri: str,
+        context: Path,
+        tag: str,
+        variables: Mapping[str, str],
+    ) -> str:
+        """``context`` built into ``<repository_uri>:<tag>`` by its ``build-image.sh`` on ``project``, unless the
+        repository has the tag (tags are content hashes); returns the image URI."""
         image = f"{repository_uri}:{tag}"
         ecr = self.client("ecr")
         try:
-            ecr.describe_images(repositoryName=names.image_repository(self.prefix), imageIds=[{"imageTag": tag}])
+            ecr.describe_images(repositoryName=repository, imageIds=[{"imageTag": tag}])
             log(f"image {image} exists")
             return image
         except ClientError as error:
             if error.response["Error"]["Code"] != "ImageNotFoundException":
                 raise
         bucket = names.assets_bucket(self.prefix, self.account, self.region)
-        key = f"{names.IMAGE_SOURCE_PREFIX}context-{tag}.zip"
+        key = f"{names.IMAGE_SOURCE_PREFIX}{repository}-context-{tag}.zip"
         self.client("s3").put_object(Bucket=bucket, Key=key, Body=zip_directory(context))
         codebuild = self.client("codebuild")
         build = codebuild.start_build(
@@ -503,11 +598,8 @@ class DemandStage:
             sourceTypeOverride="S3",
             sourceLocationOverride=f"{bucket}/{key}",
             environmentVariablesOverride=[
-                {"name": "IMAGE_TAG", "value": tag, "type": "PLAINTEXT"},
-                {"name": "PBS_JAVA_REPOSITORY", "value": config["GIT_REPO_URL"], "type": "PLAINTEXT"},
-                {"name": "PBS_JAVA_TAG", "value": version, "type": "PLAINTEXT"},
-                {"name": "PBS_JAVA_COMMIT", "value": pin.pbs_java_commits[version], "type": "PLAINTEXT"},
-                {"name": "PBS_JDK", "value": jdk, "type": "PLAINTEXT"},
+                {"name": name, "value": value, "type": "PLAINTEXT"}
+                for name, value in {"IMAGE_TAG": tag, **variables}.items()
             ],
         )["build"]
         log(f"building {image} ({build['id']})")
@@ -531,14 +623,20 @@ class DemandStage:
         """``--parameters <stack name>:<key>=<value>``: CDK keys stack parameters by the stack's name."""
         return [arg for key, value in values.items() for arg in ("--parameters", f"{stack}:{key}={value}")]
 
-    def guidance_command(self, *stacks: str, simulator: bool, extra: Sequence[str] = ()) -> list[str | Path]:
+    def guidance_command(
+        self, *stacks: str, simulator: bool, extra: Sequence[str] = (), with_sidecar: Sidecar | None = None
+    ) -> list[str | Path]:
+        """``cdk deploy`` of the guidance's ``stacks``: its own ``app.py``, or with ``with_sidecar`` our wrapper of it
+        (:data:`GUIDANCE_APP`) with the sidecar as context."""
         venv = self.toolchain()
+        app = GUIDANCE_APP if with_sidecar is not None else "app.py"
+        sidecar_context = ["-c", f"{SIDECAR_CONTEXT}={with_sidecar.model_dump_json()}"] if with_sidecar else []
         return [
             CDK,
             "deploy",
             *stacks,
             "--app",
-            f"{venv / 'bin' / 'python'} app.py",
+            f"{venv / 'bin' / 'python'} {app}",
             "--require-approval",
             "never",
             # The guidance takes its image as the default of a CloudFormation parameter (ContainerImage); cdk deploy
@@ -555,6 +653,7 @@ class DemandStage:
             f"imageAssetsRepositoryName={names.images_repository(self.prefix, self.account, self.region)}",
             "-c",
             f"deployBiddingSimulator={'true' if simulator else 'false'}",
+            *sidecar_context,
             *(arg for key, value in self.tags().items() for arg in ("--tags", f"{key}={value}")),
             *extra,
         ]
@@ -611,7 +710,30 @@ class DemandStage:
             "SimulatorEndpoint": outputs["BidderSimulatorAlbEndpoint"],
         }
 
-    def deploy_guidance(self, image: str) -> None:
+    def sidecar(self, image: str, content_base_url: str) -> Sidecar:
+        """The PDS sidecar of this stage (``core.pds.sidecar``), with its image: the config bucket's and, with the
+        crawl module, the catalog-context bucket's names from the parameters the Data and Media stacks wrote."""
+        self.check_pds_state()
+        crawl = self.config.modules.crawl
+        wanted = [pds_names.Parameter.CONFIG_BUCKET]
+        if crawl.enabled:
+            wanted.append(pds_names.Parameter.CATALOG_CONTEXT_BUCKET)
+        found = self.client("ssm").get_parameters(Names=[pds_names.parameter_name(self.prefix, p) for p in wanted])
+        values = {p["Name"].rsplit("/", 1)[1]: p["Value"] for p in found["Parameters"]}
+        return sidecar(
+            prefix=self.prefix,
+            image=image,
+            partition=self.session.get_partition_for_region(self.region),
+            region=self.region,
+            account=self.account,
+            config_bucket=values[pds_names.Parameter.CONFIG_BUCKET.value],
+            content_base_url=content_base_url,
+            log_retention_days=self.config.observability.log_retention_days,
+            crawl=crawl_environment(self.config),
+            catalog_context_bucket=values.get(pds_names.Parameter.CATALOG_CONTEXT_BUCKET.value),
+        )
+
+    def deploy_guidance(self, image: str, with_sidecar: Sidecar | None = None) -> None:
         demand = self.config.modules.demand
         rule_group = self.stack_outputs(self.edge_stack, "us-east-1")["OriginRuleGroupArn"]
         simulator = demand.mode == "demo" and demand.simulator == "guidance_stack"
@@ -625,10 +747,13 @@ class DemandStage:
             **self.simulator_endpoint(image),
         }
         stack = names.guidance_stack(self.prefix)
-        log(f"deploying {stack} with {image}")
+        log(f"deploying {stack} with {image}" + (f" and the PDS sidecar {with_sidecar.image}" if with_sidecar else ""))
         run(
             self.guidance_command(
-                GUIDANCE_STACK_ID, simulator=simulator, extra=self.guidance_parameters(stack, values)
+                GUIDANCE_STACK_ID,
+                simulator=simulator,
+                extra=self.guidance_parameters(stack, values),
+                with_sidecar=with_sidecar,
             ),
             cwd=self.checkout / "source" / "infrastructure",
             env=self.guidance_environment(image),
@@ -834,11 +959,6 @@ class DemandStage:
             stateMachineArn=arn, input=json.dumps({"detail": detail})
         )["executionArn"]
         log(f"census gate started with running={running}: {execution}")
-        if self.config.modules.pds.enabled and (pds := self.stack_outputs(self.pds_stack).get("CensusGateArn")):
-            gate = self.client("stepfunctions").start_execution(
-                stateMachineArn=pds, input=json.dumps({"detail": detail})
-            )["executionArn"]
-            log(f"PDS census gate started with running={running}: {gate}")
         return str(execution)
 
     def warm_running_tasks(self, timeout_s: int = 1200) -> dict[str, str]:
@@ -1043,7 +1163,8 @@ class DemandStage:
             Parameter.PRIVATE_SUBNET_IDS: ",".join(network["subnets"]),
             Parameter.ALB_ARN: group["LoadBalancerArns"][0],
             Parameter.WEB_ACL_ARN: distribution["WebACLId"],
-            Parameter.IMAGE_URI: image or definition["containerDefinitions"][0]["image"],
+            Parameter.IMAGE_URI: image
+            or next(c["image"] for c in definition["containerDefinitions"] if c["name"] == PREBID_CONTAINER),
             Parameter.GUIDANCE: f"{pin['tag']}@{pin['commit']}",
         }
 
@@ -1280,7 +1401,12 @@ class DemandStage:
             if b["Name"].startswith((f"{self.prefix}-pbs", f"{self.prefix}-cdk-"))
         ]
         logs = self.client("logs")
-        for prefix in (f"/aws/lambda/{self.prefix}-pbs", f"{self.prefix}-pbs", f"/aws/codebuild/{self.prefix}-pbs"):
+        for prefix in (
+            f"/aws/lambda/{self.prefix}-pbs",
+            f"{self.prefix}-pbs",
+            f"/aws/codebuild/{self.prefix}-pbs",
+            pds_names.sidecar_log_group(self.prefix),
+        ):
             for page in logs.get_paginator("describe_log_groups").paginate(logGroupNamePrefix=prefix):
                 residue += [f"log group {g['logGroupName']}" for g in page["logGroups"]]
         if self.parameters():

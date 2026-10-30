@@ -51,21 +51,25 @@ class DemandEdge:
         secret: bool = True,
         account: str | None = None,
         headers: dict[str, str] | None = None,
+        sid: str = SID,
+        evid: str = "1",
+        upid: str = "e2e",
+        probe: bool = True,
     ) -> httpx.Response:
-        """MediaTailor's POST: the stored request of a ``seconds`` break, the session and configuration as headers, a
-        probe (so the Pod Decision Service, once it exists, answers house only)."""
+        """MediaTailor's POST: the stored request of a ``seconds`` break, the session and configuration as headers, by
+        default a probe (so the Pod Decision Service answers house only)."""
         body: dict[str, Any] = {"ext": {"prebid": {"storedrequest": {"id": f"fast-pod-{seconds}s"}}}}
         if account is not None:
             body["app"] = {"publisher": {"id": account}}
         sent = {
             "Content-Type": "application/json",
-            "X-Fast-Sid": SID,
+            "X-Fast-Sid": sid,
             "X-Fast-Pc": f"{self.prefix}-e2e",
-            "X-Fast-Probe": "1",
+            **({"X-Fast-Probe": "1"} if probe else {}),
             **({"X-Fast-Origin": self.secret} if secret else {}),
             **(headers or {}),
         }
-        query = f"evid=1&upid=e2e&dur={seconds * 1001}"
+        query = f"evid={evid}&upid={upid}&dur={seconds * 1001}"
         return httpx.post(f"https://{self.domain}/openrtb2/auction?{query}", json=body, headers=sent, timeout=TIMEOUT_S)
 
     def get(self, path: str) -> httpx.Response:

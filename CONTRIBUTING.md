@@ -70,7 +70,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 
 - Python 3.14 idioms: `match`, `X | Y` unions, `type` aliases, `StrEnum`, f-strings, `pathlib`. Small, pure functions
   where possible; precise docstrings; comments only where they explain *why*.
-- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy core/src functions/src agent/src infra/src`,
+- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy core/src functions/src pds/src agent/src infra/src`,
   `MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e` and `MYPYPATH=tests/pbs uv run mypy tests/pbs` pass.
 - New behaviour has tests. Infrastructure changes have CDK assertions, and cdk-nag findings are fixed or acknowledged
   on the construct that causes them, with a reason.
