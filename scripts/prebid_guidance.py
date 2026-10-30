@@ -365,7 +365,7 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
             stage.deploy_guidance(image, pds)
             stage.write_parameters(stage.discover(image))
             # The guidance uploads its configuration only when its stack is created: sync it on every deploy.
-            stage.upload_config(base, prune=not args.keep_stale)
+            stage.upload_config(base, prune=args.prune)
             stage.deploy_demand_stack(demo, base)
             stage.start_census_gate()
             stage.warm_running_tasks()
@@ -374,7 +374,7 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
         case "outputs":
             stage.write_parameters(stage.discover())
         case "upload-config":
-            stage.upload_config(content_base_url(args, stage.prefix), prune=not args.keep_stale)
+            stage.upload_config(content_base_url(args, stage.prefix), prune=args.prune)
         case "smoke":
             return report_smoke(stage)
         case "herd":
@@ -428,10 +428,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.choices["deploy"].add_argument("--no-smoke", action="store_true", help="skip the synthetic POSTs")
     for name in ("deploy", "upload-config"):
         commands.choices[name].add_argument(
-            "--keep-stale",
+            "--prune",
             action="store_true",
-            help="upload the configuration but delete nothing it no longer renders (prune later with upload-config, "
-            "once the siblings' rollout has moved them off what it named)",
+            help="also delete what the configuration no longer renders, except what a live playback configuration "
+            "or Function still names (run it once every sibling uses the new body)",
         )
     commands.choices["herd"].add_argument("--rate", type=int, default=400, help="auctions per second (default 400)")
     commands.choices["herd"].add_argument("--seconds", type=int, default=6, help="duration (default 6 s)")

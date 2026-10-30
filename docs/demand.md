@@ -429,13 +429,13 @@ order:
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
 6. **The configuration**: the rendered files are compared with what the guidance serves (`current/` in its settings
    bucket, the stored data in its stored-requests bucket), what differs is uploaded, and everything is read back and
-   must match. Then what an earlier configuration left is pruned: under `prebid-server/current/`, `stored_requests/`,
-   `stored_responses/` and `stored_accounts/` only, every object that is neither rendered nor shipped by the guidance
-   (its README files and sample stored request) is listed and deleted, such as the per-length `fast-pod-<n>s` stored
-   requests before v4.0.0. Prebid Server would otherwise still serve them to anything that named them. If anything
-   was uploaded or deleted, Prebid Server's tasks roll (overlay O7 keeps full capacity). The guidance uploads its
-   configuration directory only when its stack is created, and never deletes, so without this a changed setting (a
-   timeout, the house ads) would never reach an existing stage.
+   must match. What an earlier configuration left is listed, never deleted by a deploy: under
+   `prebid-server/current/`, `stored_requests/`, `stored_responses/` and `stored_accounts/`, every object that is
+   neither rendered nor shipped by the guidance (its README files and sample stored request), such as the per-length
+   `fast-pod-<n>s` stored requests before v4.0.0. Live siblings of an earlier release may still name them. If anything
+   was uploaded, Prebid Server's tasks roll (overlay O7 keeps full capacity). The guidance uploads its configuration
+   directory only when its stack is created, and never deletes, so without this a changed setting (a timeout, the
+   house ads) would never reach an existing stage.
 7. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
    `lambda` mode the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)), the census
    gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)). With
@@ -454,21 +454,24 @@ order:
    the demo creatives are checked too.
 
 `upload-config` runs step 6 alone: it uploads what changed in the rendered configuration, verifies every object in
-S3, prunes what is stale, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.
-`--keep-stale` (on `deploy` and `upload-config`, or `DEMAND_OPTS=--keep-stale`) uploads and verifies but only lists
-what is stale.
+S3, lists what is stale, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.
 
-**Changing what the POST body names.** The siblings' body changes only when the Release Controller's rollout reaches
-them, but the prune deletes at the deploy. Release the new body to the siblings before pruning what the old one
-named:
+**Pruning, and changing what the POST body names.** `upload-config --prune` (or `deploy-demand
+DEMAND_OPTS=--prune`) also deletes the stale objects, once the upload has read back, except a stored request that a
+live configuration still names. Before deleting, it reads the request body of every playback configuration
+`<prefix>-*` and every Function `<prefix>_*` from MediaTailor and turns each stored-request id in it into a pattern
+(`fast-pod-{{session.avail_duration_secs}}s` is `fast-pod-*s`). A stale stored request that a pattern matches is
+kept, and listed with the configurations that name it; deleting it would answer their every break with 400 and the
+slate. A body that names a stored request in a form the guard cannot read keeps every stored request. Objects
+outside the managed prefixes are refused.
 
-1. `deploy-demand` with `--keep-stale`: the new stored requests are uploaded beside the old ones.
-2. Deploy the Release stack and let its rollout complete, so every sibling sends the new body.
-3. `upload-config`: the old objects are pruned.
+So a change to what the body names (a stored request renamed, or another format) is rolled out in this order:
 
-Or prune at once, and accept that a sibling the rollout has not reached names a deleted stored request: Prebid Server
-answers 400 and the slate plays on that sibling until the rollout moves it. The move from the per-length stored
-requests (`fast-pod-<n>s`) to one per route took the second way, on the one stage that had served them.
+1. `deploy-demand`: the new stored requests are uploaded beside the old ones, which stay.
+2. Deploy the Release stack and let its rollout complete, so every sibling sends the new body. A probe sibling keeps
+   the body of its channel's first release.
+3. `upload-config --prune`: the old objects are deleted, and any that a configuration still names are kept and
+   listed. Run it again once those configurations have moved.
 
 `destroy` deletes the Release, Pds and Demand stacks and the guidance's stacks, then what the guidance's templates retain (the
 S3 buckets with every object version, the container, DataSync, Lambda and Container Insights log groups, inactive task

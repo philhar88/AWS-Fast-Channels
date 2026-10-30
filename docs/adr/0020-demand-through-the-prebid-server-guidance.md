@@ -125,7 +125,8 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
 - Any break from 30 to 120 s gets a pod, on the 30.03 s grid or not. A shorter or longer break, a missing duration
   (MediaTailor sends 300 s) or an unreadable one is rejected by the module, which answers an empty VAST 4.2 document,
   and the Channel Assembly slate plays.
-- The deploy prunes the configuration it no longer renders from the guidance's buckets (`upload-config`), so the
-  per-length stored requests of a stage deployed before the amendment are deleted at its next deploy.
+- A deploy never deletes the stored requests it no longer renders. `upload-config --prune` deletes them once no
+  live playback configuration or Function names them, so a stage deployed before the amendment keeps its
+  per-length stored requests until its siblings send the new body.
 - When AWS publishes the guidance as a construct library, the overlays become construct properties and the app can
   be composed.

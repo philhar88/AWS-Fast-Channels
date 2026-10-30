@@ -9,10 +9,12 @@ templates retain: its S3 buckets (every version), log groups, inactive task defi
 deletion with the 7-day minimum, the only residue.
 """
 
+import fnmatch
 import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +97,28 @@ GUIDANCE_CONFIG_FILES: Final = (
 )
 """What the pinned guidance ships in those directories (its custom resource uploads them with the stack): the prune
 keeps them. ``tests/e2e/test_prebid_guidance.py`` checks the list against the pinned checkout."""
+STORED_REQUESTS_PREFIX: Final = "stored_requests/"
+"""The stored requests' prefix in the stored-requests bucket: what a request body names, so what the prune guards."""
+_TEMPLATE_STORED_REQUEST: Final = re.compile(r'"storedrequest"\s*:\s*\{\s*"id"\s*:\s*"(?P<id>[^"]*)"')
+_JSONATA_STORED_REQUEST: Final = re.compile(r"'storedrequest'\s*:\s*\{\s*'id'\s*:\s*(?P<expr>[^}]*)\}")
+_TEMPLATE_VARIABLE: Final = re.compile(r"\{\{[^}]*\}\}")
+_JSONATA_LITERAL: Final = re.compile(r"'([^']*)'")
+
+
+def stored_request_patterns(body: str | None) -> list[str] | None:
+    """The stored-request ids a MediaTailor request body names, as ``fnmatch`` patterns with ``*`` for each value
+    MediaTailor substitutes: ``fast-pod-{{session.avail_duration_secs}}s`` is ``fast-pod-*s``, and the JSONata
+    ``'fast-adsrv-pod-' & $string(session.avail_duration_secs) & 's'`` is ``fast-adsrv-pod-*s``. ``[]`` for a body
+    that names none; ``None`` for one that mentions ``storedrequest`` in a form this does not read."""
+    if not body or "storedrequest" not in body:
+        return []
+    patterns = [_TEMPLATE_VARIABLE.sub("*", found["id"]) for found in _TEMPLATE_STORED_REQUEST.finditer(body)]
+    for found in _JSONATA_STORED_REQUEST.finditer(body):
+        terms = [_JSONATA_LITERAL.fullmatch(term.strip()) for term in found["expr"].split("&")]
+        patterns.append("".join(term.group(1) if term else "*" for term in terms))
+    return patterns or None
+
+
 SIMULATOR_HANDLER: Final = Path("source/loadtest/bidder_simulator/lambdas/loadtest_bidder")
 """The guidance's bidder simulator handler (overlay O5 reads ``video_creatives.json`` beside it)."""
 SIMULATOR_SLOTS: Final = 4
@@ -1330,8 +1354,41 @@ class DemandStage:
                 ]
         return sorted(stale)
 
+    def live_stored_requests(self) -> tuple[dict[str, list[str]], list[str]]:
+        """What the stage's live MediaTailor configurations ask Prebid Server for: each stored-request pattern
+        (:func:`stored_request_patterns`) with the playback configurations (``<prefix>-*``) and Functions
+        (``<prefix>_*``) whose request body names it, and the ones whose body names a stored request in a form this
+        cannot read."""
+        mediatailor = self.client("mediatailor")
+        named: dict[str, list[str]] = {}
+        unreadable: list[str] = []
+
+        def note(name: str, body: str | None) -> None:
+            if (patterns := stored_request_patterns(body)) is None:
+                unreadable.append(name)
+                return
+            for pattern in patterns:
+                named.setdefault(pattern, []).append(name)
+
+        for page in mediatailor.get_paginator("list_playback_configurations").paginate():
+            for item in page.get("Items", []):
+                if (name := item["Name"]).startswith(f"{self.prefix}-"):
+                    found = mediatailor.get_playback_configuration(Name=name)
+                    request = (found.get("AdDecisionServerConfiguration") or {}).get("HttpRequest") or {}
+                    note(f"playback configuration {name}", request.get("Body"))
+        for page in mediatailor.get_paginator("list_functions").paginate():
+            for item in page.get("Items", []):
+                if (function_id := item["FunctionId"]).startswith(f"{self.prefix}_"):
+                    found = mediatailor.get_function(FunctionId=function_id)
+                    note(f"function {function_id}", (found.get("HttpRequestConfiguration") or {}).get("Body"))
+        return named, unreadable
+
     def prune_config(self, content_base_url: str) -> list[str]:
-        """Delete :meth:`stale_config`'s objects, listed first; returns their keys.
+        """Delete :meth:`stale_config`'s objects that no live configuration still asks for, listed first; returns
+        their keys. A stored request a live playback configuration or Function names (:meth:`live_stored_requests`)
+        is kept and listed with who names it: deleting it would answer that configuration's every break with 400
+        and the slate. While any of them names a stored request in a form this cannot read, every stored request is
+        kept.
 
         Raises:
             DemandError: an object to delete is outside the managed prefixes (nothing is deleted then).
@@ -1346,11 +1403,25 @@ class DemandStage:
             if not any(bucket == b and key.startswith(p) for b, p in managed)
         ]:
             raise DemandError(f"refusing to prune outside the managed configuration prefixes: {foreign}")
-        log(f"pruning {len(stale)} stale configuration objects: {', '.join(f's3://{b}/{k}' for b, k in stale)}")
-        s3 = self.client("s3")
+        named, unreadable = self.live_stored_requests()
+        kept: dict[tuple[str, str], list[str]] = {}
         for bucket, key in stale:
+            if bucket != values[Parameter.STORED_REQUESTS_BUCKET] or not key.startswith(STORED_REQUESTS_PREFIX):
+                continue
+            stored = key.removeprefix(STORED_REQUESTS_PREFIX).removesuffix(".json")
+            if users := unreadable or [
+                user for pattern, users in named.items() if fnmatch.fnmatchcase(stored, pattern) for user in users
+            ]:
+                kept[bucket, key] = users
+        for (bucket, key), users in kept.items():
+            log(f"keeping s3://{bucket}/{key}: still named by {', '.join(sorted(users))}")
+        if not (doomed := [location for location in stale if location not in kept]):
+            return []
+        log(f"pruning {len(doomed)} stale configuration objects: {', '.join(f's3://{b}/{k}' for b, k in doomed)}")
+        s3 = self.client("s3")
+        for bucket, key in doomed:
             s3.delete_object(Bucket=bucket, Key=key)
-        return [key for _, key in stale]
+        return [key for _, key in doomed]
 
     def sync_config(self, content_base_url: str) -> list[str]:
         """Upload every rendered object S3 does not hold byte for byte, then read every one back and refuse a
@@ -1392,20 +1463,23 @@ class DemandStage:
             cluster=cluster, services=[service], WaiterConfig={"Delay": 15, "MaxAttempts": 80}
         )
 
-    def upload_config(self, content_base_url: str, *, prune: bool = True) -> list[str]:
-        """Sync the rendered configuration (:meth:`sync_config`), then prune what it no longer holds
-        (:meth:`prune_config`, only once the upload read back), and if anything changed roll the tasks; returns the
+    def upload_config(self, content_base_url: str, *, prune: bool = False) -> list[str]:
+        """Sync the rendered configuration (:meth:`sync_config`) and, if anything changed, roll the tasks; returns the
         keys uploaded and deleted. ``deploy`` runs it after every guidance deploy: the guidance uploads its
         configuration directory only when its stack is created, so a changed setting would otherwise never reach an
-        existing stage, and it never deletes. Without ``prune`` (``--keep-stale``) the stale objects stay and are
-        only listed: the first step of a body-format change (docs/demand.md)."""
+        existing stage. What the configuration no longer holds is only listed, never deleted: live siblings of an
+        earlier release may still name it. With ``prune`` (``--prune``), once the upload read back, it is deleted
+        unless a live configuration still names it (:meth:`prune_config`)."""
         uploaded = self.sync_config(content_base_url)
         if prune:
             deleted = self.prune_config(content_base_url)
         else:
             deleted = []
             if stale := self.stale_config(content_base_url):
-                log(f"keeping {len(stale)} stale configuration objects: {', '.join(f's3://{b}/{k}' for b, k in stale)}")
+                log(
+                    f"{len(stale)} stale configuration objects ({', '.join(f's3://{b}/{k}' for b, k in stale)}): "
+                    "run upload-config with --prune after every sibling uses the new body"
+                )
         if changed := uploaded + deleted:
             log(f"configuration changed ({', '.join(changed)}): rolling Prebid Server's tasks")
             self.roll()
