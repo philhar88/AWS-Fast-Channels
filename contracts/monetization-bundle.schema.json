@@ -307,7 +307,7 @@
       "type": "object"
     },
     "CacheScope": {
-      "description": "What one answer of an ``HTTP_REQUEST`` is valid for, and so what its cache ``Key`` names (validator R-F8,\nADR-0033). Anything cacheable is cached; ``none`` is for a call that must happen every time.",
+      "description": "What one answer of an ``HTTP_REQUEST`` is valid for, and so what its cache ``Key`` names (validator R-F8,\nADR-0034). Anything cacheable is cached; ``none`` is for a call that must happen every time.",
       "enum": [
         "title",
         "break",

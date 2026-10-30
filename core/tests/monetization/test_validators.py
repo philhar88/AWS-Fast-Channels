@@ -290,7 +290,7 @@ def _pre_ads(kit: SimpleNamespace, step: Function, **bundle: Any) -> Bundle:
 
 
 def test_every_request_declares_its_cache_scope(kit: SimpleNamespace) -> None:
-    """ADR-0033: anything cacheable is cached, with a key that names what makes an answer unique."""
+    """ADR-0034: anything cacheable is cached, with a key that names what makes an answer unique."""
     undeclared = {"cache": None, "cache_scope": None, "cache_reason": None}
     assert _cache_messages(undeclared) == [
         "function fastm_x: declares its CacheScope, one of ['title', 'break', 'session', 'session_break', 'global', "

@@ -23,7 +23,7 @@ Rules (:class:`Rule`):
   DESIGN §5.3 sets them.
 - **R-F7** Executor timeout ≤ the hook's remaining budget; each request's timeout (and their sum) < the executor's.
 - **R-F8** Every ``HTTP_REQUEST`` declares a :class:`~.functions.CacheScope` and the reason for it in words
-  (ADR-0033). Anything cacheable is cached: a scope other than ``none`` sets ``Cache``, whose key names exactly the
+  (ADR-0034). Anything cacheable is cached: a scope other than ``none`` sets ``Cache``, whose key names exactly the
   scope's identifiers (``title``: the UPID; ``break``: the channel and the event id; ``session``: ``session.uuid``;
   ``session_break``: both; ``global``: nothing) and whose ``TtlMaximumSeconds`` stays within what one answer is valid
   for (a break scope: the shortest break; 1 s at least). ``none``, for a single-use call, sets no ``Cache``.

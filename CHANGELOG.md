@@ -264,7 +264,7 @@ All notable changes to this project are documented here. The format follows
   account without overlay O1's Glue fix, VPC and Elastic IP quotas, and the teardown residue (CDK's log-retention log
   groups, the probe canary's function logs, the guidance's KMS keys pending deletion, a locked ledger archive). The
   architecture, operations and README pages cover the module stacks, their outputs and constructs.
-- **Every Function request is cached by scope** (`modules.release`, ADR 0033,
+- **Every Function request is cached by scope** (`modules.release`, ADR 0034,
   [docs/release-controller.md](docs/release-controller.md#function-caches)): each `HTTP_REQUEST` in the release
   bundle declares a cache scope (`title`, `break`, `session`, `session_break`, `global`, or `none` for a single-use
   call) and the reason for it. Validator R-F8 refuses a request without one, a cacheable scope without `Cache`, a key

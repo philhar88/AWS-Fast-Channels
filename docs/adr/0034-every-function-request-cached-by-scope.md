@@ -1,4 +1,4 @@
-# 0033 — Every Function request declares how its answers may be reused, and is cached by that scope
+# 0034 — Every Function request declares how its answers may be reused, and is cached by that scope
 
 **Status:** Accepted
 

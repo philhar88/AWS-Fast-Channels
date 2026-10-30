@@ -89,7 +89,7 @@ class ApiShape(BaseModel):
 
 class CacheScope(StrEnum):
     """What one answer of an ``HTTP_REQUEST`` is valid for, and so what its cache ``Key`` names (validator R-F8,
-    ADR-0033). Anything cacheable is cached; ``none`` is for a call that must happen every time."""
+    ADR-0034). Anything cacheable is cached; ``none`` is for a call that must happen every time."""
 
     TITLE = "title"
     """One answer per title for every session and break: the key names the break's UPID (the content id)."""

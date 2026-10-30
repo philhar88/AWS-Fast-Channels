@@ -59,7 +59,7 @@ bundle is applied. An id is created once and never updated, so a release that ch
 ## Function caches
 
 Every `HTTP_REQUEST` in the bundle declares a cache scope (`CacheScope`) and the reason for it
-([ADR 0033](adr/0033-every-function-request-cached-by-scope.md)). Anything cacheable is cached, and its key names
+([ADR 0034](adr/0034-every-function-request-cached-by-scope.md)). Anything cacheable is cached, and its key names
 exactly what makes an answer unique: too few values serve one session's or break's answer to another, too many only
 spend upstream calls. Validator R-F8 holds the `Cache`, its key and its TTL to the scope:
 
