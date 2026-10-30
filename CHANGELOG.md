@@ -291,9 +291,10 @@ All notable changes to this project are documented here. The format follows
   that does not name exactly its scope's identifiers (a `break` key also names its channel) and a TTL that outlives
   the scope. R-F4 now admits `session.uuid` in session-scoped keys. The crawl lookup is `title`. Scope and reason
   stay in the bundle and are not sent to `PutFunction`.
-- **Prebid results for an ad server's VAST** (`modules.demand.ad_server`, ADR 0035,
+- **Prebid results for an ad server's VAST, experimental** (`modules.demand.ad_server`, ADR 0035,
   [docs/demand.md](docs/demand.md#an-ad-server-in-front-prebid-results-for-its-vast)): with `mock`, `gam` or
-  `freewheel`, the pair siblings ask an ad server for the break instead of Prebid Server.
+  `freewheel`, the pair siblings ask an ad server for the break instead of Prebid Server. The mode is off by default
+  (`none`), and no default end-to-end leg runs it.
   - A PRE_ADS Function runs the break's auction once per session and break (scope `session_break`), through the
     origin rule. The Release Controller adds the origin secret when it creates the Function.
   - The fast-ctv module stores the composed pod in the guidance's Prebid Cache, through Prebid Server's own cache
@@ -304,7 +305,8 @@ All notable changes to this project are documented here. The format follows
   - The guidance's Prebid Cache function gets 1,769 MB and 8 instances of provisioned concurrency
     (`pod_cache_memory_mb`, `pod_cache_concurrency`), through the guidance wrapper. The write is on the auction's
     deadline. At the guidance's own settings, a 100-session break lost 17 of its 100 pods; with these, it lost
-    none. They cost about $0.17 an hour while the stage exists.
+    none. They cost about $0.17 an hour, about $124 a month, only while the mode is enabled: always-on, as
+    scaling them with the channels was deferred.
   - `mock` deploys a GAM-like ad server that answers only requests with the origin secret. `gam` and `freewheel` are
     configuration and setup instructions; they are not tested live.
   - A rotation of the origin secret creates every kept auction tree again with the new value, under a new release.
