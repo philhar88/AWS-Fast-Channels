@@ -24,6 +24,7 @@ from fast_channels.core.monetization import names
 from fast_channels.core.monetization.functions import RELEASE_SUFFIX, FunctionType, Hook, released_id
 from fast_channels.core.monetization.playback import render
 from fast_channels.core.monetization.release import (
+    ChannelState,
     SiblingRecord,
     kept_releases,
     last_good,
@@ -68,6 +69,32 @@ def _now() -> datetime:
 
 def _channel(bundle_key: str, name: str) -> MonetizedChannel:
     return next(c for c in store.bundle(bundle_key).channels if c.name == name)
+
+
+def recorded(state: ChannelState | None, sibling: str, release: int) -> int:
+    """The release whose trees ``sibling`` runs for ``release``.
+
+    It is ``release`` itself, or the release an origin-secret rotation created those trees again under (followed back
+    through ``recreated_from``). A re-run of ``release``'s execution does not know the new number. If the sibling
+    records another release, or none, this is ``release``."""
+    record = state.siblings.get(sibling) if state else None
+    if record is None:
+        return release
+    number, seen = record.release, set()
+    while number != release:
+        status = store.status(number)
+        if number in seen or status is None or status.recreated_from is None:
+            return release
+        seen.add(number)
+        number = status.recreated_from
+    return record.release
+
+
+def _sibling_state(sibling: str) -> ChannelState | None:
+    """The state of the channel whose pair or probe ``sibling`` is, or None."""
+    config = settings()
+    config.require("release_channels")
+    return next((s for s in store.channels(list(config.release_channels)).values() if sibling in s.siblings), None)
 
 
 def candidates(bundle_key: str, release: int, siblings: list[str]) -> list[dict[str, str]]:
@@ -219,9 +246,13 @@ def timed_out_steps(
 ) -> dict[str, dict[str, int]]:
     """The PRE_ADS requests of ``release`` on ``sibling`` that reached their timeout in
     :data:`~fast_channels.core.monetization.smoke.TIMEOUT_PERIODS` minutes or more between ``start`` and ``end``: by
-    FunctionId, the timeout (from the release's bundle) and the minutes. No error metric counts them."""
+    FunctionId, the timeout (from the release's bundle) and the minutes. No error metric counts them.
+
+    The FunctionIds are those of the release the sibling records (:func:`recorded`), so the check still sees a tree
+    that a rotation created again under a new number."""
+    number = recorded(_sibling_state(sibling), sibling, release)
     timeouts = {
-        released_id(stem, release): ms for stem, ms in request_timeouts(store.bundle(bundle_key), sibling).items()
+        released_id(stem, number): ms for stem, ms in request_timeouts(store.bundle(bundle_key), sibling).items()
     }
     maxima = {function_id: step_maxima(sibling, function_id, start, end) for function_id in timeouts}
     return {f: {"timeout_ms": timeouts[f], "minutes": n} for f, n in timed_out(maxima, timeouts).items()}
@@ -273,11 +304,14 @@ def pointer_state(
 
 
 def promote(bundle_key: str, release: int, change_id: str, chosen: list[dict[str, str]]) -> dict[str, Any]:
-    """Make each candidate stable, rewrite its plan, ledger the promotion and give the lock back."""
+    """Make each candidate stable, rewrite its plan, ledger the promotion and give the lock back. The release each
+    candidate records (:func:`recorded`: ``release``, or its re-creation by a rotation) is marked ``PROMOTED``."""
     promoted_to: dict[str, str] = {}
+    numbers: set[int] = set()
     for candidate in chosen:
         state, version = store.channel(candidate["channel"])
         assert state is not None
+        numbers.add(recorded(state, candidate["sibling"], release))
         if state.stable != candidate["sibling"]:  # not done yet (a retried step finds it done)
             state = promoted(state)
             store.put_channel(state, version=version)
@@ -293,8 +327,9 @@ def promote(bundle_key: str, release: int, change_id: str, chosen: list[dict[str
     config = settings()
     config.require("release_channels")
     store.put_pointer(pointer(store.channels(list(config.release_channels))))
-    if (previous := store.status(release)) is not None:
-        store.put_status(previous.model_copy(update={"status": "PROMOTED", "at": _now()}))
+    for number in sorted(numbers or {release}):
+        if (previous := store.status(number)) is not None:
+            store.put_status(previous.model_copy(update={"status": "PROMOTED", "at": _now()}))
     store.unlock(release)
     logger.info("release promoted", extra={"release": release, "stable": promoted_to})
     return {"release": release, "stable": promoted_to}
@@ -320,16 +355,20 @@ def rollback(
     bundle_key: str, release: int, change_id: str, chosen: list[dict[str, str]], reason: dict[str, Any]
 ) -> dict[str, Any]:
     """R1: remap each candidate to its last good tree, point back at the stable siblings, rewrite the plans, ledger
-    the rollback and give the lock back."""
+    the rollback and give the lock back. A candidate on a re-creation of ``release`` by a rotation (:func:`recorded`)
+    is remapped too, and that release is marked ``ROLLED_BACK``."""
     config = settings()
     config.require("release_channels")
     remapped: dict[str, int | None] = {}
+    numbers: set[int] = set()
     for candidate in chosen:
         state, version = store.channel(candidate["channel"])
         assert state is not None
         sibling = candidate["sibling"]
         target = last_good(state, sibling)
-        if state.siblings[sibling].release == release and target is not None:
+        number = recorded(state, sibling, release)
+        numbers.add(number)
+        if state.siblings[sibling].release == number and target is not None:
             good = store.status(target)
             assert good is not None
             record = SiblingRecord(release=target, digest=good.digest, change_id=good.change_id, at=_now())
@@ -354,8 +393,9 @@ def rollback(
         detail={"release": release, "remapped": remapped, "pointer": content, "reason": reason},
     )
     store.put_pointer(content)
-    if (previous := store.status(release)) is not None:
-        store.put_status(previous.model_copy(update={"status": "ROLLED_BACK", "at": _now()}))
+    for number in sorted(numbers or {release}):
+        if (previous := store.status(number)) is not None:
+            store.put_status(previous.model_copy(update={"status": "ROLLED_BACK", "at": _now()}))
     store.unlock(release)
     logger.warning("release rolled back", extra={"release": release, "remapped": remapped})
     return {"release": release, "remapped": remapped, "deployment": deployed["deployment"]}

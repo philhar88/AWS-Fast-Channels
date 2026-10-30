@@ -21,6 +21,10 @@ one alarm per configuration fires when, in :data:`LOSSY_MINUTES` of :data:`WINDO
   straddles a minute makes that minute lossy and the next one not, so it never alarms alone. Breaks minutes apart
   still alarm at the second lossy break.
 - Prefetch, which requests ads before the marker, is not used by the siblings yet; it would need its own expression.
+
+Per sibling, too, an alarm on the ad decision server's errors (:class:`AdsErrorAlarms`): a route that answers
+every request with an error (a missing stored request, Prebid Server down, the origin gate refusing) plays the slate
+and raises no other alarm.
 """
 
 from collections.abc import Sequence
@@ -56,6 +60,13 @@ LOSS_RATIO: Final = 0.5
 """A minute is lossy when more than this share of its markers had no request (an invalid body: all of them)."""
 MIN_MARKERS: Final = 5
 """Markers a minute needs to be judged."""
+ADS_ERRORS_PERIOD: Final = Duration.minutes(15)
+ADS_ERRORS_PERIODS: Final = 2
+"""Consecutive :data:`ADS_ERRORS_PERIOD` periods, each with more than :data:`ADS_ERRORS_RATIO` of its requests
+failed, that raise the ADS errors alarm."""
+ADS_ERRORS_RATIO: Final = 0.5
+ADS_ERRORS_MIN_REQUESTS: Final = 5
+"""ADS requests a period needs to be judged."""
 
 
 def sibling_metric(name: str, configuration: str, statistic: str = cw.Stats.SUM) -> cw.Metric:
@@ -122,6 +133,72 @@ class MarkerDetector(Construct):
                 datapoints_to_alarm=LOSSY_MINUTES,
                 description=f"{sibling}: breaks saw ad markers but MediaTailor made no ad request (an invalid "
                 "rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+                topic=topic,
+            )
+
+
+def _mediatailor_metric(name: str, configuration: str, statistic: str) -> cw.Metric:
+    """``AWS/MediaTailor`` metric ``name`` of ``configuration``, per :data:`ADS_ERRORS_PERIOD`."""
+    return cw.Metric(
+        namespace="AWS/MediaTailor",
+        metric_name=name,
+        dimensions_map={"ConfigurationName": configuration},
+        statistic=statistic,
+        period=ADS_ERRORS_PERIOD,
+    )
+
+
+class AdsErrorAlarms(Construct):
+    """An alarm ``<configuration>-ads-errors`` per sibling: more than :data:`ADS_ERRORS_RATIO` of its ADS requests
+    failed in :data:`ADS_ERRORS_PERIODS` consecutive 15-minute periods of at least :data:`ADS_ERRORS_MIN_REQUESTS`.
+
+    - **The ratio.** ``AdDecisionServer.Errors`` counts non-200, empty and timed-out answers. An empty VAST (no
+      fill) is not one: on the rig ``fastcie-exp-mbj`` (2026-10-30), 2 ``EMPTY_VAST_RESPONSE`` events counted 0.
+      ``AdDecisionServer.Latency`` has a sample per request, a failed one or a prefetch retrieval included. On
+      fastm (2026-10-30) the samples matched ``MAKING_ADS_REQUEST`` minute by minute: 07:41 to 07:46Z on
+      fastm-demo-p-a, 8 of them refused with 403 and counted in both, and 14:13 to 14:18Z on fastm-demo-p-b, prefetch
+      retrievals included.
+    - **The noise.** A mid-break joiner's remainder request (ADR-0021) is refused with 400 when it is off the
+      30 s grid, as long as Prebid Server has a stored request per grid duration. Those requests come in the two
+      minutes of a break. A period that holds only them is followed by a period with the next break's requests, which
+      succeed, or with too few to judge. So two failing periods in a row mean a broken route, which every request
+      of a break reports.
+    - **Outside the candidate alarm.** A pointer rollback or a remap to the last good tree does not mend Prebid
+      Server, its stored requests or the origin gate. And a failing stable sibling would roll back the deployment
+      that moves viewers off it. The smoke test judges a candidate's fill before any viewer moves.
+
+    Args:
+        siblings: the sibling configurations.
+        topic: the stage's alert topic.
+
+    Attributes:
+        alarms: by configuration.
+    """
+
+    def __init__(self, scope: Construct, id: str, *, siblings: Sequence[str], topic: sns.ITopic) -> None:
+        super().__init__(scope, id)
+        self.alarms: dict[str, cw.Alarm] = {}
+        for sibling in siblings:
+            self.alarms[sibling] = alarm(
+                self,
+                f"{sibling}-ads-errors".replace("-", " ").title().replace(" ", ""),
+                name=names.ads_errors_alarm(sibling),
+                metric=cw.MathExpression(
+                    expression=f"IF(FILL(requests, 0) >= {ADS_ERRORS_MIN_REQUESTS}, "
+                    "FILL(errors, 0) / FILL(requests, 0), 0)",
+                    using_metrics={
+                        "errors": _mediatailor_metric("AdDecisionServer.Errors", sibling, cw.Stats.SUM),
+                        "requests": _mediatailor_metric("AdDecisionServer.Latency", sibling, cw.Stats.SAMPLE_COUNT),
+                    },
+                    period=ADS_ERRORS_PERIOD,
+                    label=f"{sibling}: share of ADS requests that failed",
+                ),
+                threshold=ADS_ERRORS_RATIO,
+                comparison=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                evaluation_periods=ADS_ERRORS_PERIODS,
+                datapoints_to_alarm=ADS_ERRORS_PERIODS,
+                description=f"{sibling}: most ad decision server requests failed (non-200, empty or timed out) for "
+                "30 minutes: a missing stored request, Prebid Server or the origin gate; the breaks play the slate",
                 topic=topic,
             )
 

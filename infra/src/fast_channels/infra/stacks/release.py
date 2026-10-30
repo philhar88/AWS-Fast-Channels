@@ -30,7 +30,7 @@ from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release import bundle as rendering
 from fast_channels.infra.constructs.release.burst import RealTimeBurst
 from fast_channels.infra.constructs.release.controller import PointerSettings, ReleaseController, SmokeSettings
-from fast_channels.infra.constructs.release.detectors import LogReconciler, MarkerDetector
+from fast_channels.infra.constructs.release.detectors import AdsErrorAlarms, LogReconciler, MarkerDetector
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
 from fast_channels.infra.constructs.release.pointer import ReleasePointer
 from fast_channels.infra.constructs.release.prefetch import Prefetcher
@@ -141,6 +141,7 @@ class ReleaseStack(Stack):
         self.sibling_alarms = ConfigurationAlarms(self, "SiblingAlarms", configurations=siblings, topic=topic)
         watched = [*siblings, *([names.lab_check(prefix)] if config.lab_channel else [])]
         self.markers = MarkerDetector(self, "Markers", log_group=self.logs.log_group, siblings=watched, topic=topic)
+        self.ads_errors = AdsErrorAlarms(self, "AdsErrors", siblings=siblings, topic=topic)  # not the candidate's
         application = parameter(names.parameter_name(prefix, names.Parameter.APPCONFIG_APPLICATION))
         self.pointer = ReleasePointer(
             self,

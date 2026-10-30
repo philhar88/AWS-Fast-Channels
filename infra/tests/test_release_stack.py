@@ -465,6 +465,10 @@ def test_the_judge_and_the_pointer_poll_read_the_request_timeouts_and_latency(de
         granted = [s for r, s in statements(template) if r.startswith(role)]
         assert any("cloudwatch:GetMetricStatistics" in actions(s) and s["Resource"] == "*" for s in granted), role
         assert any("s3:GetObject" in actions(s) and "release/*" in json.dumps(s["Resource"]) for s in granted), role
+        # the release the candidate records: a rotation may have created its tree again under a new number
+        assert any(
+            "dynamodb:GetItem" in actions(s) and "ControllerState" in json.dumps(s["Resource"]) for s in granted
+        ), role
 
 
 def test_a_failed_smoke_rolls_back_and_stops_the_lab_only_if_it_started_it(deployment: GetDeployment) -> None:
@@ -542,6 +546,38 @@ def test_a_real_time_herd_with_policy_fallbacks_names_its_cause(deployment: GetD
         c["AlarmName"] for c in resources(off.template(off.stage.release), "AWS::CloudWatch::CompositeAlarm").values()
     }
     assert "fastm-pds-burst-real-time" not in names_
+
+
+def test_each_sibling_alarms_when_most_of_its_ads_requests_fail_for_30_minutes(deployment: GetDeployment) -> None:
+    """A broken route (a missing stored request, Prebid Server down, the origin gate refusing) plays the slate and
+    raises no hook or marker alarm: more than half of a sibling's requests failing in two consecutive 15-minute
+    periods of at least 5 does. It notifies the alert topic and is not one of the candidate alarm's children."""
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    found = sorted(n.removesuffix("-ads-errors") for n in alarms if n.endswith("-ads-errors"))
+    assert found == [s.name for s in sorted(d.stage.release.rendered.bundle.siblings, key=lambda s: s.name)]
+    for name in found:
+        alarm = alarms[f"{name}-ads-errors"]
+        assert (alarm["EvaluationPeriods"], alarm["DatapointsToAlarm"], alarm["Threshold"]) == (2, 2, 0.5)
+        assert (alarm["ComparisonOperator"], alarm["TreatMissingData"]) == ("GreaterThanThreshold", "notBreaching")
+        assert alarm["AlarmActions"] and alarm["OKActions"], "it notifies the alert topic"
+        [expression] = [m for m in alarm["Metrics"] if "Expression" in m]
+        assert expression["Expression"] == "IF(FILL(requests, 0) >= 5, FILL(errors, 0) / FILL(requests, 0), 0)"
+        stats = {
+            m["Id"]: (m["MetricStat"]["Metric"]["MetricName"], m["MetricStat"]["Stat"], m["MetricStat"]["Period"])
+            for m in alarm["Metrics"]
+            if "MetricStat" in m
+        }
+        assert stats == {
+            "errors": ("AdDecisionServer.Errors", "Sum", 900),
+            "requests": ("AdDecisionServer.Latency", "SampleCount", 900),  # a sample per request, failed or not
+        }
+        [dimension] = next(m for m in alarm["Metrics"] if m["Id"] == "errors")["MetricStat"]["Metric"]["Dimensions"]
+        assert dimension == {"Name": "ConfigurationName", "Value": name}
+    assert "fastm-lab-x-ads-errors" not in alarms, "lab-x makes no ad request"
+    [candidate] = resources(template, "AWS::CloudWatch::CompositeAlarm").values()
+    assert "AdsErrors" not in json.dumps(candidate["AlarmRule"]), "a remap or a pointer rollback mends no route"
 
 
 def test_the_siblings_log_is_reconciled_with_mediatailors_counts_every_hour(deployment: GetDeployment) -> None:

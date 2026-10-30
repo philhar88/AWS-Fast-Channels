@@ -124,9 +124,12 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
    later (their delivery delay): every ad marker led to an ad request, every break was filled, no Function or hook
    failed, the Pod Decision Service recorded a decision per break, and no PRE_ADS request
    [timed out](#timed-out-requests). When no
-   monetized channel runs, the smoke runs on the lab channel `<prefix>-lab` (BASIC, created stopped): the controller
-   schedules a block with a break a minute through the agent tools, starts the channel and stops it after. Without a
-   running channel or the lab channel, the release stays applied and is not promoted (`release.hold`).
+   monetized channel runs, the smoke runs on the lab channel `<prefix>-lab` (BASIC, created stopped). The controller
+   schedules a block through the agent tools, starts the channel and stops it after. The block has programs enough
+   for at least seven breaks: the smoke test's two and the soak's three, a break the smoke's session joins, and one
+   that airs while its logs are delivered. A program breaks every minute, or at its editorial cue points if it has
+   them. Without a running channel or the lab channel, the release stays applied and is not promoted
+   (`release.hold`).
 2. **Soak.** A new probe session for three breaks, judged the same way.
 3. **Pointer.** A new version of the AppConfig profile `release` (application `<prefix>-fast`, environment
    `<prefix>`), `{"<channel>": "<candidate>"}`, deployed with the stage's strategy (`modules.release.strategy`;
@@ -200,8 +203,10 @@ A failure is ledgered (`rotation.fail` on the chain `release/rotation`), gives t
 sibling, leaves the state naming the new releases while those siblings still map the old trees and send the old
 value. That value is still admitted, so nothing is refused, but the drift check reports those siblings until the
 rotation runs again. The new run re-creates the trees once more, under new numbers. A re-created release's record
-names the release it came from (`recreated_from`). Every value a sibling may send is still admitted at that point, so the rotation
-can simply run again. No secret value is logged or ledgered. The rotation assumes that everyone who could read the
+names the release it came from (`recreated_from`). Every value a sibling may send is still admitted at that point,
+so the rotation can simply run again. A held release that is run again by hand after a rotation still carries its
+old number. The controller checks, promotes or rolls back the release its candidate records, followed back through
+`recreated_from`. No secret value is logged or ledgered. The rotation assumes that everyone who could read the
 ADS logs before the switch knows the old value (MediaTailor logs the request headers; the module's log group leaves
 them out).
 
@@ -346,6 +351,7 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<sibling>-markers-without-ads-request` | In 2 of 10 minutes with at least 5 markers, more than half of the markers had no ad request: an invalid rendered body or an exhausted PRE_ADS budget makes no request and logs no error, and the break plays unfilled. A break's marker counts once (MediaTailor finds a Channel Assembly marker again when it gains its duration, without a request), and a ratio leaves out the viewers who join during a break. `<prefix>-lab-x` has this alarm too, for a harness to prove it (`tests/e2e`) |
 | `<prefix>-release-rotation-failed` | An origin-secret rotation failed: the ledger's `rotation.fail` says at which step; run it again |
 | `<prefix>-release-candidate` | Any of the above (but drift) on a pair sibling: rolls a pointer deployment back (AppConfig monitor) and runs R1 |
+| `<sibling>-ads-errors` | More than half of the sibling's ad requests failed in two consecutive 15-minute periods with at least 5 each: `AdDecisionServer.Errors` (non-200, empty or timed-out answers; an empty VAST is not one) against `AdDecisionServer.Latency`'s sample count (one per request, failed or prefetched). A broken route, such as a missing stored request, Prebid Server down or the origin gate refusing, plays the slate and raises nothing else. A mid-break joiner whose remainder is off the 30 s grid is refused with 400, but those requests fall in a break's two minutes, and the next period holds requests that succeed or too few to judge. It is not part of the candidate alarm: a remap or a pointer rollback does not mend the route |
 | `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
 | `<sibling>-real-time-requests` | On a prefetched sibling, more than 50% of at least 20 ad requests in 5 minutes were real time (`RealTimeAdsRequests`: `MAKING_ADS_REQUEST` with no `prefetchScheduleName`). Late joiners and mid-break joiners are real time by design, so a small audience that zaps a lot can raise it alone; it has no actions of its own |
 | `<prefix>-pds-burst-real-time` | The PDS's `<prefix>-pds-policy-fallbacks` and any `<sibling>-real-time-requests` together: MediaTailor asked for every session at the marker at once (a retrieval it did not use, or a break published closer than the retrieval lead), a sub-second herd the tasks' CPU cannot absorb, and those breaks were served SAFE ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)). With the PDS and prefetch on |

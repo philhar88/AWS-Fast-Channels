@@ -126,6 +126,12 @@ def markers_alarm(configuration: str) -> str:
     return f"{configuration}-markers-without-ads-request"
 
 
+def ads_errors_alarm(configuration: str) -> str:
+    """The ad decision server errors alarm of a sibling: more than half of its ADS requests failed in two
+    consecutive 15-minute periods with at least 5 requests each (``release.detectors.AdsErrorAlarms``)."""
+    return f"{configuration}-ads-errors"
+
+
 def lab_check(prefix: str) -> str:
     """``<prefix>-lab-x``: the VOD playback configuration a test harness creates, outside the Release Controller, to
     prove the markers-without-an-ad-request detector (BUILD-PLAN M3-04). Its alarm exists with the lab channel; its
