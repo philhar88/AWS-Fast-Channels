@@ -172,14 +172,16 @@ def test_promote_swaps_the_pair_rewrites_the_plan_and_gives_the_lock_back(
     assert ledger.actions() == [("release/fastm-demo", "release.promote"), ("release/fastm-demo", "release.probe")]
 
 
+@pytest.mark.parametrize("crawl", [False, True], ids=["controls only", "with the crawl lookup"])
 def test_after_a_promotion_the_probe_runs_the_stable_release_but_for_its_probe_fields(
-    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch, crawl: bool
 ) -> None:
     """M3-x4: the probe was on release 1 (its channel's first release); the promotion of 2 re-applies it with 2: the
-    same session controls (the PRE_SESSION tree) and ADS body as the new stable sibling, but for its probe fields. Its
-    Functions of 2 are put (they exist when the pair's tree is the same), and it keeps no history, so the reaper may
-    delete release 1's trees once no other sibling keeps them."""
-    key = released_twice(kit, state)
+    same session controls (the PRE_SESSION tree) and ADS body as the new stable sibling, but for its probe fields (and
+    the crawl lookup, a PRE_ADS tree of the pair siblings only). Its Functions of 2 are put (they exist when the
+    pair's tree is the same), and it keeps no history, so the reaper may delete release 1's trees once no other
+    sibling keeps them."""
+    key = released_twice(kit, state, **({"contributions": [CrawlContribution()]} if crawl else {}))
     stub("mediatailor").add_response(
         "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
     )
@@ -190,8 +192,11 @@ def test_after_a_promotion_the_probe_runs_the_stable_release_but_for_its_probe_f
     pair, _ = render(
         stable.playback, prefix="fastm", release=2, change_id="c2", origin_secret=SecretStr("secret-value-a")
     )
-    assert set(differences(pair, probe)) | set(differences(probe, pair)) <= PROBE_ONLY
-    assert probe["FunctionMapping"] == pair["FunctionMapping"] == {"PRE_SESSION_INITIALIZATION": "fastm_ps_root_r0002"}
+    pair_only = {"FunctionMapping.PRE_ADS_REQUEST"} if crawl else set()
+    assert set(differences(pair, probe)) <= PROBE_ONLY | pair_only and set(differences(probe, pair)) <= PROBE_ONLY
+    assert probe["FunctionMapping"] == {"PRE_SESSION_INITIALIZATION": "fastm_ps_root_r0002"}
+    assert probe["FunctionMapping"].items() <= pair["FunctionMapping"].items()
+    assert ("PRE_ADS_REQUEST" in pair["FunctionMapping"]) is crawl
     assert (
         probe["AdDecisionServerConfiguration"]["HttpRequest"]["Body"]
         == pair["AdDecisionServerConfiguration"]["HttpRequest"]["Body"]

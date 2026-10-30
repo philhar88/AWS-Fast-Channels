@@ -685,9 +685,10 @@ def test_the_probe_sibling_runs_the_stable_release_and_fills_house_ads(
     releases: Stage, on_air: dict[str, Any], channel: Channel
 ) -> None:
     """M3-x4: the probe ``-p-z`` follows the stable sibling's release on every promotion and rollback (this run's
-    rollbacks, or the promote function's ``probes`` step on a stage upgraded since). It maps the same trees, sends the
-    same ADS body and carries the same avail suppression; only its own name and ``X-Fast-Probe`` differ. A canary
-    session on it through a break is filled, with house ads only, and its decision records are flagged."""
+    rollbacks, or the promote function's ``probes`` step on a stage upgraded since). It maps the same session-control
+    tree (the crawl lookup is the pair's only), sends the same ADS body and carries the same avail suppression; its own
+    name and ``X-Fast-Probe`` differ. A canary session on it through a break is filled, with house ads only, and its
+    decision records are flagged."""
     stage = releases
     state = channel_state(stage, channel.name)
     assert state.stable is not None
@@ -699,7 +700,12 @@ def test_the_probe_sibling_runs_the_stable_release_and_fills_house_ads(
     stable: dict[str, Any] = dict(mediatailor.get_playback_configuration(Name=state.stable))
     probe: dict[str, Any] = dict(mediatailor.get_playback_configuration(Name=probe_name))
     assert probe["Tags"]["fast:release"] == stable["Tags"]["fast:release"] == release_tag(release)
-    assert probe["FunctionMapping"] == stable["FunctionMapping"]
+    # the same trees for the hooks it maps: the session controls; the crawl lookup (PRE_ADS) is the pair's only
+    assert (
+        probe["FunctionMapping"]["PRE_SESSION_INITIALIZATION"]
+        == stable["FunctionMapping"]["PRE_SESSION_INITIALIZATION"]
+    )
+    assert probe["FunctionMapping"].items() <= stable["FunctionMapping"].items(), (probe["FunctionMapping"], stable)
     assert probe["AvailSuppression"] == stable["AvailSuppression"]
     probe_request = probe["AdDecisionServerConfiguration"]["HttpRequest"]
     stable_request = stable["AdDecisionServerConfiguration"]["HttpRequest"]
