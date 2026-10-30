@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-from fast_channels.core.pbs_config import PbsSettings, account, prebid_config, render, to_yaml
+from fast_channels.core.pbs_config import PbsSettings, account, house_ads, prebid_config, render, to_yaml
+from fast_channels.core.pds.book import Creative
 
 if TYPE_CHECKING:
     from local_mocks import Mocks
@@ -34,6 +35,15 @@ SETTINGS: Final = PbsSettings(
     server_instances=2,
     tracker_base_url="https://cdn.example",
     publisher_domain="cdn.example",
+    house_ads=house_ads(  # the kit's, as deploy-demand renders them
+        Creative(
+            crid=f"kit{n}",
+            creative_id=f"kit{n}",
+            hls_uri=f"https://cdn.example/ads/kit{n}/main.m3u8",
+            duration_ms=30_030,
+        )
+        for n in (1, 2)
+    ),
     pbs_version=PBS_VERSION,
 )
 ACCOUNTS: Final = {

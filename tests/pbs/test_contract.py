@@ -219,6 +219,28 @@ def test_when_select_fails_the_pod_is_house_ads(mocks: Mocks, pbs: Pbs) -> None:
         assert tracker(crid, 0) in [i.text for i in ad.findall("InLine/Impression")], "the module's own tracker"
 
 
+def test_without_the_policy_and_the_own_book_the_pod_is_the_kits_house_ads(mocks: Mocks, pbs: Pbs) -> None:
+    """/policy times out and the own book is silent: SAFE (no third party), and rather than an empty pod the module
+    renders the kit's house ads from its configuration, each with its own tracker, and logs why."""
+    mocks.own_book_fails = True
+    started = time.time()
+    try:
+        response = pbs.auction("slow1", seconds=60)
+    finally:
+        mocks.own_book_fails = False
+
+    pod = ads(response.text)
+    titles = [ad.findtext("InLine/AdTitle") or "" for ad in pod]
+    assert titles == ["kit1", "kit2"], response.text[:300]
+    for ad, crid in zip(pod, titles, strict=True):
+        assert tracker(crid, 0) in [i.text for i in ad.findall("InLine/Impression")], "the module's own tracker"
+    assert mocks.third_party_calls(started) == [], "SAFE: no third party without the policy"
+    line = next(
+        line for line in pbs.log.read_text().splitlines() if '"fast-ctv-pod"' in line and "HOUSE_CONFIG" in line
+    )
+    assert '"policy_fallback":"POLICY_UNAVAILABLE' in line and '"safe":true' in line, line
+
+
 @pytest.mark.parametrize("seconds", POD_SECONDS)
 def test_every_grid_duration_has_a_pod(pbs: Pbs, seconds: int) -> None:
     response = pbs.auction("CTX1", seconds=seconds)

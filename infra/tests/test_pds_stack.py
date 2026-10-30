@@ -475,11 +475,12 @@ def test_the_module_fallback_alarms_watch_prebid_servers_log(deployment: GetDepl
         f["MetricTransformations"][0]["MetricName"]: f for f in resources(template, "AWS::Logs::MetricFilter").values()
     }
 
-    assert set(filters) == {"Pods", "PolicyFallbacks", "SelectFallbacks", "PodErrors"}
+    assert set(filters) == {"Pods", "PolicyFallbacks", "SelectFallbacks", "PodErrors", "HouseFromConfig"}
     assert {f["LogGroupName"] for f in filters.values()} == {"fastm-pbs-PrebidContainerLogGroup"}
     assert filters["Pods"]["FilterPattern"] == '"fast-ctv-pod" -"warmup"'
     assert filters["PolicyFallbacks"]["FilterPattern"] == '"fast-ctv-pod" -"warmup" "POLICY_"'
     assert filters["SelectFallbacks"]["FilterPattern"] == '"fast-ctv-pod" -"warmup" "SELECT_FALLBACK"'
+    assert filters["HouseFromConfig"]["FilterPattern"] == '"fast-ctv-pod" -"warmup" "HOUSE_CONFIG"'
     assert {f["MetricTransformations"][0]["MetricNamespace"] for f in filters.values()} == {
         "FastChannels/PrebidServer/fastm"
     }

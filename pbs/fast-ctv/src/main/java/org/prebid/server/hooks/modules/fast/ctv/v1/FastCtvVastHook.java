@@ -9,6 +9,7 @@ import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.hooks.execution.v1.InvocationResultImpl;
 import org.prebid.server.hooks.execution.v1.exitpoint.ExitpointPayloadImpl;
 import org.prebid.server.hooks.modules.fast.ctv.core.Candidate;
+import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyPatch;
@@ -39,13 +40,23 @@ import java.util.function.Consumer;
  * Every bid goes to the Pod Decision Service's {@code /select}, and the module renders exactly the pod it returns,
  * with our impression tracker on every ad: the trackers the answer lists for it, or the module's own
  * ({@code tracker-template}) when it lists none. When {@code /select} fails or cannot be asked
- * ({@code SELECT_FALLBACK}), the pod is the auction's house ads that fit, each with the module's own tracker. Any exception renders an empty VAST, so the Channel Assembly slate plays. If this hook
+ * ({@code SELECT_FALLBACK}), the pod is the auction's house ads that fit, each with the module's own tracker.
+ * <p>
+ * A break the module served without the PDS's {@code /policy} answer is SAFE: own book and house ads only, the stored
+ * request as it was. If it would still be empty (the own book silent too, or {@code /select} unavailable and the
+ * auction without a house ad), the pod is the configured house ads ({@link HousePod}, {@code HOUSE_CONFIG}), each with
+ * the module's own tracker, so the break never airs the slate for want of an answer. A pod {@code /select} chose
+ * empty with the policy applied stays empty: nothing was eligible. Any exception renders an empty VAST, so the
+ * Channel Assembly slate plays. If this hook
  * is absent or times out, Prebid Server answers with its JSON, which MediaTailor refuses: the slate plays then too.
  * {@code X-Fast-Buffet: 0} omits the standalone ads, for {@code IGNORE_AD_SEQUENCE} playback configurations.
  */
 public class FastCtvVastHook implements ExitpointHook {
 
     public static final String CODE = "fast-ctv-vast";
+
+    /** Appended to the selection's reason when the pod is the configured house ads. */
+    public static final String HOUSE_CONFIG = "HOUSE_CONFIG";
 
     private static final String XML = "application/xml";
 
@@ -54,17 +65,27 @@ public class FastCtvVastHook implements ExitpointHook {
     private final TrackerTemplate tracker;
     private final ObjectMapper mapper;
     private final Consumer<String> log;
+    private final HousePod housePod;
 
     /**
      * @param log receives one JSON line per auction ({@code fast-ctv-pod}), or null for none
      */
     public FastCtvVastHook(SelectClient selectClient, PodRenderer renderer, TrackerTemplate tracker,
                            ObjectMapper mapper, Consumer<String> log) {
+        this(selectClient, renderer, tracker, mapper, log, HousePod.NONE);
+    }
+
+    /**
+     * @param housePod the configured house ads of the pod of last resort ({@link HousePod#NONE}: none)
+     */
+    public FastCtvVastHook(SelectClient selectClient, PodRenderer renderer, TrackerTemplate tracker,
+                           ObjectMapper mapper, Consumer<String> log, HousePod housePod) {
         this.selectClient = Objects.requireNonNull(selectClient);
         this.renderer = Objects.requireNonNull(renderer);
         this.tracker = Objects.requireNonNull(tracker);
         this.mapper = Objects.requireNonNull(mapper);
         this.log = log;
+        this.housePod = Objects.requireNonNull(housePod);
     }
 
     @Override
@@ -92,10 +113,25 @@ public class FastCtvVastHook implements ExitpointHook {
                                                        List<Candidate> candidates, Map<String, Candidate> byRef,
                                                        Outcome outcome) {
 
-        final Selection selection = outcome.selection() != null
+        Selection chosen = outcome.selection() != null
                 ? outcome.selection()
                 : renderer.houseFallback(imps, candidates, signals.buffet(), outcome.failure());
-        final String vast = renderer.render(selection, byRef, signals.buffet(), candidate -> {
+        Map<String, Candidate> refs = byRef;
+        final boolean unanswered = !policyApplied(policy) || outcome.selection() == null;
+        if (chosen.pod().isEmpty() && unanswered && !housePod.isEmpty()) {
+            final List<Candidate> configured = housePod.candidates(imps, renderer, mapper);
+            final Selection house = renderer.houseFallback(imps, configured, signals.buffet(), "");
+            if (!house.pod().isEmpty()) {
+                chosen = new Selection(house.pod(), house.standalone(), Map.of(),
+                        Objects.toString(chosen.reason(), "") + " " + HOUSE_CONFIG);
+                refs = new LinkedHashMap<>(byRef);
+                for (Candidate candidate : configured) {
+                    refs.put(candidate.ref(), candidate);
+                }
+            }
+        }
+        final Selection selection = chosen;
+        final String vast = renderer.render(selection, refs, signals.buffet(), candidate -> {
             final List<String> urls = new ArrayList<>(PodRenderer.noticeUrls(candidate.bid()));
             final List<String> ours = selection.trackers().getOrDefault(candidate.ref(), List.of());
             if (ours.isEmpty()) {
@@ -106,9 +142,14 @@ public class FastCtvVastHook implements ExitpointHook {
             return urls;
         });
         if (log != null) {
-            log.accept(podLine(signals, policy, candidates.size(), byRef, selection, outcome).toString());
+            log.accept(podLine(signals, policy, candidates.size(), refs, selection, outcome).toString());
         }
         return xml(payload, vast);
+    }
+
+    /** Whether the PDS's {@code /policy} patch was applied: otherwise the break was served SAFE. */
+    private static boolean policyApplied(PolicyDecision policy) {
+        return policy != null && policy.patch() != null;
     }
 
     private InvocationResult<ExitpointPayload> empty(ExitpointPayload payload, Throwable error) {
@@ -141,10 +182,11 @@ public class FastCtvVastHook implements ExitpointHook {
                 .put("evid", signals.evid())
                 .put("pc", signals.pc())
                 .put("mode", patch != null ? patch.mode().name() : null)
-                .put("policy_fallback", policy != null ? policy.fallback() : "NO_POLICY_HOOK");
+                .put("policy_fallback", policy != null ? policy.fallback() : "NO_POLICY_HOOK")
+                .put("safe", !policyApplied(policy));
         line.put("policy_ms", policy != null ? policy.latencyMs() : null);
         line.put("select_ms", outcome.latencyMs())
-                .put("select", outcome.selection() != null ? outcome.selection().reason() : selection.reason())
+                .put("select", selection.reason())
                 .put("bids", bids);
         line.putPOJO("winners", labels(selection.pod(), byRef));
         line.putPOJO("standalones", signals.buffet() ? labels(selection.standalone(), byRef) : List.of());

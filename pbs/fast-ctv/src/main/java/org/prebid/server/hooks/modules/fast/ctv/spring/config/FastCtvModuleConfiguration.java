@@ -1,5 +1,6 @@
 package org.prebid.server.hooks.modules.fast.ctv.spring.config;
 
+import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.SelectClient;
@@ -29,6 +30,7 @@ import java.util.function.Consumer;
  *     select-url: http://pds.&lt;prefix&gt;.fast.internal/select
  *     select-timeout-ms: 100
  *     tracker-template: https://&lt;cdn&gt;/ads/b.gif?d={sid}.{evid}&amp;c={crid}&amp;e={event}&amp;enr={enr}
+ *     house-ads: '[{"crid":"house1","adm":"&lt;VAST ...&gt;","dur":30,"w":1920,"h":1080}]'
  *     log-requests: true
  * </pre>
  * A missing or invalid URL stops Prebid Server at startup. Which hooks run, with which group timeouts, is decided by
@@ -48,6 +50,7 @@ public class FastCtvModuleConfiguration {
                                 @Value("${hooks.fast-ctv.select-url}") String selectUrl,
                                 @Value("${hooks.fast-ctv.select-timeout-ms:100}") long selectTimeoutMs,
                                 @Value("${hooks.fast-ctv.tracker-template}") String trackerTemplate,
+                                @Value("${hooks.fast-ctv.house-ads:[]}") String houseAds,
                                 @Value("${hooks.fast-ctv.log-requests:false}") boolean logRequests) {
 
         final Consumer<String> log = logRequests ? logger::info : null;
@@ -55,6 +58,7 @@ public class FastCtvModuleConfiguration {
                 new FastCtvPolicyHook(new PolicyClient(httpClient, mapper.mapper(), policyUrl, policyTimeoutMs),
                         mapper.mapper(), log),
                 new FastCtvVastHook(new SelectClient(httpClient, mapper.mapper(), selectUrl, selectTimeoutMs),
-                        new PodRenderer(), new TrackerTemplate(trackerTemplate), mapper.mapper(), log));
+                        new PodRenderer(), new TrackerTemplate(trackerTemplate), mapper.mapper(), log,
+                        HousePod.parse(houseAds, mapper.mapper())));
     }
 }

@@ -267,6 +267,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Demand: a break the PDS could not answer still gets a pod** (M2-x4). When `/policy` timed out, the module served
+  the break SAFE (own book only), but with the own book silent too the pod was empty and the slate aired: on fastm 3.8%
+  of pods hit a policy timeout and 69% of those came back empty. Now, if such a pod would be empty, or `/select` is
+  unavailable and the auction has no house ad, the module renders the kit's house ads from its configuration
+  (`hooks.fast-ctv.house-ads`, which `deploy-demand` renders from the default ladder's `vast.xml`), each with the
+  module's own tracker. The `fast-ctv-pod` line says `"safe": true` and ends its `select` reason with `HOUSE_CONFIG`,
+  and a metric filter counts those pods (`HouseFromConfig`). A pod `/select` chose empty with the policy applied stays
+  empty, and a paid line never airs without a reservation.
+
 - **`make destroy` with `observability.transaction_search: enable`** no longer stops part-way. `cdk destroy '**'`
   selected the termination-protected `FastChannels-AccountBaseline` stack, which CloudFormation refuses to delete, so
   the destroy failed after the Operator stack and left the stacks below it. The baseline now has its own target,
