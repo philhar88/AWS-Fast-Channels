@@ -33,6 +33,7 @@ import stage_args
 from _demand import DemandError, DemandStage, iterate_tool_versions
 from _stack import Plane, StackError, Stage
 
+from fast_channels.core.ad_server import AdServer
 from fast_channels.core.pbs_config import HouseAd, PbsSettings, render, tracker_host
 
 if TYPE_CHECKING:
@@ -280,6 +281,8 @@ def pbs_settings(config: FastChannelsConfig, content_base_url: str, house: Seque
         select_group_timeout_ms=pds.select_group_timeout_ms,
         house_ads=tuple(house),
         pbs_version=demand.pbs_version.value,
+        ad_server=demand.ad_server is not AdServer.NONE,
+        pod_cache_seconds=demand.pod_cache_seconds,
     )
 
 

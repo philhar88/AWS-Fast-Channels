@@ -12,9 +12,9 @@ from fast_channels.core import ad_server as adsrv
 from fast_channels.core.ad_server import AdServer, AdServerContribution
 from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.monetization import validators as v
-from fast_channels.core.monetization.bundle import AdServerRoute, Bundle, ChannelInput, build_bundle
+from fast_channels.core.monetization.bundle import AdServerRoute, Bundle, ChannelInput, build_bundle, bundle_document
 from fast_channels.core.monetization.functions import CacheScope, Hook
-from fast_channels.core.monetization.playback import AdsRoute, render
+from fast_channels.core.monetization.playback import AdsRoute, render, render_function
 from fast_channels.core.monetization.validators import Rule
 
 PREFIX = "fastm"
@@ -193,6 +193,32 @@ def test_an_ad_server_sibling_runs_one_auction_and_blanks_the_targeting() -> Non
     )
 
 
+def test_a_demand_origin_request_runs_only_at_pre_ads() -> None:
+    def early(document: dict[str, Any]) -> None:
+        root = _function(document, "fastm_ps_root")["SequentialExecutorConfiguration"]
+        root["FunctionList"].insert(0, {"FunctionId": "fastm_demo_p_a_pa_auction"})
+
+    found = messages(v.validate_bundle(_edit(bundle(), early)), Rule.P7)
+    assert "sibling fastm-demo-p-a: a demand-origin request runs only at PRE_ADS" in found
+    crawl = bundle().function("fastm_ps_ctl")
+    assert crawl is not None and v.check_demand_origin(crawl) == []
+
+
+def test_an_ad_server_sibling_needs_its_url() -> None:
+    from fast_channels.core.monetization.playback import sibling_playback_configuration  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="ad_server_url"):
+        sibling_playback_configuration(
+            name="fastm-demo-p-a",
+            video_content_source_url=CA_URL,
+            content_base_url=CDN,
+            pbs_origin=PBS,
+            log_percent=100,
+            function_mapping={},
+            route=AdsRoute.AD_SERVER,
+        )
+
+
 def test_only_an_ad_server_sibling_runs_an_auction() -> None:
     def misplaced(document: dict[str, Any]) -> None:
         probe = next(s for s in document["siblings"] if s["letter"] == "z")["playback"]
@@ -285,3 +311,52 @@ def test_the_buckets_are_the_stored_requests_granularity() -> None:
     assert adsrv.price_bucket("20.10") is None
     assert adsrv.price_bucket("100.00") == Decimal("100.00")
     assert adsrv.price_bucket("101.00") is None
+
+
+# --- at apply ------------------------------------------------------------------------------------------------------
+
+
+def test_the_apply_adds_the_secret_to_the_auction_only() -> None:
+    built = bundle()
+    secret = SecretStr("slot-a-value")
+    auction = built.function("fastm_demo_p_a_pa_auction")
+    assert auction is not None
+    put = render_function(auction.released(4), release=4, origin_secret=secret).put_request(tags=False)
+    headers = put["HttpRequestConfiguration"]["Headers"]
+    assert (headers["X-Fast-Origin"], headers["X-Fast-Fv"]) == ("slot-a-value", "r0004")
+    assert v.check_rendered_function(put, release=4, secrets=[secret], demand_origin=True) == []
+    assert "slot-a-value" not in json.dumps(bundle_document(built))  # the bundle never holds it
+
+    controls = built.function("fastm_ps_ctl")
+    assert controls is not None
+    assert render_function(controls, release=4, origin_secret=secret) is controls
+    assert v.check_rendered_function(controls.put_request(), release=4, secrets=[secret], demand_origin=False) == []
+
+
+def test_a_rendered_function_carries_the_secret_in_its_header_only() -> None:
+    secret = SecretStr("slot-a-value")
+    auction = bundle().function("fastm_demo_p_a_pa_auction")
+    assert auction is not None
+    put = render_function(auction.released(4), release=4, origin_secret=secret).put_request(tags=False)
+    stale = json.loads(json.dumps(put))
+    stale["HttpRequestConfiguration"]["Headers"] |= {"X-Fast-Origin": "old", "X-Fast-Fv": "r0003"}
+    stale["Description"] = "slot-a-value"
+    found = v.check_rendered_function(stale, release=4, secrets=[secret], demand_origin=True)
+    assert [x.message for x in found] == [
+        "X-Fast-Origin carries a current origin secret",
+        "the origin secret appears outside X-Fast-Origin",
+        "X-Fast-Fv is r0004",
+    ]
+    found = v.check_rendered_function(put, release=4, secrets=[secret], demand_origin=False)
+    assert [x.message for x in found] == ["only a demand-origin request carries the origin secret"]
+
+
+def test_a_third_party_configuration_is_rendered_without_the_secret() -> None:
+    secret = SecretStr("slot-a-value")
+    a = next(s for s in bundle(AdServer.GAM).siblings if s.letter == "a")
+    put, _ = render(a.playback, prefix=PREFIX, release=4, change_id="c", origin_secret=secret)
+    assert v.check_rendered(put, release=4, secrets=[secret], sends_origin=False) == []
+    leaked = put | {"AdDecisionServerConfiguration": {"HttpRequest": {"Headers": {"X-Fast-Fv": "r0004"}}}}
+    assert [x.message for x in v.check_rendered(leaked, release=4, secrets=[secret], sends_origin=False)] == [
+        "a third-party ad server never gets the origin secret"
+    ]

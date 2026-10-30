@@ -1158,16 +1158,23 @@ def load_bundle(document: Mapping[str, Any]) -> tuple[Bundle | None, list[Violat
 # --- at apply ------------------------------------------------------------------------------------------------------
 
 
-def check_rendered(put: Mapping[str, Any], *, release: int, secrets: Sequence[SecretStr]) -> list[Violation]:
+def check_rendered(
+    put: Mapping[str, Any], *, release: int, secrets: Sequence[SecretStr], sends_origin: bool = True
+) -> list[Violation]:
     """Checks of a rendered ``PutPlaybackConfiguration`` request just before it is sent (R-P2, R-F1).
 
     ``secrets`` are the origin values the rule group accepts; the request carries one of them in ``X-Fast-Origin``
-    and nowhere else, ``X-Fast-Fv`` names ``release``, and every mapped FunctionId is of that release.
+    and nowhere else, ``X-Fast-Fv`` names ``release``, and every mapped FunctionId is of that release. A
+    configuration whose ADS is a third-party ad server (``sends_origin`` false) carries neither header and no secret.
     """
     where = f"rendered {put.get('Name', '?')}"
     found: list[Violation] = []
     headers = ((put.get("AdDecisionServerConfiguration") or {}).get("HttpRequest") or {}).get("Headers") or {}
     values = {s.get_secret_value() for s in secrets}
+    if not sends_origin:
+        if {HEADER_ORIGIN, HEADER_RELEASE} & set(headers) or any(v and v in json.dumps(put) for v in values):
+            found.append(_violation(Rule.P2, where, "a third-party ad server never gets the origin secret"))
+        return found + _released_mapping(put, release=release, where=where)
     if headers.get(HEADER_ORIGIN) not in values:
         found.append(_violation(Rule.P2, where, f"{HEADER_ORIGIN} carries a current origin secret"))
     rest = json.dumps({**put, "AdDecisionServerConfiguration": None}) + json.dumps(
@@ -1178,13 +1185,43 @@ def check_rendered(put: Mapping[str, Any], *, release: int, secrets: Sequence[Se
         found.append(_violation(Rule.P2, where, f"the origin secret appears outside {HEADER_ORIGIN}"))
     if headers.get(HEADER_RELEASE) != release_tag(release):
         found.append(_violation(Rule.P2, where, f"{HEADER_RELEASE} is {release_tag(release)}"))
+    return found + _released_mapping(put, release=release, where=where)
+
+
+def check_rendered_function(
+    put: Mapping[str, Any], *, release: int, secrets: Sequence[SecretStr], demand_origin: bool
+) -> list[Violation]:
+    """R-P7 on a rendered ``PutFunction`` request just before it is sent: a demand-origin request carries a current
+    origin secret in ``X-Fast-Origin`` and nowhere else, and ``X-Fast-Fv`` names ``release``; any other function
+    carries no secret at all."""
+    where = f"rendered function {put.get('FunctionId', '?')}"
+    values = {s.get_secret_value() for s in secrets}
+    http = put.get("HttpRequestConfiguration") or {}
+    headers = http.get("Headers") or {}
+    if not demand_origin:
+        leaked = any(v and v in json.dumps(put) for v in values)
+        return [_violation(Rule.P7, where, "only a demand-origin request carries the origin secret")] if leaked else []
+    found: list[Violation] = []
+    if headers.get(HEADER_ORIGIN) not in values:
+        found.append(_violation(Rule.P7, where, f"{HEADER_ORIGIN} carries a current origin secret"))
+    rest = json.dumps({**put, "HttpRequestConfiguration": {**http, "Headers": None}}) + json.dumps(
+        {k: v for k, v in headers.items() if k != HEADER_ORIGIN}
+    )
+    if any(v and v in rest for v in values):
+        found.append(_violation(Rule.P7, where, f"the origin secret appears outside {HEADER_ORIGIN}"))
+    if headers.get(HEADER_RELEASE) != release_tag(release):
+        found.append(_violation(Rule.P7, where, f"{HEADER_RELEASE} is {release_tag(release)}"))
+    return found
+
+
+def _released_mapping(put: Mapping[str, Any], *, release: int, where: str) -> list[Violation]:
+    """R-F1: every mapped FunctionId is of ``release``."""
     suffix = f"_{release_tag(release)}"
-    found += [
+    return [
         _violation(Rule.F1, where, f"{hook} maps {function_id!r}, not a FunctionId of {release_tag(release)}")
         for hook, function_id in (put.get("FunctionMapping") or {}).items()
         if not (function_id.endswith(suffix) and re.fullmatch(FUNCTION_ID_PATTERN, function_id))
     ]
-    return found
 
 
 def check_secret_free(text: str, *, secrets: Iterable[SecretStr], where: str) -> list[Violation]:

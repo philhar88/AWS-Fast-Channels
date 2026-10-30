@@ -860,6 +860,7 @@ class DemandStage:
                     tables[subnet] = table["RouteTableId"]
         groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
         [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
+        internal = self.internal_balancer(parameters[Parameter.VPC_ID])
         return DemandNetwork(
             container_log_group=self.container_log_group(
                 parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]
@@ -872,7 +873,38 @@ class DemandStage:
             cloudfront_domain=parameters[Parameter.CLOUDFRONT_DOMAIN],
             target_group_arn=target_group,
             simulator_code_key=simulator_code_key,
+            internal_alb_dns=internal[0] if internal else None,
+            internal_alb_zone_id=internal[1] if internal else None,
         )
+
+    def internal_balancer(self, vpc_id: str) -> tuple[str, str] | None:
+        """The guidance's internal load balancer (DNS name, canonical zone): the one in its VPC that its own stacks
+        created and that is not internet-facing. It takes Prebid Cache's writes from the tasks (``/cache``)."""
+        elbv2 = self.client("elbv2")
+        candidates = [
+            b
+            for page in elbv2.get_paginator("describe_load_balancers").paginate()
+            for b in page["LoadBalancers"]
+            if b.get("VpcId") == vpc_id and b.get("Scheme") == "internal" and b.get("Type") == "application"
+        ]
+        found: list[tuple[str, str]] = []
+        for start in range(0, len(candidates), 20):  # DescribeTags takes 20 ARNs
+            batch = candidates[start : start + 20]
+            tags = elbv2.describe_tags(ResourceArns=[b["LoadBalancerArn"] for b in batch])["TagDescriptions"]
+            owners = {
+                t["ResourceArn"]: {tag["Key"]: tag["Value"] for tag in t.get("Tags", [])}.get(
+                    "aws:cloudformation:stack-name", ""
+                )
+                for t in tags
+            }
+            found += [
+                (b["DNSName"], b["CanonicalHostedZoneId"])
+                for b in batch
+                if owners.get(b["LoadBalancerArn"], "").startswith(names.guidance_stack(self.prefix))
+            ]
+        if len(found) > 1:
+            raise DemandError(f"the guidance's VPC has {len(found)} internal load balancers of its own; expected one")
+        return found[0] if found else None
 
     def container_log_group(self, cluster: str, service: str) -> str | None:
         """The log group of Prebid Server's container (``Prebid-Container`` in the guidance's task definition, else its

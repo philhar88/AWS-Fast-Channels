@@ -26,7 +26,7 @@ from typing import Any, Final, Literal
 from pydantic import Field, SecretStr, SerializationInfo, SerializerFunctionWrapHandler, model_serializer
 
 from fast_channels.core import specs
-from fast_channels.core.monetization.functions import API_CONTEXT, ApiShape, Hook, release_tag, released_id
+from fast_channels.core.monetization.functions import API_CONTEXT, ApiShape, Function, Hook, release_tag, released_id
 from fast_channels.core.naming import MEDIATAILOR_NAME_MAX
 from fast_channels.core.tags import TAG_APP, TAG_OWNER, tag_key
 
@@ -344,6 +344,21 @@ def sibling_playback_configuration(
             "PRE_SESSION_INIT_FUNCTION_COMPLETED",
         ]
     return PlaybackConfiguration.model_validate(base)
+
+
+def render_function(function: Function, *, release: int, origin_secret: SecretStr) -> Function:
+    """``function`` as a release creates it: a demand-origin request (``DemandOrigin``, the ad-server route's
+    auction) gets ``X-Fast-Origin`` and ``X-Fast-Fv`` in its headers, as :func:`render` adds them to a sibling's ADS
+    request. Any other function is returned as it is. Only ever at apply: the bundle holds no secret."""
+    http = function.http_request_configuration
+    if http is None or not http.demand_origin:
+        return function
+    headers = {
+        **(http.headers or {}),
+        HEADER_ORIGIN: origin_secret.get_secret_value(),
+        HEADER_RELEASE: release_tag(release),
+    }
+    return function.model_copy(update={"http_request_configuration": http.model_copy(update={"headers": headers})})
 
 
 def render(
