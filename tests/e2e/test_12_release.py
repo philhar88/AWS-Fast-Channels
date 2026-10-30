@@ -47,16 +47,23 @@ from harness_release import (
     with_lookup,
 )
 
-from fast_channels.core.demand import ORIGIN_SECRET_SLOTS, origin_rule_group, origin_secret
+from fast_channels.core.demand import ORIGIN_SECRET_SLOTS, Parameter, origin_rule_group, origin_secret, parameter_path
 from fast_channels.core.ledger import entry_from_item
 from fast_channels.core.mediatailor_logs import EXCLUDED_ADS_LOG_FIELDS, EXCLUDED_MANIFEST_LOG_FIELDS
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.functions import release_tag
-from fast_channels.core.monetization.playback import PERSONALIZATION_THRESHOLD_SECONDS, RELEASE_OWNER
+from fast_channels.core.monetization.playback import (
+    PERSONALIZATION_THRESHOLD_SECONDS,
+    RELEASE_OWNER,
+    ROLE_LETTERS,
+    SiblingRole,
+)
 from fast_channels.core.monetization.release import ChannelState
 
 pytestmark = pytest.mark.e2e
 
+PAIR_SUFFIXES: Final = tuple(f"-p-{letter}" for letter in ROLE_LETTERS[SiblingRole.GENERAL])
+"""The pair siblings, which take the ad-server route with ``modules.demand.ad_server``."""
 DELIVERIES_PER_SIBLING: Final = 5
 """Ads and manifest logs to the module's log group and the lake, transcode logs to the log group."""
 
@@ -78,11 +85,31 @@ def siblings(release: Stage) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_every_sibling_posts_to_prebid_server_with_the_monetized_settings(siblings: dict[str, Any]) -> None:
+@pytest.fixture(scope="module")
+def ad_server_url(release: Stage) -> str | None:
+    """The mock ad server's URL with ``modules.demand.ad_server: mock`` (M8-09), else None."""
+    ssm = release.session.client("ssm", region_name=release.region)
+    try:
+        parameter = ssm.get_parameter(Name=parameter_path(release.prefix, Parameter.AD_SERVER_URL))
+    except ssm.exceptions.ParameterNotFound:
+        return None
+    return str(parameter["Parameter"]["Value"])
+
+
+def test_every_sibling_calls_its_ad_server_with_the_monetized_settings(
+    siblings: dict[str, Any], ad_server_url: str | None
+) -> None:
+    """Every sibling POSTs to Prebid Server, but with the mock ad server (M8-09) the pair siblings GET the mock's
+    ``/ads`` instead, with the origin secret; the probe stays on Prebid Server."""
     for name, configuration in siblings.items():
         server = configuration["AdDecisionServerConfiguration"]
-        assert server["HttpRequest"]["Method"] == "POST" and server["HttpRequest"]["Body"], name
-        assert "X-Fast-Origin" in server["HttpRequest"]["Headers"], name  # the value is never read here
+        request = server["HttpRequest"]
+        if ad_server_url and name.endswith(PAIR_SUFFIXES):
+            assert configuration["AdDecisionServerUrl"].startswith(f"{ad_server_url.rstrip('/')}/ads?"), name
+            assert request.get("Method", "GET") == "GET" and not request.get("Body"), name
+        else:
+            assert request["Method"] == "POST" and request["Body"], name
+        assert "X-Fast-Origin" in request["Headers"], name  # the value is never read here
         assert server["VastResponse"]["AdSequencingMode"] == "FOLLOW_AD_SEQUENCE", name
         assert configuration["PersonalizationThresholdSeconds"] == PERSONALIZATION_THRESHOLD_SECONDS, name
         assert configuration["AvailSuppression"]["Mode"] == "BEHIND_LIVE_EDGE", name

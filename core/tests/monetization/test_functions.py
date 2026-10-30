@@ -180,7 +180,9 @@ def test_function_models_match_put_function() -> None:
 
 def test_playback_models_match_put_playback_configuration() -> None:
     request = MEDIATAILOR.operation_model("PutPlaybackConfiguration").input_shape
-    _assert_matches(pb.PlaybackConfiguration, request, "PutPlaybackConfiguration", skip=frozenset({"LogConfiguration"}))
+    _assert_matches(
+        pb.PlaybackConfiguration, request, "PutPlaybackConfiguration", skip=frozenset({"LogConfiguration", "AdsOrigin"})
+    )
     assert {h.value for h in Hook} == set(request.members["FunctionMapping"].key.enum)
     logs = MEDIATAILOR.operation_model("ConfigureLogsForPlaybackConfiguration").input_shape
     _assert_matches(pb.LogConfiguration, logs, "ConfigureLogs", skip=frozenset({"PlaybackConfigurationName"}))

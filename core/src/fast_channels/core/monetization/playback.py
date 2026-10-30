@@ -23,10 +23,10 @@ from copy import deepcopy
 from enum import StrEnum
 from typing import Any, Final, Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, SerializationInfo, SerializerFunctionWrapHandler, model_serializer
 
 from fast_channels.core import specs
-from fast_channels.core.monetization.functions import ApiShape, Hook, release_tag, released_id
+from fast_channels.core.monetization.functions import API_CONTEXT, ApiShape, Function, Hook, release_tag, released_id
 from fast_channels.core.naming import MEDIATAILOR_NAME_MAX
 from fast_channels.core.tags import TAG_APP, TAG_OWNER, tag_key
 
@@ -49,6 +49,9 @@ HEADER_PROBE: Final = "X-Fast-Probe"
 HEADER_BUFFET: Final = "X-Fast-Buffet"
 """``X-Fast-Buffet: 0`` tells the module to send no standalone ads; never on a ``FOLLOW_AD_SEQUENCE`` sibling, where
 the standalones are the per-slot fallback for a first-sight creative (ad buffet on, P0-20 §4.2)."""
+AD_SERVER_TARGETING: Final = ("hb_pb", "hb_uuid", "hb_bidder")
+"""The Prebid targeting an ad-server sibling's PRE_ADS auction commits to ``player_params.<key>`` for its ADS URL
+(M8-09); the only player parameters an ADS URL may carry."""
 TICKET_TEMPLATE: Final = "{{player_params.t}}"
 TICKET_LOG_EVENTS: Final = frozenset({"RAW_ADS_REQUEST", "PRE_SESSION_INIT_FUNCTION_COMPLETED"})
 """Opt-in log events that carry the ticket; never enabled on a configuration that forwards one (DESIGN §5.7)."""
@@ -75,10 +78,17 @@ class AdsRoute(StrEnum):
     """The templated OpenRTB POST to Prebid Server (Phase 1)."""
     OPAQUE = "opaque"
     """Whole-break routing to an opaque ad server (Phase 5)."""
+    AD_SERVER = "ad_server"
+    """A GET to an ad server whose Prebid line items redirect to the pod a PRE_ADS auction cached (M8-09)."""
 
 
-SEQUENCING: Final = {AdsRoute.PBS: "FOLLOW_AD_SEQUENCE", AdsRoute.OPAQUE: "IGNORE_AD_SEQUENCE"}
-"""``FOLLOW`` keeps the module's per-slot standalones; ``FOLLOW`` would drop an unsequenced opaque pod (P0-20 §4.3)."""
+SEQUENCING: Final = {
+    AdsRoute.PBS: "FOLLOW_AD_SEQUENCE",
+    AdsRoute.OPAQUE: "IGNORE_AD_SEQUENCE",
+    AdsRoute.AD_SERVER: "FOLLOW_AD_SEQUENCE",
+}
+"""``FOLLOW`` keeps the module's per-slot standalones (also in a cached pod an ad server's Wrapper leads to); ``FOLLOW``
+would drop an unsequenced opaque pod (P0-20 §4.3)."""
 
 STORED_REQUEST_PREFIX: Final = {False: "fast-pod-", True: "fast-pod-kids-"}
 """Stored-request id prefix, by whether the sibling serves kids (the kids requests hard-code ``regs.coppa=1``)."""
@@ -231,6 +241,21 @@ class PlaybackConfiguration(ApiShape):
     function_mapping: dict[Hook, str] | None = None
     log_configuration: LogConfiguration
     tags: dict[str, str] | None = None
+    ads_origin: bool | None = None
+    """Bundle only: whether the ADS request carries the origin secret, which :func:`render` adds. ``False`` for a
+    third-party ad server (``ad_server`` ``gam`` or ``freewheel``), which must never receive it."""
+
+    @model_serializer(mode="wrap")
+    def _request(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if info.context and info.context.get(API_CONTEXT):
+            data.pop("AdsOrigin", None)
+        return data
+
+    @property
+    def sends_origin(self) -> bool:
+        """Whether :func:`render` adds the origin secret and the release to the ADS request."""
+        return self.ads_origin is not False
 
     @property
     def headers(self) -> dict[str, str]:
@@ -272,6 +297,8 @@ def sibling_playback_configuration(
     ticketed: bool = False,
     route: AdsRoute = AdsRoute.PBS,
     lab: bool = False,
+    ad_server_url: str | None = None,
+    ad_server_origin: bool = True,
 ) -> PlaybackConfiguration:
     """A sibling's desired configuration, without the secret, the release or tags (DESIGN §6.2).
 
@@ -279,24 +306,34 @@ def sibling_playback_configuration(
     configuration (``STITCHED_ONLY``, preconditioned ads, the three timeouts, the CDN prefixes, vended logs).
     ``function_mapping`` names root stems. ``lab`` siblings publish the PRE_SESSION hook events so the smoke can
     read the committed constants; a ticketed sibling never may (validator R-P2).
+
+    An :attr:`AdsRoute.AD_SERVER` sibling GETs ``ad_server_url`` (the ad server's tag with the Prebid targeting,
+    M8-09) with no body; with ``ad_server_origin`` (our own mock) it sends ``X-Fast-Pc`` and, at apply, the origin
+    secret, and without it (GAM, FreeWheel) no header of ours at all.
     """
+    if (route is AdsRoute.AD_SERVER) != (ad_server_url is not None):
+        raise ValueError("an ad-server sibling, and only one, has an ad_server_url")
     base = specs.playback_configuration(
         name=name,
         video_content_source_url=video_content_source_url,
-        ads_url=pbs_ads_url(pbs_origin),
+        ads_url=ad_server_url if ad_server_url is not None else pbs_ads_url(pbs_origin),
         content_base_url=content_base_url,
         log_percent=log_percent,
         tags={},
     )
     base.pop("Tags")
     base["PersonalizationThresholdSeconds"] = PERSONALIZATION_THRESHOLD_SECONDS
+    request: dict[str, Any] = {
+        "Method": "POST",
+        "CompressRequest": "NONE",
+        "Headers": ads_headers(name, probe=probe, ticketed=ticketed),
+        "Body": ads_body(kids=kids),
+    }
+    if route is AdsRoute.AD_SERVER:
+        request = {"Method": "GET", **({"Headers": {HEADER_CONFIGURATION: name}} if ad_server_origin else {})}
+        base["AdsOrigin"] = ad_server_origin
     base["AdDecisionServerConfiguration"] = {
-        "HttpRequest": {
-            "Method": "POST",
-            "CompressRequest": "NONE",
-            "Headers": ads_headers(name, probe=probe, ticketed=ticketed),
-            "Body": ads_body(kids=kids),
-        },
+        "HttpRequest": request,
         "VastResponse": {"AdSequencingMode": SEQUENCING[route]},
     }
     base["AvailSuppression"] = {"Mode": "BEHIND_LIVE_EDGE", "Value": "00:00:00"}
@@ -307,6 +344,21 @@ def sibling_playback_configuration(
             "PRE_SESSION_INIT_FUNCTION_COMPLETED",
         ]
     return PlaybackConfiguration.model_validate(base)
+
+
+def render_function(function: Function, *, release: int, origin_secret: SecretStr) -> Function:
+    """``function`` as a release creates it: a demand-origin request (``DemandOrigin``, the ad-server route's
+    auction) gets ``X-Fast-Origin`` and ``X-Fast-Fv`` in its headers, as :func:`render` adds them to a sibling's ADS
+    request. Any other function is returned as it is. Only ever at apply: the bundle holds no secret."""
+    http = function.http_request_configuration
+    if http is None or not http.demand_origin:
+        return function
+    headers = {
+        **(http.headers or {}),
+        HEADER_ORIGIN: origin_secret.get_secret_value(),
+        HEADER_RELEASE: release_tag(release),
+    }
+    return function.model_copy(update={"http_request_configuration": http.model_copy(update={"headers": headers})})
 
 
 def render(
@@ -320,14 +372,16 @@ def render(
     """``PutPlaybackConfiguration`` and ``ConfigureLogsForPlaybackConfiguration`` arguments for one release.
 
     Adds the origin secret (only ever here, at apply), ``X-Fast-Fv``, the release's FunctionIds and the ownership
-    tags (``fast:owner=release-controller``, ``fast:release``, ``fast:change``).
+    tags (``fast:owner=release-controller``, ``fast:release``, ``fast:change``). A configuration whose ADS is a
+    third-party ad server (:attr:`PlaybackConfiguration.sends_origin` false) gets neither header.
     """
     tag = release_tag(release)
     api = configuration.api()
     put = {key: deepcopy(value) for key, value in api.items() if key != "LogConfiguration"}
-    headers = put["AdDecisionServerConfiguration"]["HttpRequest"]["Headers"]
-    headers[HEADER_ORIGIN] = origin_secret.get_secret_value()
-    headers[HEADER_RELEASE] = tag
+    if configuration.sends_origin:
+        headers = put["AdDecisionServerConfiguration"]["HttpRequest"].setdefault("Headers", {})
+        headers[HEADER_ORIGIN] = origin_secret.get_secret_value()
+        headers[HEADER_RELEASE] = tag
     put["FunctionMapping"] = {hook: released_id(stem, release) for hook, stem in put.get("FunctionMapping", {}).items()}
     put["Tags"] = release_tags(prefix, release=release, change_id=change_id)
     return put, {"PlaybackConfigurationName": configuration.name, **api["LogConfiguration"]}

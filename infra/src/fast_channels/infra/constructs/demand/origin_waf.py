@@ -18,6 +18,11 @@ from fast_channels.infra import nag
 AUCTION_PREFIX: Final = "/openrtb2/"
 OPEN_PATHS: Final = ("/openrtb2/auction", "/status")
 """The only paths that reach Prebid Server: MediaTailor's auction and the health check."""
+CACHE_PATH: Final = "/cache"
+"""Prebid Cache's public read (the ad-server mode): ``GET``/``HEAD /cache?uuid=<uuid4>`` only."""
+CACHE_READ_METHODS: Final = ("GET", "HEAD")
+UUID4: Final = r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+"""Prebid Cache's keys (the guidance's cache function generates uuid4s)."""
 CAPACITY: Final = 50
 """Web ACL capacity units reserved for the group (immutable; the rules use about 20). The guidance's own rules use
 about 1,300, so the web ACL stays under the 1,500 units included in its price."""
@@ -58,6 +63,43 @@ def _block(
     )
 
 
+def _cache_read() -> wafv2.CfnRuleGroup.RuleProperty:
+    """``fast-cache-read``: block ``/cache`` unless the method is ``GET`` or ``HEAD`` and ``uuid`` is a uuid4."""
+    method = wafv2.CfnRuleGroup.FieldToMatchProperty(method={})
+    reads = [_match(method, verb, position="EXACTLY") for verb in CACHE_READ_METHODS]
+    uuid = wafv2.CfnRuleGroup.StatementProperty(
+        regex_match_statement=wafv2.CfnRuleGroup.RegexMatchStatementProperty(
+            field_to_match=wafv2.CfnRuleGroup.FieldToMatchProperty(single_query_argument={"Name": "uuid"}),
+            regex_string=UUID4,
+            text_transformations=[wafv2.CfnRuleGroup.TextTransformationProperty(priority=0, type="NONE")],
+        )
+    )
+    allowed = wafv2.CfnRuleGroup.StatementProperty(
+        and_statement=wafv2.CfnRuleGroup.AndStatementProperty(
+            statements=[
+                wafv2.CfnRuleGroup.StatementProperty(
+                    or_statement=wafv2.CfnRuleGroup.OrStatementProperty(statements=reads)
+                ),
+                uuid,
+            ]
+        )
+    )
+    return _block(
+        "fast-cache-read",
+        3,
+        wafv2.CfnRuleGroup.StatementProperty(
+            and_statement=wafv2.CfnRuleGroup.AndStatementProperty(
+                statements=[
+                    _path(CACHE_PATH, "EXACTLY"),
+                    wafv2.CfnRuleGroup.StatementProperty(
+                        not_statement=wafv2.CfnRuleGroup.NotStatementProperty(statement=allowed)
+                    ),
+                ]
+            )
+        ),
+    )
+
+
 class OriginGate(Construct):
     """The origin secrets and the rule group that requires one of them.
 
@@ -68,6 +110,10 @@ class OriginGate(Construct):
       Prebid Server endpoints (cache writes, user sync, events) are closed;
     - ``fast-rate``: block a client IP above ``rate_limit_per_ip`` requests to ``/openrtb2/*`` per 60 s, an abuse
       cap only: MediaTailor spreads its POSTs over many addresses.
+    - with ``cache_reads`` (the ad-server mode), ``/cache`` joins the open paths and ``fast-cache-read`` blocks every
+      request to it but ``GET`` or ``HEAD`` with a ``uuid`` that is a uuid4: MediaTailor follows an ad server's
+      Wrapper to the cached pod with a plain GET, and Prebid Server writes inside the VPC (the internal load
+      balancer), so a public write, a listing or a guess of another form never reaches the cache.
 
     The rule group reads the secrets through CloudFormation dynamic references: no secret value is in a template.
 
@@ -75,6 +121,7 @@ class OriginGate(Construct):
         prefix: deployment prefix (names).
         rate_limit_per_ip: ``modules.demand.rate_limit_per_ip``.
         removal_policy: of the secrets.
+        cache_reads: open ``GET``/``HEAD /cache?uuid=<uuid4>`` (``modules.demand.ad_server`` set).
 
     Attributes:
         secrets: origin secret A and B.
@@ -82,7 +129,14 @@ class OriginGate(Construct):
     """
 
     def __init__(
-        self, scope: Construct, id: str, *, prefix: str, rate_limit_per_ip: int, removal_policy: RemovalPolicy
+        self,
+        scope: Construct,
+        id: str,
+        *,
+        prefix: str,
+        rate_limit_per_ip: int,
+        removal_policy: RemovalPolicy,
+        cache_reads: bool = False,
     ) -> None:
         super().__init__(scope, id)
         self.secrets = [
@@ -148,7 +202,10 @@ class OriginGate(Construct):
                         not_statement=wafv2.CfnRuleGroup.NotStatementProperty(
                             statement=wafv2.CfnRuleGroup.StatementProperty(
                                 or_statement=wafv2.CfnRuleGroup.OrStatementProperty(
-                                    statements=[_path(path, "EXACTLY") for path in OPEN_PATHS]
+                                    statements=[
+                                        _path(path, "EXACTLY")
+                                        for path in (*OPEN_PATHS, *((CACHE_PATH,) if cache_reads else ()))
+                                    ]
                                 )
                             )
                         )
@@ -166,5 +223,6 @@ class OriginGate(Construct):
                         )
                     ),
                 ),
+                *([_cache_read()] if cache_reads else []),
             ],
         )

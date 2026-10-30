@@ -34,6 +34,7 @@ import stage_args
 from botocore.exceptions import ClientError
 
 from fast_channels.core import demand as names
+from fast_channels.core.ad_server import POD_CACHE_CONTEXT, AdServer, PodCacheFunction
 from fast_channels.core.demand import NETWORK_CONTEXT, SIMULATOR_CODE_PREFIX, DemandNetwork, Parameter, Subnet
 from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, simulator_creatives
 from fast_channels.core.ladder import Ladder
@@ -623,14 +624,24 @@ class DemandStage:
         """``--parameters <stack name>:<key>=<value>``: CDK keys stack parameters by the stack's name."""
         return [arg for key, value in values.items() for arg in ("--parameters", f"{stack}:{key}={value}")]
 
+    def pod_cache_function(self) -> PodCacheFunction | None:
+        """The Prebid Cache function's settings in the ad-server mode (``modules.demand.ad_server``), else None."""
+        demand = self.config.modules.demand
+        if demand.ad_server is AdServer.NONE:
+            return None
+        return PodCacheFunction(memory_mib=demand.pod_cache_memory_mb, provisioned=demand.pod_cache_concurrency)
+
     def guidance_command(
         self, *stacks: str, simulator: bool, extra: Sequence[str] = (), with_sidecar: Sidecar | None = None
     ) -> list[str | Path]:
         """``cdk deploy`` of the guidance's ``stacks``: its own ``app.py``, or with ``with_sidecar`` our wrapper of it
-        (:data:`GUIDANCE_APP`) with the sidecar as context."""
+        (:data:`GUIDANCE_APP`) with the sidecar as context, and in the ad-server mode the Prebid Cache function's
+        settings (:meth:`pod_cache_function`)."""
         venv = self.toolchain()
         app = GUIDANCE_APP if with_sidecar is not None else "app.py"
         sidecar_context = ["-c", f"{SIDECAR_CONTEXT}={with_sidecar.model_dump_json()}"] if with_sidecar else []
+        if with_sidecar is not None and (cache := self.pod_cache_function()) is not None:
+            sidecar_context += ["-c", f"{POD_CACHE_CONTEXT}={cache.model_dump_json()}"]
         return [
             CDK,
             "deploy",
@@ -843,7 +854,9 @@ class DemandStage:
         return key
 
     def network(self, simulator_code_key: str | None = None) -> DemandNetwork:
-        """The guidance's network from the SSM contract and EC2: private subnets with their zones and route tables."""
+        """The guidance's network from the SSM contract and EC2: private subnets with their zones and route tables,
+        and with an ad server (``modules.demand.ad_server``) the internal load balancer that takes the cache's
+        writes."""
         parameters = self.parameters()
         ids = parameters[Parameter.PRIVATE_SUBNET_IDS].split(",")
         ec2 = self.client("ec2")
@@ -860,6 +873,11 @@ class DemandStage:
                     tables[subnet] = table["RouteTableId"]
         groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
         [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
+        internal = (
+            self.internal_balancer(parameters[Parameter.VPC_ID])
+            if self.config.modules.demand.ad_server is not AdServer.NONE
+            else None
+        )
         return DemandNetwork(
             container_log_group=self.container_log_group(
                 parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]
@@ -872,7 +890,38 @@ class DemandStage:
             cloudfront_domain=parameters[Parameter.CLOUDFRONT_DOMAIN],
             target_group_arn=target_group,
             simulator_code_key=simulator_code_key,
+            internal_alb_dns=internal[0] if internal else None,
+            internal_alb_zone_id=internal[1] if internal else None,
         )
+
+    def internal_balancer(self, vpc_id: str) -> tuple[str, str] | None:
+        """The guidance's internal load balancer (DNS name, canonical zone): the one in its VPC that its own stacks
+        created and that is not internet-facing. It takes Prebid Cache's writes from the tasks (``/cache``)."""
+        elbv2 = self.client("elbv2")
+        candidates = [
+            b
+            for page in elbv2.get_paginator("describe_load_balancers").paginate()
+            for b in page["LoadBalancers"]
+            if b.get("VpcId") == vpc_id and b.get("Scheme") == "internal" and b.get("Type") == "application"
+        ]
+        found: list[tuple[str, str]] = []
+        for start in range(0, len(candidates), 20):  # DescribeTags takes 20 ARNs
+            batch = candidates[start : start + 20]
+            tags = elbv2.describe_tags(ResourceArns=[b["LoadBalancerArn"] for b in batch])["TagDescriptions"]
+            owners = {
+                t["ResourceArn"]: {tag["Key"]: tag["Value"] for tag in t.get("Tags", [])}.get(
+                    "aws:cloudformation:stack-name", ""
+                )
+                for t in tags
+            }
+            found += [
+                (b["DNSName"], b["CanonicalHostedZoneId"])
+                for b in batch
+                if owners.get(b["LoadBalancerArn"], "").startswith(names.guidance_stack(self.prefix))
+            ]
+        if len(found) > 1:
+            raise DemandError(f"the guidance's VPC has {len(found)} internal load balancers of its own; expected one")
+        return found[0] if found else None
 
     def container_log_group(self, cluster: str, service: str) -> str | None:
         """The log group of Prebid Server's container (``Prebid-Container`` in the guidance's task definition, else its

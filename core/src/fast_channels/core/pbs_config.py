@@ -68,6 +68,23 @@ PDS_BASE_URL: Final = f"http://127.0.0.1:{PDS_PORT}"
 """The Pod Decision Service as Prebid Server reaches it: the sidecar in the same task (ADR-0036)."""
 SIMULATOR_RECORD: Final = "sim"
 """The bidder simulator's record in the stage's private zone (``lambda`` mode)."""
+CTV_PRICE_GRANULARITY: Final[Mapping[str, Any]] = {
+    "precision": 2,
+    "ranges": [
+        {"min": 0, "max": 20, "increment": 0.10},
+        {"min": 20, "max": 50, "increment": 0.50},
+        {"min": 50, "max": 100, "increment": 1.00},
+    ],
+}
+"""``hb_pb`` buckets for CTV: 10 cents up to $20, 50 cents up to $50, $1 up to $100 (CTV CPMs run well above web
+display's, so Prebid's ``medium`` and ``high`` granularities cap too low). One line item per bucket matches it."""
+POD_CACHE_FIELD: Final = "pod_cache"
+"""``ext.fast.pod_cache``: the fast-ctv module's ad-server ask (``PodCache.FIELD`` in Java)."""
+CACHE_RECORD: Final = "cache"
+"""Prebid Cache's write endpoint in the stage's private zone: the guidance's internal load balancer (ad-server mode)."""
+CACHE_PATH: Final = "/cache"
+POD_CACHE_GROUP_MS: Final = 150
+"""What the ad-server mode adds to the exitpoint group's timeout: the composed pod's one write to Prebid Cache."""
 
 
 def private_zone(prefix: str) -> str:
@@ -80,9 +97,15 @@ def simulator_host(prefix: str) -> str:
     return f"{SIMULATOR_RECORD}.{private_zone(prefix)}"
 
 
-def stored_request_id(seconds: int, *, kids: bool = False) -> str:
-    """``fast-pod-<seconds>s`` (``fast-pod-kids-<seconds>s`` for child-directed playback configurations)."""
-    return f"fast-pod-{'kids-' if kids else ''}{seconds}s"
+def cache_host(prefix: str) -> str:
+    """Stable name of Prebid Cache's write endpoint inside the Prebid Server VPC (``cache.internal.host``)."""
+    return f"{CACHE_RECORD}.{private_zone(prefix)}"
+
+
+def stored_request_id(seconds: int, *, kids: bool = False, ad_server: bool = False) -> str:
+    """``fast-pod-<seconds>s`` (``fast-pod-kids-<seconds>s`` for child-directed playback configurations); the
+    ad-server route's are ``fast-adsrv-pod-…`` (``core.ad_server``)."""
+    return f"fast-{'adsrv-' if ad_server else ''}pod-{'kids-' if kids else ''}{seconds}s"
 
 
 class HouseAd(BaseModel):
@@ -147,6 +170,11 @@ class PbsSettings(BaseModel):
     pbs_version: str = Field(default="3.43.0", pattern=r"^\d+\.\d+\.\d+$")
     """Prebid Server Java release the configuration is for (``modules.demand.pbs_version``): 4.x needs two settings
     3.x does not have."""
+    ad_server: bool = False
+    """``modules.demand.ad_server`` is not ``none``: the ad-server route's stored requests, Prebid Cache's write
+    endpoint inside the VPC and the pod's cache write in the exitpoint's budget (M8-09)."""
+    pod_cache_seconds: int = Field(default=300, ge=30, le=3600)
+    """How long a cached pod lives in Prebid Cache (``ext.fast.pod_cache.ttlseconds``)."""
 
     @property
     def pbs_major(self) -> int:
@@ -200,9 +228,15 @@ def _slot(index: int, count: int, poddur: int) -> dict[str, Any]:
     }
 
 
-def stored_request(settings: PbsSettings, seconds: int, *, kids: bool = False) -> dict[str, Any]:
+def stored_request(
+    settings: PbsSettings, seconds: int, *, kids: bool = False, ad_server: bool = False
+) -> dict[str, Any]:
     """The stored request for a ``seconds`` break: ``seconds / 30`` structured slots of one pod, own book only, which
     may bid several ads per slot (:data:`OWN_BOOK_MAXBIDS`).
+
+    The ad-server route's (``ad_server``) is the same pod plus two asks of the fast-ctv module: cache the composed pod
+    for ``pod_cache_seconds`` (``ext.fast.pod_cache``) and answer its Prebid targeting in CTV price buckets
+    (``ext.prebid.targeting``). It sets no ``ext.prebid.cache``, so Prebid Server's core never caches single bids.
 
         Raises:
             ValueError: ``seconds`` is not one of :data:`POD_SECONDS`.
@@ -210,8 +244,16 @@ def stored_request(settings: PbsSettings, seconds: int, *, kids: bool = False) -
     if seconds not in POD_SECONDS:
         raise ValueError(f"no stored request for {seconds} s breaks: the grid is {POD_SECONDS}")
     count = seconds // SLOT_SECONDS
+    ext: dict[str, Any] = {"prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": OWN_BOOK_MAXBIDS}]}}
+    if ad_server:
+        ext["prebid"]["targeting"] = {
+            "pricegranularity": dict(CTV_PRICE_GRANULARITY),
+            "includewinners": True,
+            "includebidderkeys": False,
+        }
+        ext["fast"] = {POD_CACHE_FIELD: {"ttlseconds": settings.pod_cache_seconds}}
     return {
-        "id": stored_request_id(seconds, kids=kids),
+        "id": stored_request_id(seconds, kids=kids, ad_server=ad_server),
         "at": 1,
         "tmax": TMAX_MS,
         "cur": ["USD"],
@@ -230,7 +272,7 @@ def stored_request(settings: PbsSettings, seconds: int, *, kids: bool = False) -
         },
         "regs": {"coppa": 1 if kids else 0},
         "imp": [_slot(index, count, seconds) for index in range(1, count + 1)],
-        "ext": {"prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": OWN_BOOK_MAXBIDS}]}},
+        "ext": ext,
     }
 
 
@@ -259,7 +301,10 @@ def account(settings: PbsSettings) -> dict[str, Any]:
                     AUCTION_ENDPOINT: {
                         "stages": {
                             "processed-auction-request": _group(settings.policy_group_timeout_ms, POLICY_HOOK),
-                            "exitpoint": _group(settings.select_group_timeout_ms, VAST_HOOK),
+                            "exitpoint": _group(
+                                settings.select_group_timeout_ms + (POD_CACHE_GROUP_MS if settings.ad_server else 0),
+                                VAST_HOOK,
+                            ),
                         }
                     }
                 }
@@ -321,7 +366,19 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
             },
         },
         "metrics": {"logback": {"enabled": True, "name": "METRICS", "interval": 30}},
-        "cache": {"scheme": "https", "host": "${CACHE_HOST}", "path": "/cache", "query": "uuid="},
+        "cache": {
+            "scheme": "https",
+            "host": "${CACHE_HOST}",
+            "path": CACHE_PATH,
+            "query": "uuid=",
+            # Writes stay inside the VPC (the guidance's internal load balancer admits only the tasks); the
+            # targeting still names the public host above, where only GET /cache?uuid=<uuid4> passes the edge.
+            **(
+                {"internal": {"scheme": "http", "host": cache_host(settings.prefix), "path": CACHE_PATH}}
+                if settings.ad_server
+                else {}
+            ),
+        },
         "settings": {
             "enforce-valid-account": False,
             "generate-storedrequest-bidrequest-id": True,
@@ -369,11 +426,12 @@ def render(settings: PbsSettings) -> dict[str, str]:
     directory (where the guidance uploads them from at deploy time)."""
     files = {"current-config/prebid-config.yaml": _CONFIG_HEADER.format(prefix=settings.prefix)}
     files["current-config/prebid-config.yaml"] += to_yaml(prebid_config(settings))
-    for kids in (False, True):
-        for seconds in POD_SECONDS:
-            files[f"stored_requests/{stored_request_id(seconds, kids=kids)}.json"] = _json(
-                stored_request(settings, seconds, kids=kids)
-            )
+    for ad_server in (False, True) if settings.ad_server else (False,):
+        for kids in (False, True):
+            for seconds in POD_SECONDS:
+                files[f"stored_requests/{stored_request_id(seconds, kids=kids, ad_server=ad_server)}.json"] = _json(
+                    stored_request(settings, seconds, kids=kids, ad_server=ad_server)
+                )
     files[f"stored_accounts/{settings.prefix}.json"] = _json(account(settings))
     return files
 

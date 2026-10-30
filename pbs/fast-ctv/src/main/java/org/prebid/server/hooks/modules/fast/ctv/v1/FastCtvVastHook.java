@@ -10,6 +10,7 @@ import org.prebid.server.hooks.execution.v1.InvocationResultImpl;
 import org.prebid.server.hooks.execution.v1.exitpoint.ExitpointPayloadImpl;
 import org.prebid.server.hooks.modules.fast.ctv.core.Candidate;
 import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
+import org.prebid.server.hooks.modules.fast.ctv.core.PodCache;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyPatch;
@@ -50,6 +51,10 @@ import java.util.function.Consumer;
  * Channel Assembly slate plays. If this hook
  * is absent or times out, Prebid Server answers with its JSON, which MediaTailor refuses: the slate plays then too.
  * {@code X-Fast-Buffet: 0} omits the standalone ads, for {@code IGNORE_AD_SEQUENCE} playback configurations.
+ * <p>
+ * In the ad-server mode (a stored request with {@code ext.fast.pod_cache}, see {@link PodCache}) the same pod is
+ * stored in Prebid Cache and the answer is JSON: the pod's Prebid targeting ({@code hb_pb}, {@code hb_uuid},
+ * {@code hb_bidder}) for an ad server's line items, or no bid, so that ad server serves its house ad.
  */
 public class FastCtvVastHook implements ExitpointHook {
 
@@ -59,6 +64,7 @@ public class FastCtvVastHook implements ExitpointHook {
     public static final String HOUSE_CONFIG = "HOUSE_CONFIG";
 
     private static final String XML = "application/xml";
+    private static final String JSON = "application/json";
 
     private final SelectClient selectClient;
     private final PodRenderer renderer;
@@ -66,6 +72,7 @@ public class FastCtvVastHook implements ExitpointHook {
     private final ObjectMapper mapper;
     private final Consumer<String> log;
     private final HousePod housePod;
+    private final PodCache podCache;
 
     /**
      * @param log receives one JSON line per auction ({@code fast-ctv-pod}), or null for none
@@ -80,18 +87,32 @@ public class FastCtvVastHook implements ExitpointHook {
      */
     public FastCtvVastHook(SelectClient selectClient, PodRenderer renderer, TrackerTemplate tracker,
                            ObjectMapper mapper, Consumer<String> log, HousePod housePod) {
+        this(selectClient, renderer, tracker, mapper, log, housePod, null);
+    }
+
+    /**
+     * @param housePod the configured house ads of the pod of last resort ({@link HousePod#NONE}: none)
+     * @param podCache the ad-server mode's cache, or null to refuse the mode (the pod is then always VAST)
+     */
+    public FastCtvVastHook(SelectClient selectClient, PodRenderer renderer, TrackerTemplate tracker,
+                           ObjectMapper mapper, Consumer<String> log, HousePod housePod, PodCache podCache) {
         this.selectClient = Objects.requireNonNull(selectClient);
         this.renderer = Objects.requireNonNull(renderer);
         this.tracker = Objects.requireNonNull(tracker);
         this.mapper = Objects.requireNonNull(mapper);
         this.log = log;
         this.housePod = Objects.requireNonNull(housePod);
+        this.podCache = podCache;
     }
 
     @Override
     public Future<InvocationResult<ExitpointPayload>> call(ExitpointPayload payload, AuctionInvocationContext context) {
+        PodCache.Ask ask = null;
+        String requestId = null;
         try {
             final AuctionContext auction = context.auctionContext();
+            requestId = auction.getBidRequest().getId();
+            ask = podCache != null ? podCache.ask(auction.getBidRequest()) : null;
             final Signals signals = Signals.of(auction.getHttpRequest());
             final PolicyDecision policy = context.moduleContext() instanceof PolicyDecision decision ? decision : null;
             final List<Imp> imps = auction.getBidRequest().getImp();
@@ -100,18 +121,23 @@ public class FastCtvVastHook implements ExitpointHook {
             candidates.forEach(candidate -> byRef.put(candidate.ref(), candidate));
             final String problem = SelectClient.problem(signals, imps);
             final ObjectNode request = problem == null ? selectClient.request(signals, policy, imps, candidates) : null;
+            final PodCache.Ask cachedPod = ask;
+            final String id = requestId;
             return selectClient.select(request, problem, byRef, context.timeout().remaining())
-                    .map(outcome -> respond(payload, signals, policy, imps, candidates, byRef, outcome))
-                    .otherwise(error -> empty(payload, error));
+                    .compose(outcome -> respond(payload, context, signals, policy, imps, candidates, byRef, outcome,
+                            cachedPod))
+                    .otherwise(error -> empty(payload, error, cachedPod, id));
         } catch (RuntimeException e) {
-            return Future.succeededFuture(empty(payload, e));
+            return Future.succeededFuture(empty(payload, e, ask, requestId));
         }
     }
 
-    private InvocationResult<ExitpointPayload> respond(ExitpointPayload payload, Signals signals,
-                                                       PolicyDecision policy, List<Imp> imps,
-                                                       List<Candidate> candidates, Map<String, Candidate> byRef,
-                                                       Outcome outcome) {
+    private Future<InvocationResult<ExitpointPayload>> respond(ExitpointPayload payload,
+                                                               AuctionInvocationContext context, Signals signals,
+                                                               PolicyDecision policy, List<Imp> imps,
+                                                               List<Candidate> candidates,
+                                                               Map<String, Candidate> byRef, Outcome outcome,
+                                                               PodCache.Ask ask) {
 
         Selection chosen = outcome.selection() != null
                 ? outcome.selection()
@@ -141,10 +167,12 @@ public class FastCtvVastHook implements ExitpointHook {
             }
             return urls;
         });
-        if (log != null) {
-            log.accept(podLine(signals, policy, candidates.size(), refs, selection, outcome).toString());
+        final ObjectNode line = podLine(signals, policy, candidates.size(), refs, selection, outcome);
+        if (ask == null) {
+            logLine(line);
+            return Future.succeededFuture(xml(payload, vast));
         }
-        return xml(payload, vast);
+        return cachePod(payload, context, signals, selection, refs, vast, ask, line);
     }
 
     /** Whether the PDS's {@code /policy} patch was applied: otherwise the break was served SAFE. */
@@ -152,18 +180,65 @@ public class FastCtvVastHook implements ExitpointHook {
         return policy != null && policy.patch() != null;
     }
 
-    private InvocationResult<ExitpointPayload> empty(ExitpointPayload payload, Throwable error) {
+    /**
+     * The ad-server mode: the rendered pod goes to Prebid Cache once, and the answer is its targeting (no bid when
+     * the pod has no paid ad or the write fails).
+     */
+    private Future<InvocationResult<ExitpointPayload>> cachePod(ExitpointPayload payload,
+                                                                AuctionInvocationContext context, Signals signals,
+                                                                Selection selection, Map<String, Candidate> byRef,
+                                                                String vast, PodCache.Ask ask, ObjectNode line) {
+
+        final AuctionContext auction = context.auctionContext();
+        final List<Candidate> winners = selection.pod().stream().map(pick -> byRef.get(pick.ref())).toList();
+        final int ads = selection.pod().size() + (signals.buffet() ? selection.standalone().size() : 0);
+        final String impid = selection.pod().isEmpty() ? null : selection.pod().getFirst().impid();
+        final long started = System.nanoTime();
+        return podCache.put(vast, PodCache.price(winners), ask, auction.getAccount(), context.timeout())
+                .recover(error -> {
+                    line.put("cache_error", error.getClass().getSimpleName());
+                    return Future.succeededFuture(null);
+                })
+                .map(cached -> {
+                    line.put("cached", cached != null).put("cache_ms", (System.nanoTime() - started) / 1_000_000);
+                    if (cached != null) {
+                        line.put("hb_pb", cached.bucket()).put("uuid8", cached.uuid().substring(0, 8));
+                    }
+                    logLine(line);
+                    return json(payload, podCache.answer(auction.getBidRequest().getId(), cached,
+                            signals.decisionId(), impid, ads).toString());
+                });
+    }
+
+    private void logLine(ObjectNode line) {
+        if (log != null) {
+            log.accept(line.toString());
+        }
+    }
+
+    private InvocationResult<ExitpointPayload> empty(ExitpointPayload payload, Throwable error, PodCache.Ask ask,
+                                                     String requestId) {
         if (log != null) {
             log.accept(mapper.createObjectNode().put("evt", "fast-ctv-pod")
                     .put("error", error.getClass().getSimpleName()).toString());
         }
-        return xml(payload, PodRenderer.EMPTY_VAST);
+        return ask != null
+                ? json(payload, podCache.answer(requestId, null, null, null, 0).toString())
+                : xml(payload, PodRenderer.EMPTY_VAST);
     }
 
     private static InvocationResult<ExitpointPayload> xml(ExitpointPayload payload, String body) {
+        return replace(payload, XML, body);
+    }
+
+    private static InvocationResult<ExitpointPayload> json(ExitpointPayload payload, String body) {
+        return replace(payload, JSON, body);
+    }
+
+    private static InvocationResult<ExitpointPayload> replace(ExitpointPayload payload, String type, String body) {
         final MultiMap headers = MultiMap.caseInsensitiveMultiMap()
                 .addAll(payload.responseHeaders())
-                .set(HttpUtil.CONTENT_TYPE_HEADER, XML);
+                .set(HttpUtil.CONTENT_TYPE_HEADER, type);
         return InvocationResultImpl.<ExitpointPayload>builder()
                 .status(InvocationStatus.success)
                 .action(InvocationAction.update)

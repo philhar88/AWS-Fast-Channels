@@ -38,7 +38,7 @@ from fast_channels.core.ledger import LedgerKind, new_record_id
 from fast_channels.core.mediatailor_logs import RECORD_FIELDS, VENDED_LOG_TYPES
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.functions import release_tag
-from fast_channels.core.monetization.playback import release_tags, render
+from fast_channels.core.monetization.playback import release_tags, render, render_function
 from fast_channels.core.monetization.release import (
     DONE,
     ReleaseStatus,
@@ -52,9 +52,11 @@ from fast_channels.core.monetization.validators import (
     Rule,
     Violation,
     check_rendered,
+    check_rendered_function,
     check_secret_free,
     require_valid,
 )
+from fast_channels.core.tags import tag_key
 from fast_channels.functions import aws
 from fast_channels.functions.channel_ops import is_missing
 from fast_channels.functions.ops.ledger import append, entry
@@ -63,6 +65,7 @@ from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
+    from pydantic import SecretStr
 
     from fast_channels.core.monetization.bundle import Bundle, MonetizedChannel, Sibling
     from fast_channels.core.monetization.functions import Function
@@ -198,17 +201,37 @@ def put_function(function: Function) -> bool:
     return False
 
 
-def put_functions(bundle_key: str, release: int, change_id: str, siblings: list[str]) -> dict[str, Any]:
+ORIGIN_SLOT_TAG: Final = tag_key("origin-slot")
+"""``fast:origin-slot``: the origin secret slot a demand-origin Function carries (a rotation re-creates those trees
+before it retires the slot)."""
+
+
+def put_functions(
+    bundle_key: str, release: int, change_id: str, siblings: list[str], *, slot: str | None = None
+) -> dict[str, Any]:
     """The Function trees ``siblings`` map, with the ids of ``release``, children before the executors that run
-    them."""
+    them. A demand-origin request (the ad-server route's auction) gets the origin secret of ``slot`` (default: the
+    current one) and the release in its headers here, and a ``fast:origin-slot`` tag."""
     config = settings()
     config.require("prefix")
     tags = release_tags(config.prefix, release=release, change_id=change_id)
     bundle = store.bundle(bundle_key)
     created: list[str] = []
     existing: list[str] = []
+    secret: SecretStr | None = None
     for function in mapped_functions(bundle, [_sibling(bundle, name) for name in siblings]):
-        released = function.released(release, tags=tags)
+        http = function.http_request_configuration
+        origin = http is not None and bool(http.demand_origin)
+        if origin and secret is None:
+            slot = slot or store.origin_slot()
+            secret = store.secret(slot)
+        released = function.released(release, tags={**tags, **({ORIGIN_SLOT_TAG: slot} if origin and slot else {})})
+        if origin and secret is not None:
+            released = render_function(released, release=release, origin_secret=secret)
+        if secret is not None:
+            require_valid(
+                check_rendered_function(released.put_request(), release=release, secrets=[secret], demand_origin=origin)
+            )
         (created if put_function(released) else existing).append(released.function_id)
     logger.info("functions in place", extra={"release": release, "new": created, "existing": existing})
     return {"created": created, "existing": existing}
@@ -279,7 +302,7 @@ def configure(bundle_key: str, sibling_name: str, release: int, change_id: str) 
     put, logging = render(
         sibling.playback, prefix=config.prefix, release=release, change_id=change_id, origin_secret=secret
     )
-    require_valid(check_rendered(put, release=release, secrets=[secret]))
+    require_valid(check_rendered(put, release=release, secrets=[secret], sends_origin=sibling.playback.sends_origin))
     mediatailor = aws.client("mediatailor")
     response = mediatailor.put_playback_configuration(**put)
     mediatailor.configure_logs_for_playback_configuration(**logging)

@@ -17,7 +17,8 @@ Rules (:class:`Rule`):
   ``avail.random``, and read a session only as ``session.uuid`` (the cache is per configuration and partitioned about
   4 ways, P0-10).
 - **R-F5** A PRE_ADS lookup's ``Url``, ``Headers``, ``Body`` and ``Key`` read only ``scte.segmentation_upid``,
-  ``scte.event_id`` and constants.
+  ``scte.event_id`` and constants. A per-session request (an auction, ``session`` or ``session_break`` scope) may also
+  read ``session.uuid`` and the avail's duration, and ``session.user_agent`` in a header; never a player value.
 - **R-F6** PRE_SESSION writes literals only, never ``player_params.t`` or ``manifest.*``; its root executor
   re-exports every committed key; the session controls (suppression mode and value together) are committed as
   DESIGN §5.3 sets them.
@@ -39,6 +40,9 @@ Rules (:class:`Rule`):
 - **R-P5** Every grid duration has a stored request; zero, missing (300 s) and off-grid durations have none, so
   they fail safe to the slate.
 - **R-P6** Sibling names ``<prefix>-<ch>-p-[a-z0-9]`` of a monetized channel.
+- **R-P7** The ad-server route (M8-09): the sibling's PRE_ADS tree runs one demand-origin auction (``DemandOrigin``:
+  the apply adds the secret, so it targets the auction and never sets the header itself), PRE_SESSION blanks the
+  targeting player parameters, and the ADS URL passes them; a third-party ad server gets no header of ours.
 - **R-C1** Channel policy ``ArnLike aws:SourceArn`` = the v3.0.0 configuration and ``<ch>-p-?``: nothing after
   ``-p-?``, no ``*`` (``<ch>*`` admitted another channel's sibling 51/72, P0-08).
 - **R-S1** Every SINGLE prefetch schedule sets ``scte.event_id``, ``scte.segmentation_upid`` and
@@ -84,6 +88,7 @@ from fast_channels.core.monetization.functions import (
 )
 from fast_channels.core.monetization.jsonata_allowlist import ALLOWED_FUNCTIONS
 from fast_channels.core.monetization.playback import (
+    AD_SERVER_TARGETING,
     BODY_VARIABLES,
     HEADER_BUFFET,
     HEADER_CONFIGURATION,
@@ -91,6 +96,7 @@ from fast_channels.core.monetization.playback import (
     HEADER_PROBE,
     HEADER_RELEASE,
     HEADER_TICKET,
+    PBS_AUCTION_PATH,
     PERSONALIZATION_THRESHOLD_SECONDS,
     ROLE_LETTERS,
     SEQUENCING,
@@ -121,6 +127,7 @@ class Rule(StrEnum):
     P4 = "R-P4"
     P5 = "R-P5"
     P6 = "R-P6"
+    P7 = "R-P7"
     C1 = "R-C1"
     S1 = "R-S1"
     A1 = "R-A1"
@@ -240,6 +247,10 @@ CACHE_TTL_FLOOR_SECONDS: Final = 1
 CACHE_REASON_MIN: Final = 20
 """A scope's reason is a sentence, not a token."""
 CONTENT_LOOKUP_PATHS: Final = frozenset({"scte.segmentation_upid", "scte.event_id"})
+SESSION_REQUEST_PATHS: Final = frozenset({SESSION_ID, "session.avail_duration_secs", "session.avail_duration_ms"})
+"""What a per-session PRE_ADS request (an auction) may read besides the content ids: MediaTailor generates them."""
+SESSION_REQUEST_HEADER_PATHS: Final = frozenset({"session.user_agent"})
+"""Client-influenced, so only in a header (never the URL or the body, where a quote could break it; R-P1)."""
 PRE_ADS_FORBIDDEN_WRITES: Final = re.compile(r"(?:session|scte|avail|asset)\..+|adsRequest\.(?:url|method|body)")
 """PRE_ADS outputs that would change the ADS URL, the body, or the variables they substitute (R-P1)."""
 TICKET_KEY: Final = "player_params.t"
@@ -707,11 +718,23 @@ def _check_pre_ads(tree: _Tree, routes: Collection[AdsRoute]) -> Iterator[Violat
                         f"function {function.function_id} Output[{key}]",
                         "a PRE_ADS function never rewrites the ADS URL, the body or the variables they read",
                     )
+        http = function.http_request_configuration
+        per_session = http is not None and http.cache_scope in (CacheScope.SESSION, CacheScope.SESSION_BREAK)
         for value in _request_values(function):
-            if value.analysis and (extra := sorted(value.analysis.paths - CONTENT_LOOKUP_PATHS)):
-                yield _violation(
-                    Rule.F5, value.where, f"reads {extra}; a PRE_ADS lookup reads only the SCTE-35 ids and constants"
+            allowed = CONTENT_LOOKUP_PATHS
+            if per_session:
+                if value.where.endswith("Cache.Key"):
+                    continue  # a per-session key names the session: R-F8 holds it to its scope
+                allowed = allowed | SESSION_REQUEST_PATHS
+                if "Headers[" in value.where:
+                    allowed = allowed | SESSION_REQUEST_HEADER_PATHS
+            if value.analysis and (extra := sorted(value.analysis.paths - allowed)):
+                rule = (
+                    "a per-session PRE_ADS request reads the SCTE-35 ids, the session id and the avail's duration"
+                    if per_session
+                    else "a PRE_ADS lookup reads only the SCTE-35 ids and constants"
                 )
+                yield _violation(Rule.F5, value.where, f"reads {extra}; {rule}")
 
 
 # --- the ADS request -----------------------------------------------------------------------------------------------
@@ -774,10 +797,19 @@ def check_headers(sibling: Sibling) -> list[Violation]:
     where = f"sibling {sibling.name} Headers"
     headers = sibling.playback.headers
     found: list[Violation] = []
-    if url_params := sorted(set(re.findall(r"\[(player_params\.[^\]]*)\]", sibling.playback.ad_decision_server_url))):
+    url_params = set(re.findall(r"\[(player_params\.[^\]]*)\]", sibling.playback.ad_decision_server_url))
+    if sibling.route is AdsRoute.AD_SERVER:
+        url_params -= {f"player_params.{key}" for key in AD_SERVER_TARGETING}  # the auction's, not the player's
+    if url_params:
         found.append(
-            _violation(Rule.P2, f"sibling {sibling.name} AdDecisionServerUrl", f"carries {url_params}; never the URL")
+            _violation(
+                Rule.P2, f"sibling {sibling.name} AdDecisionServerUrl", f"carries {sorted(url_params)}; never the URL"
+            )
         )
+    if not sibling.playback.sends_origin:
+        if headers:
+            found.append(_violation(Rule.P2, where, "a third-party ad server gets no header of ours"))
+        return found
     for name, text in headers.items():
         variables = template_variables(text)
         if unknown := [v for v in variables if not _known_variable(v)]:
@@ -832,9 +864,73 @@ def _check_playback(sibling: Sibling, bundle: Bundle, trees: Mapping[Hook, _Tree
             where=f"{where} Body",
         )
     yield from check_headers(sibling)
+    yield from _check_ad_server(sibling, bundle, trees)
     yield from check_live_maximum(playback, pre_ads_ms=trees[Hook.PRE_ADS].timeout_ms if Hook.PRE_ADS in trees else 0)
     yield from check_ad_behaviour(sibling)
     yield from _check_budgets(where, trees)
+
+
+_AUCTION_BODY: Final = re.compile(r"'([A-Za-z0-9_-]*)' & \$string\(session\.avail_duration_secs\) & 's'")
+"""How an auction's JSONata body names its stored request (``core.ad_server.auction_body``)."""
+
+
+def _origin_requests(trees: Iterable[_Tree]) -> list[Function]:
+    return [
+        f
+        for tree in trees
+        for f in tree.functions
+        if f.http_request_configuration is not None and f.http_request_configuration.demand_origin
+    ]
+
+
+def check_demand_origin(function: Function) -> list[Violation]:
+    """R-P7 on a demand-origin request: a POST to the auction that leaves the origin secret and the release to the
+    apply, so the secret goes nowhere else and the bundle never holds it."""
+    http, where = function.http_request_configuration, f"function {function.function_id}"
+    if http is None or not http.demand_origin:
+        return []
+    found: list[Violation] = []
+    head = _value(f"{where} Url", http.url)
+    url = head.text if not head.expression else (_leftmost(head.analysis.tree).value if head.analysis else "")
+    if not (isinstance(url, str) and url.startswith("https://") and f"{PBS_AUCTION_PATH}?" in url):
+        found.append(
+            _violation(Rule.P7, f"{where} Url", f"a demand-origin request POSTs to https://<origin>{PBS_AUCTION_PATH}?")
+        )
+    if http.method_type != "POST":
+        found.append(_violation(Rule.P7, where, "a demand-origin request is a POST"))
+    if {name.lower() for name in http.headers or {}} & {HEADER_ORIGIN.lower(), HEADER_RELEASE.lower()}:
+        found.append(_violation(Rule.P7, f"{where} Headers", "the apply adds the origin secret and the release"))
+    return found
+
+
+def _check_ad_server(sibling: Sibling, bundle: Bundle, trees: Mapping[Hook, _Tree]) -> Iterator[Violation]:
+    """R-P7 and R-P5 for one sibling: an ad-server sibling runs one auction, whose stored request exists for every
+    grid duration, and blanks the targeting at session start; no other sibling runs one."""
+    where = f"sibling {sibling.name}"
+    auctions = _origin_requests([trees[Hook.PRE_ADS]] if Hook.PRE_ADS in trees else [])
+    if _origin_requests([tree for hook, tree in trees.items() if hook is not Hook.PRE_ADS]):
+        yield _violation(Rule.P7, where, "a demand-origin request runs only at PRE_ADS")
+    if sibling.route is not AdsRoute.AD_SERVER:
+        if auctions:
+            yield _violation(Rule.P7, where, "only an ad-server sibling runs a PRE_ADS auction")
+        return
+    if len(auctions) != 1:
+        yield _violation(Rule.P7, where, f"an ad-server sibling's PRE_ADS tree runs one auction, not {len(auctions)}")
+    for auction in auctions:
+        yield from check_demand_origin(auction)
+        body = (auction.http_request_configuration.body if auction.http_request_configuration else None) or ""
+        at = f"function {auction.function_id} Body"
+        if (match := _AUCTION_BODY.search(body)) is None:
+            yield _violation(Rule.P5, at, "names its stored request by the break's length")
+            continue
+        template = f'{{"id":"{match.group(1)}{{{{session.avail_duration_secs}}}}s"}}'
+        yield from check_stored_requests(
+            template, stored_requests=bundle.stored_requests, grid_seconds=bundle.grid_seconds, where=at
+        )
+    session = trees.get(Hook.PRE_SESSION)
+    committed = set(session.root.output) if session else set()
+    if missing := sorted({f"player_params.{key}" for key in AD_SERVER_TARGETING} - committed):
+        yield _violation(Rule.P7, where, f"PRE_SESSION commits {missing} empty, so a player cannot set them")
 
 
 def check_live_maximum(playback: PlaybackConfiguration, *, pre_ads_ms: int) -> list[Violation]:
@@ -1062,16 +1158,23 @@ def load_bundle(document: Mapping[str, Any]) -> tuple[Bundle | None, list[Violat
 # --- at apply ------------------------------------------------------------------------------------------------------
 
 
-def check_rendered(put: Mapping[str, Any], *, release: int, secrets: Sequence[SecretStr]) -> list[Violation]:
+def check_rendered(
+    put: Mapping[str, Any], *, release: int, secrets: Sequence[SecretStr], sends_origin: bool = True
+) -> list[Violation]:
     """Checks of a rendered ``PutPlaybackConfiguration`` request just before it is sent (R-P2, R-F1).
 
     ``secrets`` are the origin values the rule group accepts; the request carries one of them in ``X-Fast-Origin``
-    and nowhere else, ``X-Fast-Fv`` names ``release``, and every mapped FunctionId is of that release.
+    and nowhere else, ``X-Fast-Fv`` names ``release``, and every mapped FunctionId is of that release. A
+    configuration whose ADS is a third-party ad server (``sends_origin`` false) carries neither header and no secret.
     """
     where = f"rendered {put.get('Name', '?')}"
     found: list[Violation] = []
     headers = ((put.get("AdDecisionServerConfiguration") or {}).get("HttpRequest") or {}).get("Headers") or {}
     values = {s.get_secret_value() for s in secrets}
+    if not sends_origin:
+        if {HEADER_ORIGIN, HEADER_RELEASE} & set(headers) or any(v and v in json.dumps(put) for v in values):
+            found.append(_violation(Rule.P2, where, "a third-party ad server never gets the origin secret"))
+        return found + _released_mapping(put, release=release, where=where)
     if headers.get(HEADER_ORIGIN) not in values:
         found.append(_violation(Rule.P2, where, f"{HEADER_ORIGIN} carries a current origin secret"))
     rest = json.dumps({**put, "AdDecisionServerConfiguration": None}) + json.dumps(
@@ -1082,13 +1185,43 @@ def check_rendered(put: Mapping[str, Any], *, release: int, secrets: Sequence[Se
         found.append(_violation(Rule.P2, where, f"the origin secret appears outside {HEADER_ORIGIN}"))
     if headers.get(HEADER_RELEASE) != release_tag(release):
         found.append(_violation(Rule.P2, where, f"{HEADER_RELEASE} is {release_tag(release)}"))
+    return found + _released_mapping(put, release=release, where=where)
+
+
+def check_rendered_function(
+    put: Mapping[str, Any], *, release: int, secrets: Sequence[SecretStr], demand_origin: bool
+) -> list[Violation]:
+    """R-P7 on a rendered ``PutFunction`` request just before it is sent: a demand-origin request carries a current
+    origin secret in ``X-Fast-Origin`` and nowhere else, and ``X-Fast-Fv`` names ``release``; any other function
+    carries no secret at all."""
+    where = f"rendered function {put.get('FunctionId', '?')}"
+    values = {s.get_secret_value() for s in secrets}
+    http = put.get("HttpRequestConfiguration") or {}
+    headers = http.get("Headers") or {}
+    if not demand_origin:
+        leaked = any(v and v in json.dumps(put) for v in values)
+        return [_violation(Rule.P7, where, "only a demand-origin request carries the origin secret")] if leaked else []
+    found: list[Violation] = []
+    if headers.get(HEADER_ORIGIN) not in values:
+        found.append(_violation(Rule.P7, where, f"{HEADER_ORIGIN} carries a current origin secret"))
+    rest = json.dumps({**put, "HttpRequestConfiguration": {**http, "Headers": None}}) + json.dumps(
+        {k: v for k, v in headers.items() if k != HEADER_ORIGIN}
+    )
+    if any(v and v in rest for v in values):
+        found.append(_violation(Rule.P7, where, f"the origin secret appears outside {HEADER_ORIGIN}"))
+    if headers.get(HEADER_RELEASE) != release_tag(release):
+        found.append(_violation(Rule.P7, where, f"{HEADER_RELEASE} is {release_tag(release)}"))
+    return found
+
+
+def _released_mapping(put: Mapping[str, Any], *, release: int, where: str) -> list[Violation]:
+    """R-F1: every mapped FunctionId is of ``release``."""
     suffix = f"_{release_tag(release)}"
-    found += [
+    return [
         _violation(Rule.F1, where, f"{hook} maps {function_id!r}, not a FunctionId of {release_tag(release)}")
         for hook, function_id in (put.get("FunctionMapping") or {}).items()
         if not (function_id.endswith(suffix) and re.fullmatch(FUNCTION_ID_PATTERN, function_id))
     ]
-    return found
 
 
 def check_secret_free(text: str, *, secrets: Iterable[SecretStr], where: str) -> list[Violation]:

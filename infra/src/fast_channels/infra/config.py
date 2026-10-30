@@ -23,6 +23,7 @@ from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
+from fast_channels.core.ad_server import AdServer
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
@@ -599,6 +600,35 @@ class DemandModule(_Module):
     rate_limit_per_ip: int = Field(default=20_000, ge=10, le=2_000_000_000)
     """Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any
     MediaTailor egress address's rate)."""
+    ad_server: AdServer = AdServer.NONE
+    """Where the monetized pair siblings send a break's ad request (M8-09): ``none`` (Prebid Server answers the pod as
+    VAST), ``mock`` (the demo's GAM-like ad server), ``gam`` or ``freewheel`` (``ad_server_tag``). With an ad server,
+    a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the
+    release module."""
+    ad_server_tag: str = ""
+    """``gam`` and ``freewheel``: the publisher's VAST tag URL, with ``{prebid}`` once where the targeting key-values
+    go (inside ``cust_params`` for GAM, in the key-value section for FreeWheel); empty otherwise."""
+    pod_cache_seconds: int = Field(default=300, ge=30, le=3600)
+    """How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break."""
+    pod_cache_concurrency: int = Field(default=8, ge=0, le=1000)
+    """With an ad server: provisioned concurrency of the guidance's Prebid Cache function, whose writes are on an
+    auction's deadline (a new instance takes about 1.4 s to start). A 100-session break in real time peaked at 6
+    instances (docs/demand.md, "The cache function"): about 0.06-0.08 per session of the largest break. 0: none."""
+    pod_cache_memory_mb: int = Field(default=1769, ge=128, le=10240)
+    """With an ad server: the Prebid Cache function's memory. One vCPU: an instance's first cache connection took
+    about 1 s at the guidance's 256 MB and about 250 ms at 1,769 MB."""
+
+    @model_validator(mode="after")
+    def _ad_server_tag(self) -> Self:
+        match self.ad_server:
+            case AdServer.GAM | AdServer.FREEWHEEL:
+                if not self.ad_server_tag.startswith("https://") or self.ad_server_tag.count("{prebid}") != 1:
+                    raise ValueError(
+                        f"ad_server {self.ad_server} needs ad_server_tag: an https URL with {{prebid}} once"
+                    )
+            case _ if self.ad_server_tag:
+                raise ValueError(f"ad_server_tag is only for gam and freewheel, not {self.ad_server}")
+        return self
 
     @model_validator(mode="after")
     def _within_task_limits(self) -> Self:
@@ -808,6 +838,10 @@ class ModulesConfig(_Section):
             for name, needs in _MODULE_NEEDS.items()
             if self.enabled(name) and (missing := [need for need in needs if not self.enabled(need)])
         ]
+        if self.demand.enabled and self.demand.ad_server is not AdServer.NONE and not self.release.enabled:
+            problems.append(
+                f"demand.ad_server {self.demand.ad_server} needs release: its PRE_ADS auction is a release Function"
+            )
         if problems:
             raise ValueError("\n".join(problems))
         return self

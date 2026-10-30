@@ -15,6 +15,7 @@ demo creatives, and the census-gated scaling with its warm-up are in place. The 
 - [The fast-ctv module](#the-fast-ctv-module)
 - [Demo demand and the bidder simulator](#demo-demand-and-the-bidder-simulator)
 - [Scaling: the census gate, dayparts and warm-up](#scaling-the-census-gate-dayparts-and-warm-up)
+- [An ad server in front: Prebid results for its VAST](#an-ad-server-in-front-prebid-results-for-its-vast)
 - [Deploy and destroy](#deploy-and-destroy)
 - [Rules the configuration relies on](#rules-the-configuration-relies-on)
 
@@ -237,6 +238,123 @@ sends requests to tasks still starting, which refuse them (HTTP 502).
 `scripts/prebid_guidance.py herd --rate 400 --seconds 6` replays a break herd with the warm-up project and prints
 vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s on 2 tasks.
 
+## An ad server in front: Prebid results for its VAST
+
+With `modules.demand.ad_server` set, an ad server decides the break and Prebid's results reach it as key-values: the
+standard Prebid video flow for an ad server ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)). The
+default, `none`, is the direct route above, unchanged.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `modules.demand.ad_server` | `none` | `none`, `mock` (the demo's ad server), `gam` or `freewheel`. Needs the release module |
+| `modules.demand.ad_server_tag` | `""` | `gam`/`freewheel`: the publisher's VAST tag, with `{prebid}` once where the key-values go |
+| `modules.demand.pod_cache_seconds` | `300` | How long Prebid Cache keeps a break's pod |
+| `modules.demand.pod_cache_concurrency` | `8` | Provisioned concurrency of the guidance's Prebid Cache function (0: none). See [the cache function](#the-cache-function) |
+| `modules.demand.pod_cache_memory_mb` | `1769` | The Prebid Cache function's memory (one vCPU; the guidance's own is 256 MB) |
+
+How a break is sold on this route:
+
+1. **Session start.** The PRE_SESSION tree blanks `player_params.hb_pb`, `hb_uuid` and `hb_bidder`, so a value the
+   player sends never reaches the ad server.
+2. **The auction.** A PRE_ADS Function POSTs the break's auction to Prebid Server through its CloudFront and the
+   origin rule, before the ad request. It sends what MediaTailor's direct POST sends:
+   - the break in the query;
+   - the session and the configuration in headers, plus the viewer's `User-Agent`;
+   - in the body, only the stored request `fast-adsrv-pod-<seconds>s`;
+   - the origin secret and the release, which the Release Controller adds when it creates the Function.
+
+   The Function is cached per session and break (scope `session_break`, 30 s), so a break's auction runs once. Its
+   request timeout is 1,200 ms, and with the 2,000 ms ad request the siblings' 6,000 ms Live maximum holds.
+3. **The pod.**
+   - Prebid Server runs the auction as on the direct route: `/policy` patches the request, and `/select` picks the
+     pod, with its reservations and pod rules.
+   - The fast-ctv module renders the pod, our impression tracker on every ad. The stored request's
+     `ext.fast.pod_cache` asks it to store that pod in Prebid Cache once, through Prebid Server's own cache client.
+   - It answers one bid with the pod's Prebid targeting:
+     - `hb_pb`: the bucket of the sum of the paid winners' prices, in CTV buckets of 0.10 up to $20, 0.50 up to $50
+       and 1.00 up to $100;
+     - `hb_uuid` and `hb_cache_id`: the cache key;
+     - `hb_bidder`: `fast-ctv`;
+     - `hb_cache_host` and `hb_cache_path`.
+   - A pod of house ads only, an empty pod or a failed write answers no bid.
+4. **The ad request.** MediaTailor GETs the ad server's tag with the three keys for this break. A Prebid line item
+   that matches `hb_pb` answers a VAST Wrapper to `https://<guidance CloudFront>/cache?uuid=<hb_uuid>`. Anything else
+   gets the ad server's own ads.
+5. **The pod plays.** MediaTailor follows the Wrapper and stitches the pod as it stitches the direct route's:
+   winners in `sequence` order, a standalone in a slot whose ad fails, slate for the rest.
+
+**Prebid Cache** is the guidance's own: ElastiCache Serverless (Valkey) behind its cache function, with uuid4 keys.
+- **Writes stay inside the VPC.** Prebid Server's `cache.internal` names `cache.<prefix>.fast.internal`, a private
+  record of the guidance's internal load balancer, which admits only the Prebid Server tasks.
+- **Reads are public.** The origin rule group opens `/cache` only to `GET` or `HEAD` with a `uuid` that is a uuid4.
+  Any other method, path form or query, a public `POST` included, is blocked at the edge. CloudFront caches a read
+  per `uuid` for the entry's remaining life.
+
+The private record needs the guidance's internal load balancer, which the deploy finds in the guidance's VPC.
+
+**The mock ad server** (`mock`, the demo) sits beside the bidder simulator:
+- It answers `GET /ads` behind an API Gateway HTTP API (throttled to 200/s), and only for requests that carry the
+  stage's origin secret, as the origin rule requires of Prebid Server's callers. The function's permission is scoped
+  to the API.
+- It works like a GAM network with one Prebid line item per price bucket. A request whose `hb_pb` is a bucket, with
+  a uuid4 `hb_uuid` and a bidder, gets the Prebid line's Wrapper to the cached pod (`allowMultipleAds="true"`).
+  Anything else gets the house line's Wrapper to the stage's house pod.
+- It logs each decision with its line, session and break.
+
+**Google Ad Manager** (`gam`). These instructions cannot be tested here without a GAM network. They follow Prebid's
+setup guides for GAM (*Google Ad Manager with Prebid Step by Step* and *Setting up Prebid Video in GAM*):
+
+- **Tag:** the publisher's VAST tag with the key-values inside `cust_params`, for example
+  `https://pubads.g.doubleclick.net/gampad/ads?iu=/<network>/<ad unit>&sz=1920x1080&gdfp_req=1&output=vast&env=vp&unviewed_position_start=1&correlator=[avail.random]&cust_params={prebid}`.
+  The deployment replaces `{prebid}` with `hb_pb%3D[player_params.hb_pb]%26hb_uuid%3D[player_params.hb_uuid]%26hb_bidder%3D[player_params.hb_bidder]`.
+- **Line items:** price-priority line items, one per bucket above, each targeting `hb_pb` with its bucket.
+- **Creative:** a VAST redirect creative with the URL `https://<guidance CloudFront>/cache?uuid=%%PATTERN:hb_uuid%%`,
+  its duration the longest break.
+- **Rule:** the pod a Wrapper leads to must be the whole break, so do not let an ad rule add other ads beside it.
+
+**FreeWheel** (`freewheel`). These instructions cannot be tested here without a FreeWheel network. They follow
+Prebid's *Setting up Prebid Video in FreeWheel*:
+
+- **Tag:** the publisher's ad request with `{prebid}` in its key-value section, after the first `;`. The deployment
+  replaces it with `hb_pb=[player_params.hb_pb]&hb_uuid=[player_params.hb_uuid]&hb_bidder=[player_params.hb_bidder]`.
+- **Placements:** one per bucket, each with custom targeting `hb_pb` on its bucket.
+- **Creative:** VAST URL `https://<guidance CloudFront>/cache?uuid=#{request.keyValue("hb_uuid")}`.
+- **Difference from Prebid's guide:** Prebid's FreeWheel long-form guide targets `hb_pb_cat_dur`, one key per ad, so
+  that FreeWheel assembles the pod. Here the pod is already assembled, under the Pod Decision Service's rules, so one
+  key decides it.
+
+**What this route trades.**
+- The ad server decides the break as one unit: one price for the whole pod.
+- The auction adds up to 1,300 ms before the ad request.
+- The auction is MediaTailor's Function request, which carries no viewer IP, so `/policy` sets no `device.ip`.
+- A break answers no bid when the cache write does not finish within the exitpoint's time. That happens when the
+  cache function has no instance ready, or when `/select` is slow and leaves no time for the write. The ad server
+  then serves its house ad. See [the cache function](#the-cache-function) for how the stage keeps instances ready.
+- An instance of provisioned concurrency costs about $0.021 an hour at 1,769 MB (arm64), so the default 8 cost about
+  $0.17 an hour, about $124 a month, whether or not a channel is on air.
+
+### The cache function
+
+The composed pod's write goes to the guidance's Prebid Cache function, through its internal load balancer, on the
+auction's deadline: the exitpoint's extra 150 ms. In the ad-server mode, the guidance wrapper (`scripts/guidance_app.py`)
+gives that function its memory and an alias `live` with provisioned concurrency, which the guidance's four Lambda target
+groups invoke instead of the function ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)).
+
+Measured on a throwaway stage with 100 smart-TV sessions (lane D's herd driver, 2026-10-30):
+
+| Cache function | Break | Pods cached | Peak instances | Notes |
+|---|---|---|---|---|
+| 256 MB, no provisioned concurrency (the guidance's own) | one in real time | 83 of 100 | 31 | 28 new instances, each about 1.4 s to start; their writes timed out |
+| 256 MB, 4 provisioned | one in real time | 79 of 100 | 31 | each provisioned instance's first cache connection took about 1 s, so the burst spilled over |
+| 1,769 MB, 4 provisioned | one in real time | 98 of 100 | 8 | the first connection took about 250 ms; 27 invocations spilled over |
+| 1,769 MB, 8 provisioned | one in real time | 100 of 100 | 6 | write p95 83 ms, p99 104 ms; 1 invocation spilled over |
+| 1,769 MB, 8 provisioned | five, prefetched | 564 of 583 | 28 | breaks 1, 2 and 4 wrote every pod. 18 misses came in break 3, which every session asked for twice: the prefetcher had re-created its schedule, fixed since. 1 miss came in break 5 |
+
+So a break in real time needs about 0.06–0.08 ready instances per session, and a prefetched one less: its requests
+spread over the retrieval window. Set `pod_cache_concurrency` from the audience of the largest break. The guidance's
+handler connects to the cache on an instance's first request, so the memory matters for the CPU that connection
+needs, not for an instance's start (about 1.4 s at any size).
+
 ## Deploy and destroy
 
 ```bash
@@ -313,6 +431,24 @@ steps locally) deploys `STAGE=fastci MODULES=ops,demand` (the `fastci` stage wit
 ledger archive, and fails on any residue but KMS keys pending deletion. A run takes about two and a half hours and
 costs a few US dollars. The tests take a few minutes and must start within the census gate's 15 minutes: the leg runs
 no channel, so the gate then scales Prebid Server to zero.
+
+**The ad-server leg** (`tests/e2e/test_15_ad_server.py`) needs the stage `fastciads`: `fastci` with
+`ad_server: mock` and a 900 s pod cache, so that every pod of the run can still be read back once the ADS log arrives.
+Deploy it with every module on, run `make deploy-demand` with the same stage, then the test. Viewers play the stable
+sibling through three breaks. The test checks:
+
+- one auction per session and break;
+- the mock's Prebid line for each cached pod;
+- that the stitched ads are the cached pod's;
+- the house line when no bid clears;
+- that the edge lets only `GET` and `HEAD /cache?uuid=<uuid4>` through.
+
+```bash
+make deploy STAGE=fastciads PREFIX=<throwaway>
+make deploy-demand STAGE=fastciads PREFIX=<throwaway>
+uv run pytest tests/e2e/test_15_ad_server.py -m e2e --prefix <throwaway> -v
+make destroy-demand STAGE=fastciads PREFIX=<throwaway> && make destroy STAGE=fastciads PREFIX=<throwaway>
+```
 
 A stage with Prebid Server deployed costs about $120–150 a month while idle (two NAT gateways, the load balancers, the
 web ACL, the Valkey cache minimum). Destroy throwaway stages right after use.

@@ -84,6 +84,9 @@ it costs.
 | `modules.demand.server_instances` | int | `2` | Prebid Server `server.http.server-instances`: one event loop per task vCPU. |
 | `modules.demand.dayparts` | list of object | `[]` | Scheduled task minimums ahead of busy dayparts; target tracking covers the time between them. |
 | `modules.demand.rate_limit_per_ip` | int | `20000` | Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any MediaTailor egress address's rate). |
+| `modules.demand.ad_server` | `none` \| `mock` \| `gam` \| `freewheel` | `none` | Where the monetized pair siblings send a break's ad request (M8-09): `none` (Prebid Server answers the pod as VAST), `mock` (the demo's GAM-like ad server), `gam` or `freewheel` (`ad_server_tag`). With an ad server, a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the release module. |
+| `modules.demand.ad_server_tag` | str | `""` | `gam` and `freewheel`: the publisher's VAST tag URL, with `{prebid}` once where the targeting key-values go (inside `cust_params` for GAM, in the key-value section for FreeWheel); empty otherwise. |
+| `modules.demand.pod_cache_seconds` | int | `300` | How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break. |
 | `modules.pds.enabled` | bool | `false` | Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per break. |
 | `modules.pds.policy_timeout_ms` | int | `50` | Timeout of the module's `/policy` call; on expiry the break is served from the own book alone. The PDS sidecar on the task's loopback answered 400-session break herds at p99 12-18 ms, max 36 ms at the module (ADR-0036). |
 | `modules.pds.policy_group_timeout_ms` | int | `75` | Timeout of the hook group that holds the `/policy` call (at least `policy_timeout_ms`). |
@@ -327,11 +330,13 @@ make deploy STAGE=fastci PREFIX=fastcipr7    # the same stage under another pref
 uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage becomes
 ```
 
-A missing or malformed stage file stops `make` before any command runs. The repository ships two stages for the
-modules' development: `fastm` and `fastci` (the end-to-end tests' default prefix), each with every module on.
+A missing or malformed stage file stops `make` before any command runs. The repository ships three stages for the
+modules' development, each with every module on: `fastm`, `fastci` (the end-to-end tests' default prefix), and
+`fastciads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
+([docs/demand.md](demand.md#deploy-and-destroy)).
 
 Each deployment subscribes to the account's as-run log, which allows five subscriptions, so an account and region
-holds at most five deployments with the default `observability.as_run: per_stage`. Both stages read the account's
+holds at most five deployments with the default `observability.as_run: per_stage`. The stages read the account's
 shared as-run router instead (`as_run: shared`, [ADR-0032](adr/0032-shared-as-run-router.md)), so they take no
 subscription. Deploy the router once per account and region, after any deployment's Media stack (which creates the
 as-run log group):

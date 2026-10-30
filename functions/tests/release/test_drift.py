@@ -12,8 +12,12 @@ from botocore.stub import Stubber
 from pydantic import SecretStr
 
 from fast_channels.core import specs
-from fast_channels.core.monetization.playback import render
+from fast_channels.core.ad_server import AdServer, AdServerContribution, ads_url
+from fast_channels.core.ad_server import stored_request_id as adsrv_stored_request_id
+from fast_channels.core.monetization.bundle import AdServerRoute
+from fast_channels.core.monetization.playback import render, render_function
 from fast_channels.core.monetization.release import applied
+from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
 from fast_channels.functions.release import drift
 
 type Stub = Callable[[str], Stubber]
@@ -75,6 +79,39 @@ def test_drift_names_the_paths_never_the_values(kit: SimpleNamespace, stub: Stub
         "fastm_ps_ctl_r0002: missing",
     ]
     assert "secret-value" not in json.dumps(found) and "someone-elses" not in json.dumps(found)
+
+
+def test_the_auction_is_compared_with_the_origin_secret(kit: SimpleNamespace, stub: Stub) -> None:
+    """The ad-server route's auction (M8-09) was created with the origin secret in its headers: as created it has no
+    drift, and another secret there is drift, named by path."""
+    mock = ads_url(AdServer.MOCK, mock_url="https://abc123.execute-api.us-east-1.amazonaws.com", sibling="{sibling}")
+    bundle = kit.make_bundle(
+        stored_requests=[
+            *(stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
+            *(adsrv_stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
+        ],
+        contributions=[AdServerContribution(pbs_origin="https://d222222abcdef8.cloudfront.net")],
+        ad_server=AdServerRoute(url=mock, origin=True),
+    )
+    sibling = next(s for s in bundle.siblings if s.letter == "b")
+    auction = "fastm_demo_p_b_pa_auction_r0002"
+
+    def expect(mediatailor: Stubber, secret: SecretStr) -> None:
+        mediatailor.add_response("get_playback_configuration", live(sibling), {"Name": sibling.name})
+        for stem in (sibling.playback.function_mapping or {}).values():
+            root = bundle.function(stem)
+            for function in [root, *(bundle.function(ref.function_id) for ref in root.steps)]:
+                released = function.released(2)
+                if released.function_id == auction:
+                    released = render_function(released, release=2, origin_secret=secret)
+                response = released.put_request(tags=False)
+                mediatailor.add_response("get_function", response, {"FunctionId": released.function_id})
+
+    expect(stub("mediatailor"), SECRET)
+    assert drift.sibling_drift(sibling, bundle, release=2, change_id="c2", secret=SECRET) == []
+    expect(stub("mediatailor"), SecretStr("another-value"))
+    found = drift.sibling_drift(sibling, bundle, release=2, change_id="c2", secret=SECRET)
+    assert found == [f"{auction}: HttpRequestConfiguration.Headers.X-Fast-Origin"]
 
 
 def test_a_deleted_sibling_is_drift(kit: SimpleNamespace, stub: Stub) -> None:

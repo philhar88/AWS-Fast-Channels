@@ -215,7 +215,8 @@
       "description": "Which ADS a sibling's breaks go to.",
       "enum": [
         "pbs",
-        "opaque"
+        "opaque",
+        "ad_server"
       ],
       "title": "AdsRoute",
       "type": "string"
@@ -686,6 +687,18 @@
           ],
           "default": null,
           "title": "Cachereason"
+        },
+        "DemandOrigin": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Demandorigin"
         }
       },
       "required": [
@@ -965,6 +978,18 @@
           ],
           "default": null,
           "title": "Tags"
+        },
+        "AdsOrigin": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adsorigin"
         }
       },
       "required": [

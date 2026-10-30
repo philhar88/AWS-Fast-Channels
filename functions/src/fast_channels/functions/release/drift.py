@@ -3,7 +3,8 @@ monetized channel's policy still what the Release Controller applied?
 
 For each sibling the controller recorded, it renders the configuration again from that release's bundle (with the
 current origin secret) and compares it with ``GetPlaybackConfiguration`` and the logging; it compares each mapped
-FunctionId (and its steps) with ``GetFunction``; and it checks each channel's policy against validator R-C1. Every
+FunctionId (and its steps) with ``GetFunction``, a demand-origin request (the ad-server route's auction) with the
+current origin secret too; and it checks each channel's policy against validator R-C1. Every
 difference is logged by path, never by value (a header holds the origin secret), and their number is published as
 ``ReleaseDrift``; the alarm ``<prefix>-release-drift`` fires on any. Nothing is repaired here: the controller owns
 these resources, so drift means someone else changed them.
@@ -19,7 +20,7 @@ from botocore.exceptions import ClientError
 
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.functions import release_tag
-from fast_channels.core.monetization.playback import render
+from fast_channels.core.monetization.playback import render, render_function
 from fast_channels.core.monetization.release import ChannelState, differences
 from fast_channels.core.monetization.validators import check_channel_policy
 from fast_channels.functions import aws
@@ -87,6 +88,9 @@ def sibling_drift(sibling: Sibling, bundle: Bundle, *, release: int, change_id: 
             if function is None:
                 continue
             released = function.released(release)
+            http = function.http_request_configuration
+            if http is not None and http.demand_origin:  # created with the origin secret (apply.put_functions)
+                released = render_function(released, release=release, origin_secret=secret)
             existing = _get(mediatailor.get_function, FunctionId=released.function_id)
             if existing is None:
                 found.append(f"{released.function_id}: missing")

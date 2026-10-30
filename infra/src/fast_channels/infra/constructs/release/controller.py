@@ -454,12 +454,27 @@ class ReleaseController(Construct):
         )
         smoke.allow(["mediatailor:GetPlaybackConfiguration"], siblings, why="the candidate siblings")
         rotate = self.rotate
-        rotate.allow(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"], [self.table.table_arn])
+        rotate.allow(
+            ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+            [self.table.table_arn],
+            why="the state, the origin slot, and a new release for each tree that carries the secret",
+        )
         rotate.allow(["s3:GetObject"], [self.bucket.arn_for_objects("release/*")], why="the bundles")
         rotate.allow(
-            ["mediatailor:PutPlaybackConfiguration", "mediatailor:TagResource"],
+            ["mediatailor:PutPlaybackConfiguration", "mediatailor:GetPlaybackConfiguration", "mediatailor:TagResource"],
             siblings,
-            why="every sibling sends the new origin secret (its own release, re-put)",
+            why="every sibling sends the new origin secret (its own release, re-put); the plans' playback prefix",
+        )
+        rotate.allow(
+            ["mediatailor:GetFunction", "mediatailor:PutFunction", "mediatailor:TagResource"],
+            [functions],
+            why="a tree that carries the origin secret (the ad-server route's auction), created again with the new one",
+        )
+        rotate.allow(["mediatailor:ListFunctions"], ["*"])
+        rotate.allow(
+            ["s3:PutObject"],
+            [f"arn:{Stack.of(self).partition}:s3:::{media_bucket}/plan/playback/*"],
+            why="the plan of a channel whose stable sibling moved to a new release",
         )
         rotate.allow(
             ["mediatailor:DescribeChannel"],

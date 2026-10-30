@@ -265,6 +265,20 @@ class ChannelInput(_Model):
     """The channel's outputs (``channels.iac[].outputs``)."""
 
 
+SIBLING_PLACEHOLDER: Final = "{sibling}"
+
+
+class AdServerRoute(_Model):
+    """The ad-server route of the pair siblings (``modules.demand.ad_server``, M8-09); the probe stays on Prebid
+    Server, house only."""
+
+    url: str
+    """The ADS URL template; :data:`SIBLING_PLACEHOLDER` becomes each sibling's name."""
+    origin: bool
+    """The ad server is ours (the mock): its requests carry ``X-Fast-Pc`` and the origin secret. GAM and FreeWheel
+    get neither."""
+
+
 def root_stem(prefix: str, hook: Hook, *, sibling: str | None = None) -> str:
     """The root executor of ``hook``: ``<p>_<hook>_root`` or, when a step embeds the sibling, per sibling."""
     return function_stem(prefix, f"{hook.abbreviation}_root", sibling=sibling)
@@ -322,12 +336,14 @@ def build_bundle(
     tier: RolloutTier = RolloutTier.DEMO,
     probe_sibling: bool = True,
     contributions: Sequence[BundleContribution] = (),
+    ad_server: AdServerRoute | None = None,
 ) -> Bundle:
     """The bundle of ``channels``: siblings ``a``/``b`` (and the probe ``z``) per channel, each hook's root executor
     over ``contributions`` and then the session controls. The probe, which never forwards a ticket, publishes the
     PRE_SESSION hook events as lab siblings do, so the committed session controls can be read from its logs.
 
     Phase 1 has no kids pairs and no ticket (M4); sessions are CONTEXTUAL and PRE_SESSION runs the controls alone.
+    With ``ad_server`` the pair siblings take the ad-server route (M8-09) and the probe stays on Prebid Server.
     Validate the result with :func:`fast_channels.core.monetization.validators.validate_bundle`.
     """
     functions = _Functions()
@@ -336,12 +352,13 @@ def build_bundle(
     for channel in channels:
         for role, letter in _letters(probe_sibling):
             name = sibling_name(channel.name, letter)
+            route = AdsRoute.AD_SERVER if ad_server and role is SiblingRole.GENERAL else AdsRoute.PBS
             context = SiblingContext(
                 prefix=prefix,
                 channel=channel.name,
                 name=name,
                 role=role,
-                route=AdsRoute.PBS,
+                route=route,
                 content_base_url=content_base_url,
             )
             by_hook: dict[Hook, list[HookTree]] = {}
@@ -359,8 +376,15 @@ def build_bundle(
                 kids=channel.child_directed or role is SiblingRole.KIDS,
                 probe=role is SiblingRole.PROBE,
                 lab=channel.lab or role is SiblingRole.PROBE,  # never ticketed: it may log the hook's output
+                route=route,
+                ad_server_url=ad_server.url.replace(SIBLING_PLACEHOLDER, name)
+                if ad_server and route is AdsRoute.AD_SERVER
+                else None,
+                ad_server_origin=ad_server.origin if ad_server else True,
             )
-            siblings.append(Sibling(name=name, channel=channel.name, letter=letter, role=role, playback=playback))
+            siblings.append(
+                Sibling(name=name, channel=channel.name, letter=letter, role=role, route=route, playback=playback)
+            )
     return Bundle(
         prefix=prefix,
         functions=tuple(_creation_order(functions.documents)),
