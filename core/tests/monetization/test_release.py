@@ -34,7 +34,7 @@ def test_names() -> None:
     assert names.bundle_key(DIGEST) == f"release/{DIGEST}/bundle.json"
     assert names.plan_key("fastm-demo") == "plan/playback/fastm-demo.json"
     assert names.channel_chain("fastm-demo") == "release/fastm-demo"
-    assert names.function_pattern("fast-m") == "fast_m_*"
+    assert names.function_pattern("fastm") == "fastm_*"
     assert names.sibling_pattern("fastm-demo") == "fastm-demo-p-*"
 
 

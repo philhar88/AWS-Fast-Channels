@@ -80,9 +80,9 @@ _DATEHOUR_FORMAT: Final = "yyyy/MM/dd/HH"
 
 
 def lake_database_name(prefix: str) -> str:
-    """Glue database of the deployment's lake: ``<prefix>_lake`` with hyphens as underscores (``fastci-pr7`` ->
-    ``fastci_pr7_lake``), which Athena needs no quotes for."""
-    return f"{prefix.replace('-', '_')}_lake"
+    """Glue database of the deployment's lake: ``<prefix>_lake``, which Athena needs no quotes for (the prefix has no
+    hyphen, ``core.naming.PREFIX_PATTERN``)."""
+    return f"{prefix}_lake"
 
 
 class LakeBucket(Construct):

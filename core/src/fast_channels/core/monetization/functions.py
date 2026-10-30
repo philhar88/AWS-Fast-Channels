@@ -192,11 +192,6 @@ class Function(ApiShape):
 # --- FunctionIds ---------------------------------------------------------------------------------------------------
 
 
-def function_prefix(prefix: str) -> str:
-    """``<p>``: the deployment prefix as it starts every FunctionId (``fast-m`` → ``fast_m``)."""
-    return prefix.replace("-", "_")
-
-
 def sibling_scope(prefix: str, configuration: str) -> str:
     """The sibling scope of a playback configuration in FunctionIds: its name without ``<prefix>-``, with ``-`` as
     ``_`` (``fastm-demo-p-a`` → ``demo_p_a``). Channel names hold no ``_``, so the mapping is one to one."""
@@ -205,9 +200,10 @@ def sibling_scope(prefix: str, configuration: str) -> str:
 
 def function_stem(prefix: str, name: str, *, sibling: str | None = None) -> str:
     """The FunctionId of ``name`` without its release: ``<p>_<name>``, or ``<p>_<scope>_<name>`` for a function that
-    embeds the constant of the playback configuration ``sibling``."""
+    embeds the constant of the playback configuration ``sibling``. ``<p>`` is the deployment prefix, which has no
+    hyphen (``core.naming.PREFIX_PATTERN``)."""
     scope = f"_{sibling_scope(prefix, sibling)}" if sibling else ""
-    return f"{function_prefix(prefix)}{scope}_{name}"
+    return f"{prefix}{scope}_{name}"
 
 
 def release_tag(release: int) -> str:

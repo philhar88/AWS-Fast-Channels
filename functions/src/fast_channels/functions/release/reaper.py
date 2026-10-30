@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from aws_lambda_powertools import Logger
 
 from fast_channels.core.monetization import names
-from fast_channels.core.monetization.functions import FunctionType, function_prefix
+from fast_channels.core.monetization.functions import FunctionType
 from fast_channels.core.monetization.playback import RELEASE_OWNER
 from fast_channels.core.tags import TAG_APP, TAG_OWNER
 from fast_channels.functions import aws
@@ -64,7 +64,7 @@ def delete_siblings(prefix: str, channels: list[str], media_bucket: str) -> int:
 
 def functions(prefix: str) -> list[dict[str, Any]]:
     """The controller's Functions (``<p>_*``)."""
-    start = f"{function_prefix(prefix)}_"
+    start = f"{prefix}_"
     mediatailor = aws.client("mediatailor")
     return [
         item
