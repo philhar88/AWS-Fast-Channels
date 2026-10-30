@@ -37,6 +37,19 @@ changing them does to live sessions (P0-08):
   no bake). `AppConfig.AllAtOnce` is not used: the monitors watch its 10-minute bake, so a rollback could itself be
   rolled back while the candidate alarm is still in ALARM, and it would hold the environment, which takes one
   deployment at a time, for 10 minutes (fastm, 2026-10-29).
+- **A timed-out request fails a release.** An `HTTP_REQUEST` step that reaches its `RequestTimeoutMilliseconds` inside
+  an executor is neither a Function error nor a hook error: the step completes with a null response, and no error
+  metric, error event or monitor sees it (fastm, 2026-10-30). The smoke and soak judges and the pointer poll
+  therefore read each PRE_ADS `HTTP_REQUEST`'s own `AWS/MediaTailor` `Function.Latency` (per FunctionId, Maximum per
+  minute) against its own timeout from the release's bundle.
+  - A request at or above its timeout in two one-minute periods fails the smoke, or stops the pointer deployment,
+    and R1 runs.
+  - Each request is compared with its own timeout, not the hook's latency with the tree's smallest timeout. The
+    hook's latency is the sum of its steps: healthy trees ran 314 and 452 ms against a 250 ms crawl request.
+  - Two periods, not one, because a cold first call can reach a timeout once (the crawl request: 266 ms, on a
+    healthy smoke).
+  - It is a runtime check, not a CloudWatch alarm: the FunctionId changes with every release, and each release's
+    bundle sets its own timeouts.
 - **Kill switches are never rolled back by a release alarm.** The `flags` profile shares the environment; while the
   environment is monitored it deploys with `<prefix>-flags-at-once` (no bake), which no monitor can roll back. The
   monitor role may call `cloudwatch:DescribeAlarms` on `*`: AppConfig finds a composite alarm only with an unfiltered
