@@ -4,13 +4,13 @@ The Release Controller is the release module (`modules.release`, off by default;
 [operations.md](operations.md#configuration-reference)). It is the only writer of what monetizes a channel: the
 MediaTailor Monetization Functions and the sibling playback configurations that run them. It is being built on the
 `feature/agentic-monetization` branch. This page covers the apply path, the smoke gate, promotion and unattended
-rollback, the drift check, the playback plan, the ownership guard and the siblings' logs. The origin-secret rotation
-follows.
+rollback, the origin-secret rotation, the drift check, the playback plan, the ownership guard and the siblings' logs.
 
 - [Siblings](#siblings)
 - [The release bundle](#the-release-bundle)
 - [The apply path](#the-apply-path)
 - [Promotion and rollback](#promotion-and-rollback)
+- [Origin-secret rotation](#origin-secret-rotation)
 - [The playback plan](#the-playback-plan)
 - [Prefetch](#prefetch)
 - [Drift](#drift)
@@ -160,6 +160,42 @@ release. On a healthy smoke, the crawl lookup reached its 250 ms once (266 ms), 
 This is a runtime check, not an alarm: the FunctionId changes with every release, and each release's bundle sets its
 own timeouts.
 
+## Origin-secret rotation
+
+The siblings send one of the two origin secrets of the stage in `X-Fast-Origin`; the WAF rule group
+`<prefix>-demand-origin` (rule `fast-origin-required`) admits either, so a rotation never blocks a POST. The state
+machine `<prefix>-release-rotation` rotates every `modules.release.secret_rotation_days` days (90 by default).
+EventBridge Scheduler starts it daily, and a scheduled run that is not due ends at once: a rate schedule starts
+when it is created unless it has a `StartDate`, so a rate of 90 days would rotate on every deploy. Due
+means that the days have passed since the siblings last switched secret, or, before the first rotation, since the
+current secret last changed. Start the state machine by hand on any suspected exposure; a run by hand always
+rotates:
+
+```bash
+aws stepfunctions start-execution --state-machine-arn <RotationStateMachineArn> --input '{"reason": "exposure"}'
+```
+
+1. **Begin.** It holds the Release Controller's lock, as its own execution, so no release or other rotation runs
+   meanwhile (it waits for one that holds the lock). It chooses the slot the siblings do not send.
+2. **Admit.** That slot gets a new value (Secrets Manager), which the rule group admits beside the current one.
+3. **Probe.** After a minute, a probe POST with the new value through the guidance's CloudFront must not be blocked;
+   it is retried until the change has reached CloudFront.
+4. **Switch.** Every configured sibling sends the new value: `PutPlaybackConfiguration` of its own release, the same
+   call as a remap, so live sessions use it at their next break. The slot is recorded.
+5. **Verify.** While a monetized channel is on air, the siblings' ad requests since the switch must have been
+   answered (no `ERROR_ADS_INVALID_RESPONSE`) and a break filled; it is retried for one break.
+6. **Retire.** The old slot gets a value nobody has seen, which the rule group admits instead of the old one. The lock
+   is given back.
+
+A failure is ledgered (`rotation.fail` on the chain `release/rotation`), gives the lock back and raises
+`<prefix>-release-rotation-failed`. Every value a sibling may send is still admitted at that point, so the rotation
+can simply run again. No secret value is logged or ledgered. The rotation assumes that everyone who could read the
+ADS logs before the switch knows the old value (MediaTailor logs the request headers; the module's log group leaves
+them out).
+
+The rule group's values are changed by the rotation, not by CloudFormation: a later update of the DemandEdge stack
+that changes the rule group resolves the secrets again, and so writes the same values.
+
 ## The playback plan
 
 `/plan/playback/<channel>.json` in the media bucket, served by the CDN with `Cache-Control: max-age=30`, names the
@@ -289,6 +325,7 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-zero-ads-sessions` | Sessions on a sibling that saw three breaks without an ad request (hourly) |
 | `<prefix>-release-log-loss` | MediaTailor made ad requests its vended ADS log does not have (hourly, over an hour that ended 20 minutes before): `AWS/MediaTailor` `AdDecisionServer.Ads` sample counts against the log's `MAKING_ADS_REQUEST` per sibling. MediaTailor can leave a requested, filled break out of the log entirely, and the silent-loss detector, which counts logged markers, does not see it |
 | `<sibling>-markers-without-ads-request` | In 2 of 10 minutes with at least 5 markers, more than half of the markers had no ad request: an invalid rendered body or an exhausted PRE_ADS budget makes no request and logs no error, and the break plays unfilled. A break's marker counts once (MediaTailor finds a Channel Assembly marker again when it gains its duration, without a request), and a ratio leaves out the viewers who join during a break. `<prefix>-lab-x` has this alarm too, for a harness to prove it (`tests/e2e`) |
+| `<prefix>-release-rotation-failed` | An origin-secret rotation failed: the ledger's `rotation.fail` says at which step; run it again |
 | `<prefix>-release-candidate` | Any of the above (but drift) on a pair sibling: rolls a pointer deployment back (AppConfig monitor) and runs R1 |
 | `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
 

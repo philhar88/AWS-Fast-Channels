@@ -122,6 +122,10 @@ class Settings:
     pds_policy_log_group: str = field(default_factory=lambda: _env("PDS_POLICY_LOG_GROUP"))
     """The PDS ``/policy`` function's log group, where its decision records are (the release smoke test counts
     them)."""
+    secret_rotation_days: int = field(default_factory=lambda: int(_env("SECRET_ROTATION_DAYS") or 0))
+    """``modules.release.secret_rotation_days``: the scheduled origin-secret rotation's period."""
+    pbs_origin: str = field(default_factory=lambda: _env("PBS_ORIGIN"))
+    """The demand gate's CloudFront (``https://<domain>``): the origin-secret rotation's probe POSTs there."""
     tool_functions: str = field(default_factory=lambda: _env("TOOL_FUNCTIONS"))
     """JSON of the agent tools' function names by target (the release module's lab smoke test uses them)."""
     release_table: str = field(default_factory=lambda: _env("RELEASE_TABLE"))

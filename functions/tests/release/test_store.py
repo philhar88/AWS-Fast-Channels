@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from botocore.response import StreamingBody
-from botocore.stub import Stubber
+from botocore.stub import ANY, Stubber
 
 from fast_channels.core.monetization.bundle import bundle_document
 from fast_channels.core.monetization.release import ChannelState, ReleaseStatus
@@ -145,10 +145,12 @@ def test_one_release_holds_the_lock_at_a_time(stub: Stub, monkeypatch: pytest.Mo
         {},
         {
             "TableName": TABLE,
-            "Item": {"pk": "LOCK", "release": 3, "expires": 1_000 + 9_600},  # RELEASE_LOCK_SECONDS
-            "ConditionExpression": "attribute_not_exists(pk) OR #release = :release OR #expires < :now",
-            "ExpressionAttributeNames": {"#release": "release", "#expires": "expires"},
-            "ExpressionAttributeValues": {":release": 3, ":now": 1_000},
+            "Item": {"pk": "LOCK", "release": 3, "owner": "r0003", "expires": 1_000 + 9_600},  # RELEASE_LOCK_SECONDS
+            "ConditionExpression": (
+                "attribute_not_exists(pk) OR #expires < :now OR (#release = :release AND #owner = :owner)"
+            ),
+            "ExpressionAttributeNames": {"#release": "release", "#owner": "owner", "#expires": "expires"},
+            "ExpressionAttributeValues": {":release": 3, ":owner": "r0003", ":now": 1_000},
         },
     )
     store.lock(3)
@@ -161,9 +163,9 @@ def test_one_release_holds_the_lock_at_a_time(stub: Stub, monkeypatch: pytest.Mo
     unlock = {
         "TableName": TABLE,
         "Key": {"pk": "LOCK"},
-        "ConditionExpression": "#release = :release",
-        "ExpressionAttributeNames": {"#release": "release"},
-        "ExpressionAttributeValues": {":release": 3},
+        "ConditionExpression": "#release = :release AND #owner = :owner",
+        "ExpressionAttributeNames": {"#release": "release", "#owner": "owner"},
+        "ExpressionAttributeValues": {":release": 3, ":owner": "r0003"},
     }
     dynamodb.add_response("delete_item", {}, unlock)
     store.unlock(3)
@@ -206,3 +208,38 @@ def test_the_pointer_and_the_lock_holder(stub: Stub, monkeypatch: pytest.MonkeyP
     assert store.holder() is None  # expired
     dynamodb.add_response("get_item", {"Item": {"release": {"N": "4"}, "expires": {"N": "2000"}}}, get("LOCK"))
     assert store.holder() == 4
+
+
+def test_each_rotation_owns_the_lock_it_holds(stub: Stub, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store.time, "time", lambda: 1_000.5)
+    dynamodb = stub("dynamodb")
+    dynamodb.add_response(
+        "put_item",
+        {},
+        {
+            "TableName": TABLE,
+            "Item": {"pk": "LOCK", "release": 0, "owner": "rotation-1", "expires": 1_000 + 9_600},
+            "ConditionExpression": ANY,
+            "ExpressionAttributeNames": ANY,
+            "ExpressionAttributeValues": {":release": 0, ":owner": "rotation-1", ":now": 1_000},
+        },
+    )
+    store.lock(store.ROTATION, owner="rotation-1")
+    conditional_failure(dynamodb, "put_item")  # rotation-1 holds it: rotation-2 waits
+    with pytest.raises(store.ReleaseBusyError, match="the rotation waits"):
+        store.lock(store.ROTATION, owner="rotation-2")
+    conditional_failure(dynamodb, "delete_item")
+    store.unlock(store.ROTATION, owner="rotation-2")  # not its lock: left to rotation-1
+
+
+def test_a_switch_records_when_the_siblings_changed_secret(stub: Stub, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store.time, "time", lambda: 1_793_345_492.4)
+    dynamodb = stub("dynamodb")
+    dynamodb.add_response(
+        "put_item", {}, {"TableName": TABLE, "Item": {"pk": "ORIGIN", "slot": "b", "at": 1_793_345_492}}
+    )
+    store.put_origin_slot("b")
+    dynamodb.add_response("get_item", {}, get("ORIGIN"))
+    assert store.origin_rotated_at() is None
+    dynamodb.add_response("get_item", {"Item": {"slot": {"S": "b"}, "at": {"N": "1793345492"}}}, get("ORIGIN"))
+    assert store.origin_rotated_at() == datetime(2026, 10, 30, 7, 31, 32, tzinfo=UTC)

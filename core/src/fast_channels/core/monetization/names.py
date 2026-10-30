@@ -69,6 +69,11 @@ def state_machine(prefix: str) -> str:
     return f"{prefix}-release"
 
 
+def rotation_state_machine(prefix: str) -> str:
+    """The origin-secret rotation (Step Functions Standard, DESIGN §8.6)."""
+    return f"{prefix}-release-rotation"
+
+
 def log_group(prefix: str) -> str:
     """The siblings' MediaTailor vended logs, encrypted with the module's own KMS key (DESIGN §5.7)."""
     return f"/aws/vendedlogs/mediatailor/{prefix}-release"
@@ -131,6 +136,8 @@ def channel_chain(channel: str) -> str:
 
 BUNDLE_CHAIN: Final = "release/bundle"
 """Ledger chain of bundle validations (accepted or rejected)."""
+ROTATION_CHAIN: Final = "release/rotation"
+"""Ledger chain of origin-secret rotations."""
 
 
 def function_pattern(prefix: str) -> str:

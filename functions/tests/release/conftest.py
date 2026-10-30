@@ -63,6 +63,9 @@ class FakeStore:
     slot: str = "a"
     holder: int | None = None
     """The release holding the lock."""
+    owner: str | None = None
+    """Its owner (a release's tag, or a rotation's execution)."""
+    rotated_at: datetime | None = None
     deployed: dict[str, str] = field(default_factory=dict)
     """The release pointer's last deployed content."""
 
@@ -103,14 +106,24 @@ class FakeStore:
     def origin_slot(self) -> str:
         return self.slot
 
-    def lock(self, release: int) -> None:
-        if self.holder not in (None, release):
-            raise store.ReleaseBusyError(f"r{self.holder:04d} applies")
-        self.holder = release
+    def put_origin_slot(self, slot: str) -> None:
+        self.slot = slot
 
-    def unlock(self, release: int) -> None:
-        if self.holder == release:
-            self.holder = None
+    def _held(self) -> tuple[int, str] | None:
+        return None if self.holder is None else (self.holder, self.owner or f"r{self.holder:04d}")
+
+    def lock(self, release: int, owner: str | None = None) -> None:
+        mine = (release, owner or f"r{release:04d}")
+        if self._held() not in (None, mine):
+            raise store.ReleaseBusyError(f"{self._held()} holds the lock")
+        self.holder, self.owner = mine
+
+    def unlock(self, release: int, owner: str | None = None) -> None:
+        if self._held() == (release, owner or f"r{release:04d}"):
+            self.holder, self.owner = None, None
+
+    def origin_rotated_at(self) -> datetime | None:
+        return self.rotated_at
 
     def lock_holder(self) -> int | None:
         return self.holder
@@ -171,6 +184,8 @@ def state(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
         "channels",
         "put_channel",
         "origin_slot",
+        "origin_rotated_at",
+        "put_origin_slot",
         "secret",
         "lock",
         "unlock",
@@ -201,13 +216,24 @@ def ledger(monkeypatch: pytest.MonkeyPatch) -> Ledger:
     return fake
 
 
-SERVICES = ("appconfig", "cloudwatch", "dynamodb", "events", "lambda", "logs", "mediatailor", "s3", "secretsmanager")
+SERVICES = (
+    "appconfig",
+    "cloudwatch",
+    "dynamodb",
+    "events",
+    "lambda",
+    "logs",
+    "mediatailor",
+    "s3",
+    "secretsmanager",
+    "wafv2",
+)
 
 
 def _client(service: str) -> Any:
     match service:
-        case "secretsmanager":
-            return aws.regional_client("secretsmanager", "us-east-1")
+        case "secretsmanager" | "wafv2":
+            return aws.regional_client(service, "us-east-1")
         case "dynamodb":
             return aws.table("fastm-release").meta.client
         case _:

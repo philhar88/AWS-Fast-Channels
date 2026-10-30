@@ -96,7 +96,7 @@ it costs.
 | `modules.release.strategy` | `demo` or `standard` or `large` | `"demo"` | `demo` (a simulated audience: 10% steps over 30 minutes), `standard` (up to 20,000 concurrent viewers: 10% steps over 3 hours) or `large` (exponential steps over 4 hours). |
 | `modules.release.lab_channel` | bool | `true` | Create the stopped lab channel `<prefix>-lab`, started only to smoke-test a release while the monetized channel is stopped. |
 | `modules.release.probe_sibling` | bool | `true` | Create a house-only probe playback configuration per channel, for canaries and smoke tests. |
-| `modules.release.secret_rotation_days` | int | `90` | Days between rotations of the origin secret that MediaTailor sends to the demand origin. |
+| `modules.release.secret_rotation_days` | int | `90` | Days between rotations of the origin secret that MediaTailor sends to the demand origin (a daily check rotates once they have passed). |
 | `modules.release.prefetch.enabled` | bool | `true` | Create a SINGLE prefetch schedule for each of the next breaks of a running monetized channel, so MediaTailor asks the ad decision server minutes ahead, spread over a window, and transcodes new creatives before they air. Retrieval transcodes bill whether or not the break airs; the horizon stays short and re-planned breaks lose their schedules. |
 | `modules.release.prefetch.siblings` | str[] | `["a", "b", "k", "l"]` | Sibling letters that get schedules: the general pair and the kids pair (the probe `z` never does). |
 | `modules.release.prefetch.horizon_breaks` | int | `20` | Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration). |

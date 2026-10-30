@@ -147,10 +147,13 @@ def test_only_the_controller_changes_monetization(deployment: GetDeployment) -> 
     apply_role = next(name for name in roles if name.startswith("ControllerApplyRole"))
     promote_role = next(name for name in roles if name.startswith("ControllerPromoteRole"))
     reaper_role = next(name for name in roles if name.startswith("ControllerReaperRole"))
+    rotate_role = next(name for name in roles if name.startswith("ControllerRotateRole"))
 
     prefetch_role = next(name for name in roles if name.startswith("PrefetcherFunctionRole"))
     writers = {role for role, s in statements(template) if s["Effect"] == "Allow" and actions(s) & WRITES}
-    assert writers == {apply_role, promote_role, reaper_role, prefetch_role}  # promote remaps (R1)
+    # promote remaps a candidate (R1) and deletes old trees; rotate re-puts the siblings with the new
+    # origin secret
+    assert writers == {apply_role, promote_role, reaper_role, prefetch_role, rotate_role}
     prefetch_writes = {a for r, s in statements(template) if r == prefetch_role for a in actions(s) & WRITES}
     assert prefetch_writes == {"mediatailor:CreatePrefetchSchedule", "mediatailor:DeletePrefetchSchedule"}
     [policy] = [
@@ -191,11 +194,12 @@ def test_every_other_role_of_the_stage_is_denied_the_controllers_writes(deployme
         "/ControllerApplyRole",
         "/ControllerPromoteRole",
         "/ControllerReaperRole",
+        "/ControllerRotateRole",
         "/PrefetcherFunctionRole",
     )
     readers = ("/ZeroAdsDetectorRole", "/ControllerSmokeRole", "/LogReconcilerFunctionRole")
     controller = {n for n in unguarded if any(r in n for r in (*exempt, *readers))}
-    assert len(controller) == 7  # the controller's writers, and the readers of the siblings' logs
+    assert len(controller) == 8  # the controller's writers, and the readers of the siblings' logs
     # The roles of CDK's core custom-resource providers are CfnResources, not iam.Role (the guard's Aspect cannot
     # attach to them): they empty buckets or run a trigger, and none of them may call MediaTailor.
     providers = set(unguarded) - controller
@@ -240,7 +244,7 @@ def test_the_siblings_logs_are_encrypted_with_a_key_that_delegates_nothing(deplo
     roles = resources(template, "AWS::IAM::Role")
     assert sorted(p["Fn::GetAtt"][0] for p in principals) == sorted(
         next(n for n in roles if n.startswith(start))
-        for start in ("ZeroAdsDetectorRole", "ControllerSmokeRole", "LogReconcilerFunctionRole")
+        for start in ("ZeroAdsDetectorRole", "ControllerSmokeRole", "LogReconcilerFunctionRole", "ControllerRotateRole")
     )
     assert all(r["Condition"] == {"StringEquals": {"kms:ViaService": "logs.us-east-1.amazonaws.com"}} for r in readers)
     groups = resources(template, "AWS::Logs::LogGroup")
@@ -320,8 +324,10 @@ def test_the_siblings_impressions_reach_the_pds_delivery_function(deployment: Ge
     assert not resources(off.template(off.stage.pds), "AWS::SSM::Parameter")
 
 
-def _definition(template: Template) -> dict[str, Any]:
-    [machine] = resources(template, "AWS::StepFunctions::StateMachine").values()
+def _definition(template: Template, name: str = "fastm-release") -> dict[str, Any]:
+    [machine] = [
+        m for m in resources(template, "AWS::StepFunctions::StateMachine").values() if m["StateMachineName"] == name
+    ]
     parts = machine["DefinitionString"]["Fn::Join"][1]
     return dict(json.loads("".join(p if isinstance(p, str) else "TOKEN" for p in parts)))
 
@@ -517,6 +523,46 @@ def test_the_siblings_log_is_reconciled_with_mediatailors_counts_every_hour(depl
         1,
         "notBreaching",
     )
+
+
+def test_the_origin_secret_rotates_on_a_schedule_with_two_values_admitted(deployment: GetDeployment) -> None:
+    d = deployment({**RELEASE, "modules.release.secret_rotation_days": 30}, extra=EXTRA)
+    template = d.template(d.stage.release)
+    machines = {m["StateMachineName"]: m for m in resources(template, "AWS::StepFunctions::StateMachine").values()}
+    assert "fastm-release-rotation" in machines
+    parts = machines["fastm-release-rotation"]["DefinitionString"]["Fn::Join"][1]
+    states = json.loads("".join(p if isinstance(p, str) else "TOKEN" for p in parts))["States"]
+    order, state = [], "Begin"
+    while state in states and states[state]["Type"] != "Succeed":
+        order.append(state)
+        state = states[state]["Choices"][0]["Next"] if states[state]["Type"] == "Choice" else states[state]["Next"]
+    assert order == ["Begin", "Due?", "Admit", "Propagation", "Probe", "Switch", "OneBreak", "Verify", "Retire"]
+    assert states["Due?"]["Default"] == "NotDue", "a scheduled run that is not due ends at once"
+    assert "reason" in states["Begin"]["Arguments"]["Payload"]
+    [busy] = [r for r in states["Begin"]["Retry"] if r["ErrorEquals"] == ["ReleaseBusyError"]]
+    assert busy["IntervalSeconds"] == 60
+    for step in ("Begin", "Admit", "Probe", "Switch", "Verify", "Retire"):
+        assert states[step]["Catch"][-1]["Next"] == "RecordFailure"
+    [schedule] = [s for s in resources(template, "AWS::Scheduler::Schedule").values() if "rotation" in s["Description"]]
+    # a daily check: a rate schedule starts when it is created, so rate(30 days) would rotate on every deploy
+    assert schedule["ScheduleExpression"] == "rate(1 day)"
+    [function] = [
+        f
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.release.rotate.handler"
+    ]
+    assert function["Environment"]["Variables"]["SECRET_ROTATION_DAYS"] == "30"
+    alarms = {a["AlarmName"] for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    assert "fastm-release-rotation-failed" in alarms
+    [role] = [
+        f["Role"]["Fn::GetAtt"][0]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.release.rotate.handler"
+    ]
+    granted = [s for r, s in statements(template) if r == role]
+    waf = [s for s in granted if "wafv2:UpdateRuleGroup" in actions(s)]
+    assert waf and all("global/rulegroup/fastm-demand-origin/*" in json.dumps(s["Resource"]) for s in waf)
+    assert any("secretsmanager:PutSecretValue" in actions(s) for s in granted)
 
 
 def test_template_snapshot(

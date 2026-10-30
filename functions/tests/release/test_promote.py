@@ -215,7 +215,7 @@ def test_candidates_are_smoke_tested_where_a_channel_runs(
     assert promote.handler(event, context) == {"candidates": [CANDIDATE], "smoke": [], "lab": None}
     assert ledger.actions() == [("release/bundle", "release.hold")]  # no lab channel: applied, not promoted
     mediatailor.add_client_error("describe_channel", service_error_code="NotFoundException", http_status_code=404)
-    assert not promote._running("fastm-demo")
+    assert not promote.on_air("fastm-demo")
     with pytest.raises(ValueError, match="unknown step 'x'"):
         promote.handler({"step": "x"}, context)
 

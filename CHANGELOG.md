@@ -99,6 +99,14 @@ All notable changes to this project are documented here. The format follows
   against `FILLED_AVAIL` for context); `<prefix>-release-log-loss` fires when MediaTailor made ad requests the log
   does not have. MediaTailor was seen leaving a requested, filled break out of its log; delivery, which reads that
   log's beacons, would under-count it.
+- **Origin-secret rotation** (`modules.release.secret_rotation_days`,
+  [docs/release-controller.md](docs/release-controller.md#origin-secret-rotation)). The state machine
+  `<prefix>-release-rotation` rotates the demand gate's origin secret with two values admitted at once: a new value
+  for the slot the siblings do not send, admitted at the WAF beside the current one; a probe through the guidance's
+  CloudFront until it is admitted; every sibling re-put with it; one break verified; then the old value replaced by
+  one nobody has seen. It holds the Release Controller's lock (one rotation at a time), rotates every
+  `secret_rotation_days` days (a daily EventBridge Scheduler check) and on demand, and raises
+  `<prefix>-release-rotation-failed` on a failure.
 - **Release Controller: smoke gate, promotion and rollback** (`modules.release`,
   [docs/release-controller.md](docs/release-controller.md#promotion-and-rollback), ADRs 0019, 0021, 0023). After a
   release configures a channel's idle sibling, a probe session smoke-tests it for two breaks and soaks it for three
