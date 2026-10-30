@@ -230,7 +230,7 @@ def sidecar(
     content_base_url: str,
     log_retention_days: int,
     policy_timeout_ms: int = 50,
-    select_timeout_ms: int = 150,
+    select_timeout_ms: int = 200,
     crawl: dict[str, str] | None = None,
     catalog_context_bucket: str | None = None,
 ) -> Sidecar:

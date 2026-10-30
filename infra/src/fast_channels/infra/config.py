@@ -648,14 +648,14 @@ class PdsModule(_Module):
     break."""
     policy_timeout_ms: int = Field(default=50, gt=0)
     """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone. The sidecar
-    on the task's loopback answered the 400-session herds at p99 12-14 ms, max 36 ms at the module (ADR-0036)."""
+    on the task's loopback answered the 400-session herds at p99 12-18 ms, max 36 ms at the module (ADR-0036)."""
     policy_group_timeout_ms: int = Field(default=75, gt=0)
     """Timeout of the hook group that holds the ``/policy`` call (at least ``policy_timeout_ms``)."""
-    select_timeout_ms: int = Field(default=150, gt=0)
+    select_timeout_ms: int = Field(default=200, gt=0)
     """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids. ``/select`` reserves the
-    pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-100 ms): the 400-session herds measured
-    p99 65-96 ms, max 111-166 ms at the module (ADR-0036)."""
-    select_group_timeout_ms: int = Field(default=200, gt=0)
+    pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-125 ms): 400-session break herds measured
+    p99 65-134 ms, max 111-166 ms at the module, and at 150 ms one pod in 400 fell back (ADR-0036)."""
+    select_group_timeout_ms: int = Field(default=250, gt=0)
     """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
     demo_lines: tuple[DemoLine, ...] = Field(default=(), max_length=8)
     """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's

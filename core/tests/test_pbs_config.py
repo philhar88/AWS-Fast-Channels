@@ -200,7 +200,7 @@ def test_the_own_book_and_the_module_call_the_pds_sidecar_on_the_tasks_loopback(
         "policy-url": "http://127.0.0.1:8090/policy",
         "policy-timeout-ms": 50,
         "select-url": "http://127.0.0.1:8090/select",
-        "select-timeout-ms": 150,
+        "select-timeout-ms": 200,
         "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
         "house-ads": "[]",
         "log-requests": True,

@@ -123,8 +123,8 @@
           "enabled": false,
           "policy_timeout_ms": 50,
           "policy_group_timeout_ms": 75,
-          "select_timeout_ms": 150,
-          "select_group_timeout_ms": 200,
+          "select_timeout_ms": 200,
+          "select_group_timeout_ms": 250,
           "demo_lines": []
         },
         "release": {
