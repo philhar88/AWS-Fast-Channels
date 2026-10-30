@@ -58,8 +58,14 @@ DECISIONS: Final = "filter record = 'pds.policy' and sid = '{session}'\n| fields
 LAB_LEAD: Final = timedelta(minutes=3)
 """From planning the lab's block to its first program: publishing and starting the channel fit in it."""
 LAB_BREAKS: Final = {"cadence_minutes": 1, "min_gap_minutes": 0.5, "slate_gops": 30}
-"""A break a minute on the lab channel, so a smoke and a soak take minutes."""
-LAB_PICKS: Final = 2
+"""A break a minute on the lab channel where an asset has no editorial cue points. An asset that has them breaks only
+at them (``BreakPolicy.offsets``): on fastm, 4 to 9 minutes apart."""
+LAB_MIN_BREAKS: Final = 7
+"""Breaks the lab's block carries at least: the smoke test's 2 and the soak's 3, a break the smoke's session joins
+(left out), and one that airs during the smoke's log delay, which neither session watches (fastm, 2026-10-30: a
+block of 2 programs had 4 breaks, and the soak saw 1 of its 3)."""
+LAB_MAX_PICKS: Final = 8
+"""Programs the block may take to reach :data:`LAB_MIN_BREAKS`."""
 
 
 class LabError(RuntimeError):
@@ -84,8 +90,15 @@ def tool(name: str, correlation_id: str, **arguments: Any) -> dict[str, Any]:
     return body
 
 
+def _breaks(plan: dict[str, Any]) -> int:
+    return sum(len(program.get("breaks", ())) for program in plan.get("programs", ()))
+
+
 def lab_start(lab: str, correlation_id: str) -> dict[str, Any]:
-    """Schedule a block with a break a minute on the lab channel and start it."""
+    """Schedule a block of at least :data:`LAB_MIN_BREAKS` breaks on the lab channel and start it.
+
+    The block is planned with one program, then one more at a time, until it has the breaks or uses every READY
+    asset found (at most :data:`LAB_MAX_PICKS`). The plans not published expire."""
     channel = tool("channels___get_channel", correlation_id, channel=lab)
     assets = tool(
         "library___find_assets",
@@ -93,23 +106,34 @@ def lab_start(lab: str, correlation_id: str) -> dict[str, Any]:
         kind="content",
         status="READY",
         ladder_version=channel["ladder_version"],
-        limit=LAB_PICKS,
+        limit=LAB_MAX_PICKS,
     )["assets"]
     if not assets:
         raise LabError(f"{lab}: no READY content of ladder {channel['ladder_version']} to smoke-test with")
     start = (datetime.now(UTC) + LAB_LEAD).isoformat(timespec="seconds").replace("+00:00", "Z")
-    plan = tool(
-        "schedule___plan",
-        correlation_id,
-        channel=lab,
-        picks=[a["asset_id"] for a in assets],
-        start=start,
-        break_policy=LAB_BREAKS,
-    )
+    for picks in range(1, len(assets) + 1):
+        plan = tool(
+            "schedule___plan",
+            correlation_id,
+            channel=lab,
+            picks=[a["asset_id"] for a in assets[:picks]],
+            start=start,
+            break_policy=LAB_BREAKS,
+        )
+        if _breaks(plan) >= LAB_MIN_BREAKS:
+            break
+    else:
+        logger.warning(
+            "the lab block has fewer breaks than the smoke test and the soak need",
+            extra={"channel": lab, "breaks": _breaks(plan), "needed": LAB_MIN_BREAKS, "programs": len(assets)},
+        )
     tool("schedule___publish", correlation_id, plan_id=plan["plan_id"])
     tool("channels___start_channel", correlation_id, channel=lab)
-    logger.info("lab channel started", extra={"channel": lab, "plan_id": plan["plan_id"], "start": start})
-    return {"lab": lab, "plan_id": plan["plan_id"], "start": start}
+    logger.info(
+        "lab channel started",
+        extra={"channel": lab, "plan_id": plan["plan_id"], "start": start, "breaks": _breaks(plan)},
+    )
+    return {"lab": lab, "plan_id": plan["plan_id"], "start": start, "breaks": _breaks(plan)}
 
 
 def lab_stop(lab: str, correlation_id: str) -> dict[str, Any]:

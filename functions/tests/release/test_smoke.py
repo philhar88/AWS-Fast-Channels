@@ -145,17 +145,25 @@ def test_the_lab_channel_is_scheduled_started_and_stopped_through_the_agent_tool
     )
     smoke.settings.cache_clear()
     lam = stub("lambda")
+    assets = [{"asset_id": a} for a in ("sintel", "tears", "bbb", "spring")]
+
+    def planned(plan_id: str, *breaks: int) -> dict[str, Any]:
+        return {"ok": True, "plan_id": plan_id, "programs": [{"breaks": [{}] * n} for n in breaks]}
+
     calls = [
         ("f-channels", {"ok": True, "ladder_version": "standard@0123456789"}),
-        ("f-library", {"ok": True, "assets": [{"asset_id": "sintel"}, {"asset_id": "tears"}]}),
-        ("f-schedule", {"ok": True, "plan_id": "fastm-lab.1"}),
-        ("f-schedule", {"ok": True, "published": 2}),
+        ("f-library", {"ok": True, "assets": assets}),
+        ("f-schedule", planned("fastm-lab.1", 3)),
+        ("f-schedule", planned("fastm-lab.2", 3, 2)),  # 5: fewer than the smoke test and the soak need
+        ("f-schedule", planned("fastm-lab.3", 3, 2, 4)),
+        ("f-schedule", {"ok": True, "published": 3}),
         ("f-channels", {"ok": True, "state": "RUNNING"}),
     ]
     for function, body in calls:
         lam.add_response("invoke", tool_answer(body), {"FunctionName": function, "Payload": ANY, "ClientContext": ANY})
     started = smoke.lab_start("fastm-lab", "c9")
-    assert started["lab"] == "fastm-lab" and started["plan_id"] == "fastm-lab.1"
+    assert started["lab"] == "fastm-lab" and started["plan_id"] == "fastm-lab.3" and started["breaks"] == 9
+    lam.assert_no_pending_responses()
     lam.add_response("invoke", tool_answer({"ok": True, "state": "STOPPED"}), None)
     assert smoke.lab_stop("fastm-lab", "c9") == {"lab": "fastm-lab", "stopped": True}
     lam.add_response("invoke", tool_answer({"ok": False, "error": {"code": "NOT_FOUND"}}), None)
