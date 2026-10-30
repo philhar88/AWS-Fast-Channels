@@ -39,8 +39,10 @@ from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.monetization import names as release_names
-from fast_channels.core.pbs_config import POD_SECONDS, render, simulator_host
+from fast_channels.core.pbs_config import POD_SECONDS, HouseAd, house_ads, render, simulator_host
 from fast_channels.core.pds import names as pds_names
+from fast_channels.core.pds.book import house_creatives
+from fast_channels.core.specs import vast_key
 
 if TYPE_CHECKING:
     import boto3
@@ -568,7 +570,7 @@ class DemandStage:
         the demo creatives beside the simulator's handler (overlay O5), which its stack packages."""
         from prebid_guidance import pbs_settings  # noqa: PLC0415 - the CLI module imports this one
 
-        for rel, content in render(pbs_settings(self.config, content_base_url)).items():
+        for rel, content in render(pbs_settings(self.config, content_base_url, self.house_ads())).items():
             path = self.checkout / CONFIG_ROOT / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
@@ -676,6 +678,19 @@ class DemandStage:
             log(f"no {key} in the media bucket: the simulator bids the guidance's own creatives")
             return None
         return DemoIndex.model_validate_json(body)
+
+    def house_ads(self) -> tuple[HouseAd, ...]:
+        """The default ladder kit's house ads (``ads/<ladder>/vast.xml``), for the module's pod of last resort; none
+        without a Media stack or a kit."""
+        if (outputs := self.media_outputs()) is None:
+            return ()
+        key = vast_key(outputs["DefaultLadderVersion"])
+        try:
+            body = self.client("s3").get_object(Bucket=outputs["MediaBucketName"], Key=key)["Body"].read()
+        except ClientError:
+            log(f"no {key} in the media bucket: the module has no house ads of its own")
+            return ()
+        return house_ads(house_creatives(body.decode()))
 
     @staticmethod
     def simulator_creatives(demo: DemoIndex | None, content_base_url: str) -> str | None:
@@ -1059,7 +1074,7 @@ class DemandStage:
 
         values = self.parameters()
         s3 = self.client("s3")
-        for rel, content in render(pbs_settings(self.config, content_base_url)).items():
+        for rel, content in render(pbs_settings(self.config, content_base_url, self.house_ads())).items():
             if rel.startswith("current-config/"):
                 bucket, key = values[Parameter.SETTINGS_BUCKET], f"prebid-server/current/{rel.split('/', 1)[1]}"
             else:

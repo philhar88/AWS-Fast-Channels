@@ -37,6 +37,7 @@ hooks:
     select-url: "http://pds.fastm.fast.internal/select"
     select-timeout-ms: 200
     tracker-template: "https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
+    house-ads: "[]"
     log-requests: true
 metrics:
   logback:

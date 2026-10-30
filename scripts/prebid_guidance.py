@@ -33,7 +33,7 @@ import stage_args
 from _demand import DemandError, DemandStage, iterate_tool_versions
 from _stack import Plane, StackError, Stage
 
-from fast_channels.core.pbs_config import PbsSettings, render, tracker_host
+from fast_channels.core.pbs_config import HouseAd, PbsSettings, render, tracker_host
 
 if TYPE_CHECKING:
     from fast_channels.infra.config import FastChannelsConfig
@@ -263,9 +263,10 @@ def stage_config(
     return FastChannelsConfig.from_context(App(context=context).node, region=region)
 
 
-def pbs_settings(config: FastChannelsConfig, content_base_url: str) -> PbsSettings:
+def pbs_settings(config: FastChannelsConfig, content_base_url: str, house: Sequence[HouseAd] = ()) -> PbsSettings:
     """The Prebid Server settings of a deployment whose CDN serves content, and our tracker, at
-    ``content_base_url`` (the Media stack's ``ContentBaseUrl``)."""
+    ``content_base_url`` (the Media stack's ``ContentBaseUrl``), with the kit's ``house`` ads for the module's pod
+    of last resort."""
     demand, pds = config.modules.demand, config.modules.pds
     return PbsSettings(
         prefix=config.prefix,
@@ -277,6 +278,7 @@ def pbs_settings(config: FastChannelsConfig, content_base_url: str) -> PbsSettin
         policy_group_timeout_ms=pds.policy_group_timeout_ms,
         select_timeout_ms=pds.select_timeout_ms,
         select_group_timeout_ms=pds.select_group_timeout_ms,
+        house_ads=tuple(house),
         pbs_version=demand.pbs_version.value,
     )
 

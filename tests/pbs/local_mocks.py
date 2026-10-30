@@ -123,7 +123,7 @@ POLICY_TICKETS: Final = {
     "SAFEbad1": "SAFE that wrongly names bidders (the module must add none)",
     "KIDS1": "KIDS, no bidders",
     "KIDSbad1": "KIDS that wrongly names bidders",
-    "slow1": "FULL with bidders after 200 ms (past the module's 50 ms timeout)",
+    "slow1": "FULL with bidders after 200 ms (past the module's 80 ms timeout)",
     "err1": "HTTP 500",
     "junk1": "200 with a body that is not JSON",
     "v2x1": "an unknown schema version",
@@ -287,6 +287,8 @@ class Mocks:
     work: Path
     calls: list[Call] = field(default_factory=list)
     select_fails: bool = False
+    own_book_fails: bool = False
+    """The own book answers 503: the auction has no own-book bid, house ads included."""
     own_book_every_bid: bool = False
     """The own book bids several ads per slot (:func:`own_book`)."""
     contract_errors: list[str] = field(default_factory=list)
@@ -409,6 +411,8 @@ class Mocks:
                     return self._refused(path, error)
                 return (503, "{}", 0) if self.select_fails else (200, select(request), 0)
             case "/ownbook/openrtb":
+                if self.own_book_fails:
+                    return 503, "{}", 0
                 return 200, json.dumps(own_book(body, every_bid=self.own_book_every_bid)), 0
             case "/amt":
                 assert self._simulator is not None

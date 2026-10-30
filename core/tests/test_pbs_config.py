@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from syrupy.extensions.json import JSONSnapshotExtension
 from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
+from fast_channels.core.demo_demand import vast_ad
 from fast_channels.core.pbs_config import (
     OWN_BOOK,
     POD_SECONDS,
@@ -21,8 +22,10 @@ from fast_channels.core.pbs_config import (
     SHIPPED_ADAPTERS,
     SIMULATOR,
     VAST_HOOK,
+    HouseAd,
     PbsSettings,
     account,
+    house_ads,
     pds_host,
     prebid_config,
     private_zone,
@@ -32,6 +35,7 @@ from fast_channels.core.pbs_config import (
     to_yaml,
     tracker_host,
 )
+from fast_channels.core.pds.book import AD_SYSTEM, Creative
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -199,8 +203,24 @@ def test_the_own_book_and_the_module_call_the_pds_on_its_stable_private_name() -
         "select-url": "http://pds.fastm.fast.internal/select",
         "select-timeout-ms": 200,
         "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
+        "house-ads": "[]",
         "log-requests": True,
     }
+
+
+def test_the_kits_house_ads_are_the_modules_pod_of_last_resort() -> None:
+    """``hooks.fast-ctv.house-ads``: the kit's house ads as the own book renders them, for a break the PDS could not
+    be asked about."""
+    kit = Creative(crid="house1", creative_id="h1-std-0a1b", hls_uri=f"{CDN}/ads/std/h1/main.m3u8", duration_ms=30_030)
+
+    ads = house_ads([kit])
+    module = prebid_config(SETTINGS.model_copy(update={"house_ads": ads}))["hooks"]["fast-ctv"]
+
+    [ad] = json.loads(module["house-ads"])
+    assert (ad["crid"], ad["dur"], ad["w"], ad["h"]) == ("house1", 30, 1920, 1080)
+    assert ad["adm"] == vast_ad(kit, ad_system=AD_SYSTEM)
+    with pytest.raises(ValueError, match="may not contain"):
+        HouseAd(crid="x", adm="<VAST>${AUCTION_PRICE}</VAST>", dur=30, w=1, h=1)
 
 
 def test_one_event_loop_per_vcpu_and_the_guidance_cache_defaults() -> None:

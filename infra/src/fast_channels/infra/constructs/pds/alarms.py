@@ -2,10 +2,12 @@
 
 The module logs one ``fast-ctv-pod`` line per auction: ``policy_fallback`` names why the ``/policy`` patch was not
 applied (``POLICY_UNAVAILABLE``, ``POLICY_HTTP_<status>``, ``NO_POLICY_HOOK``…, null when it was), and ``select``
-starts with ``SELECT_FALLBACK`` when the pod is the auction's house ads instead of ``/select``'s answer. Metric filters
-count the lines, the policy fallbacks, the select fallbacks and the module's errors (an empty VAST, so the slate
-plays), leaving out the warm-up's and the herd's synthetic auctions (``warmup-<n>`` sessions on ``<prefix>-warmup``),
-which run on cold tasks by design. Two alarms watch the shares over 5 minutes:
+starts with ``SELECT_FALLBACK`` when the pod is the auction's house ads instead of ``/select``'s answer; it ends with
+``HOUSE_CONFIG`` when the pod is the kit's house ads from the module's configuration, because the break would
+otherwise have been empty. Metric filters count the lines, the policy fallbacks, the select fallbacks, the module's
+errors (an empty VAST, so the slate plays) and the configured house pods, leaving out the warm-up's and the herd's
+synthetic auctions (``warmup-<n>`` sessions on ``<prefix>-warmup``), which run on cold tasks by design. Two alarms
+watch the shares over 5 minutes:
 
 - ``<prefix>-pds-policy-fallbacks``: more than 1% of breaks served without the policy (own book only, no viewer data);
 - ``<prefix>-pds-select-fallbacks``: more than 0.5% of pods built by the module from house bids, or empty after an
@@ -43,6 +45,7 @@ PATTERNS: Final = {
     "PolicyFallbacks": f'{_POD} "POLICY_"',
     "SelectFallbacks": f'{_POD} "SELECT_FALLBACK"',
     "PodErrors": f'{_POD} "error"',
+    "HouseFromConfig": f'{_POD} "HOUSE_CONFIG"',
 }
 """Metric name -> the filter pattern of the module's lines it counts."""
 

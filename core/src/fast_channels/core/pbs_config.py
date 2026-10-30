@@ -21,13 +21,16 @@ Nothing rendered here is secret: the origin secret lives in the WAF rule group, 
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, Final
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from fast_channels.core.demo_demand import InlineCreative, vast_ad
 from fast_channels.core.naming import PREFIX_PATTERN
+from fast_channels.core.pds.book import AD_SYSTEM
+from fast_channels.core.timeline import whole_seconds
 
 POD_SECONDS: Final = (30, 60, 90, 120)
 """Break lengths with a stored request: one to four 30 s slots (the 30.03 s grid, rounded)."""
@@ -84,6 +87,42 @@ def stored_request_id(seconds: int, *, kids: bool = False) -> str:
     return f"fast-pod-{'kids-' if kids else ''}{seconds}s"
 
 
+class HouseAd(BaseModel):
+    """One of the kit's house ads in the module's configuration (``hooks.fast-ctv.house-ads``): the pod of last
+    resort when a break would otherwise be empty because the PDS could not be asked."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    crid: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    adm: str = Field(min_length=1, max_length=8192)
+    """An inline VAST 4.2 ad without an impression of its own (``core.demo_demand.vast_ad``)."""
+    dur: int = Field(gt=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+
+    @field_validator("adm")
+    @classmethod
+    def _no_placeholder(cls, adm: str) -> str:
+        if "${" in adm:  # Spring would read it as a property placeholder
+            raise ValueError("a house ad's VAST may not contain '${'")
+        return adm
+
+
+def house_ads(creatives: Iterable[InlineCreative]) -> tuple[HouseAd, ...]:
+    """The module's configured house ads: the kit's (``core.pds.book.house_creatives``), rendered as the own book
+    renders them."""
+    return tuple(
+        HouseAd(
+            crid=c.crid,
+            adm=vast_ad(c, ad_system=AD_SYSTEM),
+            dur=whole_seconds(c.duration_ms),
+            w=c.width,
+            h=c.height,
+        )
+        for c in creatives
+    )
+
+
 class PbsSettings(BaseModel):
     """What one stage's Prebid Server configuration depends on."""
 
@@ -104,6 +143,9 @@ class PbsSettings(BaseModel):
     policy_group_timeout_ms: int = Field(default=110, gt=0)
     select_timeout_ms: int = Field(default=200, gt=0)
     select_group_timeout_ms: int = Field(default=250, gt=0)
+    house_ads: tuple[HouseAd, ...] = ()
+    """The kit's house ads, which the module renders when a break would otherwise be empty (``/policy`` unavailable
+    and the own book silent, or ``/select`` unavailable and the auction without a house ad)."""
     pbs_version: str = Field(default="3.43.0", pattern=r"^\d+\.\d+\.\d+$")
     """Prebid Server Java release the configuration is for (``modules.demand.pbs_version``): 4.x needs two settings
     3.x does not have."""
@@ -275,6 +317,7 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
                 "select-url": f"{pds}/select",
                 "select-timeout-ms": settings.select_timeout_ms,
                 "tracker-template": settings.tracker_template,
+                "house-ads": json.dumps([ad.model_dump() for ad in settings.house_ads], separators=(",", ":")),
                 "log-requests": True,
             },
         },

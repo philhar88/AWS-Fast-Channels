@@ -8,8 +8,10 @@ import org.junit.jupiter.api.Test;
 import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.execution.timeout.TimeoutFactory;
 import org.prebid.server.hooks.execution.v1.exitpoint.ExitpointPayloadImpl;
+import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
+import org.prebid.server.hooks.modules.fast.ctv.core.PolicyPatch;
 import org.prebid.server.hooks.modules.fast.ctv.core.SelectClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.TrackerTemplate;
 import org.prebid.server.hooks.v1.InvocationAction;
@@ -36,6 +38,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.DECISION;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.EVID;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.MAPPER;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.SID;
@@ -46,9 +49,11 @@ import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.house;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.mediaTailorRequest;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.pdsTracker;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.pod;
+import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.policyAnswer;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.response;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.seat;
 import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.selectAnswer;
+import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.vast;
 
 public class FastCtvVastHookTest {
 
@@ -59,6 +64,18 @@ public class FastCtvVastHookTest {
     private final FastCtvVastHook target = new FastCtvVastHook(
             new SelectClient(httpClient, MAPPER, "http://pds.fastm.fast.internal/select", 100), new PodRenderer(),
             new TrackerTemplate(TRACKER), MAPPER, log::add);
+    /** The kit's house ads as the configuration renders them (``hooks.fast-ctv.house-ads``). */
+    private static final HousePod HOUSE_POD = new HousePod(List.of(
+            new HousePod.Ad("kit1", vast("kit1", null), 30, 1920, 1080),
+            new HousePod.Ad("kit2", vast("kit2", null), 30, 1920, 1080)));
+    private final FastCtvVastHook withHousePod = new FastCtvVastHook(
+            new SelectClient(httpClient, MAPPER, "http://pds.fastm.fast.internal/select", 100), new PodRenderer(),
+            new TrackerTemplate(TRACKER), MAPPER, log::add, HOUSE_POD);
+    private static final PolicyDecision TIMED_OUT = new PolicyDecision(null, "POLICY_UNAVAILABLE TimeoutException", 80);
+    private static final PolicyDecision APPLIED = new PolicyDecision(
+            PolicyPatch.parse(policyAnswer("CONTEXTUAL", "amt"), DECISION), null, 12);
+    private static final String EMPTY_SELECTION =
+            "{\"v\":1,\"pod\":[],\"standalone\":[],\"trackers\":{},\"reason\":\"empty\"}";
 
     /**
      * The bids of {@link org.prebid.server.hooks.modules.fast.ctv.Fixtures#selectAnswer}: house1/house2 from the own
@@ -153,18 +170,71 @@ public class FastCtvVastHookTest {
         assertThat(body(call(pod(1), auction()))).isEqualTo(PodRenderer.EMPTY_VAST);
     }
 
+    @Test
+    public void withoutThePolicyAndASilentOwnBookThePodIsTheConfiguredHouseAds() {
+        selectAnswers(Future.succeededFuture(HttpClientResponse.of(200, null, EMPTY_SELECTION)));
+
+        final String vast = body(call(withHousePod, pod(2), response(), TIMED_OUT));
+
+        assertThat(ads(vast)).containsExactly("kit1#1", "kit2#2");
+        assertThat(vast).contains("<Impression><![CDATA[" + OUR_TRACKER + "kit1&e=impression&enr=0]]>");
+        assertThat(log).singleElement().satisfies(line -> assertThat(line)
+                .contains("\"select\":\"empty HOUSE_CONFIG\"", "\"safe\":true",
+                        "\"winners\":[\"fast-ctv:kit1\",\"fast-ctv:kit2\"]",
+                        "\"policy_fallback\":\"POLICY_UNAVAILABLE TimeoutException\""));
+    }
+
+    @Test
+    public void whenSelectFailsAndTheAuctionHasNoHouseAdThePodIsTheConfiguredOnes() {
+        selectAnswers(Future.failedFuture(new TimeoutException("Timeout period of 100ms has been exceeded")));
+
+        final String vast = body(call(withHousePod, pod(2), response(seat("ownbook")), APPLIED));
+
+        assertThat(ads(vast)).containsExactly("kit1#1", "kit2#2");
+        assertThat(log.getFirst()).contains("SELECT_FALLBACK", "HOUSE_CONFIG", "\"safe\":false");
+    }
+
+    @Test
+    public void theAuctionsHouseAdsComeBeforeTheConfiguredOnes() {
+        selectAnswers(Future.failedFuture(new TimeoutException("Timeout period of 100ms has been exceeded")));
+
+        assertThat(ads(body(call(withHousePod, pod(2), auction(), TIMED_OUT)))).containsExactly("house1#1", "house2#2");
+        assertThat(log.getFirst()).contains("SELECT_FALLBACK").doesNotContain("HOUSE_CONFIG");
+    }
+
+    @Test
+    public void aPodSelectEmptiedWithThePolicyAppliedStaysEmpty() {
+        selectAnswers(Future.succeededFuture(HttpClientResponse.of(200, null, EMPTY_SELECTION)));
+
+        assertThat(body(call(withHousePod, pod(2), auction(), APPLIED))).isEqualTo(PodRenderer.EMPTY_VAST);
+        assertThat(log.getFirst()).contains("\"select\":\"empty\"", "\"safe\":false");
+    }
+
+    @Test
+    public void withoutConfiguredHouseAdsAPolicylessEmptyPodStaysEmpty() {
+        selectAnswers(Future.succeededFuture(HttpClientResponse.of(200, null, EMPTY_SELECTION)));
+
+        assertThat(body(call(target, pod(2), response(), TIMED_OUT))).isEqualTo(PodRenderer.EMPTY_VAST);
+    }
+
     private void selectAnswers(Future<HttpClientResponse> response) {
         when(httpClient.request(any(), anyString(), any(), anyString(), anyLong(), anyLong())).thenReturn(response);
     }
 
     private InvocationResult<ExitpointPayload> call(BidRequest request, BidResponse response, String... headers) {
+        return call(target, request, response, new PolicyDecision(null, "POLICY_HTTP_500", 3), headers);
+    }
+
+    private static InvocationResult<ExitpointPayload> call(FastCtvVastHook hook, BidRequest request,
+                                                           BidResponse response, PolicyDecision policy,
+                                                           String... headers) {
         final AuctionInvocationContext context = mock(AuctionInvocationContext.class);
         when(context.auctionContext()).thenReturn(AuctionContext.builder()
                 .httpRequest(mediaTailorRequest(TICKET, headers))
                 .bidRequest(request).bidResponse(response).build());
         when(context.timeout()).thenReturn(new TimeoutFactory(Clock.systemUTC()).create(150));
-        when(context.moduleContext()).thenReturn(new PolicyDecision(null, "POLICY_HTTP_500", 3));
-        return target.call(ExitpointPayloadImpl.of(MultiMap.caseInsensitiveMultiMap(), "{}"), context).result();
+        when(context.moduleContext()).thenReturn(policy);
+        return hook.call(ExitpointPayloadImpl.of(MultiMap.caseInsensitiveMultiMap(), "{}"), context).result();
     }
 
     private static String body(InvocationResult<ExitpointPayload> result) {

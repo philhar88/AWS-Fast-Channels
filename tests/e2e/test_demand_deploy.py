@@ -7,7 +7,7 @@ import zipfile
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import _demand
 import boto3
@@ -18,6 +18,7 @@ from botocore.stub import Stubber
 from fast_channels.core.demand import Parameter
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.specs import vast_key
 
 REGION = "us-east-1"
 LOCK = """
@@ -622,6 +623,58 @@ def test_a_demand_only_stage_has_no_demo_index(stage: _demand.DemandStage, stub:
     )
 
     assert stage.demo_index() is None
+
+
+KIT_VAST: Final = "".join(
+    [
+        '<VAST xmlns="http://www.iab.com/VAST" version="4.2">',
+        *(
+            f'<Ad sequence="{n}"><InLine><Creatives><Creative id="h{n}-std-0a1b"><Linear>'
+            "<Duration>00:00:30.030</Duration><MediaFiles>"
+            f'<MediaFile width="1920" height="1080">https://media.example.com/ads/std/h{n}/main.m3u8</MediaFile>'
+            "</MediaFiles></Linear></Creative></Creatives></InLine></Ad>"
+            for n in (1, 2, 1)
+        ),
+        "</VAST>",
+    ]
+)
+"""The kit's VAST pod (``ads/<ladder>/vast.xml``), which repeats its house ads."""
+
+
+def media_stacks(cloudformation: Any) -> None:
+    for name, outputs in (
+        ("FastChannels-fastcix-Data", {"MediaBucketName": "fastcix-media"}),
+        (
+            "FastChannels-fastcix-Media",
+            {"DefaultLadderVersion": STANDARD.version, "ContentBaseUrl": "https://m.example"},
+        ),
+    ):
+        cloudformation.add_response("describe_stacks", {"Stacks": [stack(name, outputs)]}, {"StackName": name})
+
+
+def test_the_modules_house_ads_are_the_kits(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation, s3 = stub("cloudformation"), stub("s3")
+    media_stacks(cloudformation)
+    s3.add_response(
+        "get_object",
+        {"Body": io.BytesIO(KIT_VAST.encode())},
+        {"Bucket": "fastcix-media", "Key": vast_key(STANDARD.version)},
+    )
+
+    ads = stage.house_ads()
+
+    assert [(ad.crid, ad.dur, ad.w) for ad in ads] == [("house1", 30, 1920), ("house2", 30, 1920)]
+    assert "h1-std-0a1b" in ads[0].adm and "<Impression>" not in ads[0].adm
+
+
+def test_without_a_kit_the_module_has_no_house_ads(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation, s3 = stub("cloudformation"), stub("s3")
+    media_stacks(cloudformation)
+    s3.add_client_error(
+        "get_object", "NoSuchKey", expected_params={"Bucket": "fastcix-media", "Key": vast_key(STANDARD.version)}
+    )
+
+    assert stage.house_ads() == ()
 
 
 def test_the_simulator_creatives_bill_on_the_cdn_beacon(stage: _demand.DemandStage) -> None:
