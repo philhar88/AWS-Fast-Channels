@@ -3,7 +3,7 @@
 Runs only when the stage has the Release stack (``deploy-demand`` deploys it beside the guidance); skipped
 otherwise. The first tests read the siblings, their Functions and vended-log deliveries, the playback plan through
 the CDN and the ledger, and invoke the drift check and the log reconciliation once; they change nothing (the
-reconciliation puts one more ``UnloggedAdsRequests`` datapoint).
+reconciliation puts one more ``UnloggedFilledSeconds`` datapoint).
 
 With ``--releases`` the rest make releases (``harness_release``; about 50 minutes):
 
@@ -153,12 +153,15 @@ def test_the_log_reconciler_counts_every_siblings_requests(release: Stage, sibli
     result = json.loads(response["Payload"].read())
     if "skipped" in result:  # a stage younger than the hour reconciled (its log group is newer)
         print(f"\n{result['start']} to {result['end']}: skipped, {result['skipped']}")
-        assert result["unlogged_requests"] == 0, result
+        assert result["unlogged_filled_s"] == 0, result
         return
-    counts = {name: (s["counted"]["requests"], s["logged"]["requests"]) for name, s in result["siblings"].items()}
-    print(f"\n{result['start']} to {result['end']}: (counted, logged) requests {counts}")
+    counts = {
+        name: (s["counted"]["filled_ms"] / 1000, s["logged"]["filled_ms"] / 1000)
+        for name, s in result["siblings"].items()
+    }
+    print(f"\n{result['start']} to {result['end']}: (counted, logged) filled seconds {counts}")
     assert set(result["siblings"]) == set(siblings), result
-    assert result["unlogged_requests"] == sum(s["unlogged_requests"] for s in result["siblings"].values()), result
+    assert result["unlogged_filled_s"] == round(sum(s["unlogged_filled_s"] for s in result["siblings"].values()), 3)
 
 
 def test_the_ledger_records_the_release(release: Stage, siblings: dict[str, Any]) -> None:

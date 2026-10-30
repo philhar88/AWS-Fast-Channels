@@ -106,9 +106,9 @@ All notable changes to this project are documented here. The format follows
   writes the SSM parameters `/<prefix>/release/*` it reads. The Pod Decision Service's delivery function also counts
   the siblings' impressions, through a subscription filter on their log group.
 - **Release log reconciliation** (`modules.release`). Every hour, each sibling's vended ADS log is compared with
-  `AWS/MediaTailor`'s own counts (`AdDecisionServer.Ads` sample counts against `MAKING_ADS_REQUEST`, and avails
-  against `FILLED_AVAIL` for context); `<prefix>-release-log-loss` fires when MediaTailor made ad requests the log
-  does not have. MediaTailor was seen leaving a requested, filled break out of its log; delivery, which reads that
+  `AWS/MediaTailor`'s own count of filled ad time (the `Sum` of `Avail.FilledDuration` against the log's
+  `FILLED_AVAIL` durations); `<prefix>-release-log-loss` fires when MediaTailor filled ad time the log does not
+  have. MediaTailor was seen leaving a requested, filled break out of its log; delivery, which reads that
   log's beacons, would under-count it.
 - **Origin-secret rotation** (`modules.release.secret_rotation_days`,
   [docs/release-controller.md](docs/release-controller.md#origin-secret-rotation)). The state machine
