@@ -153,3 +153,45 @@ def test_a_recurring_schedule_refuses_the_sibling_and_a_failure_does_not_stop_th
 
 def test_only_the_configured_letters() -> None:
     assert prefetch.siblings_to_schedule(CHANNEL, sorted(STATE.siblings)) == [f"{CHANNEL}-p-a", f"{CHANNEL}-p-b"]
+
+
+def test_a_run_over_an_unchanged_schedule_makes_no_write(stub: Stub, context: Any) -> None:
+    """The owner's direction (2026-10-30): the schedule of record decides, and a run over an unchanged one is a no-op.
+    Both siblings already have their breaks' schedules (in whole seconds, as MediaTailor keeps them) and Channel
+    Assembly's approximate starts moved by 1.3 s: no Create or DeletePrefetchSchedule is made (the stubber would fail
+    on one)."""
+    mediatailor = stub("mediatailor")
+    starts = [NOW + timedelta(minutes=m, milliseconds=700) for m in (5, 9)]
+    jittered = [s + timedelta(milliseconds=1300) for s in starts]
+    mediatailor.add_response("describe_channel", RUNNING, {"ChannelName": CHANNEL})
+    mediatailor.add_response(
+        "get_channel_schedule", schedule(*jittered), {"ChannelName": CHANNEL, "DurationMinutes": "360"}
+    )
+    mediatailor.add_response(
+        "describe_program", program(11, 12), {"ChannelName": CHANNEL, "ProgramName": "20261030T120000-sintel"}
+    )
+    for sibling in (f"{CHANNEL}-p-a", f"{CHANNEL}-p-b"):
+        items = [
+            {
+                "Arn": f"{PC_ARN}/{sibling}/pf-{event_id}",
+                "Name": f"pf-{event_id}",
+                "PlaybackConfigurationName": sibling,
+                "ScheduleType": "SINGLE",
+                "Retrieval": {
+                    "StartTime": (start - timedelta(seconds=150)).replace(microsecond=0),
+                    "EndTime": (start - timedelta(seconds=30)).replace(microsecond=0),
+                },
+                "Consumption": {
+                    "StartTime": (start - timedelta(seconds=20)).replace(microsecond=0),
+                    "EndTime": (start + timedelta(seconds=70)).replace(microsecond=0),
+                },
+            }
+            for event_id, start in zip((11, 12), starts, strict=True)
+        ]
+        mediatailor.add_response(
+            "list_prefetch_schedules", {"Items": items}, {"PlaybackConfigurationName": sibling, "ScheduleType": "ALL"}
+        )
+
+    totals = prefetch.handler({"id": "event-2"}, context)
+
+    assert totals == {"created": 0, "deleted": 0, "kept": 4, "refused": 0, "errors": 0}
