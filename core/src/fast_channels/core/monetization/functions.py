@@ -113,7 +113,7 @@ class Cache(ApiShape):
     key: str | None = None
 
 
-BUNDLE_ONLY_REQUEST_MEMBERS: Final = ("CacheScope", "CacheReason")
+BUNDLE_ONLY_REQUEST_MEMBERS: Final = ("CacheScope", "CacheReason", "DemandOrigin")
 """``HttpRequestConfiguration`` members the bundle holds for the validators and ``PutFunction`` never receives."""
 
 
@@ -136,6 +136,9 @@ class HttpRequestConfiguration(ApiShape):
     """What one answer is valid for: ``cache`` and its key follow from it, ``none`` sets no ``cache`` (R-F8)."""
     cache_reason: str | None = None
     """Why that scope is the right one, in words (R-F8)."""
+    demand_origin: bool | None = None
+    """A call to the demand origin's auction: the apply adds ``X-Fast-Origin`` (the current origin secret) and
+    ``X-Fast-Fv`` (the release) to its ``Headers``, as it does to a sibling's ADS request (R-P2)."""
 
     @model_serializer(mode="wrap")
     def _request(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
