@@ -544,7 +544,7 @@ def test_the_origin_secret_rotates_on_a_schedule_with_two_values_admitted(deploy
     for step in ("Begin", "Admit", "Probe", "Switch", "Verify", "Retire"):
         assert states[step]["Catch"][-1]["Next"] == "RecordFailure"
     [schedule] = [s for s in resources(template, "AWS::Scheduler::Schedule").values() if "rotation" in s["Description"]]
-    # a daily check: Scheduler fires a rate schedule when it is created, so rate(30 days) rotated on every deploy
+    # a daily check: a rate schedule starts when it is created, so rate(30 days) would rotate on every deploy
     assert schedule["ScheduleExpression"] == "rate(1 day)"
     [function] = [
         f

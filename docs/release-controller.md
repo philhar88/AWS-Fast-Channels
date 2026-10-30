@@ -165,8 +165,8 @@ own timeouts.
 The siblings send one of the two origin secrets of the stage in `X-Fast-Origin`; the WAF rule group
 `<prefix>-demand-origin` (rule `fast-origin-required`) admits either, so a rotation never blocks a POST. The state
 machine `<prefix>-release-rotation` rotates every `modules.release.secret_rotation_days` days (90 by default).
-EventBridge Scheduler starts it daily, and a scheduled run that is not due ends at once: Scheduler fires a rate
-schedule when the schedule is created, so a rate of 90 days would rotate on every deploy (fastm, 2026-10-30). Due
+EventBridge Scheduler starts it daily, and a scheduled run that is not due ends at once: a rate schedule starts
+when it is created unless it has a `StartDate`, so a rate of 90 days would rotate on every deploy. Due
 means that the days have passed since the siblings last switched secret, or, before the first rotation, since the
 current secret last changed. Start the state machine by hand on any suspected exposure; a run by hand always
 rotates:

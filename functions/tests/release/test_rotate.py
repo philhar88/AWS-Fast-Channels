@@ -287,3 +287,55 @@ def test_the_handler_dispatches(monkeypatch: pytest.MonkeyPatch, context: Any) -
     assert rotate.handler({"step": "begin", "change_id": "x"}, context) == {"step": "begin"}
     with pytest.raises(ValueError, match="unknown step"):
         rotate.handler({"step": "x"}, context)
+
+
+def test_two_rotations_at_once_never_leave_a_sibling_on_a_refused_value(
+    state: Any, ledger: Any, released: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fastm 2026-10-30: a scheduled rotation and one by hand overlapped. The first one's retire un-admitted the value
+    the second had switched the siblings to, and live ad requests got 403s. Here both run step by step in the order
+    they ran; after every step, each sibling sends a value the WAF admits."""
+    values = {"a": "a0", "b": "b0"}
+    admitted = set(values.values())
+    sent: dict[str, str] = {}
+    serial = iter(range(1, 100))
+
+    def new_value(slot: str) -> None:
+        values[slot] = f"{slot}{next(serial)}"
+
+    def admit_values(current: dict[str, SecretStr]) -> None:
+        admitted.clear()
+        admitted.update(v.get_secret_value() for v in current.values())
+
+    def put(**kw: Any) -> None:
+        sent[kw["Name"]] = kw["AdDecisionServerConfiguration"]["HttpRequest"]["Headers"]["X-Fast-Origin"]
+
+    monkeypatch.setattr(rotate, "_new_value", new_value)
+    monkeypatch.setattr(rotate.store, "secret", lambda slot: SecretStr(values[slot]))
+    monkeypatch.setattr(rotate, "admit_values", admit_values)
+    monkeypatch.setattr(rotate.aws, "client", lambda service: SimpleNamespace(put_playback_configuration=put))
+    monkeypatch.setattr(rotate.promote, "on_air", lambda channel: False)
+
+    def admitted_everywhere() -> None:
+        assert set(sent.values()) <= admitted, (sent, admitted)
+
+    first = rotate.begin("scheduled-1")
+    rotate.admit(first["target"], "scheduled-1")
+    rotate.switch(first["target"], "scheduled-1")
+    admitted_everywhere()
+    with pytest.raises(store.ReleaseBusyError):
+        rotate.begin("by-hand-2")  # the overlap: the second rotation waits for the first
+    rotate.verify(SIBLINGS, 0.0)
+    rotate.retire(first["current"], "scheduled-1")
+    admitted_everywhere()
+    second = rotate.begin("by-hand-2")
+    assert second["current"] == first["target"], "the second starts from the first one's switch"
+    for step in (
+        lambda: rotate.admit(second["target"], "by-hand-2"),
+        lambda: rotate.switch(second["target"], "by-hand-2"),
+        lambda: rotate.retire(second["current"], "by-hand-2"),
+    ):
+        step()
+        admitted_everywhere()
+    assert set(sent.values()) == {values[state.slot]}, "every sibling sends the recorded slot's value"
+    assert state.holder is None

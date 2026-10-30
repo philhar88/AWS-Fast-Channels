@@ -193,7 +193,7 @@ class ReleaseRotation(Construct):
         scheduler.Schedule(
             self,
             "Schedule",
-            # A daily check, not rate(<days>): Scheduler fires a rate schedule when it is created (fastm 2026-10-30),
+            # A daily check, not rate(<days>): a rate schedule starts when it is created unless it has a StartDate,
             # so every deploy would rotate. The check rotates once <days> have passed since the last rotation.
             description=f"Origin-secret rotation of {prefix}: a daily check, rotating every {days} days",
             schedule=scheduler.ScheduleExpression.rate(Duration.days(1)),
