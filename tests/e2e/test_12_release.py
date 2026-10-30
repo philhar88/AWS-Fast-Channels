@@ -101,7 +101,13 @@ def test_every_sibling_calls_its_ad_server_with_the_monetized_settings(
     siblings: dict[str, Any], ad_server_url: str | None
 ) -> None:
     """Every sibling POSTs to Prebid Server, but with the mock ad server (M8-09) the pair siblings GET the mock's
-    ``/ads`` instead, with the origin secret; the probe stays on Prebid Server."""
+    ``/ads`` instead, with the origin secret; the probe stays on Prebid Server. The siblings of each channel's newest
+    release have the avail suppression the code renders (ADR-0021). A sibling an older release configured (the idle
+    one, the probe) keeps that release's, which the drift check compares."""
+    newest: dict[str, str] = {}
+    for name, configuration in siblings.items():
+        channel = name.rsplit("-p-", 1)[0]
+        newest[channel] = max(newest.get(channel, ""), configuration["Tags"]["fast:release"])
     for name, configuration in siblings.items():
         server = configuration["AdDecisionServerConfiguration"]
         request = server["HttpRequest"]
@@ -113,11 +119,12 @@ def test_every_sibling_calls_its_ad_server_with_the_monetized_settings(
         assert "X-Fast-Origin" in request["Headers"], name  # the value is never read here
         assert server["VastResponse"]["AdSequencingMode"] == "FOLLOW_AD_SEQUENCE", name
         assert configuration["PersonalizationThresholdSeconds"] == PERSONALIZATION_THRESHOLD_SECONDS, name
-        assert configuration["AvailSuppression"] == {
-            "Mode": "AFTER_LIVE_EDGE",
-            "Value": "00:00:00",
-            "FillPolicy": "PARTIAL_AVAIL",
-        }, name
+        if configuration["Tags"]["fast:release"] == newest[name.rsplit("-p-", 1)[0]]:
+            assert configuration["AvailSuppression"] == {
+                "Mode": "AFTER_LIVE_EDGE",
+                "Value": "00:00:00",
+                "FillPolicy": "PARTIAL_AVAIL",
+            }, name
         assert configuration["Tags"]["fast:owner"] == RELEASE_OWNER, name
         roots = configuration["FunctionMapping"]  # one root per hook (PRE_SESSION, and PRE_ADS with the crawl)
         assert roots and all(r.endswith(configuration["Tags"]["fast:release"]) for r in roots.values()), (name, roots)
