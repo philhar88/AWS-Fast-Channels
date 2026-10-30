@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from fast_channels.core.pbs_config import PBS_VERSION as SUPPORTED_PBS_VERSION
-from fast_channels.core.pbs_config import PbsSettings, account, house_ads, prebid_config, render, to_yaml
+from fast_channels.core.pbs_config import PbsSettings, account, auction_body, house_ads, prebid_config, render, to_yaml
 from fast_channels.core.pds.book import Creative
 
 if TYPE_CHECKING:
@@ -160,14 +160,15 @@ class Pbs:
         self,
         ticket: str = "",
         *,
-        seconds: int = 120,
+        seconds: int | str = 120,
         account: str | None = None,
         headers: dict[str, str] | None = None,
         query: str | None = None,
     ) -> httpx.Response:
-        """MediaTailor's POST: the body names only the stored request; the session, the ticket and the playback
-        configuration are headers, the break is the query (``query`` replaces it)."""
-        body: dict[str, Any] = {"ext": {"prebid": {"storedrequest": {"id": f"fast-pod-{seconds}s"}}}}
+        """MediaTailor's POST: the body names the one stored request and the break's whole seconds
+        (``pbs_config.auction_body``); the session, the ticket and the playback configuration are headers, the break
+        is the query (``query`` replaces it)."""
+        body: dict[str, Any] = auction_body(seconds)
         if account:
             body["app"] = {"publisher": {"id": account}}
         sent = {
@@ -182,7 +183,8 @@ class Pbs:
             **(headers or {}),
         }
         if query is None:
-            query = f"evid=820461826&upid=tears-of-steel&dur={seconds * 1001}"
+            dur = seconds * 1001 if isinstance(seconds, int) else 30030
+            query = f"evid=820461826&upid=tears-of-steel&dur={dur}"
         return httpx.post(f"{self.base_url}/openrtb2/auction?{query}", json=body, headers=sent, timeout=10)
 
 

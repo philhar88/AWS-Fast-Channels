@@ -234,19 +234,46 @@ def test_without_the_policy_and_the_own_book_the_pod_is_the_kits_house_ads(mocks
     assert '"policy_fallback":"POLICY_UNAVAILABLE' in line and '"safe":true' in line, line
 
 
-@pytest.mark.parametrize("seconds", POD_SECONDS)
-def test_every_grid_duration_has_a_pod(pbs: Pbs, seconds: int) -> None:
+@pytest.mark.parametrize("seconds", [*POD_SECONDS, 48, 84, 108])
+def test_every_length_a_slot_fits_has_a_pod_of_its_whole_slots(pbs: Pbs, seconds: int) -> None:
+    """The planner's breaks and a mid-break joiner's remainders (ADR-0021): the module builds ``seconds // 30``
+    slots from the one stored request, and the pod fits them."""
     response = pbs.auction("CTX1", seconds=seconds)
 
     assert response.status_code == 200
-    assert len([ad for ad in ads(response.text) if ad.get("sequence")]) >= 1
+    assert 1 <= len([ad for ad in ads(response.text) if ad.get("sequence")]) <= seconds // 30
 
 
-@pytest.mark.parametrize("seconds", [31, 300])
-def test_an_off_grid_duration_is_refused(pbs: Pbs, seconds: int) -> None:
-    """MediaTailor rounds half up and sends 300 s for a missing duration: no such stored request, so 400 and the
-    slate."""
-    assert pbs.auction("CTX1", seconds=seconds).status_code == 400
+@pytest.mark.parametrize("seconds", [0, 20, 29, 121, 300, "", "abc", "48.5"])
+def test_a_length_the_module_cannot_build_a_pod_for_is_an_empty_vast(
+    mocks: Mocks, pbs: Pbs, seconds: int | str
+) -> None:
+    """Under 30 s no ad fits, over 120 s is no break of ours, 300 s is what MediaTailor sends for a missing duration,
+    and anything not whole seconds is refused: the auction is rejected and the module answers an empty VAST 4.2, so
+    the slate airs without an error."""
+    started = time.time()
+    response = pbs.auction("CTX1", seconds=seconds)
+
+    assert response.status_code == 200
+    assert ads(response.text) == []
+    line = next(line for line in pbs.log.read_text().splitlines() if '"fast-ctv-pod"' in line and "REJECTED" in line)
+    assert "POLICY_" not in line and "SELECT_FALLBACK" not in line, line
+    assert mocks.calls_to("/policy", started) == [], "rejected before the policy is asked"
+    assert mocks.third_party_calls(started) == [], "and before any bidder"
+
+
+def test_no_bidder_request_carries_the_modules_ext_fast(mocks: Mocks, pbs: Pbs) -> None:
+    """The module removes ``ext.fast`` (the pod's length and the slot length) once it built the pod: neither the
+    simulator nor the own book sees it."""
+    started = time.time()
+    response, _ = third_party_calls(mocks, pbs, "FULL1")
+
+    calls = mocks.third_party_calls(started)
+    assert response.status_code == 200 and calls, "the policy added the simulator"
+    own_book = mocks.calls_to("/ownbook/openrtb", started)
+    assert own_book
+    for call in [*calls, *own_book]:
+        assert "fast" not in (call.body.get("ext") or {}), (call.path, call.body.get("ext"))
 
 
 def test_the_module_logs_never_carry_the_ticket(pbs: Pbs) -> None:
