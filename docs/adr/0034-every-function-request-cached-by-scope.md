@@ -17,7 +17,7 @@ key with too few values serves one session's or one break's answer to another: a
 gives every viewer the first viewer's bids. A key with values the answer does not depend on only spends cache memory
 and upstream calls.
 
-Validator R-F4 (DESIGN §7) forbade `session.*` in keys, because per-viewer keys hit rarely across the partitions. That
+Validator R-F4 forbade `session.*` in keys, because per-viewer keys hit rarely across the partitions. That
 holds for hit rates, but for per-session answers the key is what keeps them apart, not what makes them hit.
 
 ## Decision
@@ -52,8 +52,8 @@ R-F4 changes with it. A key still starts with `'<name>|v<N>|'` and never reads `
 choose another viewer's entry) or `avail.random`. It may read a session only as `session.uuid`, and R-F8 allows that
 only in the `session` scopes.
 
-The crawl lookup (M17-03) is `title`, as it was keyed before. The release module's end-to-end lookup is a `break`
-key with the channel. The PRE_ADS auction of the ad-server chain (M8-09) is `session_break`.
+The crawl lookup is `title`, as it was keyed before. The release module's end-to-end lookup is a `break`
+key with the channel. The PRE_ADS auction of the ad-server chain is `session_break`.
 
 ## Consequences
 

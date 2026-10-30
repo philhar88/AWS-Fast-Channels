@@ -6,8 +6,8 @@
 
 A FAST break is a herd. Every session of a configuration reaches the same SCTE-35 marker within one playlist poll,
 so every session's ad request arrives at Prebid Server and the Pod Decision Service in the same few seconds. Sized
-for that peak, the PDS needed about 0.34 provisioned Lambda environments per session in a break herd (lane D's
-M2-x2 measurements; the 2026-10-30 decision moved the PDS into the Prebid Server task as a sidecar). A creative that
+for that peak, the PDS needed about 0.34 provisioned Lambda environments per session in a break herd (measured in
+October 2026; [ADR-0036](0036-pds-sidecar-in-the-prebid-server-task.md) then moved the PDS into the Prebid Server task as a sidecar). A creative that
 MediaTailor has not prepared before is also skipped at its first sight (`NEW_CREATIVE`, `IMPORT_IN_PROGRESS`,
 `TRANSCODE_IN_PROGRESS`), so a break full of new creatives airs slate.
 
