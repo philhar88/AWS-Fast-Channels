@@ -5,7 +5,8 @@ play it (``/plan/playback/<channel>.json``). The other is **idle**: a release is
 configuration with live sessions is remapped. A FunctionMapping remap reaches live sessions at their next break in
 about 3 s, fleet-wide, which makes it the rollback primitive and never a canary (P0-08). The first release of a
 channel configures every sibling (``a`` becomes stable, ``b`` idle). A sibling added later is configured by the next
-release. Promotion (M3-04) swaps the pair and re-points the probe.
+release. Promotion (M3-04) swaps the pair. The probe ``z`` (house only, canary sessions only) then follows the stable
+sibling's release (:func:`followed`), and so does a rollback of the stable sibling (M3-x4).
 
 :func:`targets` picks the siblings a release configures, :func:`mapped_functions` the Functions it creates for
 them, :func:`applied` records it, :func:`differences` compares what a configuration should be with what the service
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from fast_channels.core.monetization.functions import Function
 
 STABLE_LETTER, IDLE_LETTER = ROLE_LETTERS[SiblingRole.GENERAL]
+(PROBE_LETTER,) = ROLE_LETTERS[SiblingRole.PROBE]
 PLAN_VERSION: Final = 1
 
 
@@ -162,6 +164,20 @@ def rolled_back(state: ChannelState, sibling: str, *, record: SiblingRecord) -> 
         update={
             "siblings": {**state.siblings, sibling: record},
             "history": {**state.history, sibling: history},
+        }
+    )
+
+
+def followed(state: ChannelState, probe: str, record: SiblingRecord) -> ChannelState:
+    """``state`` after the probe sibling ``probe`` was re-applied with the stable sibling's release (``record``).
+
+    The probe keeps no history: it has only canary sessions, it never rolls back on its own, and it follows the
+    stable sibling again on its next promotion or rollback. So the trees of its earlier release are deleted once no
+    other sibling keeps them (:func:`kept_releases`)."""
+    return state.model_copy(
+        update={
+            "siblings": {**state.siblings, probe: record},
+            "history": {**state.history, probe: (record.release,)},
         }
     )
 

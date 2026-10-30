@@ -440,6 +440,24 @@ class ReleaseController(Construct):
             why="the remap of a candidate sibling to its last good tree (R1)",
         )
         promote.allow(["mediatailor:ListFunctions"], ["*"])
+        # The probe sibling follows the stable release (M3-x4): its trees of that release, its configuration and logging
+        promote.allow(
+            ["mediatailor:GetFunction", "mediatailor:PutFunction", "mediatailor:TagResource"],
+            [functions],
+            why="the probe's Function trees of the stable release (<p>_*), never updated once created",
+        )
+        promote.allow(
+            ["mediatailor:ConfigureLogsForPlaybackConfiguration"],
+            siblings,
+            why="the probe sibling's logging, as its release configures it",
+        )
+        stack = Stack.of(self)
+        promote.allow(
+            ["iam:CreateServiceLinkedRole"],
+            [f"arn:{stack.partition}:iam::{stack.account}:role/aws-service-role/mediatailor.amazonaws.com/*"],
+            why="MediaTailor's service-linked role, which logging needs",
+            conditions={"StringEquals": {"iam:AWSServiceName": "mediatailor.amazonaws.com"}},
+        )
         promote.allow(
             ["mediatailor:DescribeChannel"],
             [self._mt("channel", c) for c in self._channels] or ["*"],
@@ -796,6 +814,12 @@ class ReleaseController(Construct):
         )
         promoted = self._invoke(
             "PromoteCandidates", {"step": "promote", "candidates": "{% $plan.candidates %}", **context}, on=promote
+        )
+        # The promotion stands when only a probe sibling could not follow it: no fail step marks the release failed.
+        promoted.add_catch(
+            sfn.Fail.jsonata(self, "ProbesNotFollowed", error="ProbeFollowError", cause="{% $states.input.Cause %}"),
+            errors=["ProbeFollowError"],
+            outputs="{% $states.errorOutput %}",
         )
         promoted.add_catch(failed, outputs="{% $states.errorOutput %}")
         landed = (

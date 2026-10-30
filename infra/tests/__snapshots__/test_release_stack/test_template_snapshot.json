@@ -34,6 +34,12 @@
         "Ref": "PrefetcherFunction12BB8015"
       }
     },
+    "PromoteFunction": {
+      "Description": "Promotion and rollback; its probes step catches the probe siblings up by hand",
+      "Value": {
+        "Ref": "ControllerPromote115724CE"
+      }
+    },
     "RotationStateMachineArn": {
       "Description": "The origin-secret rotation",
       "Value": {
@@ -2660,6 +2666,7 @@
             },
             {
               "Action": [
+                "mediatailor:ConfigureLogsForPlaybackConfiguration",
                 "mediatailor:GetPlaybackConfiguration",
                 "mediatailor:PutPlaybackConfiguration",
                 "mediatailor:TagResource"
@@ -2671,17 +2678,32 @@
               ]
             },
             {
+              "Action": [
+                "mediatailor:DeleteFunction",
+                "mediatailor:GetFunction",
+                "mediatailor:PutFunction",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
+            },
+            {
+              "Action": "iam:CreateServiceLinkedRole",
+              "Condition": {
+                "StringEquals": {
+                  "iam:AWSServiceName": "mediatailor.amazonaws.com"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:iam::123456789012:role/aws-service-role/mediatailor.amazonaws.com/*"
+            },
+            {
               "Action": "mediatailor:DescribeChannel",
               "Effect": "Allow",
               "Resource": [
                 "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
                 "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab"
               ]
-            },
-            {
-              "Action": "mediatailor:DeleteFunction",
-              "Effect": "Allow",
-              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
             },
             {
               "Action": "dynamodb:PutItem",
@@ -4004,7 +4026,7 @@
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"OnLab?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $exists($plan.lab) and $plan.lab != null %}\",\"Next\":\"LabStop\"}],\"Default\":\"Point\"},\"PromoteCandidates\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              ":states:::lambda:invoke\"},\"OnLab?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $exists($plan.lab) and $plan.lab != null %}\",\"Next\":\"LabStop\"}],\"Default\":\"Point\"},\"PromoteCandidates\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"ProbeFollowError\"],\"Next\":\"ProbesNotFollowed\"},{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerPromote115724CE",
@@ -4015,7 +4037,7 @@
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"RecordFailure\":{\"Next\":\"ReleaseFailed\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              ":states:::lambda:invoke\"},\"ProbesNotFollowed\":{\"Type\":\"Fail\",\"Error\":\"ProbeFollowError\",\"Cause\":\"{% $states.input.Cause %}\"},\"RecordFailure\":{\"Next\":\"ReleaseFailed\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerApply033D6DE8",

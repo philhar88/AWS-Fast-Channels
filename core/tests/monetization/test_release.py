@@ -14,6 +14,7 @@ from fast_channels.core.monetization.release import (
     SiblingRecord,
     applied,
     differences,
+    followed,
     kept_releases,
     last_good,
     mapped_functions,
@@ -196,3 +197,26 @@ def test_promotion_swaps_the_pair_and_rollback_returns_to_the_last_good_tree() -
     with pytest.raises(ValueError, match="rolls back to None"):
         rolled_back(back, "fastm-demo-p-b", record=good)
     assert kept_releases({"fastm-demo": state}) == {1, 2}
+
+
+def test_the_probe_follows_the_stable_release_and_keeps_no_history() -> None:
+    """M3-x4: the probe ``z`` is re-applied with the stable sibling's release. It keeps no rollback target of its own,
+    so the trees of its earlier release are deleted once no other sibling keeps them."""
+    names_ = ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"]
+    state = applied(None, channel="fastm-demo", siblings=names_, release=1, digest=DIGEST, change_id="c1", at=AT)
+    for release in range(2, 8):  # the pair siblings keep 3 releases each: none of them keeps 1
+        idle = state.idle
+        assert idle is not None
+        state = promoted(
+            applied(state, channel="fastm-demo", siblings=[idle], release=release, digest=DIGEST, change_id="c", at=AT)
+        )
+    assert kept_releases({"fastm-demo": state}) == {1, 2, 3, 4, 5, 6, 7}, "the probe still keeps release 1"
+    record = SiblingRecord(release=7, digest=DIGEST, change_id="c7", at=AT)
+    after = followed(state, "fastm-demo-p-z", record)
+    assert after.siblings["fastm-demo-p-z"] == record and after.history["fastm-demo-p-z"] == (7,)
+    assert kept_releases({"fastm-demo": after}) == {2, 3, 4, 5, 6, 7}, "release 1's trees can go"
+    assert (after.stable, after.idle, after.siblings["fastm-demo-p-a"]) == (
+        state.stable,
+        state.idle,
+        state.siblings["fastm-demo-p-a"],
+    )
