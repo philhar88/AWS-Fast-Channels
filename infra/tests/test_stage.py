@@ -301,7 +301,7 @@ def shipped_with(overrides: dict[str, str]) -> FastChannelsConfig:
 
 
 def test_shipped_stages() -> None:
-    assert STAGES == stage_args.stage_names() == ["fastci", "fastm"]
+    assert STAGES == stage_args.stage_names() == ["fastci", "fastci-ads", "fastm"]
     assert f"^{stage_args.PREFIX.pattern}$" == FastChannelsConfig.model_json_schema()["properties"]["prefix"]["pattern"]
 
 
@@ -367,7 +367,7 @@ def test_a_stage_under_another_prefix_expands_it() -> None:
 @pytest.mark.parametrize(
     ("files", "argv", "expected"),
     [
-        ({}, ["context", "fastz"], "unknown stage 'fastz': the stages are fastci, fastm"),
+        ({}, ["context", "fastz"], "unknown stage 'fastz': the stages are fastci, fastci-ads, fastm"),
         ({}, ["context", "../cdk"], "unknown stage '../cdk'"),
         ({}, ["context", "fastm", "--prefix", "Fast_M"], "--prefix must match"),
         ({"bad": "[1, 2]"}, ["prefix", "bad"], "must hold a JSON object (a partial fast-channels block)"),

@@ -330,11 +330,13 @@ make deploy STAGE=fastci PREFIX=fastcipr7    # the same stage under another pref
 uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage becomes
 ```
 
-A missing or malformed stage file stops `make` before any command runs. The repository ships two stages for the
-modules' development: `fastm` and `fastci` (the end-to-end tests' default prefix), each with every module on.
+A missing or malformed stage file stops `make` before any command runs. The repository ships three stages for the
+modules' development, each with every module on: `fastm`, `fastci` (the end-to-end tests' default prefix), and
+`fastci-ads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
+([docs/demand.md](demand.md#deploy-and-destroy)).
 
 Each deployment subscribes to the account's as-run log, which allows five subscriptions, so an account and region
-holds at most five deployments with the default `observability.as_run: per_stage`. Both stages read the account's
+holds at most five deployments with the default `observability.as_run: per_stage`. The stages read the account's
 shared as-run router instead (`as_run: shared`, [ADR-0032](adr/0032-shared-as-run-router.md)), so they take no
 subscription. Deploy the router once per account and region, after any deployment's Media stack (which creates the
 as-run log group):

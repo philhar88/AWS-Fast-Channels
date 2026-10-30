@@ -405,6 +405,24 @@ ledger archive, and fails on any residue but KMS keys pending deletion. A run ta
 costs a few US dollars. The tests take a few minutes and must start within the census gate's 15 minutes: the leg runs
 no channel, so the gate then scales Prebid Server to zero.
 
+**The ad-server leg** (`tests/e2e/test_15_ad_server.py`) needs the stage `fastci-ads`: `fastci` with
+`ad_server: mock` and a 900 s pod cache, so that every pod of the run can still be read back once the ADS log arrives.
+Deploy it with every module on, run `make deploy-demand` with the same stage, then the test. Viewers play the stable
+sibling through three breaks. The test checks:
+
+- one auction per session and break;
+- the mock's Prebid line for each cached pod;
+- that the stitched ads are the cached pod's;
+- the house line when no bid clears;
+- that the edge lets only `GET` and `HEAD /cache?uuid=<uuid4>` through.
+
+```bash
+make deploy STAGE=fastci-ads PREFIX=<throwaway>
+make deploy-demand STAGE=fastci-ads PREFIX=<throwaway>
+uv run pytest tests/e2e/test_15_ad_server.py -m e2e --prefix <throwaway> -v
+make destroy-demand STAGE=fastci-ads PREFIX=<throwaway> && make destroy STAGE=fastci-ads PREFIX=<throwaway>
+```
+
 A stage with Prebid Server deployed costs about $120–150 a month while idle (two NAT gateways, the load balancers, the
 web ACL, the Valkey cache minimum). Destroy throwaway stages right after use.
 

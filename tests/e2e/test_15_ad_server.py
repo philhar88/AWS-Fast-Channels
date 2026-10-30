@@ -11,21 +11,22 @@ airs. For each break the test then joins:
 It also reads the cached pods back through the edge, and checks that the edge lets only ``GET /cache?uuid=<uuid4>``
 through. It changes nothing.
 
-The stage sets ``modules.demand.pod_cache_seconds`` long enough (900 s) that every pod of the run can still be read
-once the ADS log has been delivered, a few minutes after the break.
+The stage ``fastci-ads`` (``make deploy STAGE=fastci-ads PREFIX=<throwaway>``, then ``make deploy-demand`` with the
+same) has the mock, and sets ``modules.demand.pod_cache_seconds`` long enough (900 s) that every pod of the run can
+still be read once the ADS log has been delivered, a few minutes after the break.
 """
 
 import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import httpx
 import pytest
 from _stack import Stage, stage_id
-from harness import Channel, Player, until
+from harness import BREAK_POLICY, LEAD, PROGRAMS, Channel, Player, Tools, until, wait_for
 from harness_ad_server import (
     SMART_TV_USER_AGENT,
     Auction,
@@ -38,16 +39,24 @@ from harness_ad_server import (
     decisions,
     per_break,
     pod_media,
+    provisioned,
+    running_tasks,
+    warmups,
     watch,
 )
 from playback import break_windows
 
-from fast_channels.core.demand import Parameter, origin_secret, parameter_path
+from fast_channels.core.demand import Parameter, origin_secret, parameter_path, warmup_project
 from fast_channels.core.monetization import names
+from fast_channels.core.pds.names import ALIAS as PDS_ALIAS
 
 pytestmark = pytest.mark.e2e
 
 VIEWERS: Final = 3
+READY_TIMEOUT_S: Final = 900
+"""Census lag, Prebid Server's scale-out from zero and its warm-up, with room."""
+TAIL: Final = timedelta(seconds=90)
+"""How long the viewers keep playing after the last break's scheduled end: the live playlist lags the wall clock."""
 LOG_WAIT_S: Final = 480
 """How long the ADS log may take to show every viewer's last break (vended logs arrive in batches)."""
 EDGE_REGION: Final = "us-east-1"
@@ -62,6 +71,9 @@ class AdServerStage:
     mock_log_group: str
     container_log_group: str
     ads_log_group: str
+    cluster: str
+    service: str
+    pds_functions: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -85,9 +97,7 @@ def ad_server(stage: Stage) -> AdServerStage:
     parameters = _parameters(stage)
     if Parameter.AD_SERVER_URL.value not in parameters:
         pytest.skip(f"stage {stage.prefix} has no mock ad server (modules.demand.ad_server is not mock)")
-    cloudformation = stage.session.client("cloudformation", region_name=stage.region)
-    [described] = cloudformation.describe_stacks(StackName=f"{stage_id(stage.prefix)}-Demand")["Stacks"]
-    demand = {o["OutputKey"]: o["OutputValue"] for o in described.get("Outputs", [])}
+    demand, pds = (_outputs(stage, f"{stage_id(stage.prefix)}-{stack}") for stack in ("Demand", "Pds"))
     secrets = stage.session.client("secretsmanager", region_name=EDGE_REGION)
     secret = str(secrets.get_secret_value(SecretId=origin_secret(stage.prefix, "a"))["SecretString"])
     return AdServerStage(
@@ -98,7 +108,16 @@ def ad_server(stage: Stage) -> AdServerStage:
         mock_log_group=demand["AdServerLogGroup"],
         container_log_group=demand["ContainerLogGroup"],
         ads_log_group=names.log_group(stage.prefix),
+        cluster=parameters[Parameter.CLUSTER_ARN.value],
+        service=parameters[Parameter.SERVICE_ARN.value],
+        pds_functions=tuple(pds[key] for key in ("PolicyFunction", "OwnBookFunction", "SelectFunction") if key in pds),
     )
+
+
+def _outputs(stage: Stage, stack: str) -> dict[str, str]:
+    cloudformation = stage.session.client("cloudformation", region_name=stage.region)
+    [described] = cloudformation.describe_stacks(StackName=stack)["Stacks"]
+    return {o["OutputKey"]: o["OutputValue"] for o in described.get("Outputs", [])}
 
 
 @pytest.fixture(scope="module")
@@ -113,18 +132,34 @@ def tv() -> Iterator[Player]:
 
 
 @pytest.fixture(scope="module")
-def run(
-    ad_server: AdServerStage, tv: Player, channel: Channel, published: dict[str, Any], running: dict[str, Any]
-) -> Run:
+def run(ad_server: AdServerStage, tv: Player, channel: Channel, tools: Tools, request: pytest.FixtureRequest) -> Run:
+    """Start the channel, ingest the pattern while Prebid Server scales out, wait until it is warm, schedule the
+    pattern three times with a break each, and play viewers on the stable sibling through the breaks."""
     stage = ad_server.stage
-    windows = break_windows(published["programs"])
-    ssm = stage.session.client("ssm", region_name=stage.region)
-    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
-    plan = httpx.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel.name)}", timeout=10).json()
-    until(datetime.fromisoformat(published["programs"][0]["start"]) - timedelta(seconds=20))
-    start_ms = int(time.time() * 1000) - 60_000
-    viewers = tuple(Viewer.join(tv, plan["playback"]["hls"]) for _ in range(VIEWERS))
-    watch(viewers, ends=windows[-1].ends + timedelta(seconds=45))
+    try:
+        tools("channels___start_channel", channel=channel.name)
+        asset = request.getfixturevalue("ingested")  # while the census gate scales Prebid Server out
+        wait_until_warm(ad_server)
+        start = (datetime.now(UTC) + LEAD).replace(microsecond=0)
+        plan = tools(
+            "schedule___plan",
+            channel=channel.name,
+            picks=[asset.asset_id] * PROGRAMS,
+            start=start.isoformat(),
+            break_policy=BREAK_POLICY,
+        )
+        assert plan["publishable"], plan["violations"]
+        published = tools("schedule___publish", plan_id=plan["plan_id"])
+        windows = break_windows(published["programs"])
+        ssm = stage.session.client("ssm", region_name=stage.region)
+        cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
+        playback = httpx.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel.name)}", timeout=10).json()
+        until(datetime.fromisoformat(published["programs"][0]["start"]) - timedelta(seconds=20))
+        start_ms = int(time.time() * 1000) - 60_000
+        viewers = tuple(Viewer.join(tv, playback["playback"]["hls"]) for _ in range(VIEWERS))
+        watch(viewers, ends=windows[-1].ends + TAIL)
+    finally:
+        tools("channels___stop_channel", channel=channel.name)
     logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms)
     sids = {v.sid for v in viewers}
     deadline = time.monotonic() + LOG_WAIT_S
@@ -144,7 +179,7 @@ def run(
             response = httpx.get(ad_server.cache_url, params={"uuid": entry.uuid}, timeout=10)
             if response.status_code == 200:
                 pods[entry.uuid] = response.text
-    return Run(
+    result = Run(
         viewers=viewers,
         auctions=tuple(
             a for a in auctions(logs.messages(ad_server.container_log_group, '"fast-ctv-pod"')) if a.sid in sids
@@ -153,6 +188,40 @@ def run(
         breaks=tuple(found.values()),
         pods=pods,
     )
+    print(report(result))
+    return result
+
+
+def wait_until_warm(ad_server: AdServerStage) -> None:
+    """Until Prebid Server runs and every running task's warm-up succeeded, and the PDS's functions are provisioned."""
+    stage = ad_server.stage
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+    lambda_ = stage.session.client("lambda", region_name=stage.region)
+    last: dict[str, Any] = {}
+
+    def ready() -> bool | None:
+        tasks = running_tasks(ecs, cluster=ad_server.cluster, service=ad_server.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        concurrency = provisioned(lambda_, ad_server.pds_functions, PDS_ALIAS)
+        last.update(tasks=len(tasks), warmups=sorted(warmed.values()), concurrency=sorted(concurrency.values()))
+        if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
+            raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
+        warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
+        return True if warm and set(concurrency.values()) <= {"READY"} else None
+
+    wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
+
+
+def report(run: Run) -> str:
+    lines = {(d.sid, d.evid): d.line for d in run.decisions}
+    rows = [
+        f"{entry.sid[:8]} evid {entry.evid}: line {lines.get((entry.sid, entry.evid))}, wrapper "
+        f"{entry.uuid[:8] or entry.redirect[-40:]}, filled {entry.filled_seconds} s with {len(entry.creatives)} "
+        f"ads, skipped {sorted(set(entry.skipped))}"
+        for entry in sorted(run.breaks, key=lambda b: (b.sid, b.evid))
+    ]
+    head = f"{len(run.viewers)} viewers, {len(run.breaks)} ad requests, {len(run.auctions)} auctions"
+    return "\n".join([head, *rows])
 
 
 def test_each_break_ran_one_auction(run: Run) -> None:

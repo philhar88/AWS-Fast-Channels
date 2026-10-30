@@ -221,6 +221,42 @@ def watch(viewers: Sequence[Viewer], *, ends: datetime) -> None:
         time.sleep(POLL_SECONDS)
 
 
+PREBID_CONTAINER: Final = "Prebid-Container"
+"""The guidance's Prebid Server container (``scripts/_demand.py``)."""
+
+
+def running_tasks(ecs: Any, *, cluster: str, service: str) -> list[str]:
+    """The running Prebid Server tasks of the guidance's service (task ARNs)."""
+    arns = ecs.list_tasks(cluster=cluster, serviceName=service, desiredStatus="RUNNING")["taskArns"]
+    tasks = ecs.describe_tasks(cluster=cluster, tasks=arns)["tasks"] if arns else []
+    return [str(task["taskArn"]) for task in tasks if task.get("lastStatus") == "RUNNING"]
+
+
+def warmups(codebuild: Any, project: str, tasks: Sequence[str]) -> dict[str, str]:
+    """The newest warm-up build's status of each of ``tasks`` that has one (task ARN -> ``buildStatus``)."""
+    ids = codebuild.list_builds_for_project(projectName=project, sortOrder="DESCENDING")["ids"][:100]
+    status: dict[str, str] = {}
+    for build in codebuild.batch_get_builds(ids=ids)["builds"] if ids else []:
+        variables = {v["name"]: v["value"] for v in build.get("environment", {}).get("environmentVariables", [])}
+        task = variables.get("TASK_ARN")
+        if task is not None and task in tasks and task not in status:
+            status[str(task)] = str(build["buildStatus"])
+    return status
+
+
+def provisioned(lambda_: Any, functions: Iterable[str], alias: str) -> dict[str, str]:
+    """The provisioned-concurrency status of each function's ``alias`` (``NONE`` while it has none)."""
+    status: dict[str, str] = {}
+    for function in functions:
+        try:
+            config = lambda_.get_provisioned_concurrency_config(FunctionName=function, Qualifier=alias)
+        except lambda_.exceptions.ProvisionedConcurrencyConfigNotFoundException:
+            status[function] = "NONE"
+        else:
+            status[function] = str(config["Status"])
+    return status
+
+
 @dataclass
 class Logs:
     """CloudWatch Logs reads of one run's window."""
