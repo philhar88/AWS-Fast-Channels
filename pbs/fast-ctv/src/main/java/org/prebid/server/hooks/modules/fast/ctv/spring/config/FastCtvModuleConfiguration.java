@@ -1,6 +1,8 @@
 package org.prebid.server.hooks.modules.fast.ctv.spring.config;
 
+import org.prebid.server.cache.CoreCacheService;
 import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
+import org.prebid.server.hooks.modules.fast.ctv.core.PodCache;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.SelectClient;
@@ -44,6 +46,7 @@ public class FastCtvModuleConfiguration {
 
     @Bean
     FastCtvModule fastCtvModule(HttpClient httpClient,
+                                CoreCacheService cacheService,
                                 JacksonMapper mapper,
                                 @Value("${hooks.fast-ctv.policy-url}") String policyUrl,
                                 @Value("${hooks.fast-ctv.policy-timeout-ms:50}") long policyTimeoutMs,
@@ -59,6 +62,6 @@ public class FastCtvModuleConfiguration {
                         mapper.mapper(), log),
                 new FastCtvVastHook(new SelectClient(httpClient, mapper.mapper(), selectUrl, selectTimeoutMs),
                         new PodRenderer(), new TrackerTemplate(trackerTemplate), mapper.mapper(), log,
-                        HousePod.parse(houseAds, mapper.mapper())));
+                        HousePod.parse(houseAds, mapper.mapper()), new PodCache(cacheService, mapper.mapper())));
     }
 }
