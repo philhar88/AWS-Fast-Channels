@@ -12,6 +12,7 @@ from fast_channels.core.monetization import validators as v
 from fast_channels.core.monetization.bundle import (
     ROLLOUTS,
     Bundle,
+    ChannelInput,
     HookTree,
     Rollout,
     RolloutTier,
@@ -20,6 +21,7 @@ from fast_channels.core.monetization.bundle import (
 )
 from fast_channels.core.monetization.functions import (
     Cache,
+    CacheScope,
     CustomOutputConfiguration,
     Function,
     FunctionRef,
@@ -151,13 +153,27 @@ def _output(stem: str, output: dict[str, str]) -> Function:
     )
 
 
+CONSTANT = Cache(
+    ttl_minimum_seconds=1,
+    ttl_maximum_seconds=1,
+    key="{% 'x|v1|' %}",
+    scope=CacheScope.GLOBAL,
+    reason="A test request whose answer is the same for every session and break.",
+)
+
+
 def _http(stem: str, **configuration: Any) -> Function:
     return Function(
         function_id=stem,
         function_type=FunctionType.HTTP_REQUEST,
         http_request_configuration=HttpRequestConfiguration(
             **(
-                {"method_type": "GET", "url": "https://x.example.com/a", "request_timeout_milliseconds": 200}
+                {
+                    "method_type": "GET",
+                    "url": "https://x.example.com/a",
+                    "request_timeout_milliseconds": 200,
+                    "cache": CONSTANT,
+                }
                 | configuration
             )
         ),
@@ -226,7 +242,12 @@ def test_request_limits(kit: SimpleNamespace) -> None:
 
 def test_cache_rules(kit: SimpleNamespace) -> None:
     def cached(**cache: Any) -> list[str]:
-        settings = {"ttl_minimum_seconds": 300, "ttl_maximum_seconds": 300} | cache
+        settings = {
+            "ttl_minimum_seconds": 300,
+            "ttl_maximum_seconds": 300,
+            "scope": CacheScope.TITLE,
+            "reason": kit.TITLE_REASON,
+        } | cache
         found = v.check_function(kit.pa_meta(cache=Cache(**settings)), prefix="fastm")
         return [x.message for x in found if x.rule in {Rule.F1, Rule.F3, Rule.F4}]
 
@@ -241,11 +262,176 @@ def test_cache_rules(kit: SimpleNamespace) -> None:
     assert cached(key="{% $string(scte.segmentation_upid) %}") == [
         "starts with the literal '<name>|v<N>|': cache entries cannot be invalidated"
     ]
-    assert cached(key="{% ('meta|v2|' & scte.event_id) %}") == []
-    assert cached(key="{% 'meta|v1|' & session.uuid & avail.random %}") == [
-        "reads ['avail.random', 'session.uuid']; every session of the configuration shares the cache"
+    assert cached(key="{% ('meta|v2|' & scte.segmentation_upid) %}") == []
+    assert cached(key="{% 'meta|v1|' & player_params.vid & avail.random %}") == [
+        "reads ['avail.random', 'player_params.vid']; every session of the configuration shares the cache"
+    ]
+    assert cached(key="{% 'meta|v1|' & session.uuid & session.client_ip %}") == [
+        "reads ['session.client_ip']; a key names a session by session.uuid only"
     ]
     assert cached(key="{% 'meta|v1|' & ?? %}") == ["the validators cannot read this expression: unexpected '??' at 14"]
+
+
+# --- R-F8: every request is cached by scope ---------------------------------------------------------------------------
+
+AUCTION_KEY = "{% 'auction|v1|' & session.uuid & '|' & scte.event_id %}"
+
+
+def _scoped(scope: CacheScope, key: str, *, ttl: int = 1) -> Cache:
+    return Cache(
+        ttl_minimum_seconds=1, ttl_maximum_seconds=ttl, key=key, scope=scope, reason="One answer per scope, in test."
+    )
+
+
+def _cache_messages(cache: Cache | None, **check: Any) -> list[str]:
+    found = v.check_function(_http("fastm_x", cache=cache), prefix="fastm", **check)
+    return [f"{x.where}: {x.message}" for x in found if x.rule is Rule.F8]
+
+
+def _pre_ads(kit: SimpleNamespace, step: Function, **bundle: Any) -> Bundle:
+    tree = HookTree(hook=Hook.PRE_ADS, steps=(Step(function=step),), budget_ms=500)
+    return kit.make_bundle(contributions=[kit.Contribution("t", lambda _: [tree])], **bundle)
+
+
+def test_every_request_declares_a_cache(kit: SimpleNamespace) -> None:
+    """ADR-0033: MediaTailor answered an HTTP_REQUEST that set no Cache from a cache, for 40 minutes."""
+    assert _cache_messages(None) == [
+        "function fastm_x: sets no Cache, but MediaTailor may answer it from a cache anyway (ADR-0033): declare a "
+        "Cache with the scope its answer is valid for and a key that names it"
+    ]
+    unscoped = Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=1, key="{% 'x|v1|' %}")
+    assert _cache_messages(unscoped) == [
+        "function fastm_x Cache: declares its Scope, one of ['title', 'break', 'session', 'session_break', 'global']"
+    ]
+    for reason in (None, "", "   ", "because"):
+        terse = unscoped.model_copy(update={"scope": CacheScope.GLOBAL, "reason": reason})
+        assert _cache_messages(terse) == [
+            "function fastm_x Cache: gives the reason for scope global in words (a sentence, not a token)"
+        ], reason
+    # The kit's redeem (M4's shape) is session-scoped: one session's ticket answer never reaches another session.
+    assert kit.rules(v.validate_bundle(kit.make_bundle(contributions=[kit.redeem(), kit.crawl()]))) == set()
+
+
+@pytest.mark.parametrize(
+    ("scope", "key"),
+    [
+        (CacheScope.TITLE, "{% 'meta|v1|' & $string(scte.segmentation_upid) %}"),
+        (CacheScope.TITLE, "{% 'meta|v1|' & scte.segmentation_upid.assetId %}"),
+        (CacheScope.BREAK, "{% 'lookup|v1|fastm-demo|' & scte.event_id %}"),
+        (CacheScope.BREAK, "{% 'lookup|v1|fastm-demo|' & scte.segmentation_event_id %}"),
+        (CacheScope.SESSION, "{% 'redeem|v1|' & session.uuid %}"),
+        (CacheScope.SESSION_BREAK, AUCTION_KEY),
+        (CacheScope.GLOBAL, "{% 'flags|v1|' %}"),
+    ],
+)
+def test_a_key_names_its_scope(scope: CacheScope, key: str) -> None:
+    assert _cache_messages(_scoped(scope, key)) == []
+
+
+def test_a_key_without_its_scope_identifiers() -> None:
+    def problems(scope: CacheScope, key: str) -> list[str]:
+        return [m.removeprefix("function fastm_x Cache.Key: ") for m in _cache_messages(_scoped(scope, key))]
+
+    beyond = "which a {} answer does not vary by: declare the scope those values make it"
+    assert problems(CacheScope.TITLE, "{% 'meta|v1|' %}") == ["a title key names scte.segmentation_upid"]
+    assert problems(CacheScope.BREAK, "{% 'l|v1|fastm-demo|' %}") == [
+        "a break key names one of ['scte.event_id', 'scte.segmentation_event_id']"
+    ]
+    assert problems(CacheScope.SESSION, "{% 'r|v1|' & scte.event_id %}") == [
+        "a session key names session.uuid",
+        f"reads ['scte.event_id'], {beyond.format('session')}",
+    ]
+    # An auction keyed on the break alone would give every session of the break the first session's bids.
+    assert problems(CacheScope.SESSION_BREAK, "{% 'auction|v1|' & scte.event_id %}") == [
+        "a session_break key names session.uuid"
+    ]
+    assert problems(CacheScope.SESSION_BREAK, "{% 'auction|v1|' & session.uuid %}") == [
+        "a session_break key names one of ['scte.event_id', 'scte.segmentation_event_id']"
+    ]
+    # A title key that varies by session is no title answer: every viewer would get a cold entry of their own.
+    assert problems(CacheScope.TITLE, "{% 'meta|v1|' & scte.segmentation_upid & session.uuid %}") == [
+        f"reads ['session.uuid'], {beyond.format('title')}"
+    ]
+    assert problems(CacheScope.GLOBAL, "{% 'flags|v1|' & scte.event_id %}") == [
+        f"reads ['scte.event_id'], {beyond.format('global')}"
+    ]
+
+
+def test_a_ttl_never_outlives_its_scope() -> None:
+    upid = "{% 'meta|v1|' & scte.segmentation_upid %}"
+    assert _cache_messages(_scoped(CacheScope.TITLE, upid, ttl=300)) == []
+    assert _cache_messages(_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=30)) == []
+    assert _cache_messages(_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=31)) == [
+        "function fastm_x Cache: TtlMaximumSeconds 31 outlives a session_break answer: at most 30 s"
+    ]
+    assert _cache_messages(_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=60), break_seconds=60) == []
+    assert _cache_messages(_scoped(CacheScope.BREAK, "{% 'l|v1|c|' & scte.event_id %}", ttl=2), break_seconds=0) == [
+        "function fastm_x Cache: TtlMaximumSeconds 2 outlives a break answer: at most 1 s"
+    ]
+    assert v.scope_validity(CacheScope.BREAK, break_seconds=0) == 1  # the floor
+    assert v.scope_validity(CacheScope.SESSION_BREAK, break_seconds=900) == 300  # the cache's own maximum
+    assert {scope: v.scope_validity(scope) for scope in CacheScope} == {
+        CacheScope.TITLE: 300,
+        CacheScope.BREAK: 30,
+        CacheScope.SESSION: 300,
+        CacheScope.SESSION_BREAK: 30,
+        CacheScope.GLOBAL: 300,
+    }
+
+
+def test_the_bundle_bounds_break_answers_by_its_shortest_break(kit: SimpleNamespace) -> None:
+    auction = _http("fastm_pa_auction", cache=_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=60))
+    for grid, rejected in (((30, 60, 90, 120), True), ((60, 90, 120), False)):
+        bundle = _pre_ads(kit, auction, grid_seconds=grid, stored_requests=[f"fast-pod-{s}s" for s in grid])
+        found = kit.messages(v.validate_bundle(bundle), Rule.F8)
+        assert any("outlives a session_break answer: at most 30 s" in m for m in found) is rejected, grid
+
+
+def test_a_break_key_names_the_channel(kit: SimpleNamespace) -> None:
+    """SCTE-35 event ids are unique per channel only, so a break key names the channel it is valid for."""
+
+    def lookup(channel: str | None) -> Function:
+        segment = f"{channel}|" if channel else ""
+        return _http(
+            "fastm_pa_lookup", cache=_scoped(CacheScope.BREAK, f"{{% 'lookup|v1|{segment}' & scte.event_id %}}")
+        )
+
+    assert kit.messages(v.validate_bundle(_pre_ads(kit, lookup("fastm-demo"))), Rule.F8) == []
+    for wrong in (None, "fastm-dem", "fastm-demo2"):
+        assert kit.messages(v.validate_bundle(_pre_ads(kit, lookup(wrong))), Rule.F8) == [
+            f"function fastm_pa_lookup Cache.Key: a break key of fastm-demo-p-{letter} names its channel as a "
+            "'|fastm-demo|' segment"
+            for letter in "abz"
+        ], wrong
+    keyless = _http(
+        "fastm_pa_lookup", cache=_scoped(CacheScope.BREAK, "{% 'lookup|v1|' %}").model_copy(update={"key": None})
+    )
+    assert "a break key of fastm-demo-p-a names its channel as a '|fastm-demo|' segment" in {
+        m.split(": ")[1] for m in kit.messages(v.validate_bundle(_pre_ads(kit, keyless)), Rule.F8)
+    }
+    # One deployment-wide break function cannot serve two channels: each sibling's key names its own channel.
+    channels = [ChannelInput(name=name, video_content_source_url=kit.CA_URL) for name in ("fastm-demo", "fastm-news")]
+    found = kit.messages(v.validate_bundle(_pre_ads(kit, lookup("fastm-demo"), channels=channels)), Rule.F8)
+    assert found == [
+        f"function fastm_pa_lookup Cache.Key: a break key of fastm-news-p-{letter} names its channel as a "
+        "'|fastm-news|' segment"
+        for letter in "abz"
+    ]
+
+
+def test_scope_and_reason_stay_out_of_the_request(kit: SimpleNamespace) -> None:
+    """``PutFunction`` has no such members (botocore parity, test_functions); the bundle keeps both for validation."""
+    meta = kit.pa_meta()
+    assert meta.put_request()["HttpRequestConfiguration"]["Cache"] == {
+        "TtlMinimumSeconds": 300,
+        "TtlMaximumSeconds": 300,
+        "Key": "{% 'meta|v1|' & $string(scte.segmentation_upid) %}",
+    }
+    stored = bundle_document(kit.make_bundle(contributions=[kit.crawl()]))
+    cache = next(f for f in stored["bundle"]["functions"] if f["FunctionId"] == "fastm_pa_meta")
+    assert cache["HttpRequestConfiguration"]["Cache"]["Scope"] == "title"
+    assert cache["HttpRequestConfiguration"]["Cache"]["Reason"] == kit.TITLE_REASON
+    assert Bundle.model_validate(stored["bundle"]).digest == stored["digest"]
 
 
 def test_unreadable_expressions_are_refused(kit: SimpleNamespace) -> None:

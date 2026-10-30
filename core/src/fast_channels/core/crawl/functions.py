@@ -20,6 +20,7 @@ from fast_channels.core.crawl.catalog_context import CACHE_CONTROL, CONTEXT_PREF
 from fast_channels.core.monetization.bundle import HookTree, SiblingContext, Step
 from fast_channels.core.monetization.functions import (
     Cache,
+    CacheScope,
     Function,
     FunctionType,
     Hook,
@@ -40,6 +41,11 @@ EXECUTOR_BUDGET_MS: Final = 400
 validator R-P3 keeps the Live and VOD maximum at least this plus ``AdsRequestTimeoutMilliseconds``."""
 CACHE_SECONDS: Final = int(CACHE_CONTROL.removeprefix("max-age="))
 CACHE_KEY_PREFIX: Final = f"meta|v{CONTEXT_VERSION}|"
+CACHE_REASON: Final = (
+    "The context object depends on the title alone (the break's UPID) and the publisher keeps it for 300 s, so every "
+    "session and break of the title shares one answer."
+)
+"""Why the lookup is cached per title (validator R-F8)."""
 UPID_PRESENT: Final = "{% $exists(scte.segmentation_upid) and $string(scte.segmentation_upid) != '' %}"
 """RunCondition: prefetched RECURRING breaks and breaks without a UPID skip the lookup."""
 
@@ -75,6 +81,8 @@ def pa_meta(prefix: str, *, content_base_url: str) -> Function:
                 ttl_minimum_seconds=CACHE_SECONDS,
                 ttl_maximum_seconds=CACHE_SECONDS,
                 key=f"{{% '{CACHE_KEY_PREFIX}' & $string(scte.segmentation_upid) %}}",
+                scope=CacheScope.TITLE,
+                reason=CACHE_REASON,
             ),
             output={
                 "temp.c_ok": f"{{% response.statusCode = 200 and response.body.v = {CONTEXT_VERSION} %}}",

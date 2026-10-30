@@ -35,3 +35,4 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Accepted |
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |
 | [0033](0033-prefetch-single-schedules.md) | Ad prefetch with rolling SINGLE schedules from the schedule of record | Accepted |
+| [0033](0033-every-function-request-cached-by-scope.md) | Every Function request is cached, keyed by the scope its answer is valid for | Accepted |

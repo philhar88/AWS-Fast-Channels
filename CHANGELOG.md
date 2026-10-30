@@ -264,6 +264,13 @@ All notable changes to this project are documented here. The format follows
   account without overlay O1's Glue fix, VPC and Elastic IP quotas, and the teardown residue (CDK's log-retention log
   groups, the probe canary's function logs, the guidance's KMS keys pending deletion, a locked ledger archive). The
   architecture, operations and README pages cover the module stacks, their outputs and constructs.
+- **Every Function request is cached by scope** (`modules.release`, ADR 0033,
+  [docs/release-controller.md](docs/release-controller.md#function-caches)): each `HTTP_REQUEST` in the release
+  bundle sets `Cache` with a scope (`title`, `break`, `session`, `session_break` or `global`) and the reason for it.
+  Validator R-F8 refuses a request without one, a key that does not name exactly its scope's identifiers (a `break`
+  key also names its channel) and a TTL that outlives the scope, so no answer can come from MediaTailor's
+  undocumented default cache. R-F4 now admits `session.uuid` in session-scoped keys. The crawl lookup is `title`.
+  Scope and reason stay in the bundle and are not sent to `PutFunction`.
 
 ### Fixed
 

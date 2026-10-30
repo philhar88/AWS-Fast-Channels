@@ -174,7 +174,7 @@ back like every other function.
 | Function | What it does |
 |---|---|
 | `<p>_pa_root` | `SEQUENTIAL_EXECUTOR`, 400 ms: runs the lookup and commits one value, the `x-fast-ctx` request header |
-| `<p>_pa_meta` | `HTTP_REQUEST` GET `<content base>/catalog/ctx/v1/<content id>.json`, 250 ms, skipped when the break has no UPID. The content id is `scte.segmentation_upid` with its `FST3` prefix removed if MediaTailor left it. `Cache` 300/300 s keyed `meta\|v1\|<UPID>` |
+| `<p>_pa_meta` | `HTTP_REQUEST` GET `<content base>/catalog/ctx/v1/<content id>.json`, 250 ms, skipped when the break has no UPID. The content id is `scte.segmentation_upid` with its `FST3` prefix removed if MediaTailor left it. `Cache` 300/300 s keyed `meta\|v1\|<UPID>`, scope `title` (ADR 0033) |
 
 - **Load.** MediaTailor's Function cache is per playback configuration and splits into about 4 or 5 partitions that
   each coalesce concurrent misses, so the CDN sees about 4 or 5 requests per title per sibling in each 300 s window,

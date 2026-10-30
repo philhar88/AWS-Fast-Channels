@@ -157,7 +157,7 @@ def _assert_matches(model: type[BaseModel], shape: Any, path: str, skip: frozens
     members = shape.members
     for name, info in model.model_fields.items():
         alias = info.alias or name
-        if alias in skip:
+        if alias in skip or (model is fn.Cache and alias in fn.BUNDLE_ONLY_CACHE_MEMBERS):
             continue
         assert alias in members, f"{path}.{alias} is not a botocore member"
         member = members[alias]

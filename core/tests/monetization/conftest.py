@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from fast_channels.core.crawl.functions import CACHE_REASON as TITLE_REASON
 from fast_channels.core.monetization.bundle import (
     Bundle,
     ChannelInput,
@@ -17,6 +18,7 @@ from fast_channels.core.monetization.bundle import (
 )
 from fast_channels.core.monetization.functions import (
     Cache,
+    CacheScope,
     Function,
     FunctionType,
     Hook,
@@ -53,6 +55,8 @@ def pa_meta(prefix: str = PREFIX, **http: Any) -> Function:
             ttl_minimum_seconds=300,
             ttl_maximum_seconds=300,
             key="{% 'meta|v1|' & $string(scte.segmentation_upid) %}",
+            scope=CacheScope.TITLE,
+            reason=TITLE_REASON,
         ),
         "output": {
             "temp.c_ok": "{% response.statusCode = 200 and response.body.v = 1 %}",
@@ -117,6 +121,13 @@ def redeem() -> Contribution:
                 body=body,
                 headers={"Content-Type": "application/json"},
                 request_timeout_milliseconds=800,
+                cache=Cache(
+                    ttl_minimum_seconds=300,
+                    ttl_maximum_seconds=300,
+                    key="{% 'redeem|v1|' & session.uuid %}",
+                    scope=CacheScope.SESSION,
+                    reason="A ticket is redeemed once per session; no other session may ever see that answer.",
+                ),
                 output={"temp.redeem": "{% response.statusCode = 200 ? 'bound' : 'anon' %}"},
             ),
         )
@@ -180,6 +191,7 @@ def kit() -> SimpleNamespace:
         GRID=GRID,
         STORED=STORED,
         CATALOG_URL=CATALOG_URL,
+        TITLE_REASON=TITLE_REASON,
         pa_meta=pa_meta,
         Contribution=Contribution,
         crawl=crawl,

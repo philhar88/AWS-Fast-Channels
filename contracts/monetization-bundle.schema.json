@@ -274,7 +274,7 @@
     },
     "Cache": {
       "additionalProperties": false,
-      "description": "``HttpRequestCacheConfiguration``: responses are cached per playback configuration, keyed by ``Key``.",
+      "description": "``HttpRequestCacheConfiguration``: responses are cached per playback configuration, keyed by ``Key``.\n\n``scope`` and ``reason`` are the desired state's own: the validators read them, :meth:`ApiShape.api` leaves them\nout of the request.",
       "properties": {
         "TtlMinimumSeconds": {
           "minimum": 1,
@@ -297,6 +297,29 @@
           ],
           "default": null,
           "title": "Key"
+        },
+        "Scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CacheScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "Reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
         }
       },
       "required": [
@@ -305,6 +328,18 @@
       ],
       "title": "Cache",
       "type": "object"
+    },
+    "CacheScope": {
+      "description": "What a cached response is valid for, and so what its ``Key`` must name (validator R-F8, ADR-0033).\n\nMediaTailor answers an ``HTTP_REQUEST`` from a cache even when the function sets no ``Cache`` (build note M3-04),\nso every request declares its cache, and its key names the values that make an answer unique.",
+      "enum": [
+        "title",
+        "break",
+        "session",
+        "session_break",
+        "global"
+      ],
+      "title": "CacheScope",
+      "type": "string"
     },
     "CdnConfiguration": {
       "additionalProperties": false,
