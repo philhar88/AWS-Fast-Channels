@@ -83,9 +83,17 @@ public class PodCache {
      */
     public Ask ask(BidRequest request) {
         final ExtRequest ext = request != null ? request.getExt() : null;
-        final JsonNode fast = ext != null ? ext.getProperty("fast") : null;
+        return ask(request, ext != null ? ext.getProperty("fast") : null);
+    }
+
+    /**
+     * The pod-cache ask of {@code request} with its {@code ext.fast} given apart: the policy hook removes it from the
+     * request ({@link PodShape}) and hands it on.
+     */
+    public Ask ask(BidRequest request, JsonNode fast) {
+        final ExtRequest ext = request != null ? request.getExt() : null;
         final JsonNode ttl = fast != null ? fast.path(FIELD).path("ttlseconds") : null;
-        if (ttl == null || !ttl.canConvertToInt() || ttl.asInt() < 1 || ttl.asInt() > MAX_TTL_SECONDS) {
+        if (ttl == null || !ttl.canConvertToInt() || ttl.asInt() < 1 || ttl.asInt() > MAX_TTL_SECONDS || ext == null) {
             return null;
         }
         final ExtRequestPrebid prebid = ext.getPrebid();

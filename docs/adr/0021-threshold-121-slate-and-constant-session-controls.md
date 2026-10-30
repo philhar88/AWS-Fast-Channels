@@ -83,11 +83,13 @@ an empty response; (b) made no such request.
 **What follows:**
 - **Remainder durations.** MediaTailor asks for the remainder at segment granularity: 90,090 ms at +30 s, and 48,054
   or 42,054 ms at +76 s, in the measurement.
-  - On the Prebid Server route, `fast-pod-{{session.avail_duration_secs}}s` names a stored request for the grid
-    durations only (30, 60, 90 and 120 s; R-P5). A remainder that rounds to one of them is filled; any other names
-    none, and Prebid Server answers 400, so the slate plays, as it did for the whole break with `BEHIND_LIVE_EDGE`.
-  - Remainders are filled once the stored request takes its pod length from `session.avail_duration_secs` instead of
-    its name: one stored request per route, which replaces the per-length ones.
+  - On the Prebid Server route, one stored request per route (`fast-pod`) takes the pod's length from
+    `session.avail_duration_secs` in the body (`ext.fast.pod_s`, ADR 0020 as amended on 2026-10-30), and the fast-ctv
+    module shapes a pod of one 30 s slot per whole 30 s of it. A remainder from 30 to 120 s is therefore filled, on
+    the grid or not (a 48 s remainder gets one slot, and the slate plays the rest). A shorter one gets an empty pod,
+    so the slate plays, as it did for the whole break with `BEHIND_LIVE_EDGE`.
+  - Until that amendment, the stored request named the length (`fast-pod-<seconds>s`, the grid durations only), so a
+    remainder off the grid named none and Prebid Server answered 400.
   - The Pod Decision Service's pod rules already take any pod duration (Σ dur ≤ poddur, Σ VAST durations ≤ the
     break).
 - **The smoke test** still leaves out a break its session joined: its pod is a remainder, which the verdict does not

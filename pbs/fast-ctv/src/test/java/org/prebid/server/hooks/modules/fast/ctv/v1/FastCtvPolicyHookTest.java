@@ -8,6 +8,8 @@ import org.mockito.ArgumentCaptor;
 import org.prebid.server.auction.model.AuctionContext;
 import org.prebid.server.execution.timeout.TimeoutFactory;
 import org.prebid.server.hooks.execution.v1.auction.AuctionRequestPayloadImpl;
+import org.prebid.server.hooks.modules.fast.ctv.core.ModuleContext;
+import org.prebid.server.hooks.modules.fast.ctv.core.PodShape;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
 import org.prebid.server.hooks.v1.InvocationAction;
@@ -19,6 +21,9 @@ import org.prebid.server.model.CaseInsensitiveMultiMap;
 import org.prebid.server.model.HttpRequestContext;
 import org.prebid.server.vertx.httpclient.HttpClient;
 import org.prebid.server.vertx.httpclient.model.HttpClientResponse;
+
+import org.prebid.server.proto.openrtb.ext.request.ExtRequest;
+import org.prebid.server.proto.openrtb.ext.request.ExtRequestPrebid;
 
 import java.time.Clock;
 import java.util.ArrayList;
@@ -61,7 +66,7 @@ public class FastCtvPolicyHookTest {
         final BidRequest patched = result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(stored)).bidRequest();
         assertThat(patched.getImp()).allSatisfy(imp ->
                 assertThat(imp.getExt().path("prebid").path("bidder").has("amt")).isTrue());
-        assertThat(((PolicyDecision) result.moduleContext()).patch().mode().name()).isEqualTo("CONTEXTUAL");
+        assertThat(((ModuleContext) result.moduleContext()).policy().patch().mode().name()).isEqualTo("CONTEXTUAL");
     }
 
     @Test
@@ -97,7 +102,7 @@ public class FastCtvPolicyHookTest {
 
             assertThat(result.action()).isEqualTo(InvocationAction.no_action);
             assertThat(result.payloadUpdate()).isNull();
-            assertThat(((PolicyDecision) result.moduleContext()).isFallback()).isTrue();
+            assertThat(((ModuleContext) result.moduleContext()).policy().isFallback()).isTrue();
             reasons.add(result.message().split(" ")[0]);
         }
         assertThat(reasons).containsExactly("POLICY_HTTP_500", "POLICY_MALFORMED", "POLICY_MALFORMED",
@@ -144,6 +149,60 @@ public class FastCtvPolicyHookTest {
         verify(httpClient).request(any(), anyString(), any(), body.capture(), anyLong(), anyLong());
         assertThat(MAPPER.readTree(body.getValue()).path("t").asText()).isEqualTo("ticketwithquotes");
         assertThat(body.getValue()).doesNotContain("with quotes");
+    }
+
+    @Test
+    public void theStoredPodIsShapedToTheBreakBeforeThePatchAndExtFastNeverReachesABidder() throws Exception {
+        answer(Future.succeededFuture(HttpClientResponse.of(200, null, policyAnswer("CONTEXTUAL", "amt").toString())));
+        final BidRequest stored = storedPod("90");
+
+        final InvocationResult<AuctionRequestPayload> result = call(stored, TICKET);
+
+        assertThat(result.action()).isEqualTo(InvocationAction.update);
+        final BidRequest auctioned = result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(stored)).bidRequest();
+        assertThat(auctioned.getImp()).hasSize(3).allSatisfy(imp -> {
+            assertThat(imp.getVideo().getPoddur()).isEqualTo(90);
+            assertThat(imp.getExt().at("/prebid/bidder/amt").isMissingNode()).isFalse();
+        });
+        assertThat(auctioned.getExt().getProperty(PodShape.EXT)).isNull();
+        final ModuleContext state = (ModuleContext) result.moduleContext();
+        assertThat(state.shape().podSeconds()).isEqualTo(90);
+        assertThat(state.shape().fast().get(PodShape.POD_FIELD).textValue()).isEqualTo("90");
+        assertThat(MAPPER.readTree(log.getFirst()).path("pod_s").asInt()).isEqualTo(90);
+        assertThat(MAPPER.readTree(log.getFirst()).path("slots").asInt()).isEqualTo(3);
+    }
+
+    @Test
+    public void withoutAPatchTheShapedPodStillReplacesTheTemplate() {
+        answer(Future.failedFuture(new TimeoutException()));
+        final BidRequest stored = storedPod("60");
+
+        final InvocationResult<AuctionRequestPayload> result = call(stored, TICKET);
+
+        assertThat(result.action()).isEqualTo(InvocationAction.update);
+        assertThat(result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(stored)).bidRequest().getImp())
+                .hasSize(2);
+        assertThat(((ModuleContext) result.moduleContext()).policy().isFallback()).isTrue();
+    }
+
+    @Test
+    public void aBreakWithoutAUsableLengthIsRejectedWithoutAskingThePolicy() throws Exception {
+        final InvocationResult<AuctionRequestPayload> result = call(storedPod("29"), TICKET);
+
+        assertThat(result.status()).isEqualTo(InvocationStatus.success);
+        assertThat(result.action()).isEqualTo(InvocationAction.reject);
+        assertThat(((ModuleContext) result.moduleContext()).refused()).isTrue();
+        verify(httpClient, never()).request(any(), anyString(), any(), anyString(), anyLong(), anyLong());
+        assertThat(MAPPER.readTree(log.getFirst()).path("refused").asText()).isEqualTo("pod_s 29 outside 30-120 s");
+    }
+
+    /** The one stored request, merged with MediaTailor's body: a template slot, {@code slot_s} and {@code pod_s}. */
+    private static BidRequest storedPod(String podSeconds) {
+        final BidRequest template = pod(1);
+        final ExtRequest ext = ExtRequest.of(ExtRequestPrebid.builder().build());
+        ext.addProperty(PodShape.EXT, MAPPER.createObjectNode().put(PodShape.SLOT_FIELD, 30)
+                .put(PodShape.POD_FIELD, podSeconds));
+        return template.toBuilder().ext(ext).build();
     }
 
     private void answer(Future<HttpClientResponse> response) {

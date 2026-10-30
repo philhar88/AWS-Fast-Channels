@@ -16,6 +16,9 @@
     "USD"
   ],
   "ext": {
+    "fast": {
+      "slot_s": 30
+    },
     "prebid": {
       "multibid": [
         {
@@ -25,7 +28,7 @@
       ]
     }
   },
-  "id": "fast-pod-30s",
+  "id": "fast-pod-kids",
   "imp": [
     {
       "ext": {
@@ -46,7 +49,7 @@
         ],
         "plcmt": 1,
         "poddur": 30,
-        "podid": 1,
+        "podid": "1",
         "protocols": [
           3,
           6,
@@ -63,7 +66,7 @@
     }
   ],
   "regs": {
-    "coppa": 0
+    "coppa": 1
   },
   "source": {
     "schain": {

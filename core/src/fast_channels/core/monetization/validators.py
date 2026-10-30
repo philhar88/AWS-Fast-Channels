@@ -38,8 +38,9 @@ Rules (:class:`Rule`):
 - **R-P4** Threshold 121; ``FOLLOW_AD_SEQUENCE`` on PBS siblings, ``IGNORE_AD_SEQUENCE`` on opaque ones;
   ``AvailSuppression`` ``AFTER_LIVE_EDGE`` ``00:00:00`` ``PARTIAL_AVAIL``; no PRE_MANIFEST function (ADR-0021,
   P0-07).
-- **R-P5** Every grid duration has a stored request; zero, missing (300 s) and off-grid durations have none, so
-  they fail safe to the slate.
+- **R-P5** The body names a stored request the Prebid Server configuration serves and sends the break's length as
+  ``ext.fast.pod_s`` from ``session.avail_duration_secs``; zero and missing (300 s) durations are never grid
+  durations, so the module, which shapes pods from 30 to 120 s, answers them empty and they fail safe to the slate.
 - **R-P6** Sibling names ``<prefix>-<ch>-p-[a-z0-9]`` of a monetized channel.
 - **R-P7** The ad-server route (M8-09): the sibling's PRE_ADS tree runs one demand-origin auction (``DemandOrigin``:
   the apply adds the secret, so it targets the auction and never sets the header itself), PRE_SESSION blanks the
@@ -99,6 +100,7 @@ from fast_channels.core.monetization.playback import (
     HEADER_TICKET,
     PBS_AUCTION_PATH,
     PERSONALIZATION_THRESHOLD_SECONDS,
+    POD_SECONDS_FIELD,
     ROLE_LETTERS,
     SEQUENCING,
     TICKET_LOG_EVENTS,
@@ -830,24 +832,41 @@ def check_headers(sibling: Sibling) -> list[Violation]:
     return found
 
 
+_POD_SECONDS_TEMPLATE: Final = re.compile(r"\{\{\s*session\.avail_duration_secs\s*\}\}")
+
+
 def check_stored_requests(
     body: str | None, *, stored_requests: Collection[str], grid_seconds: Collection[int], where: str = "body"
 ) -> list[Violation]:
-    """R-P5: the stored request the body names exists for every grid duration and for nothing else, so a zero,
-    missing (300 s) or off-grid duration asks for one that does not exist, PBS answers 400 and the slate plays."""
-    match = re.search(r'"id"\s*:\s*"([A-Za-z0-9_-]*)\{\{\s*session\.avail_duration_secs\s*\}\}s"', body or "")
-    if match is None:
-        return [_violation(Rule.P5, where, "the body names its stored request by session.avail_duration_secs")]
-    prefix = match.group(1)
-    served = {int(m.group(1)) for r in stored_requests if (m := re.fullmatch(rf"{re.escape(prefix)}(\d+)s", r))}
-    found = [
-        _violation(Rule.P5, where, f"no stored request {prefix}{seconds}s for the {seconds} s breaks")
-        for seconds in sorted(set(grid_seconds) - served)
-    ]
-    found += [
-        _violation(Rule.P5, where, f"{prefix}{seconds}s exists: a {seconds} s ask must fail safe to the slate")
-        for seconds in sorted(served - set(grid_seconds))
-    ]
+    """R-P5: the body names a stored request the configuration serves (``ext.prebid.storedrequest.id``) and sends the
+    break's whole seconds as ``ext.fast.pod_s`` = ``{{session.avail_duration_secs}}``, from which the fast-ctv module
+    shapes the pod. A zero or missing (300 s) duration is outside the module's range: it answers an empty pod, and
+    the slate plays."""
+    try:
+        data = json.loads(body or "")
+    except ValueError:
+        data = None
+    ext = data.get("ext") if isinstance(data, dict) else None
+    ext = ext if isinstance(ext, dict) else {}
+    prebid, fast = ext.get("prebid"), ext.get("fast")
+    stored = prebid.get("storedrequest") if isinstance(prebid, dict) else None
+    named = stored.get("id") if isinstance(stored, dict) else None
+    found = []
+    if named not in stored_requests:
+        found.append(
+            _violation(
+                Rule.P5, where, f"names stored request {named!r}; the configuration serves {sorted(stored_requests)}"
+            )
+        )
+    pod = fast.get(POD_SECONDS_FIELD) if isinstance(fast, dict) else None
+    if not (isinstance(pod, str) and _POD_SECONDS_TEMPLATE.fullmatch(pod)):
+        found.append(
+            _violation(
+                Rule.P5,
+                where,
+                f"sends the break's length as ext.fast.{POD_SECONDS_FIELD} = {{{{session.avail_duration_secs}}}}",
+            )
+        )
     if MISSING_DURATION_SECONDS in grid_seconds or 0 in grid_seconds:
         found.append(_violation(Rule.P5, where, "0 s and 300 s (a missing duration) are never grid durations"))
     return found
@@ -871,8 +890,11 @@ def _check_playback(sibling: Sibling, bundle: Bundle, trees: Mapping[Hook, _Tree
     yield from _check_budgets(where, trees)
 
 
-_AUCTION_BODY: Final = re.compile(r"'([A-Za-z0-9_-]*)' & \$string\(session\.avail_duration_secs\) & 's'")
-"""How an auction's JSONata body names its stored request (``core.ad_server.auction_body``)."""
+_AUCTION_BODY: Final = re.compile(
+    r"\{'ext': \{'prebid': \{'storedrequest': \{'id': '([A-Za-z0-9_-]+)'\}\}, "
+    rf"'fast': \{{'{POD_SECONDS_FIELD}': \$string\(session\.avail_duration_secs\)\}}\}}\}}"
+)
+"""How an auction's JSONata body names its stored request and the break's length (``core.ad_server.auction_body``)."""
 
 
 def _origin_requests(trees: Iterable[_Tree]) -> list[Function]:
@@ -922,9 +944,16 @@ def _check_ad_server(sibling: Sibling, bundle: Bundle, trees: Mapping[Hook, _Tre
         body = (auction.http_request_configuration.body if auction.http_request_configuration else None) or ""
         at = f"function {auction.function_id} Body"
         if (match := _AUCTION_BODY.search(body)) is None:
-            yield _violation(Rule.P5, at, "names its stored request by the break's length")
+            yield _violation(Rule.P5, at, "names its stored request and sends the break's length")
             continue
-        template = f'{{"id":"{match.group(1)}{{{{session.avail_duration_secs}}}}s"}}'
+        template = json.dumps(
+            {
+                "ext": {
+                    "prebid": {"storedrequest": {"id": match.group(1)}},
+                    "fast": {POD_SECONDS_FIELD: "{{session.avail_duration_secs}}"},
+                }
+            }
+        )
         yield from check_stored_requests(
             template, stored_requests=bundle.stored_requests, grid_seconds=bundle.grid_seconds, where=at
         )

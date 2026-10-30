@@ -59,7 +59,7 @@ from fast_channels.core.monetization.playback import (
     SiblingRole,
 )
 from fast_channels.core.monetization.release import ChannelState
-from fast_channels.core.pbs_config import POD_SECONDS
+from fast_channels.core.pbs_config import POD_MIN_SECONDS, POD_SECONDS
 
 pytestmark = pytest.mark.e2e
 
@@ -232,6 +232,8 @@ ROLLBACK_TIMEOUT_S: Final = 20 * 60
 REMAP_S: Final = 3.0
 """A remap reaches a live session at its next break in about 3 s (P0-08)."""
 LOG_DELAY_S: Final = 180
+JOIN_AFTER_S: Final = 20
+"""How far into a break the mid-break joiner joins."""
 
 
 @pytest.fixture(scope="module")
@@ -616,8 +618,9 @@ def logged_at(timestamp: str) -> float:
     return datetime.fromisoformat(timestamp.replace(" ", "T")).replace(tzinfo=UTC).timestamp()
 
 
-def upcoming_break(stage: Stage, channel: str, after: float) -> tuple[float, float]:
-    """The start (epoch seconds) and length (s) of ``channel``'s first ad break that starts after ``after``."""
+def upcoming_break(stage: Stage, channel: str, after: float, *, longer_than: float = 0) -> tuple[float, float]:
+    """The start (epoch seconds) and length (s) of ``channel``'s first ad break that starts after ``after`` and lasts
+    more than ``longer_than`` seconds."""
     mediatailor = stage.session.client("mediatailor", region_name=stage.region)
     starts = sorted(
         (b["ApproximateStartTime"].timestamp(), float(b.get("ApproximateDurationSeconds", 0)))
@@ -627,23 +630,27 @@ def upcoming_break(stage: Stage, channel: str, after: float) -> tuple[float, flo
         for item in page["Items"]
         for b in item.get("ScheduleAdBreaks", [])
     )
-    later = [s for s in starts if s[0] > after]
-    assert later, f"{channel} airs no break after {datetime.fromtimestamp(after, UTC):%H:%M:%S}"
+    later = [s for s in starts if s[0] > after and s[1] > longer_than]
+    assert later, f"{channel} airs no break over {longer_than} s after {datetime.fromtimestamp(after, UTC):%H:%M:%S}"
     return later[0]
 
 
-def test_a_mid_break_joiner_asks_for_what_is_left_of_the_break(
+def test_a_mid_break_joiner_is_filled_for_what_is_left_of_the_break(
     releases: Stage, on_air: dict[str, Any], channel: Channel
 ) -> None:
     """ADR-0021 (M3-07): with AFTER_LIVE_EDGE 00:00:00 and PARTIAL_AVAIL, a viewer who joins 20 s into a 60.06 s break
     asks for what is left of it (about 42 s, at segment granularity); with BEHIND_LIVE_EDGE it asked for nothing. The
-    remainder is not a grid duration, so it names no stored request (R-P5): Prebid Server answers 400 and the slate
-    plays. The sibling is the pair sibling of the newest release (the one under test)."""
+    remainder is not a grid duration, and the one stored request serves it: the module shapes a pod of one slot per
+    whole 30 s of it, so the remainder is filled and never past its length. The sibling is the pair sibling of the
+    newest release (the one under test)."""
     stage = releases
     state = channel_state(stage, channel.name)
     sibling = max((s for s in (state.stable, state.idle) if s), key=lambda s: state.siblings[s].release)
-    start, length = upcoming_break(stage, channel.name, time.time() + 15)
-    until(datetime.fromtimestamp(start + 20, UTC))
+    # A remainder of a slot at least: the join at +20 s leaves 30 s or more of the break.
+    start, length = upcoming_break(
+        stage, channel.name, time.time() + 15, longer_than=JOIN_AFTER_S + POD_MIN_SECONDS + 5
+    )
+    until(datetime.fromtimestamp(start + JOIN_AFTER_S, UTC))
     viewer = Viewer(sibling, stage).start()
     try:
         until(datetime.fromtimestamp(start + length + 30, UTC))
@@ -667,4 +674,7 @@ def test_a_mid_break_joiner_asks_for_what_is_left_of_the_break(
     dur_ms = int(parse_qs(urlsplit(requests[0]["adsRequestUrl"]).query)["dur"][0])
     seconds = (dur_ms + 500) // 1000
     assert 0 < dur_ms < length * 1000 and seconds not in POD_SECONDS, f"not an off-grid remainder: {dur_ms} ms"
-    assert not [r for r in filled if int(r.get("avail.numAds") or 0)], f"the {seconds} s remainder was filled: {filled}"
+    assert seconds >= POD_MIN_SECONDS, f"a {seconds} s remainder is too short for a slot: join earlier in the break"
+    assert filled, f"no FILLED_AVAIL for the {seconds} s remainder: {rows}"
+    assert int(filled[0].get("avail.numAds") or 0) >= 1, f"the {seconds} s remainder was not filled: {filled}"
+    assert float(filled[0]["avail.filledDuration"]) <= dur_ms / 1000, f"filled past the remainder: {filled}"

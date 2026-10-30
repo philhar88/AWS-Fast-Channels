@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from fast_channels.core.demand import Parameter, origin_secret, parameter_path, simulator_function
+from fast_channels.core.pbs_config import auction_body
 
 if TYPE_CHECKING:
     import boto3
@@ -56,9 +57,9 @@ class DemandEdge:
         upid: str = "e2e",
         probe: bool = True,
     ) -> httpx.Response:
-        """MediaTailor's POST: the stored request of a ``seconds`` break, the session and configuration as headers, by
-        default a probe (so the Pod Decision Service answers house only)."""
-        body: dict[str, Any] = {"ext": {"prebid": {"storedrequest": {"id": f"fast-pod-{seconds}s"}}}}
+        """MediaTailor's POST for a ``seconds`` break: the stored request and the break's length, the session and
+        configuration as headers, by default a probe (so the Pod Decision Service answers house only)."""
+        body: dict[str, Any] = auction_body(seconds)
         if account is not None:
             body["app"] = {"publisher": {"id": account}}
         sent = {

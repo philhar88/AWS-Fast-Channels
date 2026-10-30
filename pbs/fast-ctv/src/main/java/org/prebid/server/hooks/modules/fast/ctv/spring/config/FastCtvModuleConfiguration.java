@@ -4,6 +4,7 @@ import org.prebid.server.cache.CoreCacheService;
 import org.prebid.server.hooks.modules.fast.ctv.core.HousePod;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodCache;
 import org.prebid.server.hooks.modules.fast.ctv.core.PodRenderer;
+import org.prebid.server.hooks.modules.fast.ctv.core.PodShape;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.SelectClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.TrackerTemplate;
@@ -34,7 +35,10 @@ import java.util.function.Consumer;
  *     tracker-template: https://&lt;cdn&gt;/ads/b.gif?d={sid}.{evid}&amp;c={crid}&amp;e={event}&amp;enr={enr}
  *     house-ads: '[{"crid":"house1","adm":"&lt;VAST ...&gt;","dur":30,"w":1920,"h":1080}]'
  *     log-requests: true
+ *     pod-min-s: 30
+ *     pod-max-s: 120
  * </pre>
+ * {@code pod-min-s} and {@code pod-max-s} bound the break lengths the module builds a pod for ({@link PodShape}).
  * A missing or invalid URL stops Prebid Server at startup. Which hooks run, with which group timeouts, is decided by
  * the account's execution plan, never here.
  */
@@ -54,12 +58,14 @@ public class FastCtvModuleConfiguration {
                                 @Value("${hooks.fast-ctv.select-timeout-ms:100}") long selectTimeoutMs,
                                 @Value("${hooks.fast-ctv.tracker-template}") String trackerTemplate,
                                 @Value("${hooks.fast-ctv.house-ads:[]}") String houseAds,
-                                @Value("${hooks.fast-ctv.log-requests:false}") boolean logRequests) {
+                                @Value("${hooks.fast-ctv.log-requests:false}") boolean logRequests,
+                                @Value("${hooks.fast-ctv.pod-min-s:30}") int podMinSeconds,
+                                @Value("${hooks.fast-ctv.pod-max-s:120}") int podMaxSeconds) {
 
         final Consumer<String> log = logRequests ? logger::info : null;
         return new FastCtvModule(
                 new FastCtvPolicyHook(new PolicyClient(httpClient, mapper.mapper(), policyUrl, policyTimeoutMs),
-                        mapper.mapper(), log),
+                        mapper.mapper(), log, new PodShape(podMinSeconds, podMaxSeconds)),
                 new FastCtvVastHook(new SelectClient(httpClient, mapper.mapper(), selectUrl, selectTimeoutMs),
                         new PodRenderer(), new TrackerTemplate(trackerTemplate), mapper.mapper(), log,
                         HousePod.parse(houseAds, mapper.mapper()), new PodCache(cacheService, mapper.mapper())));

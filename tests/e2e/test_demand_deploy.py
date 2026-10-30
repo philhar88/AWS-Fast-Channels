@@ -467,20 +467,27 @@ def test_the_lambda_simulator_is_reached_through_the_private_zone(stage: _demand
 
 
 def test_smoke_passes_only_with_every_check() -> None:
-    pod = {"status": 200, "content_type": "application/xml; charset=utf-8", "vast_4_2": True}
+    pod = {"status": 200, "content_type": "application/xml; charset=utf-8", "ads": 2}
     results: dict[str, dict[str, Any]] = {
-        **{f"{seconds}s": dict(pod) for seconds in (30, 60, 90, 120)},
+        **{f"{seconds}s": dict(pod) for seconds in (30, 48, 60, 90, 120)},
+        "out-of-range-300s": {"status": 200, "content_type": "application/xml", "ads": 0},
+        "house-ads": {"count": 2},
         "no-secret": {"status": 403},
-        "off-grid-31s": {"status": 400},
         "other-path": {"status": 403},
     }
 
+    assert _demand.SMOKE_SECONDS == (30, 48, 60, 90, 120), "the grid and a length off it"
     assert _demand.smoke_passed(results)
+    without_kit = {k: dict(v) for k, v in results.items()} | {"house-ads": {"count": 0}}
+    without_kit["48s"]["ads"] = 0
+    assert _demand.smoke_passed(without_kit), "without the kit's house ads a probe's pod is empty"
     for key, change in (
         ("60s", {"content_type": "application/json"}),
-        ("90s", {"vast_4_2": False}),
+        ("90s", {"ads": None}),
+        ("48s", {"ads": 0}),
         ("no-secret", {"status": 200}),
-        ("off-grid-31s", {"status": 200}),
+        ("out-of-range-300s", {"ads": 1}),
+        ("out-of-range-300s", {"status": 400}),
         ("other-path", {"status": 404}),
     ):
         broken = {k: dict(v) for k, v in results.items()}
@@ -488,6 +495,19 @@ def test_smoke_passes_only_with_every_check() -> None:
         assert not _demand.smoke_passed(broken), key
     del results["120s"]
     assert not _demand.smoke_passed(results)
+
+
+@pytest.mark.parametrize(
+    ("text", "ads"),
+    [
+        ('<VAST version="4.2"><Ad id="a"/><Ad id="b"/></VAST>', 2),
+        ('<VAST version="4.2"/>', 0),
+        ('<VAST version="3.0"><Ad id="a"/></VAST>', None),
+        ('{"seatbid": []}', None),
+    ],
+)
+def test_the_smoke_counts_a_vast_4_2_pods_ads(text: str, ads: int | None) -> None:
+    assert _demand.vast_ads(text) == ads
 
 
 def test_empty_bucket_deletes_every_version_and_marker(stage: _demand.DemandStage, stub: Any) -> None:
@@ -1003,9 +1023,9 @@ def test_the_simulator_smoke_wants_one_demo_bid_per_slot(stage: _demand.DemandSt
 
 def test_the_smoke_counts_the_simulator_and_the_creatives() -> None:
     results: dict[str, Any] = {
-        **{f"{s}s": {"status": 200, "content_type": "application/xml", "vast_4_2": True} for s in (30, 60, 90, 120)},
+        **{f"{s}s": {"status": 200, "content_type": "application/xml", "ads": 1} for s in (30, 48, 60, 90, 120)},
+        "out-of-range-300s": {"status": 200, "content_type": "application/xml", "ads": 0},
         "no-secret": {"status": 403},
-        "off-grid-31s": {"status": 400},
         "other-path": {"status": 403},
         "simulator": {"passed": True},
         "demo-creatives": {"passed": True},
@@ -1017,11 +1037,40 @@ def test_the_smoke_counts_the_simulator_and_the_creatives() -> None:
 
 
 class FakeS3:
-    """The guidance's two buckets in memory; ``corrupt`` keys read back other bytes than were put."""
+    """The guidance's two buckets in memory; ``corrupt`` keys read back other bytes than were put, and with
+    ``ignore_prefix`` a listing returns every key of the bucket (a listing that ignored its prefix)."""
 
-    def __init__(self, objects: dict[tuple[str, str], bytes], corrupt: frozenset[str] = frozenset()) -> None:
-        self.objects, self.corrupt = dict(objects), corrupt
+    def __init__(
+        self,
+        objects: dict[tuple[str, str], bytes],
+        corrupt: frozenset[str] = frozenset(),
+        *,
+        ignore_prefix: bool = False,
+    ) -> None:
+        self.objects, self.corrupt, self.ignore_prefix = dict(objects), corrupt, ignore_prefix
         self.puts: list[str] = []
+        self.deletes: list[str] = []
+
+    def get_paginator(self, operation: str) -> Any:
+        assert operation == "list_objects_v2"
+        fake = self
+
+        class Paginator:
+            def paginate(self, *, Bucket: str, Prefix: str) -> Iterator[dict[str, Any]]:  # noqa: N803 - S3's names
+                keys = sorted(
+                    key
+                    for bucket, key in fake.objects
+                    if bucket == Bucket and (fake.ignore_prefix or key.startswith(Prefix))
+                )
+                for start in range(0, max(len(keys), 1), 2):  # pages of two keys, as S3 pages a long listing
+                    yield {"Contents": [{"Key": key} for key in keys[start : start + 2]]} if keys else {}
+
+        return Paginator()
+
+    def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
+        del self.objects[Bucket, Key]
+        self.deletes.append(Key)
+        return {}
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
         if (Bucket, Key) not in self.objects:
@@ -1104,3 +1153,114 @@ def test_an_upload_that_does_not_read_back_is_refused(
     with pytest.raises(_demand.DemandError, match="not the rendered one"):
         config_stage.upload_config("https://cdn.example")
     assert len(s3.puts) == len(rendered) and rolls == []
+
+
+SETTINGS_BUCKET, STORED_BUCKET = (
+    CONFIG_PARAMETERS[Parameter.SETTINGS_BUCKET],
+    CONFIG_PARAMETERS[Parameter.STORED_REQUESTS_BUCKET],
+)
+SHIPPED: Final = {
+    (SETTINGS_BUCKET, "prebid-server/current/README.md"): b"the guidance's",
+    (STORED_BUCKET, "stored_accounts/README.md"): b"the guidance's",
+    (STORED_BUCKET, "stored_requests/README.md"): b"the guidance's",
+    (STORED_BUCKET, "stored_requests/video-test-stored-req.json"): b"{}",
+    (STORED_BUCKET, "stored_responses/README.md"): b"the guidance's",
+}
+"""What the guidance's custom resource uploads into the managed prefixes with its stack (GUIDANCE_CONFIG_FILES)."""
+UNMANAGED: Final = {
+    (SETTINGS_BUCKET, "prebid-server/default/prebid-config.yaml"): b"the guidance's default",
+    (STORED_BUCKET, "stored_impressions/preroll-config.json"): b"{}",
+    (STORED_BUCKET, "stored_impressions/README.md"): b"the guidance's",
+    (SETTINGS_BUCKET, "elsewhere/fast-pod-60s.json"): b"{}",
+}
+"""Objects outside the managed prefixes, the guidance's and anyone's: the prune never lists or touches them."""
+STALE: Final = {
+    (STORED_BUCKET, "stored_requests/fast-pod-60s.json"): b"{}",
+    (STORED_BUCKET, "stored_requests/fast-pod-kids-120s.json"): b"{}",
+    (STORED_BUCKET, "stored_requests/fast-adsrv-pod.json"): b"{}",
+    (STORED_BUCKET, "stored_accounts/fastold.json"): b"{}",
+    (SETTINGS_BUCKET, "prebid-server/current/old-config.yaml"): b"x",
+}
+"""What earlier configurations left: the per-length stored requests before v4.0.0, the ad-server route's once the mode
+is off, another account, another configuration file."""
+
+
+def test_the_prune_keeps_what_the_guidance_ships(config_stage: _demand.DemandStage) -> None:
+    values = {k.value: v for k, v in CONFIG_PARAMETERS.items()}
+    assert {config_stage.config_location(rel, values) for rel in _demand.GUIDANCE_CONFIG_FILES} == set(SHIPPED)
+    with pytest.raises(_demand.DemandError, match="not in a configuration directory the deploy manages"):
+        config_stage.config_location("stored_impressions/preroll-config.json", values)
+
+
+def test_stale_configuration_is_pruned_after_the_upload_and_the_tasks_roll(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The guidance never deletes: without the prune, the stored requests of an earlier configuration stay in S3, and
+    Prebid Server would serve them to anything that still names them."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted(key for _, key in STALE)
+    assert s3.objects == {**rendered, **SHIPPED, **UNMANAGED}
+    assert (s3.puts, rolls) == ([], ["rolled"])
+    listed = capsys.readouterr().out
+    assert "pruning 5 stale configuration objects" in listed
+    assert f"s3://{STORED_BUCKET}/stored_requests/fast-pod-60s.json" in listed, "listed before they go"
+
+
+def test_keep_stale_uploads_and_only_lists_what_is_stale(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The first step of a body-format change: the new configuration is beside the old until the siblings' rollout
+    has moved them off it (docs/demand.md)."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    account = next(location for location in rendered if location[1].startswith("stored_accounts/"))
+    s3 = FakeS3({**{k: v for k, v in rendered.items() if k != account}, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert config_stage.upload_config("https://cdn.example", prune=False) == [account[1]]
+    assert s3.objects == {**rendered, **STALE} and s3.deletes == []
+    assert rolls == ["rolled"], "the upload still rolls the tasks"
+    assert "keeping 5 stale configuration objects" in capsys.readouterr().out
+    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted(key for _, key in STALE), "then pruned"
+
+
+def test_deploy_and_upload_config_take_keep_stale(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+
+    class Stage:
+        prefix = "fastcix"
+
+        def upload_config(self, content_base_url: str, *, prune: bool = True) -> list[str]:
+            calls.append(prune)
+            return []
+
+    monkeypatch.setattr(prebid_guidance, "demand_stage", lambda args: Stage())
+    monkeypatch.setattr(prebid_guidance, "content_base_url", lambda args, prefix: "https://cdn.example")
+    for argv in (["upload-config", "--keep-stale"], ["upload-config"]):
+        assert prebid_guidance.main([*argv, "--prefix", "fastcix"]) == 0
+    assert calls == [False, True]
+
+
+def test_nothing_is_pruned_when_the_upload_does_not_read_back(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = FakeS3({**STALE}, corrupt=frozenset({"prebid-server/current/prebid-config.yaml"}))
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    with pytest.raises(_demand.DemandError, match="not the rendered one"):
+        config_stage.upload_config("https://cdn.example")
+    assert (s3.deletes, rolls) == ([], [])
+
+
+def test_the_prune_refuses_anything_outside_the_managed_prefixes(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE}, ignore_prefix=True)
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    with pytest.raises(_demand.DemandError, match="refusing to prune outside the managed configuration prefixes"):
+        config_stage.upload_config("https://cdn.example")
+    assert (s3.deletes, rolls) == ([], [])

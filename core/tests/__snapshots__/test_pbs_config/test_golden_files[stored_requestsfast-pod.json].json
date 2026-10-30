@@ -16,6 +16,9 @@
     "USD"
   ],
   "ext": {
+    "fast": {
+      "slot_s": 30
+    },
     "prebid": {
       "multibid": [
         {
@@ -25,7 +28,7 @@
       ]
     }
   },
-  "id": "fast-pod-kids-60s",
+  "id": "fast-pod",
   "imp": [
     {
       "ext": {
@@ -45,8 +48,8 @@
           "video/mp4"
         ],
         "plcmt": 1,
-        "poddur": 60,
-        "podid": 1,
+        "poddur": 30,
+        "podid": "1",
         "protocols": [
           3,
           6,
@@ -56,48 +59,14 @@
         "rqddurs": [
           30
         ],
-        "slotinpod": 1,
-        "startdelay": -1,
-        "w": 1920
-      }
-    },
-    {
-      "ext": {
-        "prebid": {
-          "bidder": {
-            "ownbook": {}
-          }
-        }
-      },
-      "id": "s2",
-      "ssai": 3,
-      "video": {
-        "h": 1080,
-        "linearity": 1,
-        "mimes": [
-          "application/x-mpegURL",
-          "video/mp4"
-        ],
-        "plcmt": 1,
-        "poddur": 60,
-        "podid": 1,
-        "protocols": [
-          3,
-          6,
-          7,
-          8
-        ],
-        "rqddurs": [
-          30
-        ],
-        "slotinpod": -1,
+        "slotinpod": 0,
         "startdelay": -1,
         "w": 1920
       }
     }
   ],
   "regs": {
-    "coppa": 1
+    "coppa": 0
   },
   "source": {
     "schain": {

@@ -159,7 +159,8 @@ public final class Fixtures {
     }
 
     /**
-     * One pod of {@code slots} 30 s slots for the own book, as {@code fast-pod-<30 * slots>s} holds it.
+     * One pod of {@code slots} 30 s slots for the own book, as the module shapes it from the one stored request
+     * ({@code PodShape}).
      */
     public static BidRequest pod(int slots) {
         final List<Imp> imps = IntStream.rangeClosed(1, slots).mapToObj(n -> Imp.builder()

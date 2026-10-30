@@ -1,8 +1,8 @@
 """The demand module's edge, on stages that deployed it (``make deploy-demand``; skipped otherwise): MediaTailor's POST
 through the guidance's CloudFront, WAF and Prebid Server with the fast-ctv module, until the Pod Decision Service
-exists (M2): every grid duration answers an (empty) VAST 4.2 pod, the origin rule group keeps out everything but the
-stage's MediaTailor requests, off-grid durations are refused, an account without the module calls no third party,
-and a small break herd is served.
+exists (M2): every break length from 30 to 120 s, on the grid or not, answers a VAST 4.2 pod of one slot per whole
+30 s, a zero or missing (300 s) length an empty one; the origin rule group keeps out everything but the stage's
+MediaTailor requests, an account without the module calls no third party, and a small break herd is served.
 
 Independent of the channel tests; about two minutes.
 """
@@ -16,9 +16,10 @@ from _demand import DemandStage
 from harness_demand import DemandEdge
 from prebid_guidance import stage_config
 
-from fast_channels.core.pbs_config import POD_SECONDS
+from fast_channels.core.pbs_config import POD_SECONDS, SLOT_SECONDS
 
 if TYPE_CHECKING:
+    import httpx
     from _stack import Stage
 
 pytestmark = pytest.mark.e2e
@@ -36,20 +37,28 @@ def edge(stage: Stage) -> DemandEdge:
     return found
 
 
-@pytest.mark.parametrize("seconds", POD_SECONDS)
-def test_every_grid_duration_answers_a_vast_4_2_pod(edge: DemandEdge, seconds: int) -> None:
-    response = edge.auction(seconds)
-
+def vast_pod(response: httpx.Response) -> list[ET.Element]:
     assert response.status_code == 200, response.text[:300]
     assert response.headers["content-type"].startswith("application/xml")
     root = ET.fromstring(response.text)
     assert (root.tag, root.get("version")) == ("VAST", "4.2")
+    return root.findall("Ad")
 
 
-@pytest.mark.parametrize("seconds", [31, 300])
-def test_an_off_grid_duration_is_refused(edge: DemandEdge, seconds: int) -> None:
-    """300 s is what MediaTailor sends for a missing duration: no such stored request, so 400 and the slate."""
-    assert edge.auction(seconds).status_code == 400
+@pytest.mark.parametrize("seconds", sorted({*POD_SECONDS, 48}))
+def test_every_break_length_in_range_answers_its_pod(edge: DemandEdge, seconds: int) -> None:
+    """One stored request for every length: the module shapes the pod from ``ext.fast.pod_s``. 48 s is off the
+    grid, as a mid-break joiner's remainder is: one 30 s slot, which the house ads fill (the probe asks no one)."""
+    sequenced = [ad for ad in vast_pod(edge.auction(seconds)) if ad.get("sequence")]
+
+    assert 1 <= len(sequenced) <= seconds // SLOT_SECONDS, [ad.findtext("InLine/AdTitle") for ad in sequenced]
+
+
+@pytest.mark.parametrize("seconds", [0, 20, 300])
+def test_a_break_length_out_of_range_answers_an_empty_pod(edge: DemandEdge, seconds: int) -> None:
+    """300 s is what MediaTailor sends for a missing duration: the module rejects the auction and answers an empty
+    VAST 4.2 document, so the slate plays."""
+    assert vast_pod(edge.auction(seconds)) == []
 
 
 def test_only_the_stages_mediatailor_requests_pass_the_edge(edge: DemandEdge) -> None:

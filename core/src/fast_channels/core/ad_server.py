@@ -6,8 +6,9 @@ With ``modules.demand.ad_server`` set, the monetized pair siblings call an ad se
    start never reaches the ad server.
 2. **PRE_ADS** runs the auction: an ``HTTP_REQUEST`` POST to Prebid Server through its CloudFront and origin rule (the
    apply adds the origin secret and the release), cached per session and break. The body names only a stored request
-   (``fast-adsrv-pod-<seconds>s``), which asks the fast-ctv module to cache the composed pod in Prebid Cache and answer
-   its Prebid targeting. The root commits the targeting to ``player_params.hb_*`` for this break only.
+   (``fast-adsrv-pod``) and the break's length, and the stored request asks the fast-ctv module to cache the composed
+   pod in Prebid Cache and answer its Prebid targeting. The root commits the targeting to ``player_params.hb_*`` for
+   this break only.
 3. **The ad server** (the ADS URL template, :func:`ads_url`) gets ``hb_pb``, ``hb_uuid`` and ``hb_bidder`` as
    key-values.
    A line item matched on ``hb_pb`` returns a VAST Wrapper to ``https://<cache host>/cache?uuid=<hb_uuid>``, which
@@ -48,7 +49,8 @@ from fast_channels.core.monetization.playback import (
     PBS_AUCTION_PATH,
     AdsRoute,
 )
-from fast_channels.core.pbs_config import CTV_PRICE_GRANULARITY
+from fast_channels.core.pbs_config import CTV_PRICE_GRANULARITY, POD_FIELD
+from fast_channels.core.pbs_config import stored_request_id as pbs_stored_request_id
 
 NAME: Final = "ad-server"
 
@@ -73,8 +75,6 @@ PLACEHOLDER: Final = "{prebid}"
 POD_CACHE_SECONDS: Final = 300
 """How long a cached pod lives in Prebid Cache: longer than a prefetch's retrieval-to-break gap (about 140 s) plus
 the break, so MediaTailor can still follow the Wrapper."""
-STORED_REQUEST_PREFIX: Final = {False: "fast-adsrv-pod-", True: "fast-adsrv-pod-kids-"}
-"""Stored requests of the ad-server route (the same pods as ``fast-pod-*`` plus the pod-cache ask)."""
 AUCTION: Final = "pa_auction"
 BLANK: Final = "ps_hb"
 AUCTION_REQUEST_TIMEOUT_MS: Final = 1200
@@ -94,9 +94,10 @@ AUCTION_REASON: Final = (
 _UUID4: Final = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
-def stored_request_id(seconds: int, *, kids: bool = False) -> str:
-    """``fast-adsrv-pod-<seconds>s`` (``fast-adsrv-pod-kids-<seconds>s`` for child-directed configurations)."""
-    return f"{STORED_REQUEST_PREFIX[kids]}{seconds}s"
+def stored_request_id(*, kids: bool = False) -> str:
+    """``fast-adsrv-pod`` (``fast-adsrv-pod-kids`` for child-directed configurations): the direct route's pod plus the
+    pod-cache ask."""
+    return pbs_stored_request_id(kids=kids, ad_server=True)
 
 
 def player_param(key: str) -> str:
@@ -152,11 +153,11 @@ def auction_url(pbs_origin: str) -> str:
 
 
 def auction_body(*, kids: bool) -> str:
-    """The auction's ``Body``: the stored request for the break's length, nothing from the player (R-P1's rule)."""
-    stored = STORED_REQUEST_PREFIX[kids]
+    """The auction's ``Body``: the route's stored request and the break's whole seconds as a string
+    (``ext.fast.pod_s``), nothing from the player (R-P1's rule)."""
     return (
-        "{% $string({'ext': {'prebid': {'storedrequest': {'id': '"
-        f"{stored}' & $string(session.avail_duration_secs) & 's'}}}}}}}}) %}}"
+        f"{{% $string({{'ext': {{'prebid': {{'storedrequest': {{'id': '{stored_request_id(kids=kids)}'}}}}, "
+        f"'fast': {{'{POD_FIELD}': $string(session.avail_duration_secs)}}}}}}) %}}"
     )
 
 

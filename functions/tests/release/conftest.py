@@ -14,7 +14,7 @@ from pydantic import SecretStr
 
 from fast_channels.core.monetization.bundle import Bundle, ChannelInput, build_bundle, bundle_document
 from fast_channels.core.monetization.validators import Violation, load_bundle
-from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
+from fast_channels.core.pbs_config import POD_SECONDS, stored_request_ids
 from fast_channels.functions import aws
 from fast_channels.functions.release import apply, store
 from fast_channels.functions.settings import settings
@@ -46,7 +46,7 @@ def make_bundle(**overrides: Any) -> Bundle:
         "content_base_url": CDN,
         "pbs_origin": PBS,
         "log_percent": 100,
-        "stored_requests": [stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS],
+        "stored_requests": list(stored_request_ids()),
         "grid_seconds": POD_SECONDS,
     }
     return build_bundle(**(arguments | overrides))

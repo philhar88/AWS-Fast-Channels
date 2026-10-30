@@ -16,16 +16,46 @@
     "USD"
   ],
   "ext": {
+    "fast": {
+      "pod_cache": {
+        "ttlseconds": 300
+      },
+      "slot_s": 30
+    },
     "prebid": {
       "multibid": [
         {
           "bidder": "ownbook",
           "maxbids": 9
         }
-      ]
+      ],
+      "targeting": {
+        "includebidderkeys": false,
+        "includewinners": true,
+        "pricegranularity": {
+          "precision": 2,
+          "ranges": [
+            {
+              "increment": 0.1,
+              "max": 20,
+              "min": 0
+            },
+            {
+              "increment": 0.5,
+              "max": 50,
+              "min": 20
+            },
+            {
+              "increment": 1.0,
+              "max": 100,
+              "min": 50
+            }
+          ]
+        }
+      }
     }
   },
-  "id": "fast-pod-kids-30s",
+  "id": "fast-adsrv-pod",
   "imp": [
     {
       "ext": {
@@ -46,7 +76,7 @@
         ],
         "plcmt": 1,
         "poddur": 30,
-        "podid": 1,
+        "podid": "1",
         "protocols": [
           3,
           6,
@@ -63,7 +93,7 @@
     }
   ],
   "regs": {
-    "coppa": 1
+    "coppa": 0
   },
   "source": {
     "schain": {

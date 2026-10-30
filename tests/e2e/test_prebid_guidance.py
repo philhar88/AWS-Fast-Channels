@@ -201,11 +201,8 @@ def test_render_config_writes_the_stage_configuration(tmp_path: Path) -> None:
         [
             "current-config/prebid-config.yaml",
             "stored_accounts/fastm.json",
-            *(
-                f"stored_requests/fast-pod-{kids}{seconds}s.json"
-                for kids in ("", "kids-")
-                for seconds in (30, 60, 90, 120)
-            ),
+            "stored_requests/fast-pod.json",
+            "stored_requests/fast-pod-kids.json",
         ]
     )
     config = (out / "current-config/prebid-config.yaml").read_text()
@@ -312,6 +309,20 @@ def test_every_guidance_parameter_is_passed_on_each_deploy_or_left_at_its_defaul
 
     assert _declared_parameters(CHECKOUT) == demand.GUIDANCE_PARAMETERS | set(demand.GUIDANCE_DEFAULTS)
     assert not demand.GUIDANCE_PARAMETERS & set(demand.GUIDANCE_DEFAULTS)
+
+
+@applied
+def test_the_config_prune_keeps_every_file_the_guidance_ships_in_the_managed_directories() -> None:
+    """The guidance's custom resource uploads its configuration directories with its stack; the deploy's prune
+    (``DemandStage.prune_config``) deletes what is neither rendered nor shipped, so a guidance bump that ships another
+    file there must list it."""
+    demand = _load("_demand")
+    root = demand.CONFIG_ROOT.as_posix()
+    tracked = run("ls-files", *(f"{root}/{directory}" for directory in demand.CONFIG_PREFIXES), cwd=CHECKOUT)
+
+    assert sorted(path.removeprefix(f"{root}/") for path in tracked.splitlines()) == sorted(
+        demand.GUIDANCE_CONFIG_FILES
+    )
 
 
 @applied

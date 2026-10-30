@@ -36,7 +36,7 @@ CDN = "https://d111111abcdef8.cloudfront.net"
 PBS = "https://d222222abcdef8.cloudfront.net"
 CA_URL = "https://abc.channel-assembly.mediatailor.us-east-1.amazonaws.com/v1/channel/fastm-demo/"
 GRID = (30, 60, 90, 120)
-STORED = tuple(f"fast-pod-{s}s" for s in GRID) + tuple(f"fast-pod-kids-{s}s" for s in GRID)
+STORED = ("fast-pod", "fast-pod-kids")
 
 CATALOG_URL = (
     "{% ($u := $string(scte.segmentation_upid); $id := $substring($u, 0, 4) = 'FST3' ? $substring($u, 4) : $u; "

@@ -5,8 +5,9 @@ idle on every promotion (kids profiles get ``k``/``l`` with M4) and ``z`` is the
 the v3.0.0 configuration of the channel, which stays untouched, in:
 
 - the ADS: a POST to the Prebid Server CloudFront, its query carrying ``evid``/``upid``/``dur`` for joins, its body
-  only a constant stored-request id built from ``{{session.avail_duration_secs}}`` (MediaTailor inserts values
-  without JSON escaping, and an invalid body silently skips the ADS call, P0-20 §4.14), every other value in headers;
+  only the route's constant stored-request id and ``{{session.avail_duration_secs}}`` inside a JSON string, the pod's
+  length (MediaTailor inserts values without JSON escaping, and an invalid body silently skips the ADS call, P0-20
+  §4.14), every other value in headers;
 - ``PersonalizationThresholdSeconds`` 121, so a partial pod keeps its ads and the break slate plays the rest
   (P0-07, P0-20 §4.11);
 - ``FOLLOW_AD_SEQUENCE``, so the module's standalone ads replace a failed sequenced ad in its slot (ad buffet,
@@ -91,8 +92,12 @@ SEQUENCING: Final = {
 """``FOLLOW`` keeps the module's per-slot standalones (also in a cached pod an ad server's Wrapper leads to); ``FOLLOW``
 would drop an unsequenced opaque pod (P0-20 §4.3)."""
 
-STORED_REQUEST_PREFIX: Final = {False: "fast-pod-", True: "fast-pod-kids-"}
-"""Stored-request id prefix, by whether the sibling serves kids (the kids requests hard-code ``regs.coppa=1``)."""
+STORED_REQUEST: Final = {False: "fast-pod", True: "fast-pod-kids"}
+"""The stored request a sibling names, by whether it serves kids (the kids one hard-codes ``regs.coppa=1``);
+``core.pbs_config.stored_request_id`` renders them."""
+POD_SECONDS_FIELD: Final = "pod_s"
+"""``ext.fast.pod_s``: the break's whole seconds, which the fast-ctv module shapes the pod from
+(``core.pbs_config.POD_FIELD``)."""
 
 
 RELEASE_OWNER: Final = "release-controller"
@@ -127,12 +132,15 @@ def pbs_ads_url(pbs_origin: str) -> str:
 
 
 def ads_body(*, kids: bool) -> str:
-    """The POST body: the stored request for the break's length, nothing from the player (DESIGN §6.3).
+    """The POST body: the route's stored request and the break's whole seconds, in a JSON string (R-P1), nothing from
+    the player (DESIGN §6.3).
 
     PBS generates the request id and ``source.tid``; joins use ``X-Fast-Sid`` and the query's ``evid``.
     """
-    stored = f"{STORED_REQUEST_PREFIX[kids]}{{{{session.avail_duration_secs}}}}s"
-    return f'{{"ext":{{"prebid":{{"storedrequest":{{"id":"{stored}"}}}}}}}}'
+    return (
+        f'{{"ext":{{"prebid":{{"storedrequest":{{"id":"{STORED_REQUEST[kids]}"}}}},'
+        f'"fast":{{"{POD_SECONDS_FIELD}":"{{{{session.avail_duration_secs}}}}"}}}}}}'
+    )
 
 
 def ads_headers(configuration: str, *, probe: bool, ticketed: bool) -> dict[str, str]:

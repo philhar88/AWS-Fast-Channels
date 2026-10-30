@@ -36,10 +36,15 @@ def test_the_post_carries_no_player_value(kit: SimpleNamespace) -> None:
         f"{kit.PBS}/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]"
     )
     body = pb.ads_body(kids=False)
-    assert body == '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod-{{session.avail_duration_secs}}s"}}}}'
-    rendered = json.loads(body.replace("{{session.avail_duration_secs}}", "60"))
-    assert rendered["ext"]["prebid"]["storedrequest"]["id"] == "fast-pod-60s"
-    assert "fast-pod-kids-{{session.avail_duration_secs}}s" in pb.ads_body(kids=True)
+    assert (
+        body
+        == '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod"}},"fast":{"pod_s":"{{session.avail_duration_secs}}"}}}'
+    )
+    rendered = json.loads(body.replace("{{session.avail_duration_secs}}", "48"))
+    assert rendered == {"ext": {"prebid": {"storedrequest": {"id": "fast-pod"}}, "fast": {"pod_s": "48"}}}
+    kids = json.loads(pb.ads_body(kids=True))
+    assert kids["ext"]["prebid"]["storedrequest"]["id"] == "fast-pod-kids"
+    assert kids["ext"]["fast"] == {"pod_s": "{{session.avail_duration_secs}}"}
     assert pb.ads_headers("fastm-demo-p-a", probe=False, ticketed=False) == {
         "Content-Type": "application/json",
         "X-Fast-Pc": "fastm-demo-p-a",

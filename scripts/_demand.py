@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import suppress
@@ -40,7 +41,15 @@ from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.monetization import names as release_names
-from fast_channels.core.pbs_config import PBS_VERSION, POD_SECONDS, HouseAd, house_ads, render, simulator_host
+from fast_channels.core.pbs_config import (
+    PBS_VERSION,
+    POD_SECONDS,
+    HouseAd,
+    auction_body,
+    house_ads,
+    render,
+    simulator_host,
+)
 from fast_channels.core.pds import names as pds_names
 from fast_channels.core.pds.book import house_creatives
 from fast_channels.core.pds.sidecar import CONTEXT as SIDECAR_CONTEXT
@@ -68,6 +77,24 @@ GUIDANCE_PYTHON: Final = "3.11"
 GUIDANCE_STACK_ID: Final = "prebid-server-deployment-on-aws"
 SIMULATOR_STACK_ID: Final = "BiddingServerSimulator"
 CONFIG_ROOT: Final = Path("deployment/ecr/prebid-server")
+CONFIG_PREFIXES: Final = {
+    "current-config/": (Parameter.SETTINGS_BUCKET, "prebid-server/current/"),
+    "stored_requests/": (Parameter.STORED_REQUESTS_BUCKET, "stored_requests/"),
+    "stored_responses/": (Parameter.STORED_REQUESTS_BUCKET, "stored_responses/"),
+    "stored_accounts/": (Parameter.STORED_REQUESTS_BUCKET, "stored_accounts/"),
+}
+"""The configuration directories the deploy manages, by checkout path, with where the guidance serves each (its
+custom resource's mapping). :meth:`DemandStage.sync_config` prunes only under these prefixes; ``default-config`` and
+``stored_impressions`` stay the guidance's."""
+GUIDANCE_CONFIG_FILES: Final = (
+    "current-config/README.md",
+    "stored_accounts/README.md",
+    "stored_requests/README.md",
+    "stored_requests/video-test-stored-req.json",
+    "stored_responses/README.md",
+)
+"""What the pinned guidance ships in those directories (its custom resource uploads them with the stack): the prune
+keeps them. ``tests/e2e/test_prebid_guidance.py`` checks the list against the pinned checkout."""
 SIMULATOR_HANDLER: Final = Path("source/loadtest/bidder_simulator/lambdas/loadtest_bidder")
 """The guidance's bidder simulator handler (overlay O5 reads ``video_creatives.json`` beside it)."""
 SIMULATOR_SLOTS: Final = 4
@@ -283,17 +310,40 @@ def empty_bucket(s3: Any, bucket: str) -> int:
     return deleted
 
 
+SMOKE_SECONDS: Final = tuple(sorted({*POD_SECONDS, 48}))
+"""The smoke's break lengths: the grid's and one between them, as a mid-break joiner's remainder is."""
+SMOKE_OUT_OF_RANGE: Final = 300
+"""What MediaTailor sends for a missing duration: the module answers it with an empty pod."""
+
+
+def vast_ads(text: str) -> int | None:
+    """The number of ``Ad`` elements of a VAST 4.2 document, or ``None`` for anything else."""
+    try:
+        root = ET.fromstring(text)  # noqa: S314 - our own edge's answer to the smoke, read for its Ad count
+    except ET.ParseError:
+        return None
+    return len(root.findall("Ad")) if (root.tag, root.get("version")) == ("VAST", "4.2") else None
+
+
 def smoke_passed(results: Mapping[str, Mapping[str, Any]]) -> bool:
-    """Every grid duration answered 200 with a VAST 4.2 document as XML; the POST without the origin secret and the
-    request to another path were blocked at the edge (403); the off-grid duration was refused (400)."""
+    """Every smoke length (:data:`SMOKE_SECONDS`) answered 200 with a VAST 4.2 pod as XML, of at least one ad when
+    the kit has house ads (``house-ads``: the probe's pod is house only); a missing duration (300 s) answered an empty
+    VAST 4.2 document; the POST without the origin secret and the request to another path were blocked at the edge
+    (403)."""
     pods = [result for key, result in results.items() if key.removesuffix("s").isdigit()]
+    out_of_range = results[f"out-of-range-{SMOKE_OUT_OF_RANGE}s"]
+    least = 1 if results.get("house-ads", {}).get("count") else 0
     return (
-        len(pods) == len(POD_SECONDS)
+        len(pods) == len(SMOKE_SECONDS)
         and all(
-            r["status"] == 200 and str(r["content_type"]).startswith("application/xml") and r["vast_4_2"] for r in pods
+            r["status"] == 200
+            and str(r["content_type"]).startswith("application/xml")
+            and r["ads"] is not None
+            and r["ads"] >= least
+            for r in pods
         )
+        and (out_of_range["status"], out_of_range["ads"]) == (200, 0)
         and results["no-secret"]["status"] == 403
-        and results["off-grid-31s"]["status"] == 400
         and results["other-path"]["status"] == 403
         and all(results[check]["passed"] for check in ("simulator", "demo-creatives") if check in results)
     )
@@ -1238,6 +1288,18 @@ class DemandStage:
             found |= {p["Name"].rsplit("/", 1)[1]: p["Value"] for p in page["Parameters"]}
         return found
 
+    def config_location(self, rel: str, values: Mapping[str, str] | None = None) -> tuple[str, str]:
+        """Where the guidance serves the checkout's ``rel`` (a path under :data:`CONFIG_ROOT`), (bucket, key).
+
+        Raises:
+            DemandError: ``rel`` is in none of :data:`CONFIG_PREFIXES`.
+        """
+        values = self.parameters() if values is None else values
+        for directory, (bucket, prefix) in CONFIG_PREFIXES.items():
+            if rel.startswith(directory):
+                return values[bucket], prefix + rel.removeprefix(directory)
+        raise DemandError(f"{rel} is not in a configuration directory the deploy manages ({sorted(CONFIG_PREFIXES)})")
+
     def config_objects(self, content_base_url: str) -> dict[tuple[str, str], bytes]:
         """The stage's rendered configuration where the guidance serves it, (bucket, key) -> bytes: ``current-config/``
         under the settings bucket's ``prebid-server/current/``, the stored data at its path in the stored-requests
@@ -1245,14 +1307,50 @@ class DemandStage:
         from prebid_guidance import pbs_settings  # noqa: PLC0415 - the CLI module imports this one
 
         values = self.parameters()
-        objects: dict[tuple[str, str], bytes] = {}
-        for rel, content in render(pbs_settings(self.config, content_base_url, self.house_ads())).items():
-            if rel.startswith("current-config/"):
-                location = (values[Parameter.SETTINGS_BUCKET], f"prebid-server/current/{rel.split('/', 1)[1]}")
-            else:
-                location = (values[Parameter.STORED_REQUESTS_BUCKET], rel)
-            objects[location] = content.encode()
-        return objects
+        return {
+            self.config_location(rel, values): content.encode()
+            for rel, content in render(pbs_settings(self.config, content_base_url, self.house_ads())).items()
+        }
+
+    def stale_config(self, content_base_url: str) -> list[tuple[str, str]]:
+        """Objects under the managed prefixes (:data:`CONFIG_PREFIXES`) that are neither rendered nor shipped by the
+        guidance (:data:`GUIDANCE_CONFIG_FILES`), (bucket, key): what an earlier configuration left, such as the
+        per-length stored requests ``fast-pod-<n>s`` before v4.0.0, which Prebid Server would still serve."""
+        values = self.parameters()
+        expected = set(self.config_objects(content_base_url))
+        expected |= {self.config_location(rel, values) for rel in GUIDANCE_CONFIG_FILES}
+        s3 = self.client("s3")
+        stale = []
+        for bucket, prefix in CONFIG_PREFIXES.values():
+            for page in s3.get_paginator("list_objects_v2").paginate(Bucket=values[bucket], Prefix=prefix):
+                stale += [
+                    (values[bucket], item["Key"])
+                    for item in page.get("Contents", [])
+                    if (values[bucket], item["Key"]) not in expected
+                ]
+        return sorted(stale)
+
+    def prune_config(self, content_base_url: str) -> list[str]:
+        """Delete :meth:`stale_config`'s objects, listed first; returns their keys.
+
+        Raises:
+            DemandError: an object to delete is outside the managed prefixes (nothing is deleted then).
+        """
+        if not (stale := self.stale_config(content_base_url)):
+            return []
+        values = self.parameters()
+        managed = {(values[bucket], prefix) for bucket, prefix in CONFIG_PREFIXES.values()}
+        if foreign := [
+            f"s3://{bucket}/{key}"
+            for bucket, key in stale
+            if not any(bucket == b and key.startswith(p) for b, p in managed)
+        ]:
+            raise DemandError(f"refusing to prune outside the managed configuration prefixes: {foreign}")
+        log(f"pruning {len(stale)} stale configuration objects: {', '.join(f's3://{b}/{k}' for b, k in stale)}")
+        s3 = self.client("s3")
+        for bucket, key in stale:
+            s3.delete_object(Bucket=bucket, Key=key)
+        return [key for _, key in stale]
 
     def sync_config(self, content_base_url: str) -> list[str]:
         """Upload every rendered object S3 does not hold byte for byte, then read every one back and refuse a
@@ -1294,17 +1392,26 @@ class DemandStage:
             cluster=cluster, services=[service], WaiterConfig={"Delay": 15, "MaxAttempts": 80}
         )
 
-    def upload_config(self, content_base_url: str) -> list[str]:
-        """Sync the rendered configuration (:meth:`sync_config`) and, if anything changed, roll the tasks; returns the
-        keys uploaded. ``deploy`` runs it after every guidance deploy: the guidance uploads its configuration
-        directory only when its stack is created, so a changed setting would otherwise never reach an existing
-        stage."""
-        if uploaded := self.sync_config(content_base_url):
-            log(f"configuration changed ({', '.join(uploaded)}): rolling Prebid Server's tasks")
+    def upload_config(self, content_base_url: str, *, prune: bool = True) -> list[str]:
+        """Sync the rendered configuration (:meth:`sync_config`), then prune what it no longer holds
+        (:meth:`prune_config`, only once the upload read back), and if anything changed roll the tasks; returns the
+        keys uploaded and deleted. ``deploy`` runs it after every guidance deploy: the guidance uploads its
+        configuration directory only when its stack is created, so a changed setting would otherwise never reach an
+        existing stage, and it never deletes. Without ``prune`` (``--keep-stale``) the stale objects stay and are
+        only listed: the first step of a body-format change (docs/demand.md)."""
+        uploaded = self.sync_config(content_base_url)
+        if prune:
+            deleted = self.prune_config(content_base_url)
+        else:
+            deleted = []
+            if stale := self.stale_config(content_base_url):
+                log(f"keeping {len(stale)} stale configuration objects: {', '.join(f's3://{b}/{k}' for b, k in stale)}")
+        if changed := uploaded + deleted:
+            log(f"configuration changed ({', '.join(changed)}): rolling Prebid Server's tasks")
             self.roll()
         else:
             log("configuration in S3 is the rendered one")
-        return uploaded
+        return changed
 
     # ----- smoke ---------------------------------------------------------------------------------------------------
 
@@ -1314,15 +1421,16 @@ class DemandStage:
         return value
 
     def smoke(self) -> dict[str, Any]:
-        """A synthetic MediaTailor POST per grid duration (VAST 4.2, ``application/xml``), one without the origin
-        secret (blocked at the edge), one for an off-grid duration (400) and one for another path (blocked)."""
+        """A synthetic MediaTailor POST per smoke length (a VAST 4.2 pod, ``application/xml``), one for a missing
+        duration (an empty pod), one without the origin secret (blocked at the edge) and one for another path
+        (blocked)."""
         domain = self.parameters()[Parameter.CLOUDFRONT_DOMAIN]
         secret = self.origin_secret()
         results: dict[str, Any] = {}
         with httpx.Client(timeout=10) as http:
 
             def post(seconds: int, headers: Mapping[str, str]) -> httpx.Response:
-                body = {"ext": {"prebid": {"storedrequest": {"id": f"fast-pod-{seconds}s"}}}}
+                body = auction_body(seconds)
                 query = f"evid=1&upid=smoke&dur={seconds * 1001}"
                 sent = {
                     "Content-Type": "application/json",
@@ -1333,15 +1441,16 @@ class DemandStage:
                 }
                 return http.post(f"https://{domain}/openrtb2/auction?{query}", json=body, headers=sent)
 
-            for seconds in POD_SECONDS:
+            for seconds in (*SMOKE_SECONDS, SMOKE_OUT_OF_RANGE):
                 response = post(seconds, {"X-Fast-Origin": secret})
-                results[f"{seconds}s"] = {
+                key = f"{seconds}s" if seconds in SMOKE_SECONDS else f"out-of-range-{seconds}s"
+                results[key] = {
                     "status": response.status_code,
                     "content_type": response.headers.get("content-type", ""),
-                    "vast_4_2": response.text.startswith('<VAST version="4.2"'),
+                    "ads": vast_ads(response.text),
                 }
+            results["house-ads"] = {"count": len(self.house_ads())}
             results["no-secret"] = {"status": post(60, {}).status_code}
-            results["off-grid-31s"] = {"status": post(31, {"X-Fast-Origin": secret}).status_code}
             results["other-path"] = {"status": http.get(f"https://{domain}/info/bidders").status_code}
         if self.config.modules.demand.mode == "demo":
             demo = self.demo_index()

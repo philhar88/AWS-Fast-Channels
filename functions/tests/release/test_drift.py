@@ -13,11 +13,10 @@ from pydantic import SecretStr
 
 from fast_channels.core import specs
 from fast_channels.core.ad_server import AdServer, AdServerContribution, ads_url
-from fast_channels.core.ad_server import stored_request_id as adsrv_stored_request_id
 from fast_channels.core.monetization.bundle import AdServerRoute
 from fast_channels.core.monetization.playback import render, render_function
 from fast_channels.core.monetization.release import applied
-from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
+from fast_channels.core.pbs_config import stored_request_ids
 from fast_channels.functions.release import drift
 
 type Stub = Callable[[str], Stubber]
@@ -86,10 +85,7 @@ def test_the_auction_is_compared_with_the_origin_secret(kit: SimpleNamespace, st
     drift, and another secret there is drift, named by path."""
     mock = ads_url(AdServer.MOCK, mock_url="https://abc123.execute-api.us-east-1.amazonaws.com", sibling="{sibling}")
     bundle = kit.make_bundle(
-        stored_requests=[
-            *(stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
-            *(adsrv_stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
-        ],
+        stored_requests=list(stored_request_ids(ad_server=True)),
         contributions=[AdServerContribution(pbs_origin="https://d222222abcdef8.cloudfront.net")],
         ad_server=AdServerRoute(url=mock, origin=True),
     )

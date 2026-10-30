@@ -5,9 +5,11 @@ applied (``POLICY_UNAVAILABLE``, ``POLICY_HTTP_<status>``, ``NO_POLICY_HOOK``…
 starts with ``SELECT_FALLBACK`` when the pod is the auction's house ads instead of ``/select``'s answer; it ends with
 ``HOUSE_CONFIG`` when the pod is the kit's house ads from the module's configuration, because the break would
 otherwise have been empty. Metric filters count the lines, the policy fallbacks, the select fallbacks, the module's
-errors (an empty VAST, so the slate plays) and the configured house pods, leaving out the warm-up's and the herd's
-synthetic auctions (``warmup-<n>`` sessions on ``<prefix>-warmup``), which run on cold tasks by design. Two alarms
-watch the shares over 5 minutes:
+errors (an empty VAST, so the slate plays), the configured house pods and the breaks the module rejected (``REJECTED
+<code>``: a length outside 30-120 s, ``OUT_OF_RANGE``, or one it cannot read, ``UNREADABLE``; they air the slate and
+are no fallback, so no alarm counts them), leaving out the warm-up's and the herd's synthetic auctions
+(``warmup-<n>`` sessions on ``<prefix>-warmup``), which run on cold tasks by design. Two alarms watch the shares over
+5 minutes:
 
 - ``<prefix>-pds-policy-fallbacks``: more than 1% of breaks served without the policy (own book only, no viewer data);
 - ``<prefix>-pds-select-fallbacks``: more than 0.5% of pods built by the module from house bids, or empty after an
@@ -47,6 +49,9 @@ PATTERNS: Final = {
     "SelectFallbacks": f'{_POD} "SELECT_FALLBACK"',
     "PodErrors": f'{_POD} "error"',
     "HouseFromConfig": f'{_POD} "HOUSE_CONFIG"',
+    "PodsRejected": f'{_POD} "REJECTED"',
+    "PodsRejectedOutOfRange": f'{_POD} "REJECTED OUT_OF_RANGE"',
+    "PodsRejectedUnreadable": f'{_POD} "REJECTED UNREADABLE"',
 }
 """Metric name -> the filter pattern of the module's lines it counts."""
 

@@ -4,8 +4,9 @@
 [0002](0002-l2-constructs-over-solutions-constructs.md), exception A). It is accepted when the demand and Pod Decision
 Service modules pass their end-to-end legs. Its placement of the Pod Decision Service is superseded, and its
 deployment of the guidance amended (a wrapper of the guidance's app adds the sidecar), by
-[0036](0036-pds-sidecar-in-the-prebid-server-task.md). Amended on 2026-10-30: Prebid Server Java 4.4.0 is the only
-supported release, and `modules.demand.pbs_version` is gone (see "The Prebid Server Java release" below).
+[0036](0036-pds-sidecar-in-the-prebid-server-task.md). Amended on 2026-10-30, twice: Prebid Server Java 4.4.0 is the only
+supported release, and `modules.demand.pbs_version` is gone (see "The Prebid Server Java release" below); and one
+stored request per route replaces the per-length ones (see "Stored requests" below).
 
 ## Context
 The optional demand module ([docs/demand.md](../demand.md)) puts an auction behind the channel's ad breaks.
@@ -80,13 +81,18 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   `/openrtb2/*` without the stage's origin secret (one of two values, for rotation).
 - **The body-template rule.** The body carries only constants and MediaTailor's own variables (`session.uuid`,
   `session.avail_duration_secs`, `scte.event_id`), each inside a JSON string:
-  `{"ext":{"prebid":{"storedrequest":{"id":"fast-pod-{{session.avail_duration_secs}}s"}}}}`. Values a player can set,
-  including the playback ticket, travel only in header templates.
-- **Stored requests name the own book only.** `fast-pod-{30,60,90,120}s` and the `fast-pod-kids-*` variants hold one
-  pod of one to four 30 s slots for the own book, a `generic` alias on the Pod Decision Service. Third-party bidders,
-  IDs and user data are added only by the fast-ctv policy hook, after a positive, in-time answer from the Pod Decision
-  Service. A hook that is skipped, slow, failing or absent therefore leaves the own book and house ads: no
-  third-party call.
+  `{"ext":{"prebid":{"storedrequest":{"id":"fast-pod"}},"fast":{"pod_s":"{{session.avail_duration_secs}}"}}}`. Values
+  a player can set, including the playback ticket, travel only in header templates.
+- **Stored requests: one per route, naming the own book only.** `fast-pod` (and `fast-pod-kids`, with `regs.coppa` 1)
+  holds a template pod of one 30 s slot for the own book, a `generic` alias on the Pod Decision Service, and
+  `ext.fast.slot_s` 30. The fast-ctv module shapes it to the break in its policy hook, before anything else reads the
+  request: one slot per whole 30 s of `ext.fast.pod_s`, `poddur` the break's length, for 30 to 120 s
+  (`hooks.fast-ctv.pod-min-s`, `pod-max-s`), and it removes `ext.fast` before any bidder sees it. The amendment of
+  2026-10-30 replaced the eight per-length stored requests (`fast-pod-{30,60,90,120}s` and the kids variants), which
+  named the length in the id, so a break off the grid, such as a mid-break joiner's remainder (ADR 0021), named none.
+  Third-party bidders, IDs and user data are added only by the policy hook, after a positive, in-time answer from the
+  Pod Decision Service. A hook that is skipped, slow, failing or absent therefore leaves the own book and house ads:
+  no third-party call.
 - **One rendered configuration per stage** (`core/pbs_config.py`):
   - the guidance's five shipped adapters off, and its simulator on in demo mode only;
   - `server.http.server-instances` = vCPU;
@@ -116,7 +122,10 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   minimum). Destroying it leaves the guidance's KMS keys pending deletion for 7 days.
 - The OpenRTB 2.6 content fields reach bidders first-class, so the Pod Decision Service has one carriage. There is
   no rollback to 3.43.0: a stage that needs it would need the `app.content.ext` carriage back.
-- A break off the 30.03 s grid, or with a missing duration (MediaTailor sends 300 s), names a stored request that does
-  not exist. Prebid Server answers 400, and the Channel Assembly slate plays.
+- Any break from 30 to 120 s gets a pod, on the 30.03 s grid or not. A shorter or longer break, a missing duration
+  (MediaTailor sends 300 s) or an unreadable one is rejected by the module, which answers an empty VAST 4.2 document,
+  and the Channel Assembly slate plays.
+- The deploy prunes the configuration it no longer renders from the guidance's buckets (`upload-config`), so the
+  per-length stored requests of a stage deployed before the amendment are deleted at its next deploy.
 - When AWS publishes the guidance as a construct library, the overlays become construct properties and the app can
   be composed.

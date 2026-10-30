@@ -197,7 +197,7 @@ def test_the_bundle_routes_the_pair_to_the_ad_server(deployment: GetDeployment, 
         "fastm_demo_p_b_pa_auction",
         "fastm_ps_hb",
     }
-    assert "fast-adsrv-pod-60s" in bundle.stored_requests
+    assert {"fast-adsrv-pod", "fast-adsrv-pod-kids"} <= set(bundle.stored_requests)
     a = next(s for s in bundle.siblings if s.letter == "a")
     if overrides is MOCK:  # the mock's URL is the Demand stack's parameter, resolved at deploy
         assert a.playback.ad_decision_server_url.startswith("https://cdk-token-")

@@ -35,8 +35,7 @@ def stage_bundle(*contributions: Any) -> Bundle:
         content_base_url="https://d111111abcdef8.cloudfront.net",
         pbs_origin="https://d222222abcdef8.cloudfront.net",
         log_percent=100,
-        stored_requests=[f"fast-pod-{s}s" for s in (30, 60, 90, 120)]
-        + [f"fast-pod-kids-{s}s" for s in (30, 60, 90, 120)],
+        stored_requests=["fast-pod", "fast-pod-kids"],
         grid_seconds=[30, 60, 90, 120],
         contributions=contributions,
     )
