@@ -559,7 +559,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "SimulatorFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY38B072FC": {
+    "SimulatorFunctionInvokeFromSimulatorGroupF6D24563": {
       "Properties": {
         "Action": "lambda:InvokeFunction",
         "FunctionName": {
@@ -568,7 +568,9 @@
             "Arn"
           ]
         },
-        "Principal": "elasticloadbalancing.amazonaws.com"
+        "Principal": "elasticloadbalancing.amazonaws.com",
+        "SourceAccount": "123456789012",
+        "SourceArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-demand-simulator/*"
       },
       "Type": "AWS::Lambda::Permission"
     },
@@ -649,9 +651,10 @@
     },
     "SimulatorLoadBalancerHttpSimulatorGroup0495C406": {
       "DependsOn": [
-        "SimulatorFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY38B072FC"
+        "SimulatorFunctionInvokeFromSimulatorGroupF6D24563"
       ],
       "Properties": {
+        "Name": "fastm-demand-simulator",
         "Tags": [
           {
             "Key": "fast:app",

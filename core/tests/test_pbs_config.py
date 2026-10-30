@@ -147,14 +147,14 @@ def test_stored_request_ids() -> None:
 
 
 def test_account_runs_both_hooks_inside_their_group_timeouts() -> None:
-    settings = SETTINGS.model_copy(update={"policy_group_timeout_ms": 200, "select_group_timeout_ms": 250})
+    settings = SETTINGS.model_copy(update={"policy_group_timeout_ms": 200, "select_group_timeout_ms": 300})
     stages = account(settings)["hooks"]["execution-plan"]["endpoints"]["/openrtb2/auction"]["stages"]
 
     assert stages["processed-auction-request"]["groups"] == [
         {"timeout": 200, "hook-sequence": [{"module-code": "fast-ctv", "hook-impl-code": POLICY_HOOK}]}
     ]
     assert stages["exitpoint"]["groups"] == [
-        {"timeout": 250, "hook-sequence": [{"module-code": "fast-ctv", "hook-impl-code": VAST_HOOK}]}
+        {"timeout": 300, "hook-sequence": [{"module-code": "fast-ctv", "hook-impl-code": VAST_HOOK}]}
     ]
 
 
@@ -195,9 +195,9 @@ def test_the_own_book_and_the_module_call_the_pds_on_its_stable_private_name() -
     assert module == {
         "enabled": True,
         "policy-url": "http://pds.fastm.fast.internal/policy",
-        "policy-timeout-ms": 50,
+        "policy-timeout-ms": 80,
         "select-url": "http://pds.fastm.fast.internal/select",
-        "select-timeout-ms": 150,
+        "select-timeout-ms": 200,
         "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
         "log-requests": True,
     }

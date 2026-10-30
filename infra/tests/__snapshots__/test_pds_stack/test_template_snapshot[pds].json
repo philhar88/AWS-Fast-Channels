@@ -284,7 +284,7 @@
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"Provision1\"}, \"Release0\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 20}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"Provision1\"}, \"Release0\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
               {
                 "Fn::GetAtt": [
                   "PolicyFunction9D28D7E5",
@@ -298,7 +298,7 @@
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"Provision2\"}, \"Release1\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 20}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Next\": \"Provision2\"}, \"Release1\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
               {
                 "Fn::GetAtt": [
                   "OwnBookFunction8D395A29",
@@ -312,7 +312,7 @@
                   "Arn"
                 ]
               },
-              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 2}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"Release2\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
+              "\", \"Qualifier\": \"live\", \"ProvisionedConcurrentExecutions\": 30}, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 5, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"End\": true}, \"Release2\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig\", \"Arguments\": {\"FunctionName\": \"",
               {
                 "Fn::GetAtt": [
                   "SelectFunction95C0A89B",
@@ -1693,7 +1693,7 @@
           },
           "SystemLogLevel": "INFO"
         },
-        "MemorySize": 1024,
+        "MemorySize": 1769,
         "RecursiveLoop": "Terminate",
         "Role": {
           "Fn::GetAtt": [
@@ -1723,7 +1723,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "OwnBookFunctionCurrentVersionCD3D78F8acfa73e27c0d0777c9423ab8fcef02af": {
+    "OwnBookFunctionCurrentVersionCD3D78F8589aceca2518e3c2bbe8e63c45f9054d": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -1860,7 +1860,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "OwnBookFunctionCurrentVersionCD3D78F8acfa73e27c0d0777c9423ab8fcef02af",
+            "OwnBookFunctionCurrentVersionCD3D78F8589aceca2518e3c2bbe8e63c45f9054d",
             "Version"
           ]
         },
@@ -1868,13 +1868,15 @@
       },
       "Type": "AWS::Lambda::Alias"
     },
-    "OwnBookLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY5C93CB3F": {
+    "OwnBookLiveInvokeFromTargetOwnbookA59B8D35": {
       "Properties": {
         "Action": "lambda:InvokeFunction",
         "FunctionName": {
           "Ref": "OwnBookLive3FCE23DA"
         },
-        "Principal": "elasticloadbalancing.amazonaws.com"
+        "Principal": "elasticloadbalancing.amazonaws.com",
+        "SourceAccount": "123456789012",
+        "SourceArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pds-ownbook/*"
       },
       "Type": "AWS::Lambda::Permission"
     },
@@ -1911,7 +1913,7 @@
           },
           "SystemLogLevel": "INFO"
         },
-        "MemorySize": 1024,
+        "MemorySize": 1769,
         "RecursiveLoop": "Terminate",
         "Role": {
           "Fn::GetAtt": [
@@ -1941,7 +1943,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PolicyFunctionCurrentVersion517C64EEa54b2a22aacd23311c88f882c951de7b": {
+    "PolicyFunctionCurrentVersion517C64EE3e06a5cb690ba70bf462b9bd8779fcb7": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -2066,7 +2068,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "PolicyFunctionCurrentVersion517C64EEa54b2a22aacd23311c88f882c951de7b",
+            "PolicyFunctionCurrentVersion517C64EE3e06a5cb690ba70bf462b9bd8779fcb7",
             "Version"
           ]
         },
@@ -2074,13 +2076,15 @@
       },
       "Type": "AWS::Lambda::Alias"
     },
-    "PolicyLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY75460003": {
+    "PolicyLiveInvokeFromTargetPolicyAD9E5B4A": {
       "Properties": {
         "Action": "lambda:InvokeFunction",
         "FunctionName": {
           "Ref": "PolicyLive6AD5E16F"
         },
-        "Principal": "elasticloadbalancing.amazonaws.com"
+        "Principal": "elasticloadbalancing.amazonaws.com",
+        "SourceAccount": "123456789012",
+        "SourceArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pds-policy/*"
       },
       "Type": "AWS::Lambda::Permission"
     },
@@ -2728,7 +2732,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PublisherFunctionCurrentVersion0CCBEA0600b66b81dba8dc576d11fa67a0e2ec05": {
+    "PublisherFunctionCurrentVersion0CCBEA063be1fc3fc255c43313f0c6e64a524696": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -3050,7 +3054,7 @@
       "Properties": {
         "ExecuteOnHandlerChange": true,
         "HandlerArn": {
-          "Ref": "PublisherFunctionCurrentVersion0CCBEA0600b66b81dba8dc576d11fa67a0e2ec05"
+          "Ref": "PublisherFunctionCurrentVersion0CCBEA063be1fc3fc255c43313f0c6e64a524696"
         },
         "InvocationType": "RequestResponse",
         "ServiceToken": {
@@ -3199,7 +3203,7 @@
           },
           "SystemLogLevel": "INFO"
         },
-        "MemorySize": 1024,
+        "MemorySize": 1769,
         "RecursiveLoop": "Terminate",
         "Role": {
           "Fn::GetAtt": [
@@ -3229,7 +3233,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "SelectFunctionCurrentVersion7190FF88f2e698d7eefc91a021ce6e424bd54997": {
+    "SelectFunctionCurrentVersion7190FF888ec22c8cd9511999f9e169d926833a7d": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -3403,7 +3407,7 @@
         },
         "FunctionVersion": {
           "Fn::GetAtt": [
-            "SelectFunctionCurrentVersion7190FF88f2e698d7eefc91a021ce6e424bd54997",
+            "SelectFunctionCurrentVersion7190FF888ec22c8cd9511999f9e169d926833a7d",
             "Version"
           ]
         },
@@ -3411,13 +3415,15 @@
       },
       "Type": "AWS::Lambda::Alias"
     },
-    "SelectLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY56ED183C": {
+    "SelectLiveInvokeFromTargetSelect08658E9A": {
       "Properties": {
         "Action": "lambda:InvokeFunction",
         "FunctionName": {
           "Ref": "SelectLive5CCF2B7E"
         },
-        "Principal": "elasticloadbalancing.amazonaws.com"
+        "Principal": "elasticloadbalancing.amazonaws.com",
+        "SourceAccount": "123456789012",
+        "SourceArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pds-select/*"
       },
       "Type": "AWS::Lambda::Permission"
     },
@@ -3898,6 +3904,10 @@
             "Value": "false"
           },
           {
+            "Key": "idle_timeout.timeout_seconds",
+            "Value": "120"
+          },
+          {
             "Key": "routing.http.drop_invalid_header_fields.enabled",
             "Value": "true"
           }
@@ -4198,9 +4208,10 @@
     },
     "ServiceTargetOwnbook8A9C27E5": {
       "DependsOn": [
-        "OwnBookLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY5C93CB3F"
+        "OwnBookLiveInvokeFromTargetOwnbookA59B8D35"
       ],
       "Properties": {
+        "Name": "fastm-pds-ownbook",
         "Tags": [
           {
             "Key": "fast:app",
@@ -4228,9 +4239,10 @@
     },
     "ServiceTargetPolicyEDAE9969": {
       "DependsOn": [
-        "PolicyLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY75460003"
+        "PolicyLiveInvokeFromTargetPolicyAD9E5B4A"
       ],
       "Properties": {
+        "Name": "fastm-pds-policy",
         "Tags": [
           {
             "Key": "fast:app",
@@ -4258,9 +4270,10 @@
     },
     "ServiceTargetSelect5A512C36": {
       "DependsOn": [
-        "SelectLiveInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY56ED183C"
+        "SelectLiveInvokeFromTargetSelect08658E9A"
       ],
       "Properties": {
+        "Name": "fastm-pds-select",
         "Tags": [
           {
             "Key": "fast:app",

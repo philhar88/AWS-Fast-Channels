@@ -11,7 +11,8 @@ the census gate that keeps the functions warm while channels run.
 - :class:`PdsCensusGate`: a JSONata state machine on ``Census Changed``. It sets ``provisioned_concurrency`` on every
   alias when the first channel starts, and removes it 15 minutes after the last one stops if none runs then.
 
-Why in the VPC and warm: ``/policy`` has 50 ms. Reached over API Gateway and a NAT gateway, a third of MediaTailor's
+Why in the VPC and warm: ``/policy`` has 80 ms, of which the load balancer's Lambda invoke takes 20-40 ms. Reached over
+API Gateway and a NAT gateway, a third of MediaTailor's
 auctions fell back to the own book (every first break: a cold function and cold connections).
 """
 
@@ -22,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Final
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_elasticloadbalancingv2 as elbv2
-from aws_cdk import aws_elasticloadbalancingv2_targets as targets
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as events_targets
 from aws_cdk import aws_lambda as lambda_
@@ -35,9 +35,10 @@ from constructs import Construct
 
 from fast_channels.core.demand import SCALE_IN_AFTER_SECONDS
 from fast_channels.core.events import DETAIL_TYPES, CensusChanged, event_source
-from fast_channels.core.pds.names import ALIAS, RECORD, Endpoint, census_gate
+from fast_channels.core.pds.names import ALIAS, RECORD, Endpoint, census_gate, target_group
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.functions import FastFunction
+from fast_channels.infra.constructs.lambda_target import ScopedLambdaTarget
 from fast_channels.infra.grants import allow
 
 if TYPE_CHECKING:
@@ -45,9 +46,14 @@ if TYPE_CHECKING:
 
 PORT: Final = 80
 TIMEOUT: Final = Duration.seconds(3)
-"""Far above any caller's budget (the module waits 50 to 150 ms): the module always gives up first."""
-MEMORY_MB: Final = 1024
-"""Lambda's CPU scales with memory; the decision path is CPU-bound (JSON, pydantic)."""
+"""Far above any caller's budget (the module waits 80 to 200 ms): the module always gives up first."""
+MEMORY_MB: Final = 1769
+"""One vCPU: Lambda's CPU scales with memory, and the decision path is CPU-bound (JSON, pydantic, and after an idle
+spell the TLS handshake that reopens the connection to DynamoDB). Measured on fastcid (M2-x2): the first ``/select``
+after 90-180 s idle took 84-128 ms in the handler at 1,024 MB and 30-94 ms at 1,769 MB."""
+IDLE_TIMEOUT: Final = Duration.seconds(120)
+"""Above Prebid Server's HTTP client keep-alive (Vert.x's 60 s default; ``http-client.idle-timeout-ms`` is 0), so the
+client closes an idle connection first; with both at 60 s a request could race the load balancer's close."""
 WHY_LOGS: Final = "Every request is logged by its function as a decision record; the balancer adds nothing to them"
 
 
@@ -79,6 +85,7 @@ class PdsFunction(Construct):
         self.function = FastFunction(
             self,
             "Function",
+            compiled=True,  # a cold start is on the module's deadline
             handler=handler,
             description=description,
             environment=environment,
@@ -137,6 +144,7 @@ class PdsService(Construct):
             security_group=security_group,
             vpc_subnets=ec2.SubnetSelection(subnets=vpc.private_subnets),
             drop_invalid_header_fields=True,
+            idle_timeout=IDLE_TIMEOUT,
         )
         self.listener = self.load_balancer.add_listener(
             "Http",
@@ -154,13 +162,18 @@ class PdsService(Construct):
             target=route53.RecordTarget.from_alias(route53_targets.LoadBalancerTarget(self.load_balancer)),
         )
         nag.acknowledge(self.load_balancer, {"AwsSolutions-ELB2": WHY_LOGS})
+        self._prefix = prefix
         self._priority = 0
 
     def add_endpoint(self, endpoint: Endpoint, function: PdsFunction) -> elbv2.ApplicationTargetGroup:
         """Route ``POST <endpoint>`` to ``function``'s ``live`` alias."""
         self._priority += 10
+        name = target_group(self._prefix, endpoint)
         group = elbv2.ApplicationTargetGroup(
-            self, f"Target{endpoint.function_suffix.title()}", targets=[targets.LambdaTarget(function.alias)]
+            self,
+            f"Target{endpoint.function_suffix.title()}",
+            target_group_name=name,
+            targets=[ScopedLambdaTarget(function.alias, name)],
         )
         self.listener.add_target_groups(
             f"Route{endpoint.function_suffix.title()}",
@@ -174,10 +187,10 @@ class PdsService(Construct):
         return group
 
 
-def census_gate_definition(*, functions: Sequence[str], parameter: str, concurrency: int) -> dict[str, Any]:
-    """The gate's JSONata state machine: provisioned concurrency on the ``live`` alias of each function in
-    ``functions`` (ARNs) while any channel runs. With ``concurrency`` 0 every event releases it, so turning it off
-    also removes what an earlier configuration set.
+def census_gate_definition(*, functions: Sequence[tuple[str, int]], parameter: str) -> dict[str, Any]:
+    """The gate's JSONata state machine: each function's provisioned concurrency (``functions``: ARN and count) on its
+    ``live`` alias while any channel runs. A count of 0 removes the function's, and with every count 0 every event
+    releases them all, so turning it off also removes what an earlier configuration set.
 
     Overlapping executions are possible (a stop, a start and a stop within 15 minutes): the first stop's execution
     then releases 15 minutes after it, while no channel runs, which only shortens the grace period. A channel that
@@ -185,16 +198,17 @@ def census_gate_definition(*, functions: Sequence[str], parameter: str, concurre
     """
     retry = [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2}]
     absent = ["Lambda.ResourceNotFoundException", "Lambda.ProvisionedConcurrencyConfigNotFoundException"]
+    provisioned = any(concurrency for _, concurrency in functions)
     states: dict[str, Any] = {
         "AnyChannel": {
             "Type": "Choice",
             "Choices": [
                 {
                     "Condition": "{% $states.input.detail.running > 0 %}",
-                    "Next": "Provision0" if concurrency else "Release0",
+                    "Next": "Provision0" if provisioned else "Release0",
                 }
             ],
-            "Default": "WaitBeforeRelease" if concurrency else "Release0",
+            "Default": "WaitBeforeRelease" if provisioned else "Release0",
         },
         "WaitBeforeRelease": {"Type": "Wait", "Seconds": SCALE_IN_AFTER_SECONDS, "Next": "StillNoChannel"},
         "StillNoChannel": {
@@ -212,26 +226,41 @@ def census_gate_definition(*, functions: Sequence[str], parameter: str, concurre
         },
         "ChannelsBack": {"Type": "Succeed"},
     }
-    for index, function in enumerate(functions):
+    release_retry = [{**retry[0], "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.ServiceException"]}]
+    for index, (function, concurrency) in enumerate(functions):
         last = index == len(functions) - 1
-        if concurrency:
-            states[f"Provision{index}"] = {
-                "Type": "Task",
-                "Resource": "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig",
-                "Arguments": {
-                    "FunctionName": function,
-                    "Qualifier": ALIAS,
-                    "ProvisionedConcurrentExecutions": concurrency,
-                },
-                "Retry": retry,
-                **({"End": True} if last else {"Next": f"Provision{index + 1}"}),
-            }
+        if provisioned:
+            then = {"End": True} if last else {"Next": f"Provision{index + 1}"}
+            states[f"Provision{index}"] = (
+                {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig",
+                    "Arguments": {
+                        "FunctionName": function,
+                        "Qualifier": ALIAS,
+                        "ProvisionedConcurrentExecutions": concurrency,
+                    },
+                    "Retry": retry,
+                    **then,
+                }
+                if concurrency
+                else {  # this function gets none: what an earlier configuration set goes
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig",
+                    "Arguments": {"FunctionName": function, "Qualifier": ALIAS},
+                    "Retry": release_retry,
+                    "Catch": [{"ErrorEquals": absent, "Next": f"Unprovisioned{index}"}],
+                    **then,
+                }
+            )
+            if not concurrency:
+                states[f"Unprovisioned{index}"] = {"Type": "Pass", **then}
         following = {"End": True} if last else {"Next": f"Release{index + 1}"}
         states[f"Release{index}"] = {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig",
             "Arguments": {"FunctionName": function, "Qualifier": ALIAS},
-            "Retry": [{**retry[0], "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.ServiceException"]}],
+            "Retry": release_retry,
             "Catch": [{"ErrorEquals": absent, "Next": f"Released{index}"}],
             **following,
         }
@@ -249,8 +278,8 @@ class PdsCensusGate(Construct):
 
     Args:
         prefix: the stage's prefix (its event bus).
-        functions: the PDS functions.
-        concurrency: provisioned concurrency per function while channels run (``modules.pds.provisioned_concurrency``).
+        functions: the hot-path PDS functions, each with its provisioned concurrency while channels run
+            (``modules.pds.provisioned_concurrency``).
         census_parameter: the census's last count (``/<prefix>/ops/running-channels``).
         log_retention: the state machine's log retention.
         dead_letters: where undeliverable ``Census Changed`` events go.
@@ -265,8 +294,7 @@ class PdsCensusGate(Construct):
         id: str,
         *,
         prefix: str,
-        functions: Sequence[PdsFunction],
-        concurrency: int,
+        functions: Sequence[tuple[PdsFunction, int]],
         census_parameter: str,
         log_retention: logs.RetentionDays,
         dead_letters: sqs.IQueue,
@@ -280,8 +308,8 @@ class PdsCensusGate(Construct):
             retention=log_retention,
             removal_policy=RemovalPolicy.DESTROY,
         )
-        arns = [function.function.function.function_arn for function in functions]
-        definition = census_gate_definition(functions=arns, parameter=census_parameter, concurrency=concurrency)
+        arns = [(function.function.function.function_arn, concurrency) for function, concurrency in functions]
+        definition = census_gate_definition(functions=arns, parameter=census_parameter)
         self.state_machine = sfn.StateMachine(
             self,
             "StateMachine",
@@ -295,7 +323,7 @@ class PdsCensusGate(Construct):
         allow(
             self.state_machine,
             ["lambda:PutProvisionedConcurrencyConfig", "lambda:DeleteProvisionedConcurrencyConfig"],
-            [function.alias.function_arn for function in functions],
+            [function.alias.function_arn for function, _ in functions],
         )
         allow(
             self.state_machine,

@@ -33,9 +33,9 @@ hooks:
   fast-ctv:
     enabled: true
     policy-url: "http://pds.fastm.fast.internal/policy"
-    policy-timeout-ms: 50
+    policy-timeout-ms: 80
     select-url: "http://pds.fastm.fast.internal/select"
-    select-timeout-ms: 150
+    select-timeout-ms: 200
     tracker-template: "https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
     log-requests: true
 metrics:

@@ -181,6 +181,46 @@ def test_the_load_balancer_answers_only_prebid_server_at_pds(deployment: GetDepl
     assert {a["Name"] for a in aliases.values()} == {"live"}
     assert all(g["TargetType"] == "lambda" for g in groups.values())
     assert sorted(g["Targets"][0]["Id"]["Ref"] for g in groups.values()) == sorted(aliases)
+    attributes = {a["Key"]: a["Value"] for a in balancer["LoadBalancerAttributes"]}
+    assert attributes["idle_timeout.timeout_seconds"] == "120"  # above Prebid Server's 60 s keep-alive
+
+
+def joined(value: Any) -> str:
+    """A CloudFormation string with its ``Ref``s as ``${name}``."""
+    match value:
+        case {"Fn::Join": [separator, parts]}:
+            return str(separator).join(joined(part) for part in parts)
+        case {"Ref": name}:
+            return f"${{{name}}}"
+        case str():
+            return value
+    raise AssertionError(f"not a string: {value}")
+
+
+def test_only_the_stages_own_target_groups_may_invoke_the_functions(deployment: GetDeployment) -> None:
+    """CDK's ``LambdaTarget`` lets Elastic Load Balancing invoke a function unconditioned, from any account's target
+    group (a confused deputy). Each alias's permission names the account and its target group, by the group's fixed
+    name, and exists before the group registers the target."""
+    d = deployment(PDS, extra=EXTRA)
+    resources_ = d.template(d.stage.pds).to_json()["Resources"]
+    groups = {k: r for k, r in resources_.items() if r["Type"] == "AWS::ElasticLoadBalancingV2::TargetGroup"}
+    permissions = {
+        k: r["Properties"]
+        for k, r in resources_.items()
+        if r["Type"] == "AWS::Lambda::Permission"
+        and r["Properties"]["Principal"] == "elasticloadbalancing.amazonaws.com"
+    }
+
+    names = sorted(g["Properties"]["Name"] for g in groups.values())
+    assert names == ["fastm-pds-ownbook", "fastm-pds-policy", "fastm-pds-select"]
+    account, region = d.stage.pds.account, d.stage.pds.region
+    arns = {joined(p["SourceArn"]) for p in permissions.values()}
+    assert {p["SourceAccount"] for p in permissions.values()} == {account}
+    assert arns == {f"arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{n}/*" for n in names}
+    for group in groups.values():
+        [alias] = [group["Properties"]["Targets"][0]["Id"]["Ref"]]
+        mine = [k for k, p in permissions.items() if p["FunctionName"] == {"Ref": alias}]
+        assert len(mine) == 1 and mine[0] in group["DependsOn"], (alias, group.get("DependsOn"))
 
 
 def test_the_policy_function_is_outside_the_vpc_and_reads_only_the_snapshot(deployment: GetDeployment) -> None:
@@ -193,7 +233,7 @@ def test_the_policy_function_is_outside_the_vpc_and_reads_only_the_snapshot(depl
     assert (policy["Runtime"], policy["Architectures"], policy["MemorySize"], policy["Timeout"]) == (
         "python3.14",
         ["arm64"],
-        1024,
+        1769,
         3,
     )
     assert set(policy["Environment"]["Variables"]) >= {"PDS_CONFIG_BUCKET", "FAST_PREFIX"}
@@ -253,7 +293,7 @@ def test_the_own_book_is_warm_and_reads_the_snapshot_and_budgets(deployment: Get
     name, own_book = function(template, OWN_BOOK)
 
     assert "VpcConfig" not in own_book
-    assert (own_book["MemorySize"], own_book["Timeout"]) == (1024, 3)
+    assert (own_book["MemorySize"], own_book["Timeout"]) == (1769, 3)
     assert set(own_book["Environment"]["Variables"]) >= {"PDS_CONFIG_BUCKET", "PDS_TABLE"}
     granted = statements(template, name[:-8] + "Role")
     assert {json.dumps(s["Action"]) for s in granted} >= {'"s3:GetObject"', '"dynamodb:BatchGetItem"'}
@@ -354,12 +394,13 @@ def test_the_census_gate_warms_the_functions_while_channels_run(deployment: GetD
     rule = only(template, "AWS::Events::Rule")
     assert rule["EventPattern"]["detail-type"] == ["Census Changed"]
 
-    cold = deployment({**PDS, "modules.pds.provisioned_concurrency": 0}, extra=EXTRA)
+    none = {"policy": 0, "select": 0, "ownbook": 0}
+    cold = deployment({**PDS, "modules.pds.provisioned_concurrency": none}, extra=EXTRA)
     assert cold.template(cold.stage.pds).find_resources("AWS::StepFunctions::StateMachine"), "it releases what was set"
 
 
 def test_without_provisioned_concurrency_the_gate_only_releases() -> None:
-    definition = census_gate_definition(functions=["arn:f1"], parameter="/p", concurrency=0)
+    definition = census_gate_definition(functions=[("arn:f1", 0), ("arn:f2", 0)], parameter="/p")
     states = definition["States"]
 
     assert not [name for name in states if name.startswith("Provision")]
@@ -369,18 +410,23 @@ def test_without_provisioned_concurrency_the_gate_only_releases() -> None:
 
 def test_census_gate_definition() -> None:
     definition = census_gate_definition(
-        functions=["arn:f1", "arn:f2"], parameter="/fastm/ops/running-channels", concurrency=2
+        functions=[("arn:f1", 20), ("arn:f2", 30), ("arn:f3", 0)], parameter="/fastm/ops/running-channels"
     )
     states = definition["States"]
 
-    assert states["Provision0"]["Next"] == "Provision1" and states["Provision1"]["End"]
+    assert states["Provision0"]["Next"] == "Provision1" and states["Provision1"]["Next"] == "Provision2"
     assert states["Provision1"]["Arguments"] == {
         "FunctionName": "arn:f2",
         "Qualifier": "live",
-        "ProvisionedConcurrentExecutions": 2,
+        "ProvisionedConcurrentExecutions": 30,
     }
+    assert states["Provision0"]["Arguments"]["ProvisionedConcurrentExecutions"] == 20
+    unprovision = states["Provision2"]  # a count of 0 removes what an earlier configuration set
+    assert unprovision["Resource"].endswith(":deleteProvisionedConcurrencyConfig") and unprovision["End"]
+    assert unprovision["Catch"][0]["Next"] == "Unprovisioned2" and states["Unprovisioned2"]["End"]
+    assert states["Release1"]["Next"] == "Release2" and states["Release2"]["End"]
     assert states["Release0"]["Next"] == "Release1" and states["Released0"]["Next"] == "Release1"
-    assert states["Release1"]["End"] and states["Released1"]["End"]
+    assert states["Released2"]["End"]
     assert states["WaitBeforeRelease"]["Seconds"] == 900
 
 
@@ -402,7 +448,7 @@ def test_select_reserves_line_ads_and_answers_with_our_tracker(deployment: GetDe
     name, select = function(template, SELECT)
 
     assert "VpcConfig" not in select
-    assert (select["MemorySize"], select["Timeout"]) == (1024, 3)
+    assert (select["MemorySize"], select["Timeout"]) == (1769, 3)
     assert set(select["Environment"]["Variables"]) >= {
         "PDS_CONFIG_BUCKET",
         "PDS_TABLE",

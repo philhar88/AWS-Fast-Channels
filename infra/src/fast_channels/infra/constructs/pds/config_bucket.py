@@ -119,6 +119,7 @@ class SnapshotPublisher(Construct):
         self.function = FastFunction(
             self,
             "Function",
+            compiled=True,  # the Pds stack's one code asset: precompiled, for the endpoints' cold starts
             handler=HANDLER,
             description="PDS: publish the snapshot (demand, floor, CloudFront origin-facing networks, own book) "
             "and the lines' budgets",

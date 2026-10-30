@@ -11,7 +11,6 @@ from typing import Final
 from aws_cdk import Annotations, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_elasticloadbalancingv2 as elbv2
-from aws_cdk import aws_elasticloadbalancingv2_targets as targets
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
@@ -23,6 +22,7 @@ from constructs import Construct
 from fast_channels.core.demand import assets_bucket, simulator_function
 from fast_channels.core.pbs_config import SIMULATOR_RECORD
 from fast_channels.infra import nag
+from fast_channels.infra.constructs.lambda_target import ScopedLambdaTarget
 
 SIMULATOR_ENVIRONMENT: Final = {
     "BID_RESPONSES_DELAY_PERCENTAGE": "0",
@@ -115,7 +115,11 @@ class LambdaSimulator(Construct):
             drop_invalid_header_fields=True,
         )
         listener = self.load_balancer.add_listener("Http", port=80, open=False)
-        listener.add_targets("Simulator", targets=[targets.LambdaTarget(self.function)])
+        listener.add_targets(  # the target group shares the function's name
+            "Simulator",
+            target_group_name=simulator_function(prefix),
+            targets=[ScopedLambdaTarget(self.function, simulator_function(prefix))],
+        )
         route53.ARecord(
             self,
             "Record",

@@ -118,7 +118,7 @@ operations signal, never air time.
 | `demand` | A request without the stage's origin secret | The origin's WAF rule group blocks it at the edge (403) |
 | `demand` | A break length off the 30.03 s grid | The stored request does not exist: Prebid Server answers 400 and the slate plays |
 | `demand` | A new Prebid Server task is still cold | The warm-up waits until the task is a healthy target, then sends it probe auctions, which only the own book and house ads answer. Cold tasks time out on more `/policy` calls (2.6 % during a measured warm-up), so real traffic should start after it: open a daypart at least 10 minutes before its first break |
-| `pds` | `/policy` misses its 50 ms timeout | The module serves the break from the own book only (`POLICY_UNAVAILABLE`). Measured at 200 auctions/s: 0.13 % of auctions fell back, p99 32 ms |
+| `pds` | `/policy` misses its 80 ms timeout | The module serves the break from the own book only (`POLICY_UNAVAILABLE`). Measured at 200 auctions/s with 50 ms: 0.13 % of auctions fell back, p99 32 ms. A channel with breaks minutes apart pays the load balancer's Lambda invoke cold: 25-50 ms at the module, so 50 ms timed out one break in eight |
 | `pds` | The function has never read its snapshot | It allows no third-party bidder and passes no viewer address |
 | `pds` | `/select` is missing or failing | The module renders a house-only pod (`SELECT_FALLBACK`) |
 | `crawl` | The publisher cannot use a catalog item | It logs the error, counts it in `ContextsInvalid` and leaves the title's object as it was. A trigger that still fails after its retries goes to a dead-letter queue, whose alarm `<prefix>-crawl-publisher-dead-letters` notifies the alert topic |
@@ -146,7 +146,7 @@ These are us-east-1 list prices, rounded. Lines marked *measured* come from runs
 | `models` | Nothing: an on-demand table, standard SSM parameters, and inference profiles, which cost nothing of their own | Bedrock tokens as before (about $0.003–0.006 per schedule with Claude Haiku 5.5), plus a few DynamoDB writes per run |
 | `demand`, before `make deploy-demand` | Two Secrets Manager secrets ($0.40 each a month), the WAF rule group, the image repository's storage | — |
 | `demand`, guidance deployed | About $120–150 a month: two NAT gateways, the load balancers, the web ACL and the Valkey cache minimum. The `guidance_stack` simulator (the default) adds its own VPC with two more NAT gateways and a load balancer, about $90 a month more at list prices; the `lambda` simulator adds an internal load balancer instead (about $16 a month) | Prebid Server tasks at $0.0987 per task-hour (2 vCPU, 4 GB, x86 Fargate). The tier minimum (`tasks.min`) is 2 tasks, scaled to 0 fifteen minutes after the last channel stops |
-| `pds` | Its internal load balancer (about $16 a month); the table and buckets on demand | Provisioned concurrency on the `/policy` alias (2 × 1,024 MB on arm64 by default, under $0.03 an hour), set and removed by the census gate |
+| `pds` | Its internal load balancer (about $16 a month); the table and buckets on demand | Provisioned concurrency on the `/policy`, `/select` and `/ownbook/openrtb` aliases (20, 30 and 20 × 1,769 MB on arm64 by default, sized for a 100-session break herd: about $1.45 an hour while any channel runs), set and removed by the census gate |
 | `release` | Nothing: so far it only widens channel policies | — |
 | `crawl` | One alarm ($0.10 a month); the publisher's runs, S3 objects and CloudFront requests cost well under a cent at demo scale (*measured*) | The same |
 

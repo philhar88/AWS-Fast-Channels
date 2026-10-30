@@ -121,11 +121,15 @@
         },
         "pds": {
           "enabled": false,
-          "policy_timeout_ms": 50,
-          "policy_group_timeout_ms": 80,
-          "select_timeout_ms": 150,
-          "select_group_timeout_ms": 200,
-          "provisioned_concurrency": 2,
+          "policy_timeout_ms": 80,
+          "policy_group_timeout_ms": 110,
+          "select_timeout_ms": 200,
+          "select_group_timeout_ms": 250,
+          "provisioned_concurrency": {
+            "policy": 20,
+            "select": 30,
+            "ownbook": 20
+          },
           "demo_lines": []
         },
         "release": {
