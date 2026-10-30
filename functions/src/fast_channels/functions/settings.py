@@ -73,9 +73,6 @@ class Settings:
         default_factory=lambda: int(raw) if (raw := _env("CRAWL_HOLDOUT_PERCENT")) else None
     )
     """Share of session-breaks in the crawl module's ``crawl-v1`` holdout; None when the module is off."""
-    pbs_version: str = field(default_factory=lambda: _env("PBS_VERSION"))
-    """The stage's Prebid Server (Java) release (``modules.demand.pbs_version``), which decides how the PDS sends
-    the OpenRTB 2.6 content fields."""
     region: str = field(default_factory=lambda: _env("AWS_REGION"))
     ledger_table: str = field(default_factory=lambda: _env("LEDGER_TABLE"))
     """The ops module's ledger table (``<prefix>-ledger``)."""

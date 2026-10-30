@@ -87,12 +87,11 @@ def request(**fields: Any) -> PolicyRequest:
     return PolicyRequest.model_validate(base | fields)
 
 
-def contributor(contexts: dict[str, CatalogContext] | None = None, *, native: bool = False) -> CrawlContributor:
+def contributor(contexts: dict[str, CatalogContext] | None = None) -> CrawlContributor:
     copy = CONTEXTS if contexts is None else contexts
     return CrawlContributor(
         contexts=lambda: copy,
         holdout_percent=20,
-        native=native,
         publisher_domain=PUBLISHER,
         genre_names=load_taxonomy(),
     )
@@ -129,18 +128,14 @@ def test_the_enriched_arm_gets_the_titles_content_from_the_copy() -> None:
         "Tears of Steel",
         {"id": "fastm-demo", "domain": PUBLISHER},
     )
-    assert content["ext"] == {
+    assert "ext" not in content, "the OpenRTB 2.6 fields are native on Prebid Server Java 4.4.0"
+    assert {key: content[key] for key in ("realtime", "firstbroadcast", "genres", "gtax", "data")} == {
         "realtime": 0,
         "firstbroadcast": 0,
         "genres": ["652", "325"],
         "gtax": 9,
         "data": [{"name": PUBLISHER, "cids": ["tears-of-steel"]}],
     }
-
-
-def test_on_4_4_the_fields_are_native() -> None:
-    content = contributor(native=True).contribute(request(), Mode.CONTEXTUAL).app_content
-    assert "ext" not in content and content["genres"] == ["652", "325"] and content["gtax"] == 9
 
 
 def test_the_holdout_gets_nothing_but_its_record() -> None:
@@ -314,7 +309,6 @@ def crawl_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name, value in {
         "CRAWL_HOLDOUT_PERCENT": "20",
         "CATALOG_CONTEXT_BUCKET": BUCKET,
-        "PBS_VERSION": "3.43.0",
         "PUBLISHER_DOMAIN": PUBLISHER,
     }.items():
         monkeypatch.setenv(name, value)
@@ -343,23 +337,19 @@ def test_off_without_the_holdout_setting() -> None:
 
 
 @pytest.mark.usefixtures("crawl_on")
-@pytest.mark.parametrize(("version", "native"), [("3.43.0", False), ("4.4.0", True)])
-def test_on_with_the_stages_settings(monkeypatch: pytest.MonkeyPatch, version: str, native: bool) -> None:
-    monkeypatch.setenv("PBS_VERSION", version)
-    settings.cache_clear()
+def test_on_with_the_stages_settings() -> None:
     built = patch.contributor()
     assert built is not None
-    assert (built.holdout_percent, built.native, built.publisher_domain) == (20, native, PUBLISHER)
+    assert (built.holdout_percent, built.publisher_domain) == (20, PUBLISHER)
     assert patch.catalog_contexts()._bucket == BUCKET
     assert policy.contributors() == (built,)
 
 
 @pytest.mark.usefixtures("crawl_on")
-@pytest.mark.parametrize("missing", ["CATALOG_CONTEXT_BUCKET", "PBS_VERSION"])
-def test_on_without_its_bucket_or_release_fails_loudly(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
-    monkeypatch.delenv(missing)
+def test_on_without_its_bucket_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CATALOG_CONTEXT_BUCKET")
     settings.cache_clear()
-    with pytest.raises(RuntimeError, match=missing):
+    with pytest.raises(RuntimeError, match="CATALOG_CONTEXT_BUCKET"):
         patch.contributor()
 
 

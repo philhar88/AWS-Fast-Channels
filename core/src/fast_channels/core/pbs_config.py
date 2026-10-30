@@ -36,6 +36,9 @@ from fast_channels.core.timeline import whole_seconds
 POD_SECONDS: Final = (30, 60, 90, 120)
 """Break lengths with a stored request: one to four 30 s slots (the 30.03 s grid, rounded)."""
 SLOT_SECONDS: Final = 30
+PBS_VERSION: Final = "4.4.0"
+"""The Prebid Server Java release the stage's image is built from (``vendor/prebid-guidance/PIN.toml``): the latest
+release, the only one supported since v4.0.0 (ADR-0020)."""
 TMAX_MS: Final = 500
 OWN_BOOK: Final = "ownbook"
 """Bidder code of the own book: a ``generic`` alias on the Pod Decision Service's ``/ownbook/openrtb``."""
@@ -167,18 +170,11 @@ class PbsSettings(BaseModel):
     house_ads: tuple[HouseAd, ...] = ()
     """The kit's house ads, which the module renders when a break would otherwise be empty (``/policy`` unavailable
     and the own book silent, or ``/select`` unavailable and the auction without a house ad)."""
-    pbs_version: str = Field(default="3.43.0", pattern=r"^\d+\.\d+\.\d+$")
-    """Prebid Server Java release the configuration is for (``modules.demand.pbs_version``): 4.x needs two settings
-    3.x does not have."""
     ad_server: bool = False
     """``modules.demand.ad_server`` is not ``none``: the ad-server route's stored requests, Prebid Cache's write
     endpoint inside the VPC and the pod's cache write in the exitpoint's budget (M8-09)."""
     pod_cache_seconds: int = Field(default=300, ge=30, le=3600)
     """How long a cached pod lives in Prebid Cache (``ext.fast.pod_cache.ttlseconds``)."""
-
-    @property
-    def pbs_major(self) -> int:
-        return int(self.pbs_version.split(".", 1)[0])
 
     @field_validator("publisher_domain")
     @classmethod
@@ -282,7 +278,7 @@ def _group(timeout_ms: int, hook: str) -> dict[str, Any]:
 
 def _own_book_only() -> dict[str, Any]:
     """An activity that only the own book may perform."""
-    # Prebid Server Java 3.43.0 reads the component type by its enum name: "bidder", as the Prebid documentation
+    # Prebid Server Java reads the component type by its enum name: "bidder", as the Prebid documentation
     # spells it, makes the whole account unreadable (found by the contract tests).
     rule = {"condition": {"component_type": ["BIDDER"], "component_name": [OWN_BOOK]}, "allow": True}
     return {"default": False, "rules": [rule]}
@@ -348,7 +344,7 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
                         "ortb-version": "ORTB_2_6",
                         # 4.x refuses to start without a vendor id on a configured generic alias (an NPE, P0-20
                         # §4.13). The own book is the publisher itself: no IAB TCF vendor, so 0.
-                        **({"meta-info": {"vendor-id": 0}} if settings.pbs_major >= 4 else {}),
+                        "meta-info": {"vendor-id": 0},
                     },
                 },
             },
@@ -406,7 +402,7 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
                 "v2": {"cache-dir": "/var/tmp/vendor2"},  # noqa: S108
                 "v3": {"cache-dir": "/var/tmp/vendor3"},  # noqa: S108
                 # Mandatory in 4.x (P0-20 §4.13): where the live vendor list is cached at startup.
-                **({"live": {"startup-cache-dir": "/var/tmp/vendor-live"}} if settings.pbs_major >= 4 else {}),  # noqa: S108
+                "live": {"startup-cache-dir": "/var/tmp/vendor-live"},  # noqa: S108
             },
         },
         "admin-endpoints": {"logging-changelevel": {"enabled": False}},

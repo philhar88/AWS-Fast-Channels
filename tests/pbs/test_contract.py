@@ -5,10 +5,8 @@
   group timeout, failing or malformed, module execution off for the account, hook ids absent from the plan: zero
   third-party calls, for every privacy mode.
 - **Header isolation:** no ``X-Fast-*`` header and no ``User-Agent`` reaches a bidder.
-- **Wire fields:** the pod fields reach OpenRTB 2.5 and 2.6 bidders intact; the OpenRTB 2.6 content fields as
-  first-class fields reach them on 4.x and are dropped on 3.43.0, which is why the service carries them in
-  ``app.content.ext`` there (``FAST_PBS_VERSION``). The content metadata's contract, T1 and T2, is
-  :mod:`test_crawl_contract`.
+- **Wire fields:** the pod fields reach OpenRTB 2.5 and 2.6 bidders intact, and the OpenRTB 2.6 content fields
+  reach them as first-class fields. The content metadata's contract, T1 and T2, is :mod:`test_crawl_contract`.
 - **The impression rule:** every rendered inline ad has an impression; ours is on every ad: the service's tracker,
   or the module's own on the house fallback.
 - **The PDS contract:** every ``/policy`` and ``/select`` call the module makes validates against the contract's
@@ -33,7 +31,7 @@ from local_mocks import (
     TRACKER_ENR,
     Mocks,
 )
-from pbs_process import ACCOUNTS, SETTINGS, Pbs
+from pbs_process import ACCOUNTS, Pbs
 
 from fast_channels.core.pbs_config import POD_SECONDS
 
@@ -151,32 +149,27 @@ def test_pod_fields_reach_bidders_intact(mocks: Mocks, pbs: Pbs, path: str) -> N
     [call] = mocks.calls_to(path, started)
     imps = call.body["imp"]
     assert [imp["video"].get("poddur") for imp in imps] == [90, 90, 90]
-    # OpenRTB 2.6 types podid as a string; 3.43.0 models it as an integer, 4.x as the string
-    assert [imp["video"].get("podid") for imp in imps] == ["1" if SETTINGS.pbs_major >= 4 else 1] * 3
+    # OpenRTB 2.6 types podid as a string
+    assert [imp["video"].get("podid") for imp in imps] == ["1"] * 3
     assert [imp["video"].get("slotinpod") for imp in imps] == [1, 0, -1]
     assert [imp["video"].get("rqddurs") for imp in imps] == [[30]] * 3
     assert [imp.get("ssai") for imp in imps] == [3] * 3
 
 
 @pytest.mark.parametrize("path", ["/amt", "/echo26", "/ownbook/openrtb"])
-def test_native_2_6_content_fields_reach_bidders_on_4_x_and_are_dropped_on_3_43(
-    mocks: Mocks, pbs: Pbs, path: str
-) -> None:
+def test_native_2_6_content_fields_reach_the_bidders(mocks: Mocks, pbs: Pbs, path: str) -> None:
     started = time.time()
     pbs.auction("NATIVE1")
 
     [call] = mocks.calls_to(path, started)
     content = call.body["app"]["content"]
-    if SETTINGS.pbs_major >= 4:
-        assert {key: content.get(key) for key in NATIVE_FIELDS} == {key: NATIVE_CONTENT[key] for key in NATIVE_FIELDS}
-    else:  # 3.43.0's model has none of them: dropped without a warning (P0-20 §4.13), so the service uses ext
-        assert not content.keys() & set(NATIVE_FIELDS)
+    assert {key: content.get(key) for key in NATIVE_FIELDS} == {key: NATIVE_CONTENT[key] for key in NATIVE_FIELDS}
     if path != "/ownbook/openrtb":
         assert "data" not in content, "first-party data (the title's ids) stays with the own book"
         return
     [data] = content["data"]
     assert data["name"] == PUBLISHER_DOMAIN
-    assert data.get("cids") == (["tears-of-steel"] if SETTINGS.pbs_major >= 4 else None)
+    assert data.get("cids") == ["tears-of-steel"]
 
 
 def test_the_policy_patch_reaches_the_request_and_ids_stay_with_the_own_book(mocks: Mocks, pbs: Pbs) -> None:

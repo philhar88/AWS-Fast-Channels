@@ -541,13 +541,6 @@ class DemandMode(StrEnum):
     DEMO = "demo"
 
 
-class PbsVersion(StrEnum):
-    """Prebid Server (Java) release the demand image is built from."""
-
-    V3_43_0 = "3.43.0"
-    V4_4_0 = "4.4.0"
-
-
 class Simulator(StrEnum):
     """How the bidder simulator is deployed in demo mode."""
 
@@ -586,8 +579,6 @@ class DemandModule(_Module):
     every number labelled simulated."""
     guidance_tag: str = Field(default="v1.4.0", pattern=r"^v\d+\.\d+\.\d+$")
     """Tag of the guidance, pinned with its commit and the hash of every file the overlays patch."""
-    pbs_version: PbsVersion = PbsVersion.V3_43_0
-    """Prebid Server (Java) release of the image."""
     simulator: Simulator = Simulator.GUIDANCE_STACK
     """``guidance_stack``: the guidance's simulator stack (its own VPC with two NAT gateways); ``lambda``: the same
     handler as a Lambda target behind an internal load balancer in the Prebid Server VPC, which needs no VPC of its

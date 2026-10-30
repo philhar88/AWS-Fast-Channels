@@ -23,7 +23,6 @@ from fast_channels.infra.config import (
     FastChannelsConfig,
     LedgerLock,
     ModulesConfig,
-    PbsVersion,
     PreconditionedAds,
     ReleaseStrategy,
     Removal,
@@ -560,7 +559,6 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
             "dayparts ['cron(50 17 ? * MON-FRI *)']: min must lie between tasks.min and tasks.max",
         ),
         ({"modules.demand.dayparts": [{"cron": "rate(1 day)", "min": 3}]}, "String should match pattern"),
-        ({"modules.demand.pbs_version": "4.3.0"}, "Input should be '3.43.0' or '4.4.0'"),
         ({"modules.demand.guidance_tag": "main"}, "String should match pattern"),
         (
             {"modules.pds.policy_group_timeout_ms": 40},
@@ -613,7 +611,7 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
     assert modules.ops.ledger_lock is LedgerLock.COMPLIANCE
     assert set(modules.models.tasks) == {"scheduler.plan", "recommender"}  # merged into cdk.json's entries
     assert modules.models.tasks["recommender"].effort is Effort.LOW
-    assert (modules.demand.simulator, modules.demand.pbs_version) == (Simulator.LAMBDA, PbsVersion.V3_43_0)
+    assert modules.demand.simulator is Simulator.LAMBDA
     assert modules.pds.demo_lines == (DemoLine.model_validate(LINE),)
     assert modules.release.channels == ("fast-demo",)
 

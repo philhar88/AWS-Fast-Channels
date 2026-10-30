@@ -36,6 +36,8 @@ from typing import Final
 
 import prebid_guidance as guidance
 
+from fast_channels.core.pbs_config import PBS_VERSION
+
 REPO: Final = Path(__file__).resolve().parents[1]
 BUILD: Final = REPO / "build" / "pbs"
 TOOLS: Final = REPO / "build" / "tools"
@@ -52,8 +54,6 @@ MAVEN_SHA512: Final = (
     "b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978"
 )
 _JUNIT_PLATFORM: Final = re.compile(r"junit-platform-engine-(\d+\.\d+\.\d+)\.jar")
-GUIDANCE_JDK: Final = "21"
-"""The Corretto major version of the guidance's own build (its Dockerfile, before overlay O6)."""
 
 
 class BuildError(RuntimeError):
@@ -136,11 +136,10 @@ def java_environment(home: Path | None) -> dict[str, str]:
     return {**os.environ, "JAVA_HOME": str(home), "PATH": f"{home / 'bin'}{os.pathsep}{os.environ['PATH']}"}
 
 
-def release(pin: guidance.Pin, checkout: Path, version: str | None) -> tuple[str, str, str]:
-    """(version, Maven options, JDK major) of the guidance's own build, or of ``version`` from ``[pbs_java.builds]``."""
-    config = build_config(checkout)
-    if version is None or version == config["GIT_TAG_VERSION"]:
-        return config["GIT_TAG_VERSION"], config["MVN_CLI_OPTIONS"], GUIDANCE_JDK
+def release(pin: guidance.Pin, version: str | None) -> tuple[str, str, str]:
+    """(version, Maven options, JDK major) of ``version`` (default :data:`PBS_VERSION`, the only supported release)
+    from ``[pbs_java.builds]``. The guidance's own docker-build-config.json names 3.43.0, which is not built."""
+    version = version or PBS_VERSION
     if (spec := pin.pbs_java_builds.get(version)) is None:
         raise BuildError(f"PIN.toml [pbs_java.builds] has no build of Prebid Server Java {version}")
     return version, spec.mvn_options, spec.jdk
@@ -196,7 +195,7 @@ def build(repository: Path | None, pbs_version: str | None = None) -> Path:
     pin = guidance.Pin.load()
     checkout = guidance.DEFAULT_CHECKOUT
     guidance.apply(pin, checkout)
-    version, options, major = release(pin, checkout, pbs_version)
+    version, options, major = release(pin, pbs_version)
     tree = prepare(pin, checkout, version)
     home = jdk(pin, major)
     mvn = maven()
@@ -304,14 +303,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=("build", "test"))
     parser.add_argument("--maven-repository", type=Path, help="Maven local repository (default ~/.m2/repository)")
-    parser.add_argument("--pbs-version", help="Prebid Server Java release (default: the guidance's, 3.43.0)")
+    parser.add_argument("--pbs-version", help=f"Prebid Server Java release (default {PBS_VERSION})")
     args = parser.parse_args(argv)
     try:
         match args.command:
             case "build":
                 build(args.maven_repository, args.pbs_version)
             case "test":
-                version = args.pbs_version or build_config(guidance.DEFAULT_CHECKOUT)["GIT_TAG_VERSION"]
+                version = args.pbs_version or PBS_VERSION
                 return test(version, args.maven_repository)
     except (BuildError, guidance.GuidanceError) as error:
         print(f"error: {error}", file=sys.stderr)

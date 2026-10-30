@@ -127,12 +127,11 @@ The contract tests validate every call the real jar makes against the contract's
 outcome and latency, `safe` when the break was served without the policy, the selection or the fallback reason, the winners and standalones as `seat:crid`). Neither
 ever holds the ticket or the origin secret.
 
-**Build and tests** (Java 21 for 3.43.0, Java 25 for 4.4.0; CI job `pbs-module`, once per release):
+**Build and tests** (Prebid Server Java 4.4.0, the only supported release, on Java 25; CI job `pbs-module`):
 
 ```bash
 make pbs-test       # Prebid Server Java at the pinned commit + the guidance's modules + ours, as the image builds it; JUnit
 make pbs-contract   # the contract tests against that jar, with local mocks of every endpoint it calls
-make pbs-test pbs-contract PBS_VERSION=4.4.0   # the same on 4.4.0
 ```
 
 When the `java` on PATH is not the release's JDK, `scripts/pbs_module.py` downloads the Corretto pinned in
@@ -146,7 +145,7 @@ without the module. The contract tests (`tests/pbs`) run the jar with the stage'
 |---|---|
 | No-hook | Third-party bidders are called only after a positive, in-time `/policy` answer. Zero calls for: the module disabled host-wide; the stock jar; `/policy` unreachable, slower than the module's timeout, past the account's group timeout, failing, malformed or of another schema version; module execution off for the account; hook ids absent from the plan. Every privacy mode is exercised |
 | Header isolation | No `X-Fast-*`, `User-Agent` or `X-Forwarded-For` header reaches any bidder |
-| Wire fields | `podid`, `slotinpod`, `poddur`, `rqddurs` and `imp.ssai` reach OpenRTB 2.5 and 2.6 bidders intact (`podid` is a string on 4.4.0, as OpenRTB 2.6 types it, and an integer on 3.43.0); the own book gets OpenRTB 2.6; content metadata reaches bidders. The 2.6 content fields (`genres`, `gtax`, `realtime`, `firstbroadcast`, `data[].cids`) arrive first-class on 4.4.0; 3.43.0 drops them, so there they travel in `app.content.ext`. Precise geolocation and `app.content.data` reach only the own book |
+| Wire fields | `podid`, `slotinpod`, `poddur`, `rqddurs` and `imp.ssai` reach OpenRTB 2.5 and 2.6 bidders intact (`podid` is a string, as OpenRTB 2.6 types it); the own book gets OpenRTB 2.6; content metadata reaches bidders, the 2.6 content fields (`genres`, `gtax`, `realtime`, `firstbroadcast`, `data[].cids`) first-class. Precise geolocation and `app.content.data` reach only the own book |
 | Guidance modules | The guidance's `amt` adapter (the simulator's bidder) and its log analytics reporter run on the release. The reporter logs every request header, the ticket and the origin secret included, so stages deploy with `EnableLogAnalytics=false` |
 | Impressions | Every rendered ad has an impression, and ours, even a third-party ad with none of its own: the service's tracker, or the module's own on the house fallback |
 | PDS contract | Every `/policy` and `/select` call validates against the contract's strict models, and `/select` is answered by the Pod Decision Service's own pod rules; a break without an event id asks neither |

@@ -1,8 +1,8 @@
 """A local Prebid Server for the contract tests: the jar from ``scripts/pbs_module.py build``, run with the stage's
 rendered configuration (``fast_channels.core.pbs_config``) pointed at :mod:`local_mocks`.
 
-``FAST_PBS_VERSION`` picks the release (default 3.43.0, the guidance's): ``build/pbs/<version>/``, run with the JDK
-its build recorded (``JAVA_HOME`` there) and the configuration rendered for that release."""
+``FAST_PBS_VERSION`` picks the release (default ``core.pbs_config.PBS_VERSION``, the only supported one):
+``build/pbs/<version>/``, run with the JDK its build recorded (``JAVA_HOME`` there)."""
 
 import copy
 import json
@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from fast_channels.core.pbs_config import PBS_VERSION as SUPPORTED_PBS_VERSION
 from fast_channels.core.pbs_config import PbsSettings, account, house_ads, prebid_config, render, to_yaml
 from fast_channels.core.pds.book import Creative
 
@@ -28,7 +29,7 @@ REPO: Final = Path(__file__).resolve().parents[2]
 BUILD: Final = REPO / "build" / "pbs"
 CHECKOUT: Final = REPO / "build" / "prebid-guidance" / "checkout"
 PREFIX: Final = "fastpbs"
-PBS_VERSION: Final = os.environ.get("FAST_PBS_VERSION", "3.43.0")
+PBS_VERSION: Final = os.environ.get("FAST_PBS_VERSION", SUPPORTED_PBS_VERSION)
 SETTINGS: Final = PbsSettings(
     prefix=PREFIX,
     simulator=True,
@@ -44,7 +45,6 @@ SETTINGS: Final = PbsSettings(
         )
         for n in (1, 2)
     ),
-    pbs_version=PBS_VERSION,
 )
 ACCOUNTS: Final = {
     "shipped": PREFIX,
@@ -120,8 +120,7 @@ def local_config(mocks: Mocks, out: Path, *, port: int, module: bool, analytics:
     aliases = adapters["generic"]["aliases"]
     aliases["ownbook"]["endpoint"] = f"{mocks.base_url}/ownbook/openrtb"
     aliases["echo26"] = {"enabled": True, "endpoint": f"{mocks.base_url}/echo26", "ortb-version": "ORTB_2_6"}
-    if SETTINGS.pbs_major >= 4:  # 4.x needs a vendor id on every configured generic alias
-        aliases["echo26"]["meta-info"] = {"vendor-id": 0}
+    aliases["echo26"]["meta-info"] = {"vendor-id": 0}  # every configured generic alias needs a vendor id
     config["hooks"]["fast-ctv"] |= {
         "enabled": module,
         "policy-url": mocks.policy_url,
@@ -142,7 +141,7 @@ def local_config(mocks: Mocks, out: Path, *, port: int, module: bool, analytics:
     config["gdpr"]["vendorlist"] = {
         "v2": {"cache-dir": str(out / "vendor2")},
         "v3": {"cache-dir": str(out / "vendor3")},
-        **({"live": {"startup-cache-dir": str(out / "vendor-live")}} if SETTINGS.pbs_major >= 4 else {}),
+        "live": {"startup-cache-dir": str(out / "vendor-live")},
     }
     config["analytics"]["psdoa"] = {"enabled": analytics}
     path = out / "local-config.yaml"

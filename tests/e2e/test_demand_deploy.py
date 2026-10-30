@@ -362,8 +362,8 @@ def test_a_parameter_not_in_the_registry_is_refused(stage: _demand.DemandStage) 
 def test_a_redeploy_takes_the_new_image_not_the_previous_parameter(
     stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The guidance's image is the default of its ContainerImage parameter: with previous parameter values reused, the
-    4.4.0 → 3.43.0 rollback redeployed the template and kept 4.4.0 running."""
+    """The guidance's image is the default of its ContainerImage parameter: with previous parameter values reused, a
+    redeploy with another image (measured on a Prebid Server release change) kept the previous image running."""
     monkeypatch.setattr(type(stage), "toolchain", lambda self: Path("/venv"))
 
     command = [str(arg) for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
@@ -448,7 +448,7 @@ def test_the_sidecar_reads_its_buckets_and_follows_the_crawl_module(stage: _dema
     assert spec.environment["PDS_CONFIG_BUCKET"] == "fastcix-pds-config"
     assert spec.environment["CATALOG_CONTEXT_BUCKET"] == "ctx"
     assert spec.environment["CRAWL_HOLDOUT_PERCENT"] == str(stage.config.modules.crawl.holdout_percent)
-    assert spec.environment["PBS_VERSION"] == stage.config.modules.demand.pbs_version.value
+    assert "PBS_VERSION" not in spec.environment, "Prebid Server Java 4.4.0 only: the patch sends 2.6 natively"
     assert spec.environment["CONTENT_BASE_URL"] == "https://cdn.example"
     assert spec.log_group == "/aws/ecs/fastcix-pds"
     assert {s["Sid"] for s in spec.statements} >= {"PdsCatalogContextList", "PdsCatalogContexts"}

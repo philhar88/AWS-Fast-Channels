@@ -1,6 +1,8 @@
 # 0031 — Show-level content metadata in ad requests, looked up by the break's UPID
 
-**Status:** Accepted
+**Status:** Accepted. Amended on 2026-10-30, with
+[0020](0020-demand-through-the-prebid-server-guidance.md): Prebid Server Java 4.4.0 is the only supported release, so
+the 2.6 fields travel natively and the `content.ext` carriage for 3.43.0 is gone.
 
 ## Context
 Buyers of connected-TV supply value programme-level signals: title, series, season, episode, genre, content category,
@@ -53,8 +55,8 @@ Measurements made in an AWS account in October 2026 set the rules for using that
   OpenRTB fields.
 - **OpenRTB.** The Pod Decision Service fills `app.content` from the same objects through its policy patch. Its
   policy function keeps a copy of the objects (a list and the changed objects every 30 s) and falls back to the
-  `x-fast-ctx` header for a title the copy lacks. The 2.6 fields travel in `content.ext` on Prebid Server 3.43.0 and
-  natively from 4.4.0 (`modules.demand.pbs_version`). Pseudonymous sessions get genres and categories but nothing
+  `x-fast-ctx` header for a title the copy lacks. The 2.6 fields travel natively: Prebid Server Java 4.4.0 models
+  them (ADR 0020). Pseudonymous sessions get genres and categories but nothing
   that names the title; SAFE breaks get nothing. Neither catalog nor player values enter the POST body template.
 - **Measurement.** A `crawl-v1` holdout (`modules.crawl.holdout_percent`, 20 by default) assigns each session-break to
   an arm by `SHA-256("crawl-v1" ‖ sid ‖ "." ‖ evid) mod 100`; holdout breaks get no `app.content` beyond the stored
@@ -70,9 +72,8 @@ Measurements made in an AWS account in October 2026 set the rules for using that
   `LiveMaximumAdsPersonalizationTimeMilliseconds` ≥ the executor timeout + `AdsRequestTimeoutMilliseconds`.
 - The lookup and the objects carry no viewer data. The bid request still pairs what is watched with the device
   signals of the demand path, which is why pseudonymous sessions send no title; real demand needs a legal review first.
-- From 4.4.0, Prebid Server passes `app.content.data` (the registry ids, `cids`) only to the bidders the patch's
-  first-party-data rule names, today the own book alone; third parties see the content id in `content.id`. On
-  3.43.0 the `content.ext` copy reaches every bidder.
+- Prebid Server passes `app.content.data` (the registry ids, `cids`) only to the bidders the patch's
+  first-party-data rule names, today the own book alone; third parties see the content id in `content.id`.
 - A taxonomy update is a data change: regenerate `ct31-ids.txt` as `ATTRIBUTION.md` describes and review the map.
 - Ad servers that take metadata as URL parameters are a later recipe variant that writes `player_params.content_*`
   (the key names of the public MediaTailor Functions sample recipes' content outputs) from the precomputed `*_q`

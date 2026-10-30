@@ -221,7 +221,6 @@ def test_pbs_settings_follow_the_stage(tmp_path: Path) -> None:
     assert (settings.tracker_base_url, settings.publisher_domain) == ("https://media.example.com", "media.example.com")
     assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (50, 75)
     assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (200, 250)
-    assert settings.pbs_version == config.modules.demand.pbs_version.value
 
 
 def test_render_config_refuses_a_stage_without_demand(capsys: pytest.CaptureFixture[str]) -> None:
@@ -250,10 +249,7 @@ def test_o6_the_jdk_is_a_build_argument_defaulting_to_the_guidances() -> None:
     assert "amazon-corretto-21" not in dockerfile
 
 
-@pytest.mark.parametrize(("version", "ported"), [("3.43.0", False), ("4.4.0", True)])
-def test_o4_copies_the_module_and_on_4_x_the_ported_amt_configuration(
-    tmp_path: Path, version: str, ported: bool
-) -> None:
+def test_o4_copies_the_module_and_the_ported_amt_configuration(tmp_path: Path) -> None:
     tree = tmp_path / "prebid-server-java"
     amt = tree / "amt-bidder"
     shutil.copytree(guidance.VENDOR / "amt-bidder", amt)
@@ -263,22 +259,17 @@ def test_o4_copies_the_module_and_on_4_x_the_ported_amt_configuration(
     configuration = tree / "src/main/java/org/prebid/server/spring/config/bidder/AmtConfiguration.java"
     configuration.parent.mkdir(parents=True)
     configuration.write_text("// the guidance's\n")
-    (tree / "pom.xml").write_text(
-        "<project>\n    <groupId>org.prebid</groupId>\n    <artifactId>prebid-server</artifactId>\n"
-        f"    <version>{version}</version>\n    <dependencies>\n        <version>4.0.6</version>\n"
-        "    </dependencies>\n</project>\n"
-    )
 
     subprocess.run(["bash", str(amt / "copy-fast-ctv.sh")], cwd=tree, check=True, capture_output=True)
 
     assert (tree / "src/main/java/org/prebid/server/hooks/modules/fast/ctv/v1/FastCtvModule.java").is_file()
     port = (guidance.VENDOR / "amt-bidder/pbs-4/AmtConfiguration.java").read_text()
-    assert (configuration.read_text() == port) is ported
+    assert configuration.read_text() == port
 
 
 def test_o4_copy_script_has_no_pipe_a_reader_can_close() -> None:
-    """Under pipefail, ``producer | head`` fails when head exits first and the producer gets SIGPIPE (exit 141): the
-    4.4.0 image build failed so on CodeBuild."""
+    """Under pipefail, ``producer | head`` fails when head exits first and the producer gets SIGPIPE (exit 141): an
+    earlier 4.4.0 image build failed so on CodeBuild."""
     script = (guidance.VENDOR / "amt-bidder/copy-fast-ctv.sh").read_text()
 
     assert "set -euo pipefail" in script

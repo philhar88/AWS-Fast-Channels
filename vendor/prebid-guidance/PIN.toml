@@ -17,12 +17,11 @@ license = "Apache-2.0"
 repository = "https://github.com/prebid/prebid-server-java"
 
 [pbs_java.commits]
-"3.43.0" = "ba7f97e33fe1dcc5e64f926bc8bea5d4d4252fc1"
 "4.4.0" = "de50af1076d9cf8375c4af4fa1adcfff96db2c7c"
 
-# Releases the guidance does not build (its docker-build-config.json names 3.43.0 and pins 3.x dependencies:
-# Vert.x 4, Spring Boot 3): the JDK major version (overlay O6's build argument) and the Maven options. A stage
-# selects one with modules.demand.pbs_version; the image build writes a docker-build-config.json for it.
+# The release the image is built from (core.pbs_config.PBS_VERSION, the only supported one since v4.0.0: ADR-0020).
+# The guidance's own docker-build-config.json names 3.43.0 and pins 3.x dependencies (Vert.x 4, Spring Boot 3), so
+# the image build writes one for this release: the JDK major version (overlay O6's build argument) and Maven options.
 [pbs_java.builds."4.4.0"]
 jdk = "25"
 mvn_options = "-Dmaven.test.skip -Dcheckstyle.skip"

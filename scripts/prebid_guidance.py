@@ -280,7 +280,6 @@ def pbs_settings(config: FastChannelsConfig, content_base_url: str, house: Seque
         select_timeout_ms=pds.select_timeout_ms,
         select_group_timeout_ms=pds.select_group_timeout_ms,
         house_ads=tuple(house),
-        pbs_version=demand.pbs_version.value,
         ad_server=demand.ad_server is not AdServer.NONE,
         pod_cache_seconds=demand.pod_cache_seconds,
     )

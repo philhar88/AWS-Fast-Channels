@@ -4,9 +4,8 @@
 - **T1:** with the PRE_ADS lookup absent, failing or timing out (no ``x-fast-ctx`` header, or one that is not a
   context), every bidder's request equals the control (a holdout break) except the enrichment: for a title in the
   PDS's copy it is the copy's ``app.content``, for any other title nothing. A holdout break ignores the header.
-- **T2:** every mapped field reaches the bidders: natively on Prebid Server 4.4.0 and later, and on 3.43.0 the
-  OpenRTB 2.6 fields in ``app.content.ext``. ``app.content.data`` reaches only the bidders of the answer's
-  first-party-data rule (the own book).
+- **T2:** every mapped field reaches the bidders natively (Prebid Server Java 4.4.0). ``app.content.data`` reaches
+  only the bidders of the answer's first-party-data rule (the own book).
 """
 
 import copy
@@ -21,7 +20,6 @@ from local_mocks import (
     HOLDOUT_SID,
     LATE_HEADER,
     LATE_TITLE,
-    NATIVE,
     PUBLISHER_DOMAIN,
     THIRD_PARTIES,
     TITLE,
@@ -39,7 +37,7 @@ pytestmark = pytest.mark.pbs
 BIDDERS: Final = (*THIRD_PARTIES, "/ownbook/openrtb")
 EVID: Final = "820461826"
 NEWER: Final = ("genres", "gtax", "realtime", "firstbroadcast", "data")
-"""The OpenRTB 2.6-202505 content fields that Prebid Server Java 3.43.0 does not model."""
+"""The OpenRTB 2.6-202505 content fields (first-class since Prebid Server Java 4.4.0)."""
 
 
 def bid_requests(mocks: Mocks, pbs: Pbs, *, sid: str, upid: str, ctx: str | None = None) -> dict[str, dict[str, Any]]:
@@ -142,28 +140,20 @@ def test_t2_every_mapped_field_reaches_the_bidders(mocks: Mocks, pbs: Pbs) -> No
         for key, value in sent.items():
             if key not in {"ext", *NEWER}:
                 assert content.get(key) == value, (path, key, content.get(key))
-        newer = content if NATIVE else content.get("ext", {})
         for key in NEWER:
-            value = sent[key] if NATIVE else sent["ext"][key]
-            if key == "data" and NATIVE and path != "/ownbook/openrtb":
+            if key == "data" and path != "/ownbook/openrtb":
                 assert "data" not in content, f"{path}: data is first-party data, for the own book only"
                 continue
-            assert newer.get(key) == value, (path, key, newer.get(key))
-        if NATIVE:
-            assert "ext" not in content or not set(NEWER) & set(content["ext"]), f"{path}: native, not in ext"
+            assert content.get(key) == sent[key], (path, key, content.get(key))
+        assert "ext" not in content or not set(NEWER) & set(content["ext"]), f"{path}: native, not in ext"
 
 
-def test_t2_who_receives_the_registry_ids_depends_on_the_release(mocks: Mocks, pbs: Pbs) -> None:
-    """Pins a difference between the releases (ADR 0031): on 4.4.0 ``app.content.data`` is first-party data, which the
-    answer's ``fpd.bidders`` rule gives the own book alone; on 3.43.0 its copy in ``content.ext`` reaches every bidder.
-    Either way it holds catalog ids only."""
+def test_t2_the_registry_ids_reach_the_own_book_alone(mocks: Mocks, pbs: Pbs) -> None:
+    """``app.content.data`` is first-party data, which the answer's ``fpd.bidders`` rule gives the own book alone
+    (ADR 0031). It holds catalog ids only."""
     cids = [{"name": PUBLISHER_DOMAIN, "cids": [TITLE]}]
     received = bid_requests(mocks, pbs, sid=ENRICHED_SID, upid=TITLE)
     for path, request in received.items():
         content = request["app"]["content"]
-        if NATIVE:
-            assert content.get("data") == (cids if path == "/ownbook/openrtb" else None), path
-            assert "data" not in content.get("ext", {}), path
-        else:
-            assert content["ext"]["data"] == cids, f"{path}: the ext copy reaches every bidder on 3.43.0"
-            assert "data" not in content, path
+        assert content.get("data") == (cids if path == "/ownbook/openrtb" else None), path
+        assert "data" not in content.get("ext", {}), path

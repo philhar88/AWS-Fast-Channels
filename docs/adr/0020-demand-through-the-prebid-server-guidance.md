@@ -4,7 +4,8 @@
 [0002](0002-l2-constructs-over-solutions-constructs.md), exception A). It is accepted when the demand and Pod Decision
 Service modules pass their end-to-end legs. Its placement of the Pod Decision Service is superseded, and its
 deployment of the guidance amended (a wrapper of the guidance's app adds the sidecar), by
-[0036](0036-pds-sidecar-in-the-prebid-server-task.md).
+[0036](0036-pds-sidecar-in-the-prebid-server-task.md). Amended on 2026-10-30: Prebid Server Java 4.4.0 is the only
+supported release, and `modules.demand.pbs_version` is gone (see "The Prebid Server Java release" below).
 
 ## Context
 The optional demand module ([docs/demand.md](../demand.md)) puts an auction behind the channel's ad breaks.
@@ -64,13 +65,16 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   and KMS without data access. Inline role policies stay unconstrained; that is the residual risk.
 - **The image** is the guidance's Dockerfile with the overlays and the module, built by an x86 CodeBuild project of
   the stage and tagged by the content of its build context.
-- **The Prebid Server Java release is a stage setting**, `modules.demand.pbs_version`: `3.43.0` (the guidance's) or
-  `4.4.0`. For a release the guidance does not build, `PIN.toml` names its commit, JDK and Maven options; the image
-  build gives the Dockerfile that release's `docker-build-config.json` and the JDK (O6), and O4 replaces the
-  guidance's `amt` adapter configuration with a 4.x port. The rendered configuration adds 4.x's two required
-  settings; the own book, a configuration-level alias, has vendor id 0 (it is the publisher, not an IAB TCF vendor).
-  CI builds and tests the module and the contract on both releases. Rolling back is `pbs_version: 3.43.0` and a
-  redeploy.
+- **The Prebid Server Java release is 4.4.0, the only one supported** (`core.pbs_config.PBS_VERSION`). It was a
+  stage setting, `modules.demand.pbs_version`, with the guidance's 3.43.0 as the alternative. The amendment of
+  2026-10-30 removed 3.43.0 and the setting with it: 3.43.0 can carry the OpenRTB 2.6 content fields only in
+  `app.content.ext`, and keeping it meant a second carriage, a second CI build and a second contract run. 4.4.0 was
+  the latest Prebid Server Java release on that date. The guidance builds 3.43.0, so `PIN.toml` names 4.4.0's commit,
+  JDK and Maven options. The image build gives the Dockerfile that release's `docker-build-config.json` and the JDK
+  (O6), and O4 replaces the guidance's `amt` adapter configuration with a 4.x port. The rendered configuration has
+  4.x's two required settings; the own book, a configuration-level alias, has vendor id 0 (it is the publisher, not
+  an IAB TCF vendor). CI builds and tests the module and the contract on 4.4.0. A later release is adopted by moving
+  `PBS_VERSION` and `PIN.toml` together, after the same tests pass on it.
 - **The guidance's log analytics stays off** (`EnableLogAnalytics=false`) while its reporter logs request headers.
 - **MediaTailor POSTs to the guidance's CloudFront.** A WAF rule group of ours, referenced first, blocks
   `/openrtb2/*` without the stage's origin secret (one of two values, for rotation).
@@ -110,8 +114,8 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   architecture-specific), plus our module in Java.
 - A stage with demand costs about $120–150 a month idle while deployed (NAT gateways, ALB, WAF, the Valkey cache
   minimum). Destroying it leaves the guidance's KMS keys pending deletion for 7 days.
-- On 3.43.0 the OpenRTB 2.6 content fields reach bidders only in `app.content.ext`; on 4.4.0 they are first-class.
-  The Pod Decision Service chooses the carriage by the stage's `pbs_version`.
+- The OpenRTB 2.6 content fields reach bidders first-class, so the Pod Decision Service has one carriage. There is
+  no rollback to 3.43.0: a stage that needs it would need the `app.content.ext` carriage back.
 - A break off the 30.03 s grid, or with a missing duration (MediaTailor sends 300 s), names a stored request that does
   not exist. Prebid Server answers 400, and the Channel Assembly slate plays.
 - When AWS publishes the guidance as a construct library, the overlays become construct properties and the app can

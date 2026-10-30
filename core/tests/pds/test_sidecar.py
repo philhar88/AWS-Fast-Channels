@@ -106,7 +106,7 @@ def test_the_dynamodb_endpoint_admits_only_item_calls_on_the_sidecars_tables() -
 def test_with_the_crawl_module_it_lists_and_reads_only_the_context_objects() -> None:
     spec = sidecar(
         **ARGS,
-        crawl={"CRAWL_HOLDOUT_PERCENT": "20", "PBS_VERSION": "4.4.0"},
+        crawl={"CRAWL_HOLDOUT_PERCENT": "20"},
         catalog_context_bucket="fastm-catalog-context",
     )
     granted = by_sid(spec)
@@ -114,7 +114,7 @@ def test_with_the_crawl_module_it_lists_and_reads_only_the_context_objects() -> 
     assert granted["PdsCatalogContextList"]["Condition"] == {"StringEquals": {"s3:prefix": "catalog/ctx/v1/"}}
     assert granted["PdsCatalogContexts"]["Resource"] == "arn:aws:s3:::fastm-catalog-context/catalog/ctx/v1/*"
     assert spec.environment["CATALOG_CONTEXT_BUCKET"] == "fastm-catalog-context"
-    assert (spec.environment["CRAWL_HOLDOUT_PERCENT"], spec.environment["PBS_VERSION"]) == ("20", "4.4.0")
+    assert spec.environment["CRAWL_HOLDOUT_PERCENT"] == "20"
 
 
 def test_the_environment_names_the_stages_state_and_cdn() -> None:

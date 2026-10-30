@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import sys
 import tarfile
 import zipfile
@@ -62,10 +63,7 @@ def test_a_prebid_server_release_without_a_pinned_commit_is_refused(tmp_path: Pa
 def test_every_selectable_release_has_a_pinned_commit_and_a_build() -> None:
     pin = pbs_module.guidance.Pin.load()
 
-    assert pin.pbs_java_commits == {
-        "3.43.0": "ba7f97e33fe1dcc5e64f926bc8bea5d4d4252fc1",
-        "4.4.0": "de50af1076d9cf8375c4af4fa1adcfff96db2c7c",
-    }
+    assert pin.pbs_java_commits == {"4.4.0": "de50af1076d9cf8375c4af4fa1adcfff96db2c7c"}
     assert pin.pbs_java_repository == "https://github.com/prebid/prebid-server-java"
     assert pin.pbs_java_builds == {
         "4.4.0": pbs_module.guidance.PbsBuild(jdk="25", mvn_options="-Dmaven.test.skip -Dcheckstyle.skip")
@@ -74,23 +72,15 @@ def test_every_selectable_release_has_a_pinned_commit_and_a_build() -> None:
     assert all(archive.url.startswith("https://corretto.aws/") for archive in pin.jdks["25"].values())
 
 
-def _guidance_build(checkout: Path) -> None:
-    config = checkout / "deployment/ecr/prebid-server/docker-build-config.json"
-    config.parent.mkdir(parents=True)
-    config.write_text(
-        json.dumps({"GIT_TAG_VERSION": "3.43.0", "GIT_REPO_URL": "https://example.invalid", "MVN_CLI_OPTIONS": "-q"})
-    )
-
-
-def test_a_release_is_the_guidances_build_or_its_pinned_build(tmp_path: Path) -> None:
-    _guidance_build(tmp_path)
+def test_the_release_is_4_4_0_and_its_pinned_build() -> None:
+    """Prebid Server Java 4.4.0 only (ADR 0020): the guidance's own build (3.43.0) is not selectable."""
     pin = pbs_module.guidance.Pin.load()
 
-    assert pbs_module.release(pin, tmp_path, None) == ("3.43.0", "-q", "21")
-    assert pbs_module.release(pin, tmp_path, "3.43.0") == ("3.43.0", "-q", "21")
-    assert pbs_module.release(pin, tmp_path, "4.4.0") == ("4.4.0", "-Dmaven.test.skip -Dcheckstyle.skip", "25")
-    with pytest.raises(pbs_module.BuildError, match=r"no build of Prebid Server Java 9\.9\.9"):
-        pbs_module.release(pin, tmp_path, "9.9.9")
+    built = ("4.4.0", "-Dmaven.test.skip -Dcheckstyle.skip", "25")
+    assert pbs_module.release(pin, None) == pbs_module.release(pin, "4.4.0") == built
+    for version in ("3.43.0", "9.9.9"):
+        with pytest.raises(pbs_module.BuildError, match=rf"no build of Prebid Server Java {re.escape(version)}"):
+            pbs_module.release(pin, version)
 
 
 def test_the_java_on_path_is_used_when_it_is_the_major_version(monkeypatch: pytest.MonkeyPatch) -> None:
