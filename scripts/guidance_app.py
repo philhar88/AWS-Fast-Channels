@@ -13,6 +13,8 @@ construct one does not own (:func:`augment`):
   conditions deploy one), the sidecar's container, which Prebid Server's container waits for (``HEALTHY``);
 - the task's CPU and memory (``Cpu`` and ``Memory`` overrides of the L1 task definition);
 - the sidecar's grants on the shared task role;
+- its S3 reads in the policy of the guidance VPC's S3 gateway endpoint, which lets through only the guidance's own
+  buckets otherwise;
 - the sidecar's log group, at the stack's root (so no condition applies to it).
 
 The sidecar comes as the CDK context ``fastPds`` (``core.pds.sidecar.Sidecar`` as JSON): its image, environment,
@@ -29,6 +31,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from aws_cdk import Duration, RemovalPolicy, Size, Stack
+from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
@@ -55,12 +58,24 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
     returns them.
 
     Raises:
-        SidecarError: no task definition, one with another id, or one without Prebid Server's container.
+        SidecarError: no task definition, one with another id, one without Prebid Server's container, or not exactly
+            one S3 gateway endpoint.
     """
-    tasks = [node for node in stack.node.find_all() if isinstance(node, ecs.FargateTaskDefinition)]
+    nodes = stack.node.find_all()
+    tasks = [node for node in nodes if isinstance(node, ecs.FargateTaskDefinition)]
     if not tasks or any(task.node.id != TASK_DEFINITION for task in tasks):
         found = [task.node.path for task in tasks]
         raise SidecarError(f"expected the guidance's {TASK_DEFINITION} task definitions, found {found}")
+    endpoints = [
+        node
+        for node in nodes
+        if isinstance(node, ec2.GatewayVpcEndpoint)
+        and ".s3" in json.dumps(stack.resolve(node.node.default_child.service_name))  # type: ignore[union-attr]
+    ]
+    if len(endpoints) != 1:
+        raise SidecarError(f"expected the guidance VPC's one S3 gateway endpoint, found {len(endpoints)}")
+    for statement in sidecar["endpoint_statements"]:
+        endpoints[0].add_to_policy(iam.PolicyStatement.from_json(statement))
     log_group = logs.LogGroup(
         stack,
         "PdsSidecarLogs",

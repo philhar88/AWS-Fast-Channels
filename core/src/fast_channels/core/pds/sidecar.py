@@ -6,6 +6,11 @@ grants are exactly the hot-path functions' were: the snapshot object, the budget
 writes (``BUDGET#``, ``CAP#``, ``RES#`` items) and the ledger's ``pds/*`` chains, and with the crawl module the
 catalog-context objects. The task role is shared with Prebid Server's container, so Prebid Server could make these
 calls too (ADR-0036 weighs that).
+
+The sidecar runs in the guidance's VPC, whose S3 gateway endpoint lets requests through only to the guidance's own
+buckets (its endpoint policy): S3 answers anything else ``AccessDenied``, whatever the role allows (seen live). So
+the same S3 reads also join that endpoint's policy (:func:`endpoint_statements`), for any principal of the account
+and those objects only.
 """
 
 from typing import Any, Final
@@ -50,6 +55,9 @@ class Sidecar(BaseModel):
     task_cpu: int = TASK_CPU
     task_memory_mib: int = TASK_MEMORY_MIB
     statements: tuple[dict[str, Any], ...] = Field(description="IAM statements added to the task role.")
+    endpoint_statements: tuple[dict[str, Any], ...] = Field(
+        description="Statements added to the policy of the guidance VPC's S3 gateway endpoint."
+    )
 
 
 def _table(partition: str, region: str, account: str, name: str) -> str:
@@ -127,6 +135,43 @@ def statements(
     return tuple(granted)
 
 
+def endpoint_statements(
+    *,
+    account: str,
+    partition: str,
+    config_bucket: str,
+    catalog_context_bucket: str | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """The sidecar's S3 reads in the guidance VPC's gateway endpoint policy (module docstring), as the guidance's own
+    statements are: any principal, the account's resources only."""
+    own = {"StringEquals": {"aws:ResourceAccount": account}}
+    reads: list[dict[str, Any]] = [
+        {
+            "Sid": "PdsSnapshot",
+            "Effect": "Allow",
+            "Principal": {"AWS": "*"},
+            "Action": "s3:GetObject",
+            "Resource": f"arn:{partition}:s3:::{config_bucket}/{SNAPSHOT_KEY}",
+            "Condition": own,
+        }
+    ]
+    if catalog_context_bucket is not None:
+        reads.append(
+            {
+                "Sid": "PdsCatalogContexts",
+                "Effect": "Allow",
+                "Principal": {"AWS": "*"},
+                "Action": ["s3:ListBucket", "s3:GetObject"],
+                "Resource": [
+                    f"arn:{partition}:s3:::{catalog_context_bucket}",
+                    f"arn:{partition}:s3:::{catalog_context_bucket}/{CONTEXT_PREFIX}*",
+                ],
+                "Condition": own,
+            }
+        )
+    return tuple(reads)
+
+
 def sidecar(
     *,
     prefix: str,
@@ -175,6 +220,12 @@ def sidecar(
             partition=partition,
             region=region,
             account=account,
+            config_bucket=config_bucket,
+            catalog_context_bucket=catalog_context_bucket,
+        ),
+        endpoint_statements=endpoint_statements(
+            account=account,
+            partition=partition,
             config_bucket=config_bucket,
             catalog_context_bucket=catalog_context_bucket,
         ),

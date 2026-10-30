@@ -16,7 +16,9 @@ from typing import Any
 
 import pytest
 from aws_cdk import App, CfnCondition, Fn, Stack
+from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
+from aws_cdk import aws_iam as iam
 from aws_cdk.assertions import Template
 from constructs import Construct
 
@@ -51,6 +53,17 @@ SPEC: Sidecar = sidecar(
 )
 
 
+def _vpc(stack: Stack) -> None:
+    """The guidance's VPC: an S3 gateway endpoint whose policy allows only the guidance's own bucket."""
+    vpc = ec2.Vpc(stack, "PrebidVpc", max_azs=2, nat_gateways=0)
+    endpoint = vpc.add_gateway_endpoint("s3_gateway_endpoint", service=ec2.GatewayVpcEndpointAwsService.S3)
+    endpoint.add_to_policy(
+        iam.PolicyStatement(
+            principals=[iam.AnyPrincipal()], actions=["s3:GetObject"], resources=["arn:aws:s3:::guidance/*"]
+        )
+    )
+
+
 class _Entry(Construct):
     """One of the guidance's entry deployments: a task definition ``ECSTask/PrebidTaskDef`` with Prebid Server's
     container, every resource under the deployment's condition."""
@@ -68,6 +81,7 @@ class _Entry(Construct):
 
 def guidance_like(*, task_id: str = "PrebidTaskDef") -> Stack:
     stack = Stack(App(), "fastcid-pbs")
+    _vpc(stack)
     _Entry(stack, "CloudFrontEntryDeployment", "CloudFront")
     _Entry(stack, "ALBEntryDeployment", "ALB")
     if task_id != "PrebidTaskDef":
@@ -130,14 +144,34 @@ def test_the_task_role_gets_exactly_the_sidecars_grants() -> None:
     assert {json.dumps(s, sort_keys=True) for s in granted} == {json.dumps(s, sort_keys=True) for s in SPEC.statements}
 
 
+def test_the_s3_endpoint_lets_the_sidecars_reads_through() -> None:
+    """The guidance's endpoint policy admits only its own buckets: S3 refused the sidecar's snapshot read until its
+    reads joined it (fastcid, 2026-10-30)."""
+    stack = guidance_like()
+    wrapper.augment(stack, json.loads(SPEC.model_dump_json()))
+    [endpoint] = Template.from_stack(stack).find_resources("AWS::EC2::VPCEndpoint").values()
+    statements = endpoint["Properties"]["PolicyDocument"]["Statement"]
+
+    assert statements[0]["Resource"] == "arn:aws:s3:::guidance/*", "the guidance's own statement stays first"
+    [snapshot] = [s for s in statements if s.get("Sid") == "PdsSnapshot"]
+    assert snapshot["Resource"] == "arn:aws:s3:::fastcid-pds-config-0123/snapshot/current.json"
+    assert (snapshot["Action"], snapshot["Principal"]) == ("s3:GetObject", {"AWS": "*"})
+    assert snapshot["Condition"] == {"StringEquals": {"aws:ResourceAccount": "123456789012"}}
+
+
 def test_a_stack_that_is_not_the_guidances_is_refused() -> None:
     with pytest.raises(wrapper.SidecarError, match="PrebidTaskDef"):
         wrapper.augment(guidance_like(task_id="Other"), json.loads(SPEC.model_dump_json()))
     bare = Stack(App(), "bare")
+    _vpc(bare)
     task = ecs.FargateTaskDefinition(bare, "PrebidTaskDef", cpu=256, memory_limit_mib=512)
     task.add_container("Other-Container", image=ecs.ContainerImage.from_registry("other"))
     with pytest.raises(wrapper.SidecarError, match="Prebid-Container"):
         wrapper.augment(bare, json.loads(SPEC.model_dump_json()))
+    no_endpoint = Stack(App(), "no-endpoint")
+    _Entry(no_endpoint, "CloudFrontEntryDeployment", "CloudFront")
+    with pytest.raises(wrapper.SidecarError, match="S3 gateway endpoint"):
+        wrapper.augment(no_endpoint, json.loads(SPEC.model_dump_json()))
 
 
 def test_the_deploy_command_names_the_wrapper_only_with_a_sidecar() -> None:
@@ -193,5 +227,8 @@ def test_the_real_guidance_synthesizes_with_the_sidecar(tmp_path: Path) -> None:
         assert set(names) == {"Prebid-Container", "Pds-Container"}
         assert names["Prebid-Container"]["DependsOn"] == [{"Condition": "HEALTHY", "ContainerName": "Pds-Container"}]
         assert names["Pds-Container"]["Image"] == SPEC.image
+    [endpoint] = [r for r in resources.values() if r["Type"] == "AWS::EC2::VPCEndpoint"]
+    sids = [s.get("Sid") for s in endpoint["Properties"]["PolicyDocument"]["Statement"]]
+    assert sids[-1] == "PdsSnapshot" and len(sids) == 4, "the guidance's three statements, then the sidecar's read"
     [group] = [r for k, r in resources.items() if r["Type"] == "AWS::Logs::LogGroup" and k.startswith("PdsSidecarLogs")]
     assert group["Properties"]["LogGroupName"] == "/aws/ecs/fastcid-pds" and "Condition" not in group

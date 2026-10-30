@@ -66,6 +66,29 @@ def test_the_grants_are_the_hot_path_functions_and_no_more() -> None:
     assert "*" not in json.dumps([s["Action"] for s in granted.values()])
 
 
+def test_the_s3_reads_join_the_guidance_vpcs_endpoint_policy() -> None:
+    """The guidance's S3 gateway endpoint admits only its own buckets; the sidecar's reads join its policy, for the
+    account's objects only."""
+    own = {"StringEquals": {"aws:ResourceAccount": "123456789012"}}
+
+    assert sidecar(**ARGS).endpoint_statements == (
+        {
+            "Sid": "PdsSnapshot",
+            "Effect": "Allow",
+            "Principal": {"AWS": "*"},
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::fastm-pds-config-0123/snapshot/current.json",
+            "Condition": own,
+        },
+    )
+    [_, contexts] = sidecar(**ARGS, catalog_context_bucket="fastm-catalog-context").endpoint_statements
+    assert contexts["Resource"] == [
+        "arn:aws:s3:::fastm-catalog-context",
+        "arn:aws:s3:::fastm-catalog-context/catalog/ctx/v1/*",
+    ]
+    assert (contexts["Action"], contexts["Condition"]) == (["s3:ListBucket", "s3:GetObject"], own)
+
+
 def test_with_the_crawl_module_it_lists_and_reads_only_the_context_objects() -> None:
     spec = sidecar(
         **ARGS,
