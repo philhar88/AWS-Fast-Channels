@@ -25,10 +25,10 @@ MOCK = "https://abc123.execute-api.us-east-1.amazonaws.com"
 CA_URL = "https://abc.channel-assembly.mediatailor.us-east-1.amazonaws.com/v1/channel/fastm-demo/"
 GRID = (30, 60, 90, 120)
 STORED = (
-    *(f"fast-pod-{s}s" for s in GRID),
-    *(f"fast-pod-kids-{s}s" for s in GRID),
-    *(adsrv.stored_request_id(s) for s in GRID),
-    *(adsrv.stored_request_id(s, kids=True) for s in GRID),
+    "fast-pod",
+    "fast-pod-kids",
+    adsrv.stored_request_id(),
+    adsrv.stored_request_id(kids=True),
 )
 GAM_TAG = (
     "https://pubads.g.doubleclick.net/gampad/ads?iu=/1234/fast/demo&sz=1920x1080&gdfp_req=1&output=vast"
@@ -109,7 +109,10 @@ def test_the_auction() -> None:
         "X-Fast-Sid": "{% session.uuid %}",
         "User-Agent": "{% session.user_agent %}",
     }
-    assert "fast-adsrv-pod-' & $string(session.avail_duration_secs)" in http.body
+    assert http.body == (
+        "{% $string({'ext': {'prebid': {'storedrequest': {'id': 'fast-adsrv-pod'}}, "
+        "'fast': {'pod_s': $string(session.avail_duration_secs)}}}) %}"
+    )
     # The apply adds the secret and the release; PutFunction never sees the bundle's own members.
     sent = auction.put_request()["HttpRequestConfiguration"]
     assert {"CacheScope", "CacheReason", "DemandOrigin"}.isdisjoint(sent)
@@ -228,10 +231,12 @@ def test_only_an_ad_server_sibling_runs_an_auction() -> None:
     assert "sibling fastm-demo-p-z: only an ad-server sibling runs a PRE_ADS auction" in found
 
 
-def test_the_auctions_stored_requests_exist_for_the_grid() -> None:
-    built = bundle(stored_requests=[s for s in STORED if s != adsrv.stored_request_id(60)])
+def test_the_auctions_stored_request_exists() -> None:
+    built = bundle(stored_requests=[s for s in STORED if s != adsrv.stored_request_id()])
+    served = sorted({*STORED} - {adsrv.stored_request_id()})
     assert messages(v.validate_bundle(built), Rule.P5) == [
-        f"function fastm_demo_p_{x}_pa_auction Body: no stored request fast-adsrv-pod-60s for the 60 s breaks"
+        f"function fastm_demo_p_{x}_pa_auction Body: names stored request 'fast-adsrv-pod'; the configuration serves "
+        f"{served}"
         for x in "ab"
     ]
 

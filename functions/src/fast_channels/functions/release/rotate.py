@@ -34,6 +34,7 @@ from fast_channels.core.monetization.functions import RELEASE_SUFFIX, release_ta
 from fast_channels.core.monetization.playback import render
 from fast_channels.core.monetization.release import ChannelState, mapped_functions
 from fast_channels.core.monetization.validators import check_rendered, require_valid
+from fast_channels.core.pbs_config import SLOT_SECONDS, auction_body
 from fast_channels.functions import aws
 from fast_channels.functions.release import apply, promote, reaper, smoke, store
 from fast_channels.functions.settings import settings
@@ -184,7 +185,7 @@ def probe(target: str) -> dict[str, Any]:
     config.require("pbs_origin")
     response = httpx.post(
         f"{config.pbs_origin.rstrip('/')}/openrtb2/auction?evid=0&upid=rotation&dur=30030",
-        json={"ext": {"prebid": {"storedrequest": {"id": "fast-pod-30s"}}}},
+        json=auction_body(SLOT_SECONDS),
         headers={
             "Content-Type": "application/json",
             ORIGIN_HEADER: store.secret(target).get_secret_value(),

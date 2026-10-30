@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from fast_channels.core.ad_server import AdServer, AdServerContribution, ads_url
-from fast_channels.core.ad_server import stored_request_id as adsrv_stored_request_id
 from fast_channels.core.monetization.bundle import AdServerRoute
 from fast_channels.core.monetization.release import ReleaseStatus, applied
-from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
+from fast_channels.core.pbs_config import stored_request_ids
 from fast_channels.functions.release import apply, rotate
 
 if TYPE_CHECKING:
@@ -22,10 +21,7 @@ AT = datetime(2026, 10, 30, 12, tzinfo=UTC)
 CHANNEL = "fastm-demo"
 SIBLINGS = [f"{CHANNEL}-p-a", f"{CHANNEL}-p-b", f"{CHANNEL}-p-z"]
 PAIR = SIBLINGS[:2]
-STORED = [
-    *(stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
-    *(adsrv_stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
-]
+STORED = list(stored_request_ids(ad_server=True))
 MOCK = "https://abc123.execute-api.us-east-1.amazonaws.com"
 
 

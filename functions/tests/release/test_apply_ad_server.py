@@ -9,19 +9,15 @@ import pytest
 from pydantic import SecretStr
 
 from fast_channels.core.ad_server import AdServer, AdServerContribution, ads_url
-from fast_channels.core.ad_server import stored_request_id as adsrv_stored_request_id
 from fast_channels.core.monetization.bundle import AdServerRoute, Bundle
 from fast_channels.core.monetization.playback import release_tags, render, render_function
-from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
+from fast_channels.core.pbs_config import stored_request_ids
 from fast_channels.functions.release import apply
 
 PBS = "https://d222222abcdef8.cloudfront.net"
 MOCK = "https://abc123.execute-api.us-east-1.amazonaws.com"
 GAM_TAG = "https://pubads.g.doubleclick.net/gampad/ads?iu=/1/f&cust_params={prebid}"
-STORED = [
-    *(stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
-    *(adsrv_stored_request_id(s, kids=k) for k in (False, True) for s in POD_SECONDS),
-]
+STORED = list(stored_request_ids(ad_server=True))
 ARN = "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/"
 HLS = "https://abc.mediatailor.us-east-1.amazonaws.com/v1/master/h/fastm-demo-p-a/"
 

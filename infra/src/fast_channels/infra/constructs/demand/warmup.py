@@ -31,7 +31,7 @@ from fast_channels.core.demand import (
     origin_secret,
     warmup_project,
 )
-from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
+from fast_channels.core.pbs_config import POD_MAX_SECONDS, auction_body
 from fast_channels.infra import nag
 from fast_channels.infra.grants import allow
 
@@ -44,9 +44,9 @@ def warmup_buildspec(*, prefix: str, cloudfront_domain: str, cluster_arn: str, t
     it) is a healthy target, read origin secret A, replay probe auctions (``RATE`` and ``SECONDS_TO_RUN`` override
     the rate and the duration, as ``prebid_guidance.py herd`` does)."""
     polls = WARMUP_HEALTHY_WAIT_SECONDS // 10
-    longest = max(POD_SECONDS)
+    longest = POD_MAX_SECONDS
     query = f"evid=1&upid=warmup&dur={longest * 1001}"
-    body = json.dumps({"ext": {"prebid": {"storedrequest": {"id": stored_request_id(longest)}}}}, separators=(",", ":"))
+    body = json.dumps(auction_body(longest), separators=(",", ":"))
     return {
         "version": "0.2",
         "env": {"shell": "bash"},

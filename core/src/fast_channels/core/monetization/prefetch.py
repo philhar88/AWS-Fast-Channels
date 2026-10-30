@@ -17,7 +17,7 @@ The schedule of record is the source of truth, and the plan is a function of it:
 writes nothing. Late joiners and viewers who join during a break get real-time insertion, as accepted.
 
 Every schedule carries rule R-S1's ``DynamicVariables`` (``scte.event_id``, ``scte.segmentation_upid``,
-``session.avail_duration_ms``) and ``session.avail_duration_secs``, which the POST body's stored-request id uses.
+``session.avail_duration_ms``) and ``session.avail_duration_secs``, which the POST body sends as the pod's length.
 Retrieval opens ``retrieval_lead_s`` before the break and spreads the sessions' ADS requests over
 ``shaping_window_s`` (``RETRIEVAL_WINDOW`` traffic shaping), so the PDS sees a ramp instead of a break-time herd. A
 configuration with a RECURRING schedule gets no SINGLE schedule: the two are never mixed (P0-02). A break without a

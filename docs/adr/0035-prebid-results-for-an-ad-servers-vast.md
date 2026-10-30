@@ -58,7 +58,7 @@ We needed to settle five things:
   | Part | Value |
   |---|---|
   | Query | the break's `evid`, `upid` and `dur`, as the direct route sends them |
-  | Body | only the stored request `fast-adsrv-pod-<seconds>s` |
+  | Body | only the stored request `fast-adsrv-pod` and the break's length, `ext.fast.pod_s` |
   | Headers | `X-Fast-Pc`, `X-Fast-Sid` and the viewer's `User-Agent` |
   | Added at apply | `X-Fast-Origin` and `X-Fast-Fv`, so the bundle never holds the secret |
   | Cache | `session_break`, keyed on the session and the event id, 30 s ([ADR 0034](0034-every-function-request-cached-by-scope.md)) |
@@ -66,7 +66,8 @@ We needed to settle five things:
 
   The root commits the answer's targeting to the three player parameters for this break, or empty values when there
   is no bid.
-- **The pod.** The `fast-adsrv-pod-*` stored requests are the `fast-pod-*` pods plus two fields:
+- **The pod.** The `fast-adsrv-pod` stored requests (and `fast-adsrv-pod-kids`) are the `fast-pod` template pods,
+  which the module shapes to the break ([ADR 0020](0020-demand-through-the-prebid-server-guidance.md)), plus two fields:
   `ext.fast.pod_cache.ttlseconds` and CTV price buckets in `ext.prebid.targeting`. The buckets are 0.10 up to $20,
   0.50 up to $50 and 1.00 up to $100. They set no `ext.prebid.cache`, so Prebid Server's core never caches single
   bids.

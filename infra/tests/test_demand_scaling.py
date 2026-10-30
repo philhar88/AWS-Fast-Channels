@@ -120,7 +120,10 @@ def test_the_warmup_replays_probe_auctions_with_a_verified_vegeta() -> None:
     assert "--secret-id fastm/demand/origin-a" in build
     assert "-rate=${RATE}/s" in build
     assert f"RATE=${{RATE:-$(( {WARMUP_RATE_PER_TASK} * (HEALTHY > 0 ? HEALTHY : 1) ))}}" in pre_build
-    assert "fast-pod-120s" in build
+    assert (
+        """printf '%s' '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod"}},"fast":{"pod_s":"120"}}}' > body.json"""
+        in build
+    ), "the longest pod"
     # Load only once the task is a healthy target: before, it fails its checks and ECS replaces it
     assert 'if [ -n "${TASK_ARN:-}" ]' in pre_build
     assert f"describe-target-health --target-group-arn {NETWORK['target_group_arn']}" in pre_build

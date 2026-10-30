@@ -26,7 +26,7 @@ retrieval window, and can spread those requests over a time window (`RETRIEVAL_W
   (contrary to the user guide); `scte.*` values come only from the schedule's `DynamicVariables`, and
   `session.avail_duration_ms` is rounded to whole seconds (`60060` reaches the ADS as `60000`).
 - A **RECURRING** schedule also works, but carries no event id or UPID and a 300 s duration, so the PDS could not
-  match the break and Prebid Server would look for a 300 s stored request.
+  match the break, and the pod would be for 300 s, which the fast-ctv module answers empty.
 - `ListPrefetchSchedules` hides RECURRING schedules unless `ScheduleType=ALL`; `adBreakCorrelationId` is missing on
   prefetch events, and a prefetch-consumed `FILLED_AVAIL` carries the session's previous request URL.
 - Retrieval transcodes bill whether or not the break airs; MediaTailor allows 25 active schedules per configuration.
@@ -48,8 +48,8 @@ retrieval window, and can spread those requests over a time window (`RETRIEVAL_W
   - retrieval from 150 s to 30 s before the break, with `RETRIEVAL_WINDOW` traffic shaping over 90 s;
   - consumption from 20 s before the break to 10 s after it, matched on `scte.event_id`;
   - `DynamicVariables`: rule R-S1's `scte.event_id`, `scte.segmentation_upid` (the content id, as MediaTailor passes
-    it in real time) and `session.avail_duration_ms`, plus `session.avail_duration_secs`, from which the POST body
-    names its stored request.
+    it in real time) and `session.avail_duration_ms`, plus `session.avail_duration_secs`, which the POST body
+    sends as the pod's length.
   Every request passes validator R-S1 before it is sent. A break without an MPU UPID, or whose length is not one of
   the stage's break lengths, keeps real-time insertion.
 - **The ad path on retrieval is the real-time one.** The PDS answers about 150 s ahead: its rule for the rounded

@@ -23,10 +23,11 @@ demo creatives, and the census-gated scaling with its warm-up are in place. The 
 
 1. At each ad marker, MediaTailor POSTs to the guidance's CloudFront distribution. The URL carries the break's
    `evid`, `upid` and `dur`, the header templates carry the session id and the origin secret, and the body names
-   the stored request for the break's length.
+   the route's stored request and carries the break's length (`ext.fast.pod_s`).
 2. A WAF rule group of the stage, referenced first by the guidance's web ACL, blocks `/openrtb2/*` without the
    origin secret.
-3. Prebid Server loads the stored request: one pod of 30 s slots for the own book only.
+3. Prebid Server loads the stored request, a template pod of one 30 s slot for the own book only, and the fast-ctv
+   module shapes it to the break: one slot per whole 30 s of `pod_s`, from 30 to 120 s.
 4. The fast-ctv module's policy hook asks the Pod Decision Service which bidders, regulations and device fields this
    break may use. Only on a positive, in-time answer does it add them.
 5. The auction runs (`tmax` 500 ms). The module's exitpoint hook has the Pod Decision Service select the pod, and
@@ -80,9 +81,9 @@ deploy time. Golden copies for a sample stage are in `core/tests/__snapshots__/t
 
 | File | Content |
 |---|---|
-| `current-config/prebid-config.yaml` | Replaces the guidance's default file, so it repeats every default it keeps. Changes: `server.http.server-instances` = `modules.demand.server_instances`; the five shipped adapters (`appnexus`, `ix`, `openx`, `pubmatic`, `rubicon`) off; the simulator (`amt`) on in `demo` mode only; the own book `ownbook`, a `generic` alias on the PDS sidecar's `http://127.0.0.1:8090/ownbook/openrtb` (OpenRTB 2.6); `hooks.fast-ctv` (policy and select URLs and timeouts, the tracker template, the kit's house ads as `house-ads`, request logging); GDPR out of scope unless a request signals it; the unprotected log-level endpoint off |
-| `stored_requests/fast-pod-{30,60,90,120}s.json` | One pod (`podid` 1) of one to four 30 s slots (`poddur` = the break, `rqddurs` [30], `slotinpod` 1 first, -1 last); `app.content` `livestream` 1, `context` 1, `cattax` 9; a complete `source.schain`; `regs.coppa` 0; `imp.ssai` 3; `tmax` 500; bidder: the own book only, with up to 9 bids per slot (`ext.prebid.multibid`; Prebid Server otherwise keeps one bid per bidder and slot, and the house ads would never reach the module); no `device` or `user` |
-| `stored_requests/fast-pod-kids-{…}s.json` | The same with `regs.coppa` 1, for child-directed playback configurations |
+| `current-config/prebid-config.yaml` | Replaces the guidance's default file, so it repeats every default it keeps. Changes: `server.http.server-instances` = `modules.demand.server_instances`; the five shipped adapters (`appnexus`, `ix`, `openx`, `pubmatic`, `rubicon`) off; the simulator (`amt`) on in `demo` mode only; the own book `ownbook`, a `generic` alias on the PDS sidecar's `http://127.0.0.1:8090/ownbook/openrtb` (OpenRTB 2.6); `hooks.fast-ctv` (policy and select URLs and timeouts, the tracker template, the kit's house ads as `house-ads`, the break lengths it shapes a pod for, `pod-min-s` 30 and `pod-max-s` 120, request logging); GDPR out of scope unless a request signals it; the unprotected log-level endpoint off |
+| `stored_requests/fast-pod.json` | The one stored request of the direct route: a template pod (`podid` 1) of one 30 s slot `s1` (`rqddurs` [30]) and `ext.fast.slot_s` 30. The module copies the slot once per whole 30 s of the POST's `ext.fast.pod_s` (`s1`, `s2`, …, `poddur` = the break, `slotinpod` 1 first, -1 last, 0 for one slot) and drops `ext.fast` before any bidder sees it; `app.content` `livestream` 1, `context` 1, `cattax` 9; a complete `source.schain`; `regs.coppa` 0; `imp.ssai` 3; `tmax` 500; bidder: the own book only, with up to 9 bids per slot (`ext.prebid.multibid`; Prebid Server otherwise keeps one bid per bidder and slot, and the house ads would never reach the module); no `device` or `user` |
+| `stored_requests/fast-pod-kids.json` | The same with `regs.coppa` 1, for child-directed playback configurations |
 | `stored_accounts/<prefix>.json` | The execution plan: `processed-auction-request` → `fast-ctv-policy` inside `modules.pds.policy_group_timeout_ms`, `exitpoint` → `fast-ctv-vast` inside `select_group_timeout_ms`. Activity Controls deny `transmitEids`, `transmitUfpd` and `transmitPreciseGeo` to every bidder but the own book. Debug output is off |
 
 The Pod Decision Service is a sidecar in each Prebid Server task, on `http://127.0.0.1:8090`
@@ -292,7 +293,7 @@ How a break is sold on this route:
    origin rule, before the ad request. It sends what MediaTailor's direct POST sends:
    - the break in the query;
    - the session and the configuration in headers, plus the viewer's `User-Agent`;
-   - in the body, only the stored request `fast-adsrv-pod-<seconds>s`;
+   - in the body, only the stored request `fast-adsrv-pod` and the break's length (`ext.fast.pod_s`);
    - the origin secret and the release, which the Release Controller adds when it creates the Function.
 
    The Function is cached per session and break (scope `session_break`, 30 s), so a break's auction runs once. Its
@@ -427,10 +428,14 @@ order:
    `cluster-arn`, `service-arn`, `task-security-group-id`, `vpc-id`, `private-subnet-ids`, `alb-arn`, `web-acl-arn`,
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
 6. **The configuration**: the rendered files are compared with what the guidance serves (`current/` in its settings
-   bucket, the stored data in its stored-requests bucket), what differs is uploaded, everything is read back and must
-   match, and if anything changed Prebid Server's tasks roll (overlay O7 keeps full capacity). The guidance uploads
-   its configuration directory only when its stack is created, so without this a changed setting (a timeout, the house
-   ads) would never reach an existing stage.
+   bucket, the stored data in its stored-requests bucket), what differs is uploaded, and everything is read back and
+   must match. Then what an earlier configuration left is pruned: under `prebid-server/current/`, `stored_requests/`,
+   `stored_responses/` and `stored_accounts/` only, every object that is neither rendered nor shipped by the guidance
+   (its README files and sample stored request) is listed and deleted, such as the per-length `fast-pod-<n>s` stored
+   requests before v4.0.0. Prebid Server would otherwise still serve them to anything that named them. If anything
+   was uploaded or deleted, Prebid Server's tasks roll (overlay O7 keeps full capacity). The guidance uploads its
+   configuration directory only when its stack is created, and never deletes, so without this a changed setting (a
+   timeout, the house ads) would never reach an existing stage.
 7. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
    `lambda` mode the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)), the census
    gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)). With
@@ -440,13 +445,16 @@ order:
    **`FastChannels-<prefix>-Release`** follows: the Release Controller, whose bundle names the guidance's CloudFront
    domain ([docs/release-controller.md](release-controller.md#deploy-and-destroy)). Then one run of the census
    gate with the current count.
-8. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
-   VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs
-   `POLICY_UNAVAILABLE`); the same POST without the secret, and a request to another path, are blocked at the edge
-   (403); an off-grid duration is refused (400). In demo mode the simulator and the demo creatives are checked too.
+8. **The smoke test**: a synthetic MediaTailor probe POST with origin secret A for each grid length and for 48 s (a
+   length off the grid, as a mid-break joiner's remainder is) must answer 200 with a VAST 4.2 pod as `application/xml`,
+   of at least one ad when the kit has house ads (a probe's pod is house only, and while the Pod Decision Service is
+   absent the module renders the kit's from its configuration and logs `POLICY_UNAVAILABLE`); a missing duration
+   (300 s) must answer an empty VAST 4.2 document; the same POST
+   without the secret, and a request to another path, are blocked at the edge (403). In demo mode the simulator and
+   the demo creatives are checked too.
 
 `upload-config` runs step 6 alone: it uploads what changed in the rendered configuration, verifies every object in
-S3, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.
+S3, prunes what is stale, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.
 
 `destroy` deletes the Release, Pds and Demand stacks and the guidance's stacks, then what the guidance's templates retain (the
 S3 buckets with every object version, the container, DataSync, Lambda and Container Insights log groups, inactive task
@@ -495,5 +503,7 @@ web ACL, the Valkey cache minimum). Destroy throwaway stages right after use.
   ticket and every player parameter travel in header templates, which Prebid Server never copies to bidders.
 - **The no-hook contract.** A stored request names only the own book. If the module is disabled or absent, or
   `/policy` is unreachable, slow or failing, the auction calls no third-party bidder.
-- **The 30.03 s grid.** MediaTailor rounds `session.avail_duration_secs` half up and sends 300 for a missing duration.
-  A break off the grid names a stored request that does not exist: Prebid Server answers 400 and the slate plays.
+- **One stored request per route.** MediaTailor rounds `session.avail_duration_secs` half up and sends 300 for a
+  missing duration. The body carries the value as `ext.fast.pod_s`, and the module shapes a pod for any length from
+  30 to 120 s, on the 30.03 s grid or not (a mid-break joiner asks for the rest of the break). A shorter, longer,
+  missing or unreadable length is rejected: the module answers an empty VAST 4.2 document and the slate plays.

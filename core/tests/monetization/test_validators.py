@@ -727,21 +727,24 @@ def test_headers(bundle: Bundle, kit: SimpleNamespace) -> None:
 def test_stored_requests(kit: SimpleNamespace) -> None:
     body = pb.ads_body(kids=False)
     assert v.check_stored_requests(body, stored_requests=kit.STORED, grid_seconds=kit.GRID) == []
-    found = v.check_stored_requests(
-        body, stored_requests=["fast-pod-30s", "fast-pod-60s", "fast-pod-31s", "fast-pod-300s"], grid_seconds=kit.GRID
-    )
+    found = v.check_stored_requests(body, stored_requests=["fast-pod-30s", "fast-pod-60s"], grid_seconds=kit.GRID)
     assert [x.message for x in found] == [
-        "no stored request fast-pod-90s for the 90 s breaks",
-        "no stored request fast-pod-120s for the 120 s breaks",
-        "fast-pod-31s exists: a 31 s ask must fail safe to the slate",
-        "fast-pod-300s exists: a 300 s ask must fail safe to the slate",
+        "names stored request 'fast-pod'; the configuration serves ['fast-pod-30s', 'fast-pod-60s']"
     ]
-    assert [
-        x.message for x in v.check_stored_requests(body, stored_requests=["fast-pod-300s"], grid_seconds=[300])
-    ] == ["0 s and 300 s (a missing duration) are never grid durations"]
-    assert [x.message for x in v.check_stored_requests('{"id":"fixed"}', stored_requests=[], grid_seconds=[])] == [
-        "the body names its stored request by session.avail_duration_secs"
+    assert [x.message for x in v.check_stored_requests(body, stored_requests=["fast-pod"], grid_seconds=[60, 300])] == [
+        "0 s and 300 s (a missing duration) are never grid durations"
     ]
+    per_length = '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod-{{session.avail_duration_secs}}s"}}}}'
+    assert [x.message for x in v.check_stored_requests(per_length, stored_requests=kit.STORED, grid_seconds=[])] == [
+        "names stored request 'fast-pod-{{session.avail_duration_secs}}s'; the configuration serves "
+        "['fast-pod', 'fast-pod-kids']",
+        "sends the break's length as ext.fast.pod_s = {{session.avail_duration_secs}}",
+    ]
+    fixed = '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod"}},"fast":{"pod_s":"60"}}}'
+    assert [x.message for x in v.check_stored_requests(fixed, stored_requests=kit.STORED, grid_seconds=[])] == [
+        "sends the break's length as ext.fast.pod_s = {{session.avail_duration_secs}}"
+    ]
+    assert v.check_stored_requests("not json", stored_requests=kit.STORED, grid_seconds=[])
     kids = pb.ads_body(kids=True)
     assert v.check_stored_requests(kids, stored_requests=kit.STORED, grid_seconds=kit.GRID) == []
 
@@ -797,7 +800,9 @@ def test_a_pbs_sibling_without_a_body(bundle: Bundle, kit: SimpleNamespace) -> N
     found = v.validate_bundle(kit.edit(bundle, change))
     assert "sibling fastm-demo-p-a Body: a PBS sibling POSTs a body" in kit.messages(found, Rule.P1)
     assert kit.messages(found, Rule.P5) == [
-        "sibling fastm-demo-p-a Body: the body names its stored request by session.avail_duration_secs"
+        "sibling fastm-demo-p-a Body: names stored request None; the configuration serves "
+        "['fast-pod', 'fast-pod-kids']",
+        "sibling fastm-demo-p-a Body: sends the break's length as ext.fast.pod_s = {{session.avail_duration_secs}}",
     ]
 
 

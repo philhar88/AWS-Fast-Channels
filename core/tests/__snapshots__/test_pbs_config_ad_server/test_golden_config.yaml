@@ -40,6 +40,8 @@ hooks:
     select-timeout-ms: 200
     tracker-template: "https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
     house-ads: "[]"
+    pod-min-s: 30
+    pod-max-s: 120
     log-requests: true
 metrics:
   logback:

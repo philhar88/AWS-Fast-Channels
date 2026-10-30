@@ -6,15 +6,19 @@ Pure renderers, without I/O, for one stage (:func:`render`):
   file, so this file replaces the guidance's default ``prebid-config.yaml`` and repeats every default it keeps. It
   turns the guidance's five shipped adapters off, the bidder simulator (``amt``) on in demo mode, adds the own book as
   a ``generic`` alias on the Pod Decision Service and configures the fast-ctv module.
-- ``stored_requests/fast-pod-<n>s.json`` and ``fast-pod-kids-<n>s.json``: one structured pod of 30 s slots per break
-  length on the 30.03 s grid. They name only the own book: third-party bidders, IDs and user data are added by the
-  fast-ctv policy hook after a positive, in-time ``/policy`` answer, so a hook that is skipped, slow, failing or
-  absent leaves own book and house only (the no-hook contract).
+- ``stored_requests/fast-pod.json`` and ``fast-pod-kids.json`` (with the ad-server route, ``fast-adsrv-pod.json`` and
+  ``fast-adsrv-pod-kids.json``): one stored request per route, a template pod of one 30 s slot. They name only the
+  own book: third-party bidders, IDs and user data are added by the fast-ctv policy hook after a positive, in-time
+  ``/policy`` answer, so a hook that is skipped, slow, failing or absent leaves own book and house only (the no-hook
+  contract).
 - ``stored_accounts/<prefix>.json``: the stage's account, with the module's execution plan and the Activity Controls.
 
-MediaTailor asks for ``fast-pod-{{session.avail_duration_secs}}s``. The seconds round half up, and a missing duration
-becomes 300 s, so an off-grid or unknown break names a stored request that does not exist: Prebid Server answers
-400 and the Channel Assembly slate plays.
+MediaTailor's POST names the route's stored request and sends the break's length as ``ext.fast.pod_s``
+(``{{session.avail_duration_secs}}``, whole seconds rounded half up). The fast-ctv module shapes the pod from it: one
+slot per whole 30 s (``ext.fast.slot_s``), ``poddur`` the break's length, for any length from :data:`POD_MIN_SECONDS`
+to :data:`POD_MAX_SECONDS`, which covers a mid-break joiner's remainder. A zero, missing (MediaTailor sends 300 s) or
+unreadable length is outside the range: the module rejects the auction and answers an empty VAST, so the Channel
+Assembly slate plays.
 
 Nothing rendered here is secret: the origin secret lives in the WAF rule group, never in Prebid Server.
 """
@@ -34,8 +38,17 @@ from fast_channels.core.pds.names import PORT as PDS_PORT
 from fast_channels.core.timeline import whole_seconds
 
 POD_SECONDS: Final = (30, 60, 90, 120)
-"""Break lengths with a stored request: one to four 30 s slots (the 30.03 s grid, rounded)."""
+"""The grid's break lengths: one to four 30 s slots (the 30.03 s grid, rounded)."""
 SLOT_SECONDS: Final = 30
+POD_MIN_SECONDS: Final = min(POD_SECONDS)
+"""The shortest break the module shapes a pod for (``hooks.fast-ctv.pod-min-s``): one slot."""
+POD_MAX_SECONDS: Final = max(POD_SECONDS)
+"""The longest break the module shapes a pod for (``hooks.fast-ctv.pod-max-s``): the grid's four slots. MediaTailor's
+300 s for a missing duration is outside the range."""
+POD_FIELD: Final = "pod_s"
+"""``ext.fast.pod_s``: the break's whole seconds, which the POST body sends as a string (fast-ctv's ``PodShape``)."""
+SLOT_FIELD: Final = "slot_s"
+"""``ext.fast.slot_s``: a slot's seconds, which the stored request sets (fast-ctv's ``PodShape``)."""
 PBS_VERSION: Final = "4.4.0"
 """The Prebid Server Java release the stage's image is built from (``vendor/prebid-guidance/PIN.toml``): the latest
 release, the only one supported since v4.0.0 (ADR-0020)."""
@@ -105,10 +118,27 @@ def cache_host(prefix: str) -> str:
     return f"{CACHE_RECORD}.{private_zone(prefix)}"
 
 
-def stored_request_id(seconds: int, *, kids: bool = False, ad_server: bool = False) -> str:
-    """``fast-pod-<seconds>s`` (``fast-pod-kids-<seconds>s`` for child-directed playback configurations); the
-    ad-server route's are ``fast-adsrv-pod-…`` (``core.ad_server``)."""
-    return f"fast-{'adsrv-' if ad_server else ''}pod-{'kids-' if kids else ''}{seconds}s"
+def stored_request_id(*, kids: bool = False, ad_server: bool = False) -> str:
+    """``fast-pod`` (``fast-pod-kids`` for child-directed playback configurations); the ad-server route's are
+    ``fast-adsrv-pod`` and ``fast-adsrv-pod-kids`` (``core.ad_server``)."""
+    return f"fast-{'adsrv-' if ad_server else ''}pod{'-kids' if kids else ''}"
+
+
+def auction_body(seconds: int | str, *, kids: bool = False, ad_server: bool = False) -> dict[str, Any]:
+    """The POST body MediaTailor sends for a ``seconds`` break (``core.monetization.playback.ads_body`` rendered): the
+    route's stored request and the break's whole seconds as a string. Probes, smoke tests and warm-ups send it too."""
+    return {
+        "ext": {
+            "prebid": {"storedrequest": {"id": stored_request_id(kids=kids, ad_server=ad_server)}},
+            "fast": {POD_FIELD: str(seconds)},
+        }
+    }
+
+
+def stored_request_ids(*, ad_server: bool = False) -> tuple[str, ...]:
+    """Every stored request a stage serves: the direct route's two, and with ``ad_server`` the ad-server route's."""
+    routes = (False, True) if ad_server else (False,)
+    return tuple(stored_request_id(kids=kids, ad_server=route) for route in routes for kids in (False, True))
 
 
 class HouseAd(BaseModel):
@@ -201,11 +231,12 @@ def tracker_host(cdn_base_url: str) -> str:
     return host
 
 
-def _slot(index: int, count: int, poddur: int) -> dict[str, Any]:
-    """Slot ``index`` (1-based) of ``count``: ``slotinpod`` 1 first, -1 last, 0 between (and for a single slot)."""
-    position = 1 if index == 1 else -1 if index == count else 0
+def _template_slot() -> dict[str, Any]:
+    """The stored request's one slot, ``s1``: a pod of one 30 s slot (``slotinpod`` 0). The module copies it once per
+    slot of the break and sets each copy's ``id`` (``s1``, ``s2``, …), ``poddur`` and ``slotinpod`` (1 first, -1 last,
+    0 between); an account without the module sends it as it is."""
     return {
-        "id": f"s{index}",
+        "id": "s1",
         "video": {
             "mimes": list(VIDEO_MIMES),
             "protocols": list(VIDEO_PROTOCOLS),
@@ -215,41 +246,37 @@ def _slot(index: int, count: int, poddur: int) -> dict[str, Any]:
             "linearity": 1,
             "startdelay": -1,
             "podid": 1,
-            "poddur": poddur,
+            "poddur": SLOT_SECONDS,
             "rqddurs": [SLOT_SECONDS],
-            "slotinpod": position if count > 1 else 0,
+            "slotinpod": 0,
         },
         "ssai": 3,
         "ext": {"prebid": {"bidder": {OWN_BOOK: {}}}},
     }
 
 
-def stored_request(
-    settings: PbsSettings, seconds: int, *, kids: bool = False, ad_server: bool = False
-) -> dict[str, Any]:
-    """The stored request for a ``seconds`` break: ``seconds / 30`` structured slots of one pod, own book only, which
-    may bid several ads per slot (:data:`OWN_BOOK_MAXBIDS`).
+def stored_request(settings: PbsSettings, *, kids: bool = False, ad_server: bool = False) -> dict[str, Any]:
+    """The route's stored request: a template pod of one 30 s slot (``s1``), own book only, which may bid several ads
+    per slot (:data:`OWN_BOOK_MAXBIDS`). The fast-ctv module shapes it to the break: one copy of the slot per whole
+    ``ext.fast.slot_s`` of ``ext.fast.pod_s`` (the POST body's), each with ``poddur`` the break's length.
 
     The ad-server route's (``ad_server``) is the same pod plus two asks of the fast-ctv module: cache the composed pod
     for ``pod_cache_seconds`` (``ext.fast.pod_cache``) and answer its Prebid targeting in CTV price buckets
     (``ext.prebid.targeting``). It sets no ``ext.prebid.cache``, so Prebid Server's core never caches single bids.
-
-        Raises:
-            ValueError: ``seconds`` is not one of :data:`POD_SECONDS`.
     """
-    if seconds not in POD_SECONDS:
-        raise ValueError(f"no stored request for {seconds} s breaks: the grid is {POD_SECONDS}")
-    count = seconds // SLOT_SECONDS
-    ext: dict[str, Any] = {"prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": OWN_BOOK_MAXBIDS}]}}
+    ext: dict[str, Any] = {
+        "prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": OWN_BOOK_MAXBIDS}]},
+        "fast": {SLOT_FIELD: SLOT_SECONDS},
+    }
     if ad_server:
         ext["prebid"]["targeting"] = {
             "pricegranularity": dict(CTV_PRICE_GRANULARITY),
             "includewinners": True,
             "includebidderkeys": False,
         }
-        ext["fast"] = {POD_CACHE_FIELD: {"ttlseconds": settings.pod_cache_seconds}}
+        ext["fast"][POD_CACHE_FIELD] = {"ttlseconds": settings.pod_cache_seconds}
     return {
-        "id": stored_request_id(seconds, kids=kids, ad_server=ad_server),
+        "id": stored_request_id(kids=kids, ad_server=ad_server),
         "at": 1,
         "tmax": TMAX_MS,
         "cur": ["USD"],
@@ -267,7 +294,7 @@ def stored_request(
             }
         },
         "regs": {"coppa": 1 if kids else 0},
-        "imp": [_slot(index, count, seconds) for index in range(1, count + 1)],
+        "imp": [_template_slot()],
         "ext": ext,
     }
 
@@ -358,6 +385,8 @@ def prebid_config(settings: PbsSettings) -> dict[str, Any]:
                 "select-timeout-ms": settings.select_timeout_ms,
                 "tracker-template": settings.tracker_template,
                 "house-ads": json.dumps([ad.model_dump() for ad in settings.house_ads], separators=(",", ":")),
+                "pod-min-s": POD_MIN_SECONDS,
+                "pod-max-s": POD_MAX_SECONDS,
                 "log-requests": True,
             },
         },
@@ -424,10 +453,9 @@ def render(settings: PbsSettings) -> dict[str, str]:
     files["current-config/prebid-config.yaml"] += to_yaml(prebid_config(settings))
     for ad_server in (False, True) if settings.ad_server else (False,):
         for kids in (False, True):
-            for seconds in POD_SECONDS:
-                files[f"stored_requests/{stored_request_id(seconds, kids=kids, ad_server=ad_server)}.json"] = _json(
-                    stored_request(settings, seconds, kids=kids, ad_server=ad_server)
-                )
+            files[f"stored_requests/{stored_request_id(kids=kids, ad_server=ad_server)}.json"] = _json(
+                stored_request(settings, kids=kids, ad_server=ad_server)
+            )
     files[f"stored_accounts/{settings.prefix}.json"] = _json(account(settings))
     return files
 

@@ -255,7 +255,7 @@ Each schedule, `pf-<event id>`, tagged `fast:owner=release-controller`:
 | Part | Setting |
 |---|---|
 | Retrieval | From `retrieval_lead_seconds` (150) to `retrieval_end_seconds` (30) before the break, spread over `shaping_window_seconds` (90) with `RETRIEVAL_WINDOW` traffic shaping |
-| Dynamic variables | `scte.event_id`, `scte.segmentation_upid` (the content id), `session.avail_duration_ms` (rule R-S1) and `session.avail_duration_secs` (the POST body's stored request) |
+| Dynamic variables | `scte.event_id`, `scte.segmentation_upid` (the content id), `session.avail_duration_ms` (rule R-S1) and `session.avail_duration_secs` (the POST body's pod length, `ext.fast.pod_s`) |
 | Consumption | From 20 s before the break to 10 s after it, only into the break with that `scte.event_id` |
 
 - **Create-only.** A schedule is never changed: a moved break's schedule is deleted and created again, and a re-planned

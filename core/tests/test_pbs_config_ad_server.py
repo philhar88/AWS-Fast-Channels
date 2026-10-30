@@ -11,7 +11,6 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
 from fast_channels.core.pbs_config import (
     POD_CACHE_GROUP_MS,
-    POD_SECONDS,
     PbsSettings,
     account,
     prebid_config,
@@ -40,17 +39,15 @@ class YamlSnapshot(SingleFileSnapshotExtension):
 
 def test_the_mode_adds_its_stored_requests() -> None:
     added = sorted(set(render(SETTINGS)) - set(render(SETTINGS.model_copy(update={"ad_server": False}))))
-    assert added == sorted(
-        f"stored_requests/fast-adsrv-pod-{kids}{seconds}s.json" for kids in ("", "kids-") for seconds in POD_SECONDS
-    )
+    assert added == ["stored_requests/fast-adsrv-pod-kids.json", "stored_requests/fast-adsrv-pod.json"]
 
 
-@pytest.mark.parametrize("seconds", POD_SECONDS)
-def test_a_stored_request_is_the_pod_with_the_pod_cache_ask(seconds: int) -> None:
-    direct, cached = stored_request(SETTINGS, seconds), stored_request(SETTINGS, seconds, ad_server=True)
-    assert cached.pop("id") == f"fast-adsrv-pod-{seconds}s"
+@pytest.mark.parametrize("kids", [False, True])
+def test_a_stored_request_is_the_pod_with_the_pod_cache_ask(kids: bool) -> None:
+    direct, cached = stored_request(SETTINGS, kids=kids), stored_request(SETTINGS, kids=kids, ad_server=True)
+    assert cached.pop("id") == f"fast-adsrv-pod{'-kids' if kids else ''}"
     direct.pop("id")
-    assert cached["ext"].pop("fast") == {"pod_cache": {"ttlseconds": 300}}
+    assert cached["ext"]["fast"].pop("pod_cache") == {"ttlseconds": 300}
     assert cached["ext"]["prebid"].pop("targeting") == {
         "pricegranularity": {
             "precision": 2,
@@ -67,7 +64,7 @@ def test_a_stored_request_is_the_pod_with_the_pod_cache_ask(seconds: int) -> Non
     assert "cache" not in cached["ext"]["prebid"]  # Prebid Server's core never caches single bids
 
 
-@pytest.mark.parametrize("path", ["stored_requests/fast-adsrv-pod-60s.json", "stored_accounts/fastm.json"])
+@pytest.mark.parametrize("path", ["stored_requests/fast-adsrv-pod.json", "stored_accounts/fastm.json"])
 def test_golden_json(path: str, snapshot: SnapshotAssertion) -> None:
     assert json.loads(render(SETTINGS)[path]) == snapshot.use_extension(JSONSnapshotExtension)
 

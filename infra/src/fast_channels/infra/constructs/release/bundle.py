@@ -13,7 +13,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from fast_channels.core.ad_server import stored_request_id as ad_server_stored_request_id
 from fast_channels.core.monetization.bundle import (
     AdServerRoute,
     Bundle,
@@ -24,7 +23,7 @@ from fast_channels.core.monetization.bundle import (
     bundle_document,
 )
 from fast_channels.core.monetization.validators import require_valid, validate_bundle
-from fast_channels.core.pbs_config import POD_SECONDS, stored_request_id
+from fast_channels.core.pbs_config import POD_SECONDS, stored_request_ids
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -32,11 +31,9 @@ if TYPE_CHECKING:
     from fast_channels.infra.config import FastChannelsConfig
 
 _TOKEN: Final = re.compile(r"\$\{Token\[[^\]]*\]\}")
-STORED_REQUESTS: Final = tuple(stored_request_id(s, kids=kids) for kids in (False, True) for s in POD_SECONDS)
+STORED_REQUESTS: Final = stored_request_ids()
 """What the Prebid Server configuration serves (``core.pbs_config.render``): validator R-P5 checks the bodies."""
-AD_SERVER_STORED_REQUESTS: Final = tuple(
-    ad_server_stored_request_id(s, kids=kids) for kids in (False, True) for s in POD_SECONDS
-)
+AD_SERVER_STORED_REQUESTS: Final = tuple(sorted(set(stored_request_ids(ad_server=True)) - set(STORED_REQUESTS)))
 """What it serves too with ``modules.demand.ad_server`` set (the auction's stored requests)."""
 
 

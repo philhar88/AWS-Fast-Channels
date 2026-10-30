@@ -49,7 +49,7 @@ def test_options(kit: SimpleNamespace) -> None:
     kids = kit.make_bundle(
         channels=[ChannelInput(name="fastm-kids", video_content_source_url=kit.CA_URL, child_directed=True)]
     )
-    assert all("fast-pod-kids-" in (s.playback.body or "") for s in kids.siblings)
+    assert all('"id":"fast-pod-kids"' in (s.playback.body or "") for s in kids.siblings)
     assert kids.channels[0].child_directed
     lab = kit.make_bundle(channels=[ChannelInput(name="fastm-lab", video_content_source_url=kit.CA_URL, lab=True)])
     assert all("PRE_SESSION_INIT_FUNCTION_COMPLETED" in s.playback.opt_in_events for s in lab.siblings)

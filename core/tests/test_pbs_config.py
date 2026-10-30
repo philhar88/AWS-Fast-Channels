@@ -15,8 +15,12 @@ from syrupy.extensions.json import JSONSnapshotExtension
 from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
 from fast_channels.core.demo_demand import vast_ad
+from fast_channels.core.monetization.playback import POD_SECONDS_FIELD, STORED_REQUEST, ads_body
+from fast_channels.core.monetization.validators import MISSING_DURATION_SECONDS
 from fast_channels.core.pbs_config import (
     OWN_BOOK,
+    POD_MAX_SECONDS,
+    POD_MIN_SECONDS,
     POD_SECONDS,
     POLICY_HOOK,
     SHIPPED_ADAPTERS,
@@ -25,12 +29,14 @@ from fast_channels.core.pbs_config import (
     HouseAd,
     PbsSettings,
     account,
+    auction_body,
     house_ads,
     prebid_config,
     private_zone,
     render,
     stored_request,
     stored_request_id,
+    stored_request_ids,
     to_yaml,
     tracker_host,
 )
@@ -68,8 +74,8 @@ def test_rendered_files() -> None:
     assert sorted(render(SETTINGS)) == sorted(
         [
             "current-config/prebid-config.yaml",
-            *(f"stored_requests/fast-pod-{seconds}s.json" for seconds in POD_SECONDS),
-            *(f"stored_requests/fast-pod-kids-{seconds}s.json" for seconds in POD_SECONDS),
+            "stored_requests/fast-pod.json",
+            "stored_requests/fast-pod-kids.json",
             "stored_accounts/fastm.json",
         ]
     )
@@ -91,18 +97,17 @@ def test_the_two_settings_prebid_server_4_requires() -> None:
     assert config["gdpr"]["vendorlist"]["live"] == {"startup-cache-dir": "/var/tmp/vendor-live"}
 
 
-@pytest.mark.parametrize("seconds", POD_SECONDS)
-def test_stored_request_is_one_pod_of_30_s_slots_for_the_own_book_only(seconds: int) -> None:
-    request = stored_request(SETTINGS, seconds)
-    slots = request["imp"]
+def test_the_stored_request_is_a_template_pod_of_one_30_s_slot_for_the_own_book_only() -> None:
+    """The module copies the slot once per whole ``ext.fast.slot_s`` of the break (``ext.fast.pod_s``)."""
+    request = stored_request(SETTINGS)
+    [slot] = request["imp"]
 
-    assert request["id"] == f"fast-pod-{seconds}s"
-    assert len(slots) == seconds // 30
-    assert [slot["video"]["poddur"] for slot in slots] == [seconds] * len(slots)
-    assert {slot["video"]["podid"] for slot in slots} == {1}
-    assert all(slot["video"]["rqddurs"] == [30] for slot in slots)
-    assert [slot["ext"]["prebid"]["bidder"] for slot in slots] == [{OWN_BOOK: {}}] * len(slots)
-    assert all(slot["ssai"] == 3 for slot in slots)
+    assert request["id"] == "fast-pod"
+    assert slot["id"] == "s1"
+    video = slot["video"]
+    assert (video["podid"], video["poddur"], video["rqddurs"], video["slotinpod"]) == (1, 30, [30], 0)
+    assert slot["ext"]["prebid"]["bidder"] == {OWN_BOOK: {}}
+    assert slot["ssai"] == 3
     assert "device" not in request
     assert "user" not in request
     assert request["tmax"] == 500
@@ -110,31 +115,48 @@ def test_stored_request_is_one_pod_of_30_s_slots_for_the_own_book_only(seconds: 
     assert request["app"]["publisher"]["id"] == "fastm"
     assert request["app"]["content"] == {"livestream": 1, "context": 1, "cattax": 9}
     assert request["source"]["schain"]["nodes"] == [{"asi": "d111111abcdef8.cloudfront.net", "sid": "fastm", "hp": 1}]
-    assert request["ext"] == {"prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": 9}]}}, "house ads and lines"
+    assert request["ext"] == {
+        "prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": 9}]},  # house ads and lines
+        "fast": {"slot_s": 30},
+    }
 
 
-@pytest.mark.parametrize(("seconds", "positions"), [(30, [0]), (60, [1, -1]), (90, [1, 0, -1]), (120, [1, 0, 0, -1])])
-def test_slot_in_pod_marks_the_first_and_last_slot(seconds: int, positions: list[int]) -> None:
-    assert [slot["video"]["slotinpod"] for slot in stored_request(SETTINGS, seconds)["imp"]] == positions
-
-
-def test_kids_stored_requests_set_coppa() -> None:
-    for seconds in POD_SECONDS:
-        kids = stored_request(SETTINGS, seconds, kids=True)
-        assert kids["id"] == f"fast-pod-kids-{seconds}s"
-        assert kids["regs"] == {"coppa": 1}
-        assert kids["imp"] == stored_request(SETTINGS, seconds)["imp"]
-
-
-@pytest.mark.parametrize("seconds", [0, 31, 300, 150])
-def test_off_grid_breaks_have_no_stored_request(seconds: int) -> None:
-    with pytest.raises(ValueError, match="no stored request"):
-        stored_request(SETTINGS, seconds)
+def test_the_kids_stored_request_sets_coppa() -> None:
+    kids = stored_request(SETTINGS, kids=True)
+    assert kids["id"] == "fast-pod-kids"
+    assert kids["regs"] == {"coppa": 1}
+    assert kids["imp"] == stored_request(SETTINGS)["imp"]
 
 
 def test_stored_request_ids() -> None:
-    assert stored_request_id(60) == "fast-pod-60s"
-    assert stored_request_id(60, kids=True) == "fast-pod-kids-60s"
+    assert (stored_request_id(), stored_request_id(kids=True)) == ("fast-pod", "fast-pod-kids")
+    assert stored_request_ids() == ("fast-pod", "fast-pod-kids")
+    assert stored_request_ids(ad_server=True) == ("fast-pod", "fast-pod-kids", "fast-adsrv-pod", "fast-adsrv-pod-kids")
+    assert {kids: stored_request_id(kids=kids) for kids in (False, True)} == STORED_REQUEST, "the siblings' bodies"
+
+
+def test_the_module_shapes_every_grid_length_and_no_missing_one() -> None:
+    """``pod-min-s`` and ``pod-max-s`` cover the grid; 0 s and MediaTailor's 300 s for a missing duration are outside,
+    so the module answers them with an empty pod and the slate plays."""
+    module = prebid_config(SETTINGS)["hooks"]["fast-ctv"]
+    assert (module["pod-min-s"], module["pod-max-s"]) == (POD_MIN_SECONDS, POD_MAX_SECONDS) == (30, 120)
+    assert all(POD_MIN_SECONDS <= seconds <= POD_MAX_SECONDS for seconds in POD_SECONDS)
+    assert not POD_MIN_SECONDS <= MISSING_DURATION_SECONDS <= POD_MAX_SECONDS
+    assert POD_MIN_SECONDS > 0
+
+
+@pytest.mark.parametrize(("kids", "ad_server"), [(False, False), (True, False), (False, True), (True, True)])
+def test_the_auction_body_is_the_siblings_rendered(kids: bool, ad_server: bool) -> None:
+    body = auction_body(48, kids=kids, ad_server=ad_server)
+    assert body == {
+        "ext": {
+            "prebid": {"storedrequest": {"id": stored_request_id(kids=kids, ad_server=ad_server)}},
+            "fast": {"pod_s": "48"},
+        }
+    }
+    if not ad_server:
+        assert json.loads(ads_body(kids=kids).replace("{{session.avail_duration_secs}}", "48")) == body
+    assert POD_SECONDS_FIELD == "pod_s"
 
 
 def test_account_runs_both_hooks_inside_their_group_timeouts() -> None:
@@ -192,6 +214,8 @@ def test_the_own_book_and_the_module_call_the_pds_sidecar_on_the_tasks_loopback(
         "select-timeout-ms": 200,
         "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
         "house-ads": "[]",
+        "pod-min-s": 30,
+        "pod-max-s": 120,
         "log-requests": True,
     }
 

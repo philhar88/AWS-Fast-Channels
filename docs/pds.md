@@ -22,8 +22,9 @@ that runs them beside Prebid Server is [described below](#the-service): `/policy
 
 ## The two calls
 
-MediaTailor sends each ad request as a templated OpenRTB POST to Prebid Server. The stored request it names lists one
-pod of 30 s slots and only the own book as a bidder. The fast-ctv Prebid Server module then calls the PDS twice:
+MediaTailor sends each ad request as a templated OpenRTB POST to Prebid Server. The stored request it names lists only
+the own book as a bidder, and the fast-ctv Prebid Server module shapes its pod to the break: one 30 s slot per whole
+30 s of the break's length, which the POST carries. The module then calls the PDS twice:
 
 1. **`POST /policy`**, before the auction, with the session id, the playback configuration, the break's SCTE-35 event
    id, UPID and duration, the viewer's User-Agent and the X-Forwarded-For chain. The answer is a patch the module applies

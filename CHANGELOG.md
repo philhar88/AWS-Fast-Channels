@@ -129,8 +129,8 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   creatives from configuration (O5) and 100% minimum healthy ECS deployments (O7). `scripts/prebid_guidance.py
   checkout|verify|apply` refuses a moved tag, a changed upstream file or a patch that does not apply, and the CI job
   `guidance-overlays` applies the overlays on every run. `render-config` renders a stage's Prebid Server configuration
-  (`fast_channels.core.pbs_config`): stored requests per 30/60/90/120 s break (and kids variants) for the own book
-  only, the stage's account with the module's execution plan and Activity Controls, and the application
+  (`fast_channels.core.pbs_config`): one stored request per route (`fast-pod`, and `fast-pod-kids`), a template
+  pod for the own book only that the fast-ctv module shapes to the break, the stage's account with the module's execution plan and Activity Controls, and the application
   configuration.
 - **Demand: the fast-ctv Prebid Server module** (`pbs/fast-ctv`, [docs/demand.md](docs/demand.md#the-fast-ctv-module),
   ADR-0001 amended). A policy hook adds third-party demand only on a positive, in-time `/policy` answer from the Pod
@@ -180,8 +180,8 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   and the origin secret included. See [docs/demand.md](docs/demand.md#the-fast-ctv-module).
 - **Demand: the e2e demand leg**: the `End-to-end` workflow's `leg: demand` (job
   `e2e-demand`, up to 4 hours) deploys `STAGE=fastci MODULES=ops,demand` and the demand module, runs
-  `tests/e2e/test_11_demand_edge.py` (grid durations, the origin rule group, off-grid 400, an account without the
-  module calling no third party, a small herd), then destroys and inventories everything. `MODULES=a,b`
+  `tests/e2e/test_11_demand_edge.py` (the grid's break lengths and one off it, the empty pod of a missing
+  duration, the origin rule group, an account without the module calling no third party, a small herd), then destroys and inventories everything. `MODULES=a,b`
   (`stage_args.py --modules`, `prebid_guidance.py --modules`) keeps only those modules of a stage on.
   `deploy-demand` now also warms the running tasks no warm-up build has named (a first deploy starts them before the
   warm-up rule exists) and waits for them.
@@ -309,8 +309,9 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 - **Mid-break joiners ask for ads** (ADR-0021, amended): the session controls and the siblings' `AvailSuppression`
   are `AFTER_LIVE_EDGE` `00:00:00` with `PARTIAL_AVAIL`, so a viewer who joins during a break gets a request for
   what is left of it, and each ad inserted plays from its first segment; before, the slate played for the whole
-  break. MediaTailor asks for the remainder at segment granularity. On the Prebid Server route a remainder that is
-  not a grid duration (30, 60, 90 or 120 s) names no stored request, so it fails safe to the slate.
+  break. MediaTailor asks for the remainder at segment granularity. On the Prebid Server route a remainder from 30 to
+  120 s is filled, one 30 s slot per whole 30 s of it (the one stored request per route), and a shorter one gets an
+  empty pod, so the slate plays.
 - **Origin-secret rotation** (`modules.release.secret_rotation_days`,
   [docs/release-controller.md](docs/release-controller.md#origin-secret-rotation)). The state machine
   `<prefix>-release-rotation` rotates the demand gate's origin secret with two values admitted at once: a new value
@@ -358,8 +359,9 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   its stack is created, so `deploy-demand` on an existing stage left Prebid Server on the old configuration (seen
   live: the module's timeouts stayed at their old values in S3). `deploy-demand` now syncs the rendered
   configuration after every guidance deploy: it uploads what differs from the guidance's settings and stored-requests
-  buckets, reads every object back and refuses a mismatch, and rolls the tasks only if something changed.
-  `upload-config` runs that step alone.
+  buckets, reads every object back and refuses a mismatch, then prunes what an earlier configuration left (under the
+  managed prefixes only, keeping the guidance's own files, each listed before it is deleted), and rolls the tasks
+  only if something changed. `upload-config` runs that step alone.
 - **Demand: a break the PDS could not answer still gets a pod**. When `/policy` timed out, the module served
   the break SAFE (own book only), but with the own book silent too the pod was empty and the slate aired: on fastm 3.8%
   of pods hit a policy timeout and 69% of those came back empty. Now, if such a pod would be empty, or `/select` is
