@@ -27,6 +27,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from fast_channels.core.naming import PREFIX_PATTERN
+
 POD_SECONDS: Final = (30, 60, 90, 120)
 """Break lengths with a stored request: one to four 30 s slots (the 30.03 s grid, rounded)."""
 SLOT_SECONDS: Final = 30
@@ -87,7 +89,7 @@ class PbsSettings(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    prefix: str = Field(pattern=r"^[a-z][a-z0-9-]{0,14}[a-z0-9]$")
+    prefix: str = Field(pattern=PREFIX_PATTERN)
     """Deployment prefix: the account id, the publisher id and the private zone's name."""
     simulator: bool
     """Demo mode: the guidance's bidder simulator (``amt``) may bid when ``/policy`` adds it."""

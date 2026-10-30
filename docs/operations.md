@@ -40,7 +40,7 @@ it costs.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `prefix` | str | `"fast"` | Name prefix of every resource and value of the `fast:app` tag. Change it to deploy several copies in one account and region. |
+| `prefix` | str | `"fast"` | Name prefix of every resource and value of the `fast:app` tag: 2-16 lowercase letters and digits, starting with a letter, without hyphens. Change it to deploy several copies in one account and region. Names and IAM grants are scoped by `<prefix>-*`, so a prefix with a hyphen (`fast-x`) would fall inside another's (`fast-*`). |
 | `removal` | `destroy` or `retain` | `"destroy"` | `destroy` (demo: delete data with the stacks) or `retain` (production: keep data, enable deletion and termination protection). |
 | `ladders.builtin` | list of str | `["standard"]` | Built-in ladders (`ladders/<name>.toml`), each deployed as a MediaConvert job template. Slate and house-ad kits are encoded at deploy time for the default ladder and every ladder an IaC channel uses. |
 | `ladders.default` | str | `"standard"` | Ladder used when a request names none (ingest, agent proposals); one of `builtin`. |
@@ -252,6 +252,10 @@ Notes:
   `ladders.builtin` get their job template only.
 - `delivery.cdns` adds per-CDN playback URLs to `channels___get_channel` and the console; it does not change
   what MediaTailor or Channel Assembly write ([multi-CDN](delivery-and-multi-cdn.md#multi-cdn-in-v30)).
+- `prefix` has no hyphen. A deployment's resource names, IAM grants, Cedar policies, subscription filters and
+  event patterns are scoped by `<prefix>-*` (its MediaTailor Functions by `<prefix>_*`). With a hyphen, the
+  deployment `fast` would also cover a deployment `fast-x`. With `demand` on, the prefix is at most 10 characters,
+  because it is the qualifier of the guidance's CDK bootstrap.
 - Cross-field validation: channel outputs ⊆ `package_profiles`; `external_vast` requires a URL with documented ADS
   variables only; the region must offer MediaTailor Channel Assembly and MediaConvert (and AgentCore when
   `agent.enabled`); geographic inference profiles must be callable from the region; `log_retention_days` must be a
@@ -312,7 +316,7 @@ make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, 
 make deploy-demand STAGE=fastm               # the guidance, -Demand and -Pds (demand module)
 make seed STAGE=fastm SEED_ARGS="--wait --yes"
 make destroy STAGE=fastm
-make deploy STAGE=fastci PREFIX=fastci-pr7   # the same stage under another prefix
+make deploy STAGE=fastci PREFIX=fastcipr7    # the same stage under another prefix
 uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage becomes
 ```
 

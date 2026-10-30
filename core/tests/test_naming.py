@@ -36,6 +36,30 @@ def test_agent_owned_namespace() -> None:
     assert not naming.is_agent_owned("fastci-agent-kids", "fast")
 
 
+@pytest.mark.parametrize("prefix", ["fast", "fastm", "fastcih", "fastciads", "a1", "a" * 16])
+def test_deployment_prefixes(prefix: str) -> None:
+    assert naming.check_prefix(prefix) == prefix
+
+
+@pytest.mark.parametrize(
+    ("prefix", "why"),
+    [
+        ("fast-x", "the grants of a deployment 'fast' ('fast-*') would cover the resources of 'fast-x'"),
+        ("fastci-pr7", "the grants of a deployment 'fastci' ('fastci-*') would cover the resources of 'fastci-pr7'"),
+        ("Fast", "scoped by '<prefix>-*'"),
+        ("f", "use 2-16 lowercase letters and digits"),
+        ("a" * 17, "use 2-16 lowercase letters and digits"),
+        ("1fast", "starting with a letter"),
+        ("fast_m", "without hyphens"),
+    ],
+)
+def test_a_prefix_that_could_fall_inside_another_deployments_grants_is_refused(prefix: str, why: str) -> None:
+    with pytest.raises(ValueError, match="is not a deployment prefix") as error:
+        naming.check_prefix(prefix)
+
+    assert why in str(error.value)
+
+
 def test_stage_id() -> None:
     assert naming.stage_id(naming.DEFAULT_PREFIX) == "FastChannels"
     assert naming.stage_id("news") == "FastChannels-news"
