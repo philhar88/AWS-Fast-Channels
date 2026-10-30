@@ -128,8 +128,8 @@ def test_every_task_definition_gets_the_sidecar_that_prebid_server_waits_for() -
     assert (pds["Essential"], pds["ReadonlyRootFilesystem"]) == (True, True)
     assert pds["RestartPolicy"] == {"Enabled": True, "RestartAttemptPeriod": 60}
     assert pds["HealthCheck"]["Command"] == list(SPEC.health_command)
-    assert {"PortMappings", "Memory"}.isdisjoint(pds), "loopback only, the task's memory shared"
-    assert (pds["Cpu"], by_name["Prebid-Container"][0]["Cpu"]) == (512, 1536), "CPU weights: a quarter for the sidecar"
+    assert {"PortMappings", "Cpu", "Memory"}.isdisjoint(pds), "loopback only, the task's CPU and memory shared"
+    assert "Cpu" not in by_name["Prebid-Container"][0], "equal weights: 512/1,536 starved the sidecar in a warm-up"
     assert {e["Name"]: e["Value"] for e in pds["Environment"]} == SPEC.environment
     options = pds["LogConfiguration"]["Options"]
     assert (options["mode"], options["max-buffer-size"], options["awslogs-stream-prefix"]) == (
@@ -292,7 +292,6 @@ def test_the_real_guidance_synthesizes_with_the_sidecar(tmp_path: Path) -> None:
     ]
     assert len(groups) == 2 and all(g["slow_start.duration_seconds"] == "180" for g in groups), groups
     for definition in definitions.values():
-        cpus = {c["Name"]: c.get("Cpu") for c in definition["Properties"]["ContainerDefinitions"]}
-        assert cpus == {"Prebid-Container": 1536, "Pds-Container": 512}
+        assert not [c["Name"] for c in definition["Properties"]["ContainerDefinitions"] if "Cpu" in c]
     [group] = [r for k, r in resources.items() if r["Type"] == "AWS::Logs::LogGroup" and k.startswith("PdsSidecarLogs")]
     assert group["Properties"]["LogGroupName"] == "/aws/ecs/fastcid-pds" and "Condition" not in group

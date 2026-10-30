@@ -186,7 +186,7 @@ VEGETA: Final = {
     "sha256": "950381173a5575e25e8e086f36fc03bf65d61a2433329b48e41e1cb5e4133bba",
 }
 """The warm-up's load generator, pinned and checksum-verified (``vegeta_12.13.0_checksums.txt`` of the release)."""
-WARMUP_RATE_PER_TASK: Final = 50
+WARMUP_RATE_PER_TASK: Final = 25
 """Synthetic auctions per second per healthy target when a new task's warm-up starts (P0-21: 50-100/s per task for
 2-3 minutes warms a JVM's JIT). The replay goes through the load balancer, which spreads it over every healthy target,
 so the new task gets about this rate."""

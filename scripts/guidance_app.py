@@ -11,8 +11,8 @@ construct one does not own (:func:`augment`):
 
 - to each task definition of the guidance (``PrebidTaskDef``: one per entry deployment, of which CloudFormation
   conditions deploy one), the sidecar's container, which Prebid Server's container waits for (``HEALTHY``);
-- the task's CPU and memory (``Cpu`` and ``Memory`` overrides of the L1 task definition), and each container's CPU
-  weight (the sidecar's on its container, Prebid Server's as an override);
+- the task's CPU and memory (``Cpu`` and ``Memory`` overrides of the L1 task definition), which both containers
+  share with equal weights;
 - ALB slow start on the guidance's Prebid Server target groups (``ALBTargetGroup``), whose round-robin algorithm it
   needs;
 - the sidecar's grants on the shared task role;
@@ -140,7 +140,6 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
             readonly_root_filesystem=True,
             enable_restart_policy=True,
             restart_attempt_period=RESTART_AFTER,
-            cpu=sidecar["pds_cpu"],
         )
         prebid.add_container_dependencies(
             ecs.ContainerDependency(container=pds, condition=ecs.ContainerDependencyCondition.HEALTHY)
@@ -149,9 +148,6 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
         assert isinstance(definition, ecs.CfnTaskDefinition)
         definition.add_property_override("Cpu", str(sidecar["task_cpu"]))
         definition.add_property_override("Memory", str(sidecar["task_memory_mib"]))
-        containers = [node.node.id for node in task.node.children if isinstance(node, ecs.ContainerDefinition)]
-        index = containers.index(PREBID_CONTAINER)  # rendered in the order they were added
-        definition.add_property_override(f"ContainerDefinitions.{index}.Cpu", sidecar["prebid_cpu"])
         for statement in sidecar["statements"]:
             task.add_to_task_role_policy(iam.PolicyStatement.from_json(statement))
     return tasks
