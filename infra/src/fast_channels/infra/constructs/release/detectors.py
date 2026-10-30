@@ -36,6 +36,7 @@ from constructs import Construct
 
 from fast_channels.core.monetization import names
 from fast_channels.infra import nag
+from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.alerts import alarm
 from fast_channels.infra.constructs.functions import METRICS_NAMESPACE, FastFunction
 
@@ -163,6 +164,11 @@ class LogReconciler(Construct):
             log_retention=log_retention,
         )
         self.function.allow(["cloudwatch:GetMetricData", "logs:GetQueryResults"], ["*"])  # no resource-level
+        self.function.allow(
+            ["logs:DescribeLogGroups"],
+            [arn(self, "logs", "log-group", "*", colon=True)],
+            why="logs:DescribeLogGroups has no resource-level permissions (the siblings' group's creation time)",
+        )
         nag.acknowledge(self.function, {nag.LAMBDA_DLQ: "Invoked by an hourly schedule; the next run repeats it"})
         role = iam.Role(
             self,

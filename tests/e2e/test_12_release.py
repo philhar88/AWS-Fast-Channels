@@ -151,6 +151,10 @@ def test_the_log_reconciler_counts_every_siblings_requests(release: Stage, sibli
     response = client.invoke(FunctionName=release.output(Module.RELEASE, "LogReconcilerFunction"), Payload=b"{}")
     assert "FunctionError" not in response, response["Payload"].read()
     result = json.loads(response["Payload"].read())
+    if "skipped" in result:  # a stage younger than the hour reconciled (its log group is newer)
+        print(f"\n{result['start']} to {result['end']}: skipped, {result['skipped']}")
+        assert result["unlogged_requests"] == 0, result
+        return
     counts = {name: (s["counted"]["requests"], s["logged"]["requests"]) for name, s in result["siblings"].items()}
     print(f"\n{result['start']} to {result['end']}: (counted, logged) requests {counts}")
     assert set(result["siblings"]) == set(siblings), result
