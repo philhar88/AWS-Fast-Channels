@@ -118,7 +118,8 @@ def decisions(messages: Iterable[str]) -> list[Decision]:
 
 @dataclass
 class Break:
-    """What MediaTailor logged for one session's ad request (by ``adBreakCorrelationId``)."""
+    """What MediaTailor logged for one session's ad request: the events of the session with the break's
+    ``adBreakCorrelationId`` (which every session of the break shares)."""
 
     sid: str
     evid: str = ""
@@ -136,20 +137,23 @@ class Break:
         return values[0] if UUID4.fullmatch(values[0]) else ""
 
 
-def breaks(events: Iterable[Mapping[str, Any]]) -> dict[str, Break]:
-    """MediaTailor's ADS log as breaks: the event id of the request, the Wrapper it followed and what it filled."""
-    found: dict[str, Break] = {}
+def breaks(events: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], Break]:
+    """MediaTailor's ADS log as one break per session and ``adBreakCorrelationId``: the event id of the ad server's
+    request, the Wrapper it followed and what it filled. Following the Wrapper is a second ``MAKING_ADS_REQUEST``
+    (to the Wrapper's target, without ``evid``); a correlation id without an ad request (``AD_MARKER_FOUND`` alone) is
+    not a break."""
+    found: dict[tuple[str, str], Break] = {}
     for event in events:
-        correlation = str(event.get("adBreakCorrelationId", ""))
-        if not correlation:
+        correlation, sid = str(event.get("adBreakCorrelationId", "")), str(event.get("sessionId", ""))
+        if not correlation or not sid:
             continue
-        entry = found.setdefault(correlation, Break(sid=str(event.get("sessionId", ""))))
+        entry = found.setdefault((sid, correlation), Break(sid=sid))
         kind = str(event.get("eventType", ""))
         entry.events.add(kind)
         match kind:
             case "MAKING_ADS_REQUEST":
                 query = parse_qs(urlsplit(str(event.get("adsRequestUrl", ""))).query)
-                entry.evid = query.get("evid", [""])[0]
+                entry.evid = entry.evid or query.get("evid", [""])[0]
             case "VAST_REDIRECT":
                 entry.redirect = str((event.get("vastAd") or {}).get("vastAdTagUri", ""))
             case "FILLED_AVAIL":
@@ -157,7 +161,7 @@ def breaks(events: Iterable[Mapping[str, Any]]) -> dict[str, Break]:
                 entry.filled_seconds = float(avail.get("filledDuration") or 0)
                 entry.creatives = tuple(str(a.get("uri", "")) for a in avail.get("creativeAds") or [])
                 entry.skipped = tuple(str(s.get("skippedReason", "")) for s in avail.get("skippedAds") or [])
-    return found
+    return {key: entry for key, entry in found.items() if "MAKING_ADS_REQUEST" in entry.events}
 
 
 def pod_media(vast: str) -> list[str]:
