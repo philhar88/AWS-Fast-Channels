@@ -9,7 +9,9 @@ With ``--releases`` the rest make releases (``harness_release``; about 50 minute
 - the silent-loss detector alarms on ``<prefix>-lab-x``, a VOD configuration whose body template is invalid, while
   ``AdDecisionServer.Errors`` stays 0;
 - with the first IaC channel on air, a release whose PRE_ADS lookup turns slow during its rollout (P0-08's failure)
-  alarms and rolls back unattended, and a stub mint that reads the pointer with ``Entity-Id`` sees the ramp's shares;
+  rolls back unattended: the lookup times out, which no error alarm counts, and the pointer poll stops the
+  deployment on the step's latency. A stub mint that reads the pointer with ``Entity-Id`` sees the ramp's shares,
+  and the candidate's viewers leave the slow tree at their next break;
 - the smoke test stops a release whose lookup is slow from the start, before any viewer meets it.
 """
 
@@ -37,6 +39,7 @@ from harness_release import (
     next_break,
     pointer_ids,
     publish,
+    request_latency,
     task_window,
     vod_session,
     with_lookup,
@@ -162,7 +165,7 @@ BREAK_A_MINUTE: Final = {"cadence_minutes": 1, "min_gap_minutes": 0.5, "slate_go
 ROLLOUT_TIMEOUT_S: Final = 40 * 60
 """Apply, the smoke test and the soak (the pointer deploys after them)."""
 ROLLBACK_TIMEOUT_S: Final = 20 * 60
-"""From the lookup turning slow to the execution's end: the alarm's five-minute period, the monitor, the poll."""
+"""From the lookup turning slow to the execution's end: two minutes of timed-out breaks, the poll, the rollback."""
 REMAP_S: Final = 3.0
 """A remap reaches a live session at its next break in about 3 s (P0-08)."""
 LOG_DELAY_S: Final = 180
@@ -365,7 +368,7 @@ def test_a_release_that_breaks_during_its_rollout_rolls_back_unattended(
         ApplicationId=application, EnvironmentId=environment, DeploymentNumber=deployment
     )
     assert described["State"] == "ROLLED_BACK", described["State"]
-    assert any(e.get("TriggeredBy") == "CLOUDWATCH_ALARM" for e in described["EventLog"]), described["EventLog"]
+    print(f"deployment events: {[(e.get('EventType'), e.get('TriggeredBy')) for e in described['EventLog']]}")
     print(f"\nmint shares (percent, share): {[(p, s) for _, p, s in shares]}")
     assert any(0 < p < 100 and abs(share * 100 - p) <= 10 for _, p, share in shares), shares
     after = channel_state(stage, channel.name)
@@ -387,6 +390,14 @@ def test_a_release_that_breaks_during_its_rollout_rolls_back_unattended(
         e.action for e in ledgered(stage, names.BUNDLE_CHAIN, began) if e.correlation_id == accepted.correlation_id
     }
     assert {"release.accept", "release.point", "release.rollback"} <= actions, actions
+    [rolled] = [
+        e
+        for e in ledgered(stage, names.BUNDLE_CHAIN, began)
+        if e.action == "release.rollback" and e.correlation_id == accepted.correlation_id
+    ]
+    late = rolled.detail["reason"].get("timed_out", {}).get(candidate, {})
+    [lookup] = [f for f in late if "_pa_e2e_lookup_" in f] or [None]
+    assert lookup, f"the rollback names no timed-out lookup: {rolled.detail['reason']}"
     applied = {
         e.action
         for e in ledgered(stage, names.channel_chain(channel.name), began)
@@ -397,9 +408,13 @@ def test_a_release_that_breaks_during_its_rollout_rolls_back_unattended(
     time.sleep(LOG_DELAY_S)
     seen = breaks(stage, [v.session for v in viewers], flipped - 600, time.time())
     print(f"rollback task {remap_started - flipped:.0f}-{remapped - flipped:.0f} s after the lookup turned slow")
+    minutes = request_latency(stage, candidate, lookup, flipped - 60, time.time())
+    print(f"{lookup} per minute (s from the remap, max ms): {[(round(t - remapped), m) for t, m in minutes]}")
+    assert any(m >= late[lookup]["timeout_ms"] for t, m in minutes if t <= remap_started), minutes
+    assert not [t for t, _ in minutes if t >= remapped + REMAP_S], f"the slow tree ran after the remap: {minutes}"
     for session, requests in seen.items():
         print(f"viewer {session}: {[(round(t - remapped, 1), failed) for t, failed in requests]}")
-        assert any(failed for t, failed in requests if flipped <= t <= remap_started), f"{session}: no failing break"
+        assert any(flipped <= t <= remap_started for t, _ in requests), f"{session}: no break met the slow lookup"
         later = [failed for t, failed in requests if t > remapped + REMAP_S]
         assert later and not any(later), f"{session}: breaks after the remap {later}"
 
@@ -431,4 +446,5 @@ def test_the_smoke_test_stops_a_slow_release_before_any_viewer_meets_it(
     )
     [rollback] = [e for e in ledgered(stage, names.BUNDLE_CHAIN, began) if e.action == "release.rollback"]
     print(f"\nsmoke rollback reason: {json.dumps(rollback.detail['reason'])[:600]}")
-    assert rollback.detail["reason"], rollback.detail
+    cause = rollback.detail["reason"].get("Cause", "")
+    assert "_pa_e2e_lookup_" in cause and "timeout" in cause, rollback.detail

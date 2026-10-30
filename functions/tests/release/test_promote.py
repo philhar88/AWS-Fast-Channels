@@ -11,6 +11,7 @@ import pytest
 from botocore.stub import ANY, Stubber
 from pydantic import SecretStr
 
+from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.monetization.bundle import ChannelInput
 from fast_channels.core.monetization.playback import render
 from fast_channels.core.monetization.release import ReleaseStatus, applied
@@ -154,6 +155,7 @@ def test_rollback_remaps_the_candidate_to_its_last_good_tree(
         "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-a"}
     )
     stub("s3").add_response("put_object", {}, None)
+    stub("appconfig").add_response("list_deployments", {"Items": []}, None)  # nothing to stop
     expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-a"}, strategy="now1", number=8)
     result = promote.rollback(key, 2, "c2", [CANDIDATE], {"Error": "SmokeFailed"})
     assert result == {"release": 2, "remapped": {"fastm-demo-p-b": 1}, "deployment": 8}
@@ -310,3 +312,70 @@ def test_a_pointer_waits_while_another_deployment_of_the_environment_runs(stub: 
     stub("appconfig").add_response("list_deployments", {"Items": [{"DeploymentNumber": 4, "State": "BAKING"}]}, None)
     with pytest.raises(promote.PointerBusyError):
         promote._deploy({"fastm-demo": "fastm-demo-p-a"}, strategy="now1", description="d", tags={})
+
+
+def test_a_rollback_stops_the_pointers_rollout_but_not_the_flags(stub: Stub) -> None:
+    appconfig = stub("appconfig")
+    appconfig.add_response(
+        "list_deployments",
+        {"Items": [{"DeploymentNumber": 11, "State": "DEPLOYING"}, {"DeploymentNumber": 10, "State": "BAKING"}]},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "MaxResults": 5},
+    )
+    appconfig.add_response(
+        "get_deployment",
+        {"DeploymentNumber": 11, "ConfigurationProfileId": "prof1", "State": "DEPLOYING"},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 11},
+    )
+    appconfig.add_response(
+        "stop_deployment", {}, {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 11}
+    )
+    appconfig.add_response(
+        "get_deployment",
+        {"DeploymentNumber": 10, "ConfigurationProfileId": "flags1", "State": "BAKING"},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 10},
+    )
+    assert promote.stop_pointer() == [11]
+
+
+def expect_latency(cloudwatch: Stubber, function_id: str, maxima: list[float]) -> None:
+    cloudwatch.add_response(
+        "get_metric_statistics",
+        {"Datapoints": [{"Maximum": m} for m in maxima]},
+        {
+            "Namespace": "AWS/MediaTailor",
+            "MetricName": "Function.Latency",
+            "Dimensions": [
+                {"Name": "ConfigurationName", "Value": "fastm-demo-p-b"},
+                {"Name": "FunctionId", "Value": function_id},
+                {"Name": "HookType", "Value": "PRE_ADS_REQUEST"},
+                {"Name": "FunctionType", "Value": "HTTP_REQUEST"},
+            ],
+            "StartTime": AT,
+            "EndTime": AT,
+            "Period": 60,
+            "Statistics": ["Maximum"],
+        },
+    )
+
+
+def test_a_candidates_request_at_its_timeout_stops_the_pointer(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
+    key = state.add(kit.make_bundle(contributions=[CrawlContribution()]))
+    appconfig, cloudwatch = stub("appconfig"), stub("cloudwatch")
+    where = {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7}
+    appconfig.add_response("get_deployment", {"State": "DEPLOYING", "PercentageComplete": 20.0, "StartedAt": AT}, where)
+    expect_latency(cloudwatch, "fastm_pa_meta_r0002", [266.0, 255.0, 30.0])  # no error metric counts these
+    appconfig.add_response("stop_deployment", {}, where)
+    found = promote.pointer_state(7, key, 2, [CANDIDATE])
+    assert (found["state"], found["done"]) == ("ROLLED_BACK", True)
+    assert found["timed_out"] == {"fastm-demo-p-b": {"fastm_pa_meta_r0002": {"timeout_ms": 250, "minutes": 2}}}
+
+
+def test_a_request_that_timed_out_once_leaves_the_pointer_running(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
+    key = state.add(kit.make_bundle(contributions=[CrawlContribution()]))
+    where = {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7}
+    stub("appconfig").add_response(
+        "get_deployment", {"State": "DEPLOYING", "PercentageComplete": 20.0, "StartedAt": AT}, where
+    )
+    expect_latency(stub("cloudwatch"), "fastm_pa_meta_r0002", [266.0, 77.0])  # a cold first call
+    found = promote.pointer_state(7, key, 2, [CANDIDATE])
+    assert (found["state"], found["done"], "timed_out" in found) == ("DEPLOYING", False, False)

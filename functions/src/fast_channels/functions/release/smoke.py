@@ -26,6 +26,7 @@ from fast_channels.core.manifests import attributes, parse_multivariant
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.smoke import verdict
 from fast_channels.functions import aws
+from fast_channels.functions.release import promote
 from fast_channels.functions.settings import settings
 from fast_channels.functions.tools.registry import CORRELATION_FIELD, SEPARATOR
 
@@ -208,8 +209,16 @@ def decisions(session: str, start: float, end: float) -> set[str]:
     return {row["evid"] for row in rows if row.get("evid")}
 
 
-def judge(session: dict[str, Any], breaks: int, *, probe: bool) -> dict[str, Any]:
-    """The verdict on the watched session."""
+def judge(
+    session: dict[str, Any],
+    breaks: int,
+    *,
+    probe: bool,
+    bundle_key: str | None = None,
+    release: int | None = None,
+) -> dict[str, Any]:
+    """The verdict on the watched session; with the release, also its PRE_ADS requests' latency against their
+    timeouts on the sibling (:func:`~fast_channels.functions.release.promote.timed_out_steps`)."""
     now = time.time()
     found = events(session["session"], session["started"], now)
     joined = set(session.get("joined", ()))
@@ -222,6 +231,14 @@ def judge(session: dict[str, Any], breaks: int, *, probe: bool) -> dict[str, Any
         seen=[m for m in session.get("markers", ()) if m not in joined],
         decisions_required=not probe,
     )
+    if bundle_key and release:
+        start, end = datetime.fromtimestamp(session["started"], UTC), datetime.fromtimestamp(now, UTC)
+        late = promote.timed_out_steps(bundle_key, release, session["sibling"], start, end)
+        failures = tuple(
+            f"PRE_ADS request {f} reached its {t['timeout_ms']} ms timeout in {t['minutes']} minutes"
+            for f, t in late.items()
+        )
+        result = result.model_copy(update={"failures": (*result.failures, *failures)})
     logger.info("smoke verdict", extra=result.model_dump())
     return result.model_dump() | {"passed": result.passed}
 
@@ -235,7 +252,13 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
         case "watch":
             return watch(event["session"], event["breaks"])
         case "judge":
-            return judge(event["session"], event["breaks"], probe=event.get("probe", False))
+            return judge(
+                event["session"],
+                event["breaks"],
+                probe=event.get("probe", False),
+                bundle_key=event.get("bundle_key"),
+                release=event.get("release"),
+            )
         case "lab-start":
             return lab_start(event["lab"], event["change_id"])
         case "lab-stop":

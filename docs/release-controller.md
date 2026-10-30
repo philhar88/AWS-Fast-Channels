@@ -94,7 +94,8 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
 
 1. **Smoke test.** A probe session on the candidate for two breaks, judged on its MediaTailor logs three minutes
    later (their delivery delay): every ad marker led to an ad request, every break was filled, no Function or hook
-   failed, and the Pod Decision Service recorded a decision per break. When no
+   failed, the Pod Decision Service recorded a decision per break, and no PRE_ADS request
+   [timed out](#timed-out-requests). When no
    monetized channel runs, the smoke runs on the lab channel `<prefix>-lab` (BASIC, created stopped): the controller
    schedules a block with a break a minute through the agent tools, starts the channel and stops it after. Without a
    running channel or the lab channel, the release stays applied and is not promoted (`release.hold`).
@@ -102,7 +103,8 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
 3. **Pointer.** A new version of the AppConfig profile `release` (application `<prefix>-fast`, environment
    `<prefix>`), `{"<channel>": "<candidate>"}`, deployed with the stage's strategy (`modules.release.strategy`;
    never all at once). The environment monitors `<prefix>-release-candidate`, a composite alarm over the pair
-   siblings' hook and marker alarms: in ALARM, the deployment rolls back.
+   siblings' hook and marker alarms: in ALARM, the deployment rolls back. The controller polls the deployment every
+   minute and stops it when a candidate's PRE_ADS request [timed out](#timed-out-requests).
 4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, and the
    Function trees no sibling keeps are deleted.
 
@@ -110,6 +112,25 @@ A failed smoke or soak, or a rolled-back pointer, runs **R1**: the candidate is 
 (a remap reaches live sessions at their next break in about 3 s), the pointer goes back to the stable siblings at
 once, the plans name them, and `release.rollback` is ledgered. The same runbook runs when `<prefix>-release-candidate`
 goes to ALARM outside a promotion: each pair sibling whose hook, Function or marker alarm is in ALARM goes back to its last good tree. `GetManifest.Errors` stops a pointer deployment but remaps nothing: a stopped channel or its origin raises it, not the sibling's Functions.
+
+### Timed-out requests
+
+An `HTTP_REQUEST` step that reaches its `RequestTimeoutMilliseconds` inside an executor is neither a Function error
+nor a hook error: the step completes with a null response, the hook goes on, and no error event is logged (fastm
+2026-10-30: a 1,000 ms request to an endpoint that answers in 2,500 ms). So no error alarm sees a dependency that is
+down or slow. Only the step's `Function.Latency` shows it, at its timeout.
+
+The smoke judge and the pointer poll read `AWS/MediaTailor` `Function.Latency` (Maximum, per minute) of each
+`HTTP_REQUEST` step in the candidate's PRE_ADS tree. The dimensions are the sibling, the step's FunctionId in the
+release, `PRE_ADS_REQUEST` and `HTTP_REQUEST`. A step at or above its own request timeout (from the release's bundle)
+in two minutes or more has timed out: the smoke fails, or the pointer deployment is stopped and R1 runs.
+`release.rollback`'s reason names the requests (`timed_out`).
+
+The window starts with the probe session, or with the deployment. One slow minute is a cold call, not a broken
+release. On a healthy smoke, the crawl lookup reached its 250 ms once (266 ms), on the session's first break.
+
+This is a runtime check, not an alarm: the FunctionId changes with every release, and each release's bundle sets its
+own timeouts.
 
 ## The playback plan
 
@@ -268,4 +289,4 @@ stay until the stack goes.
 | `release.fail` in the ledger | Its `error`; an `ImmutableFunctionError` means a Function id exists with another definition (someone put it outside the controller) |
 | `<prefix>-release-drift` in alarm | The drift function's log (`release drift`): the paths that differ |
 | `release.hold` in the ledger | No monetized channel ran and there is no lab channel (or no agent to start it): start a channel and run the release again by hand |
-| `release.rollback` in the ledger | Its `reason` (a failed smoke verdict lists what failed; `ROLLED_BACK` names the alarm) |
+| `release.rollback` in the ledger | Its `reason` (a failed smoke verdict lists what failed; `ROLLED_BACK` names the alarm, or `timed_out` the PRE_ADS requests that reached their timeout) |

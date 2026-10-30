@@ -1,6 +1,8 @@
 """The smoke test's verdict on a probe session's MediaTailor log events and its decision records, break by break."""
 
-from fast_channels.core.monetization.smoke import splice_event, verdict
+from types import SimpleNamespace
+
+from fast_channels.core.monetization.smoke import request_timeouts, splice_event, timed_out, verdict
 
 MARKERS = ("1793303950308-34-633AB926", "1793304462386-34-466E9F57", "1793304756447-34-1E49FCAA")
 EVIDS = {"1664792870", "1181654871", "508165290"}
@@ -73,3 +75,18 @@ def test_markers_of_another_origin_count_decisions_by_number() -> None:
     events = session(logged("a", 0), logged("b", 1))
     assert verdict(sibling="x", session="s", events=events, decisions={"1", "2"}, breaks=2).passed
     assert not verdict(sibling="x", session="s", events=events, decisions={"1"}, breaks=2).passed
+
+
+def test_the_request_timeouts_of_a_siblings_pre_ads_tree(kit: SimpleNamespace) -> None:
+    bundle = kit.make_bundle(contributions=[kit.crawl()])
+    assert request_timeouts(bundle, "fastm-demo-p-b") == {"fastm_pa_meta": 250}
+    assert request_timeouts(bundle, "fastm-demo-p-z") == {}  # the probe maps no PRE_ADS tree
+    assert request_timeouts(bundle, "fastm-other-p-a") == {}
+
+
+def test_a_request_at_its_timeout_in_two_minutes_has_timed_out() -> None:
+    timeouts = {"fastm_pa_lookup_r0004": 1000, "fastm_pa_meta_r0004": 250}
+    # fastm 2026-10-30: the lookup to a 2,500 ms endpoint at 1,007 and 1,008 ms; the crawl once at 266 ms (cold)
+    maxima = {"fastm_pa_lookup_r0004": [1007.0, 1008.0, 40.0], "fastm_pa_meta_r0004": [266.0, 77.0, 28.0]}
+    assert timed_out(maxima, timeouts) == {"fastm_pa_lookup_r0004": 2}
+    assert timed_out({}, timeouts) == {}

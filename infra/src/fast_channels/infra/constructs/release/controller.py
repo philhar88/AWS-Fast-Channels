@@ -262,6 +262,9 @@ class ReleaseController(Construct):
             ],
         )
         self.promote.allow(["cloudwatch:DescribeAlarms"], ["*"])
+        for reader in (self.promote, self.smoke):
+            # the candidates' PRE_ADS request latency (Function.Latency): a timed-out request is no error
+            reader.allow(["cloudwatch:GetMetricStatistics"], ["*"])
         self._drift_schedule(topic)
         self.desired_state = self._function(
             "DesiredState", "desired_state", "Release Controller: publish the rendered bundle", {}
@@ -444,9 +447,8 @@ class ReleaseController(Construct):
 
     def _grant_pointer(self, pointer: PointerSettings) -> None:
         application = f"application/{pointer.application}"
-        # AppConfig authorizes CreateHostedConfigurationVersion and GetDeployment on the application's ARN ("not
-        # authorized ... on resource: arn:aws:appconfig:<region>:<account>:application/<id>", fastm 2026-10-29), not
-        # on the profile's or the deployment's that the Service Authorization Reference lists.
+        # AppConfig authorizes CreateHostedConfigurationVersion on the application's ARN too ("not authorized ... on
+        # resource: arn:aws:appconfig:<region>:<account>:application/<id>", fastm 2026-10-29).
         self.promote.allow(
             ["appconfig:CreateHostedConfigurationVersion"],
             [
@@ -475,7 +477,10 @@ class ReleaseController(Construct):
         self.promote.allow(
             ["appconfig:GetDeployment", "appconfig:StopDeployment", "appconfig:TagResource"],
             [
-                arn(self, "appconfig", "application", pointer.application),  # what AppConfig authorizes on
+                # AppConfig authorizes these on the application's, then the environment's, then the deployment's ARN
+                # (denied on each in turn, fastm 2026-10-29/30)
+                arn(self, "appconfig", "application", pointer.application),
+                arn(self, "appconfig", "application", f"{pointer.application}/environment/{pointer.environment}"),
                 arn(
                     self,
                     "appconfig",
@@ -655,12 +660,26 @@ class ReleaseController(Construct):
         )
         judge = self._invoke(
             f"{id}Judge",
-            {"step": "judge", "session": "{% $session %}", "breaks": breaks, "probe": "{% $probe %}"},
+            {
+                "step": "judge",
+                "session": "{% $session %}",
+                "breaks": breaks,
+                "probe": "{% $probe %}",
+                "bundle_key": "{% $bundle_key %}",
+                "release": "{% $release %}",
+            },
             on=self.smoke,
         )
         delivered = sfn.Wait.jsonata(self, f"{id}LogDelay", time=sfn.WaitTime.duration(LOG_DELAY))
         verdict = sfn.Choice(self, f"{id}Passed?").when(sfn.Condition.jsonata("{% $states.input.passed %}"), next_step)
-        verdict.otherwise(sfn.Fail(self, f"{id}Failed", error="SmokeFailed", cause=f"The {id.lower()} failed"))
+        verdict.otherwise(
+            sfn.Fail.jsonata(
+                self,
+                f"{id}Failed",
+                error="SmokeFailed",
+                cause=f"{{% 'The {id.lower()} failed: ' & $join($states.input.failures, '; ') %}}",
+            )
+        )
         seen = sfn.Choice(self, f"{id}Seen?").when(
             sfn.Condition.jsonata(f"{{% $session.done or $watches >= {WATCHES} %}}"),
             delivered.next(judge).next(verdict),
@@ -691,7 +710,12 @@ class ReleaseController(Construct):
         item = sfn.Pass.jsonata(
             self,
             "Candidate",
-            assign={"sibling": "{% $states.input.sibling %}", "probe": "{% $states.input.probe %}"},
+            assign={
+                "sibling": "{% $states.input.sibling %}",
+                "probe": "{% $states.input.probe %}",
+                "bundle_key": "{% $states.input.bundle_key %}",
+                "release": "{% $states.input.release %}",
+            },
         ).next(self._probe("Smoke", SMOKE_BREAKS, self._probe("Soak", SOAK_BREAKS, sfn.Succeed(self, "Soaked"))))
         smoke = sfn.Map.jsonata(
             self,
@@ -702,6 +726,8 @@ class ReleaseController(Construct):
                 "sibling": "{% $states.context.Map.Item.Value.sibling %}",
                 "channel": "{% $states.context.Map.Item.Value.channel %}",
                 "probe": False,
+                "bundle_key": "{% $plan.bundle_key %}",
+                "release": "{% $plan.release %}",
             },
         ).item_processor(item)
         point = self._invoke(
@@ -711,7 +737,17 @@ class ReleaseController(Construct):
             assign={"deployment": "{% $states.result.Payload.deployment %}"},
         )
         wait = sfn.Wait.jsonata(self, "PointerWait", time=sfn.WaitTime.duration(POINTER_POLL))
-        poll = self._invoke("Pointer", {"step": "pointer", "deployment": "{% $deployment %}"}, on=promote)
+        poll = self._invoke(
+            "Pointer",
+            {
+                "step": "pointer",
+                "deployment": "{% $deployment %}",
+                "bundle_key": "{% $plan.bundle_key %}",
+                "release": "{% $plan.release %}",
+                "candidates": "{% $plan.candidates %}",
+            },
+            on=promote,
+        )
         promoted = self._invoke(
             "PromoteCandidates", {"step": "promote", "candidates": "{% $plan.candidates %}", **context}, on=promote
         )

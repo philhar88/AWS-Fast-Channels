@@ -202,3 +202,26 @@ def test_open_refuses_a_playlist_it_cannot_follow(
     )
     with pytest.raises(ValueError, match=message):
         smoke.open_session("fastm-demo-p-b")
+
+
+def test_a_request_that_reached_its_timeout_fails_the_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = "1793303950308-34-633AB926"
+    healthy = [
+        {"eventType": "AD_MARKER_FOUND", "marker": marker, "breakId": "b1"},
+        {"eventType": "MAKING_ADS_REQUEST", "breakId": "b1"},
+        {"eventType": "FILLED_AVAIL", "breakId": "b1"},
+    ]
+    asked: list[tuple[str, int, str]] = []
+
+    def timed_out_steps(bundle_key: str, release: int, sibling: str, *_: Any) -> dict[str, dict[str, int]]:
+        asked.append((bundle_key, release, sibling))
+        return {"fastm_pa_lookup_r0004": {"timeout_ms": 1000, "minutes": 2}}
+
+    monkeypatch.setattr(smoke, "events", lambda *_: healthy)
+    monkeypatch.setattr(smoke, "decisions", lambda *_: {"1664792870"})
+    monkeypatch.setattr(smoke.promote, "timed_out_steps", timed_out_steps)
+    session = {"sibling": "fastm-demo-p-b", "session": SESSION, "started": 1_700_000_000.0, "markers": [marker]}
+    assert smoke.judge(session, breaks=1, probe=False)["passed"]  # without the release, latency is not read
+    result = smoke.judge(session, breaks=1, probe=False, bundle_key="release/d/bundle.json", release=4)
+    assert result["failures"] == ("PRE_ADS request fastm_pa_lookup_r0004 reached its 1000 ms timeout in 2 minutes",)
+    assert not result["passed"] and asked == [("release/d/bundle.json", 4, "fastm-demo-p-b")]

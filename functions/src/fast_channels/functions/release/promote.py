@@ -21,7 +21,7 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 
 from fast_channels.core.monetization import names
-from fast_channels.core.monetization.functions import RELEASE_SUFFIX, FunctionType
+from fast_channels.core.monetization.functions import RELEASE_SUFFIX, FunctionType, Hook, released_id
 from fast_channels.core.monetization.playback import render
 from fast_channels.core.monetization.release import (
     SiblingRecord,
@@ -31,6 +31,7 @@ from fast_channels.core.monetization.release import (
     promoted,
     rolled_back,
 )
+from fast_channels.core.monetization.smoke import request_timeouts, timed_out
 from fast_channels.core.monetization.validators import check_rendered, require_valid
 from fast_channels.functions import aws
 from fast_channels.functions.channel_ops import ignore_missing, is_missing
@@ -104,16 +105,47 @@ def smoke_plan(bundle_key: str, chosen: list[dict[str, str]]) -> dict[str, Any]:
     return {"smoke": [], "lab": None}
 
 
+def _running_deployments() -> list[dict[str, Any]]:
+    """The environment's deployments in progress (AppConfig allows one at a time)."""
+    config = settings()
+    config.require("appconfig_application", "appconfig_environment")
+    items = aws.client("appconfig").list_deployments(
+        ApplicationId=config.appconfig_application, EnvironmentId=config.appconfig_environment, MaxResults=5
+    )["Items"]
+    return [d for d in items if d["State"] not in TERMINAL]
+
+
+def stop_pointer() -> list[int]:
+    """Stop the release pointer's deployment in progress, if any (a rollback must not wait out a rollout); another
+    profile's deployment (the flags) is left to finish."""
+    config = settings()
+    config.require("appconfig_application", "appconfig_environment", "release_profile")
+    client = aws.client("appconfig")
+    stopped: list[int] = []
+    for deployment in _running_deployments():
+        number = int(deployment["DeploymentNumber"])
+        found = client.get_deployment(
+            ApplicationId=config.appconfig_application,
+            EnvironmentId=config.appconfig_environment,
+            DeploymentNumber=number,
+        )
+        if found.get("ConfigurationProfileId") == config.release_profile:
+            client.stop_deployment(
+                ApplicationId=config.appconfig_application,
+                EnvironmentId=config.appconfig_environment,
+                DeploymentNumber=number,
+            )
+            stopped.append(number)
+    if stopped:
+        logger.warning("pointer deployment stopped for the rollback", extra={"deployments": stopped})
+    return stopped
+
+
 def _deploy(content: dict[str, str], *, strategy: str, description: str, tags: dict[str, str]) -> dict[str, Any]:
     config = settings()
     config.require("appconfig_application", "appconfig_environment", "release_profile")
     client = aws.client("appconfig")
-    if any(
-        d["State"] not in TERMINAL
-        for d in client.list_deployments(
-            ApplicationId=config.appconfig_application, EnvironmentId=config.appconfig_environment, MaxResults=5
-        )["Items"]
-    ):
+    if _running_deployments():
         raise PointerBusyError("another deployment of the environment is in progress")
     version = client.create_hosted_configuration_version(
         ApplicationId=config.appconfig_application,
@@ -161,15 +193,73 @@ def point(release: int, change_id: str, chosen: list[dict[str, str]]) -> dict[st
     return deployed
 
 
-def pointer_state(deployment: int) -> dict[str, Any]:
-    """The pointer deployment's state and progress."""
+def step_maxima(sibling: str, function_id: str, start: datetime, end: datetime) -> list[float]:
+    """The per-minute maxima (ms) of a PRE_ADS ``HTTP_REQUEST`` function's ``Function.Latency`` on ``sibling``."""
+    dimensions = {
+        "ConfigurationName": sibling,
+        "FunctionId": function_id,
+        "HookType": Hook.PRE_ADS.value,
+        "FunctionType": FunctionType.HTTP_REQUEST.value,
+    }
+    points = aws.client("cloudwatch").get_metric_statistics(
+        Namespace="AWS/MediaTailor",
+        MetricName="Function.Latency",
+        Dimensions=[{"Name": k, "Value": v} for k, v in dimensions.items()],
+        StartTime=start,
+        EndTime=end,
+        Period=60,
+        Statistics=["Maximum"],
+    )["Datapoints"]
+    return [float(p["Maximum"]) for p in points]
+
+
+def timed_out_steps(
+    bundle_key: str, release: int, sibling: str, start: datetime, end: datetime
+) -> dict[str, dict[str, int]]:
+    """The PRE_ADS requests of ``release`` on ``sibling`` that reached their timeout in
+    :data:`~fast_channels.core.monetization.smoke.TIMEOUT_PERIODS` minutes or more between ``start`` and ``end``: by
+    FunctionId, the timeout (from the release's bundle) and the minutes. No error metric counts them."""
+    timeouts = {
+        released_id(stem, release): ms for stem, ms in request_timeouts(store.bundle(bundle_key), sibling).items()
+    }
+    maxima = {function_id: step_maxima(sibling, function_id, start, end) for function_id in timeouts}
+    return {f: {"timeout_ms": timeouts[f], "minutes": n} for f, n in timed_out(maxima, timeouts).items()}
+
+
+def pointer_state(
+    deployment: int,
+    bundle_key: str | None = None,
+    release: int | None = None,
+    chosen: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """The pointer deployment's state and progress.
+
+    A candidate whose PRE_ADS request reached its timeout in the deployment (:func:`timed_out_steps`) stops it: the
+    state is ``ROLLED_BACK`` and ``timed_out`` names the requests. The environment's monitors count errors, and a
+    timed-out request is none.
+    """
     config = settings()
     config.require("appconfig_application", "appconfig_environment")
-    found = aws.client("appconfig").get_deployment(
+    client = aws.client("appconfig")
+    found = client.get_deployment(
         ApplicationId=config.appconfig_application,
         EnvironmentId=config.appconfig_environment,
         DeploymentNumber=deployment,
     )
+    late: dict[str, dict[str, dict[str, int]]] = {}
+    if bundle_key and release and chosen and found["State"] not in TERMINAL:
+        started, now = found.get("StartedAt") or _now(), _now()
+        for candidate in chosen:
+            if steps := timed_out_steps(bundle_key, release, candidate["sibling"], started, now):
+                late[candidate["sibling"]] = steps
+        if late:
+            client.stop_deployment(
+                ApplicationId=config.appconfig_application,
+                EnvironmentId=config.appconfig_environment,
+                DeploymentNumber=deployment,
+            )
+            logger.warning("pointer deployment stopped: a PRE_ADS request timed out", extra={"timed_out": late})
+            found = found | {"State": "ROLLED_BACK"}
     events = [e.get("Description", "") for e in found.get("EventLog", [])][:5]
     return {
         "deployment": deployment,
@@ -177,6 +267,7 @@ def pointer_state(deployment: int) -> dict[str, Any]:
         "percent": found.get("PercentageComplete", 0),
         "done": found["State"] in TERMINAL,
         "events": events,
+        **({"timed_out": late} if late else {}),
     }
 
 
@@ -247,6 +338,7 @@ def rollback(
         remapped[sibling] = state.siblings[sibling].release
         apply.write_plan(_channel(bundle_key, candidate["channel"]), state, {}, _now())
     content = pointer(store.channels(list(config.release_channels)))
+    stop_pointer()  # a rollout still in progress (the pointer step failed) goes no further
     deployed = _deploy(
         content,
         strategy=_at_once(),
@@ -384,7 +476,7 @@ STEPS: Final[dict[str, Callable[[dict[str, Any]], dict[str, Any]]]] = {
     "candidates": _candidates,
     "finish": lambda e: finish(e["release"], e["change_id"]),
     "point": lambda e: point(e["release"], e["change_id"], e["candidates"]),
-    "pointer": lambda e: pointer_state(e["deployment"]),
+    "pointer": lambda e: pointer_state(e["deployment"], e.get("bundle_key"), e.get("release"), e.get("candidates")),
     "promote": _promote_and_collect,
     "rollback": lambda e: rollback(e["bundle_key"], e["release"], e["change_id"], e["candidates"], e["reason"]),
 }

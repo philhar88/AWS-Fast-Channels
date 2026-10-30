@@ -59,7 +59,8 @@ LOOKUP_BUDGET_MS: Final = 1200
 LOOKUP_MARGIN_MS: Final = 200
 """The lookup's request timeout is its share less this (R-F7: a request never outlasts its executor)."""
 SLOW_MS: Final = 2500
-"""The lookup's latency that breaks a release (P0-08's failure): the step times out, the hook errors."""
+"""The lookup's latency that breaks a release (P0-08's failure): the step times out, which no error metric counts
+(the controller reads the step's latency against its timeout)."""
 THROTTLE_RATE: Final = 20
 THROTTLE_BURST: Final = 40
 """Requests per second the rig's API takes: a probe session's breaks and a VOD session every 10 s need far less."""
@@ -351,9 +352,8 @@ def add_lookup(bundle: Bundle, url: str, headers: Mapping[str, str] | None = Non
     siblings' PRE_ADS tree (a new tree where they have none), within the 2,000 ms the request-path hooks share; other
     modules' steps stay as they are.
 
-    Each break has its own cache entry (``Cache.Key`` of the event id, 1 s): without a ``Cache``, MediaTailor still
-    answered the lookup from a cache, for 40 minutes and across releases, and a URL that varied with the break
-    (in its query or its path) did not help (fastm, 2026-10-29), so a lookup that turns slow was not called again.
+    Each break has its own cache entry (``Cache.Key`` of the event id, 1 s): the lookup is called once per break,
+    and the time it turns slow is the time its breaks meet it.
 
     Raises:
         AssertionError: the pair siblings map different PRE_ADS trees, or too little of the budget is left.
@@ -651,3 +651,26 @@ def breaks(stage: Stage, sessions: Sequence[str], start: float, end: float) -> d
         failed = any(s == session and (b == break_id or 0 <= at - t <= HOOK_WINDOW_S) for s, b, t in errors)
         found[session].append((at, failed))
     return {s: sorted(v) for s, v in found.items()}
+
+
+def request_latency(
+    stage: Stage, sibling: str, function_id: str, start: float, end: float
+) -> list[tuple[float, float]]:
+    """The per-minute maximum ``Function.Latency`` of a PRE_ADS ``HTTP_REQUEST`` function on ``sibling``: (minute
+    start in epoch seconds, ms), in time order."""
+    dimensions = {
+        "ConfigurationName": sibling,
+        "FunctionId": function_id,
+        "HookType": "PRE_ADS_REQUEST",
+        "FunctionType": "HTTP_REQUEST",
+    }
+    points = stage.session.client("cloudwatch", region_name=stage.region).get_metric_statistics(
+        Namespace="AWS/MediaTailor",
+        MetricName="Function.Latency",
+        Dimensions=[{"Name": k, "Value": v} for k, v in dimensions.items()],
+        StartTime=datetime.fromtimestamp(start, UTC),
+        EndTime=datetime.fromtimestamp(end, UTC),
+        Period=60,
+        Statistics=["Maximum"],
+    )["Datapoints"]
+    return sorted((p["Timestamp"].timestamp(), float(p["Maximum"])) for p in points)

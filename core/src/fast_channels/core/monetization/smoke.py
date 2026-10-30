@@ -24,13 +24,22 @@ The verdict names what failed; it never holds a log value.
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from fast_channels.core.monetization.functions import Hook
+
+if TYPE_CHECKING:
+    from fast_channels.core.monetization.bundle import Bundle
 
 MARKER = "AD_MARKER_FOUND"
 REQUEST = "MAKING_ADS_REQUEST"
 FILLED = "FILLED_AVAIL"
+TIMEOUT_PERIODS: Final = 2
+"""A request that reaches its timeout in this many one-minute periods fails a release: a dependency down or slow,
+not one cold call (fastm, 2026-10-30: the crawl request reached its 250 ms once, on a healthy smoke's first
+break)."""
 NO_ADS = "WARNING_NO_ADVERTISEMENTS"
 ERROR_SUFFIXES = ("_FUNCTION_ERROR", "_HOOK_ERROR")
 HOOK_SUMMARY_SUFFIX = "_HOOK_SUMMARY"
@@ -152,3 +161,31 @@ def verdict(
         unlogged=count["unlogged"],
         failures=tuple(failures),
     )
+
+
+def request_timeouts(bundle: Bundle, sibling: str, hook: Hook = Hook.PRE_ADS) -> dict[str, int]:
+    """The request timeout (ms) of each ``HTTP_REQUEST`` function in ``sibling``'s ``hook`` tree, by stem."""
+    found = next((s for s in bundle.siblings if s.name == sibling), None)
+    root = bundle.function((found.playback.function_mapping or {}).get(hook, "")) if found else None
+    if root is None:
+        return {}
+    functions = [bundle.function(ref.function_id) for ref in root.steps] or [root]
+    return {
+        f.function_id: f.http_request_configuration.request_timeout_milliseconds
+        for f in functions
+        if f is not None and f.http_request_configuration is not None
+    }
+
+
+def timed_out(
+    maxima: Mapping[str, Iterable[float]], timeouts: Mapping[str, int], *, periods: int = TIMEOUT_PERIODS
+) -> dict[str, int]:
+    """The functions whose latency reached their request timeout in ``periods`` one-minute periods or more, with the
+    number of those periods.
+
+    ``maxima`` holds each function's per-minute maximum ``Function.Latency``. A request that times out inside an
+    executor is neither a Function error nor a hook error (its response is null): only its latency, at its timeout,
+    shows it (fastm, 2026-10-30: 1,007 and 1,008 ms for a 1,000 ms request to a 2,500 ms endpoint).
+    """
+    counts = {f: sum(1 for m in maxima.get(f, ()) if m >= timeout) for f, timeout in timeouts.items()}
+    return {f: n for f, n in counts.items() if n >= periods}
