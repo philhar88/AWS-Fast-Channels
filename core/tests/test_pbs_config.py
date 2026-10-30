@@ -105,7 +105,7 @@ def test_the_stored_request_is_a_template_pod_of_one_30_s_slot_for_the_own_book_
     assert request["id"] == "fast-pod"
     assert slot["id"] == "s1"
     video = slot["video"]
-    assert (video["podid"], video["poddur"], video["rqddurs"], video["slotinpod"]) == (1, 30, [30], 0)
+    assert (video["podid"], video["poddur"], video["rqddurs"], video["slotinpod"]) == ("1", 30, [30], 0)
     assert slot["ext"]["prebid"]["bidder"] == {OWN_BOOK: {}}
     assert slot["ssai"] == 3
     assert "device" not in request

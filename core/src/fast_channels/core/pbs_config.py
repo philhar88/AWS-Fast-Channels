@@ -245,7 +245,7 @@ def _template_slot() -> dict[str, Any]:
             "plcmt": 1,
             "linearity": 1,
             "startdelay": -1,
-            "podid": 1,
+            "podid": "1",  # OpenRTB 2.6 types it as a string
             "poddur": SLOT_SECONDS,
             "rqddurs": [SLOT_SECONDS],
             "slotinpod": 0,

@@ -1209,6 +1209,40 @@ def test_stale_configuration_is_pruned_after_the_upload_and_the_tasks_roll(
     assert f"s3://{STORED_BUCKET}/stored_requests/fast-pod-60s.json" in listed, "listed before they go"
 
 
+def test_keep_stale_uploads_and_only_lists_what_is_stale(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The first step of a body-format change: the new configuration is beside the old until the siblings' rollout
+    has moved them off it (docs/demand.md)."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    account = next(location for location in rendered if location[1].startswith("stored_accounts/"))
+    s3 = FakeS3({**{k: v for k, v in rendered.items() if k != account}, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert config_stage.upload_config("https://cdn.example", prune=False) == [account[1]]
+    assert s3.objects == {**rendered, **STALE} and s3.deletes == []
+    assert rolls == ["rolled"], "the upload still rolls the tasks"
+    assert "keeping 5 stale configuration objects" in capsys.readouterr().out
+    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted(key for _, key in STALE), "then pruned"
+
+
+def test_deploy_and_upload_config_take_keep_stale(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+
+    class Stage:
+        prefix = "fastcix"
+
+        def upload_config(self, content_base_url: str, *, prune: bool = True) -> list[str]:
+            calls.append(prune)
+            return []
+
+    monkeypatch.setattr(prebid_guidance, "demand_stage", lambda args: Stage())
+    monkeypatch.setattr(prebid_guidance, "content_base_url", lambda args, prefix: "https://cdn.example")
+    for argv in (["upload-config", "--keep-stale"], ["upload-config"]):
+        assert prebid_guidance.main([*argv, "--prefix", "fastcix"]) == 0
+    assert calls == [False, True]
+
+
 def test_nothing_is_pruned_when_the_upload_does_not_read_back(
     config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
 ) -> None:

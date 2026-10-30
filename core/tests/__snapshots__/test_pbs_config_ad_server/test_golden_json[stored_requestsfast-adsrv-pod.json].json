@@ -76,7 +76,7 @@
         ],
         "plcmt": 1,
         "poddur": 30,
-        "podid": 1,
+        "podid": "1",
         "protocols": [
           3,
           6,

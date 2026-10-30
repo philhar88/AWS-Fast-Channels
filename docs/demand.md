@@ -82,7 +82,7 @@ deploy time. Golden copies for a sample stage are in `core/tests/__snapshots__/t
 | File | Content |
 |---|---|
 | `current-config/prebid-config.yaml` | Replaces the guidance's default file, so it repeats every default it keeps. Changes: `server.http.server-instances` = `modules.demand.server_instances`; the five shipped adapters (`appnexus`, `ix`, `openx`, `pubmatic`, `rubicon`) off; the simulator (`amt`) on in `demo` mode only; the own book `ownbook`, a `generic` alias on the PDS sidecar's `http://127.0.0.1:8090/ownbook/openrtb` (OpenRTB 2.6); `hooks.fast-ctv` (policy and select URLs and timeouts, the tracker template, the kit's house ads as `house-ads`, the break lengths it shapes a pod for, `pod-min-s` 30 and `pod-max-s` 120, request logging); GDPR out of scope unless a request signals it; the unprotected log-level endpoint off |
-| `stored_requests/fast-pod.json` | The one stored request of the direct route: a template pod (`podid` 1) of one 30 s slot `s1` (`rqddurs` [30]) and `ext.fast.slot_s` 30. The module copies the slot once per whole 30 s of the POST's `ext.fast.pod_s` (`s1`, `s2`, …, `poddur` = the break, `slotinpod` 1 first, -1 last, 0 for one slot) and drops `ext.fast` before any bidder sees it; `app.content` `livestream` 1, `context` 1, `cattax` 9; a complete `source.schain`; `regs.coppa` 0; `imp.ssai` 3; `tmax` 500; bidder: the own book only, with up to 9 bids per slot (`ext.prebid.multibid`; Prebid Server otherwise keeps one bid per bidder and slot, and the house ads would never reach the module); no `device` or `user` |
+| `stored_requests/fast-pod.json` | The one stored request of the direct route: a template pod (`podid` "1") of one 30 s slot `s1` (`rqddurs` [30]) and `ext.fast.slot_s` 30. The module copies the slot once per whole 30 s of the POST's `ext.fast.pod_s` (`s1`, `s2`, …, `poddur` = the break, `slotinpod` 1 first, -1 last, 0 for one slot) and drops `ext.fast` before any bidder sees it; `app.content` `livestream` 1, `context` 1, `cattax` 9; a complete `source.schain`; `regs.coppa` 0; `imp.ssai` 3; `tmax` 500; bidder: the own book only, with up to 9 bids per slot (`ext.prebid.multibid`; Prebid Server otherwise keeps one bid per bidder and slot, and the house ads would never reach the module); no `device` or `user` |
 | `stored_requests/fast-pod-kids.json` | The same with `regs.coppa` 1, for child-directed playback configurations |
 | `stored_accounts/<prefix>.json` | The execution plan: `processed-auction-request` → `fast-ctv-policy` inside `modules.pds.policy_group_timeout_ms`, `exitpoint` → `fast-ctv-vast` inside `select_group_timeout_ms`. Activity Controls deny `transmitEids`, `transmitUfpd` and `transmitPreciseGeo` to every bidder but the own book. Debug output is off |
 
@@ -455,6 +455,20 @@ order:
 
 `upload-config` runs step 6 alone: it uploads what changed in the rendered configuration, verifies every object in
 S3, prunes what is stale, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.
+`--keep-stale` (on `deploy` and `upload-config`, or `DEMAND_OPTS=--keep-stale`) uploads and verifies but only lists
+what is stale.
+
+**Changing what the POST body names.** The siblings' body changes only when the Release Controller's rollout reaches
+them, but the prune deletes at the deploy. Release the new body to the siblings before pruning what the old one
+named:
+
+1. `deploy-demand` with `--keep-stale`: the new stored requests are uploaded beside the old ones.
+2. Deploy the Release stack and let its rollout complete, so every sibling sends the new body.
+3. `upload-config`: the old objects are pruned.
+
+Or prune at once, and accept that a sibling the rollout has not reached names a deleted stored request: Prebid Server
+answers 400 and the slate plays on that sibling until the rollout moves it. The move from the per-length stored
+requests (`fast-pod-<n>s`) to one per route took the second way, on the one stage that had served them.
 
 `destroy` deletes the Release, Pds and Demand stacks and the guidance's stacks, then what the guidance's templates retain (the
 S3 buckets with every object version, the container, DataSync, Lambda and Container Insights log groups, inactive task

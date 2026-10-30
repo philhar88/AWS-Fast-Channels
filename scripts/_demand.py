@@ -1392,14 +1392,20 @@ class DemandStage:
             cluster=cluster, services=[service], WaiterConfig={"Delay": 15, "MaxAttempts": 80}
         )
 
-    def upload_config(self, content_base_url: str) -> list[str]:
+    def upload_config(self, content_base_url: str, *, prune: bool = True) -> list[str]:
         """Sync the rendered configuration (:meth:`sync_config`), then prune what it no longer holds
         (:meth:`prune_config`, only once the upload read back), and if anything changed roll the tasks; returns the
         keys uploaded and deleted. ``deploy`` runs it after every guidance deploy: the guidance uploads its
         configuration directory only when its stack is created, so a changed setting would otherwise never reach an
-        existing stage, and it never deletes."""
+        existing stage, and it never deletes. Without ``prune`` (``--keep-stale``) the stale objects stay and are
+        only listed: the first step of a body-format change (docs/demand.md)."""
         uploaded = self.sync_config(content_base_url)
-        deleted = self.prune_config(content_base_url)
+        if prune:
+            deleted = self.prune_config(content_base_url)
+        else:
+            deleted = []
+            if stale := self.stale_config(content_base_url):
+                log(f"keeping {len(stale)} stale configuration objects: {', '.join(f's3://{b}/{k}' for b, k in stale)}")
         if changed := uploaded + deleted:
             log(f"configuration changed ({', '.join(changed)}): rolling Prebid Server's tasks")
             self.roll()

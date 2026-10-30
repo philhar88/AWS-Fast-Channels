@@ -399,7 +399,7 @@ def test_a_ttl_never_outlives_its_scope() -> None:
 def test_the_bundle_bounds_break_answers_by_its_shortest_break(kit: SimpleNamespace) -> None:
     auction = _http("fastm_pa_auction", **_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=60))
     for grid, rejected in (((30, 60, 90, 120), True), ((60, 90, 120), False)):
-        bundle = _pre_ads(kit, auction, grid_seconds=grid, stored_requests=[f"fast-pod-{s}s" for s in grid])
+        bundle = _pre_ads(kit, auction, grid_seconds=grid, stored_requests=["fast-pod", "fast-pod-kids"])
         found = kit.messages(v.validate_bundle(bundle), Rule.F8)
         assert any("outlives a session_break answer: at most 30 s" in m for m in found) is rejected, grid
 
