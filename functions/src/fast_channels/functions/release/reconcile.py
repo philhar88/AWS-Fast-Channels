@@ -1,4 +1,4 @@
-"""The siblings' ADS log against MediaTailor's own metrics (hourly): ad requests MediaTailor made but did not log.
+"""The siblings' ADS log against MediaTailor's own metrics (hourly): filled ad time MediaTailor did not log.
 
 MediaTailor can leave a whole break out of its vended ADS log while it requested and filled it (fastm, 2026-10-29:
 no first ``AD_MARKER_FOUND``, ``MAKING_ADS_REQUEST`` or ``FILLED_AVAIL``, while ``AWS/MediaTailor`` counted the
@@ -6,17 +6,19 @@ avail and the Pod Decision Service received the request). The silent-loss detect
 blind to such a gap; and the Pod Decision Service counts deliveries from the same log's ``BEACON_FIRED``, so a gap
 under-counts delivery.
 
-Every hour, for each sibling, over an hour that ended :data:`LAG` ago (the vended logs' delivery delay):
+Every hour, for each sibling, over an hour that ended :data:`LAG` ago (the vended logs' delivery delay), the filled
+ad time ``AWS/MediaTailor`` counted (the ``Sum`` of ``Avail.FilledDuration``, in milliseconds) is compared with the
+log's (the sum of ``FILLED_AVAIL``'s ``avail.filledDuration``, in seconds). Both are emitted once per avail, at the
+break, whether its ads came from a prefetch retrieval or from a real-time request, and an unfilled avail adds 0 to
+both: on fastm (the Prebid Server route, prefetch on) and fastcih (the ad-server route) they agreed to the millisecond
+(2026-10-30). Request counts do not reconcile: ``AdDecisionServer.Ads`` has one sample per avail at the break, while
+the log has a ``MAKING_ADS_REQUEST`` per retrieval and per VAST Wrapper hop.
 
-- **requests:** ``SampleCount`` of ``AWS/MediaTailor`` ``AdDecisionServer.Ads`` (one sample per ADS response)
-  against the log's ``MAKING_ADS_REQUEST`` events. On fastm the two agreed hour by hour, except the hour of the gap;
-- **fills** (reported, not alarmed): ``SampleCount`` of ``Avail.FilledDuration`` (one sample per avail) against the
-  log's ``FILLED_AVAIL`` events. An unfilled avail has no ``FILLED_AVAIL``, so this differs without any gap.
-
-``UnloggedAdsRequests`` is the requests' shortfall, summed over the siblings; ``<prefix>-release-log-loss`` alarms on
-any. The log window is a minute wider than the metrics' on each side, so an event logged across a minute boundary
-is not a false shortfall. This detects; it never back-fills delivery: reconcile delivery from the trackers' own logs
-(runbook in docs/release-controller.md).
+``UnloggedFilledSeconds`` is the shortfall, summed over the siblings (beyond :data:`TOLERANCE_MS` per sibling, for
+rounding); ``<prefix>-release-log-loss`` alarms on any. The log window is a minute wider than the metrics' on each
+side, so an avail logged across a minute boundary is not a false shortfall. Avail counts are reported for context
+(an unfilled avail has a sample and no ``FILLED_AVAIL``). This detects; it never back-fills delivery: reconcile
+delivery from the trackers' own logs (runbook in docs/release-controller.md).
 """
 
 from collections.abc import Sequence
@@ -40,10 +42,12 @@ WINDOW: Final = timedelta(hours=1)
 LAG: Final = timedelta(minutes=20)
 """The vended logs reach the log group within minutes; an hour that ended this long ago is complete."""
 EDGE: Final = timedelta(minutes=1)
+TOLERANCE_MS: Final = 1000
+"""The log's durations are seconds with two decimals; a dropped break is at least 30 s."""
 QUERY: Final = (
-    "filter eventType in ['MAKING_ADS_REQUEST', 'FILLED_AVAIL']\n| stats count(*) as n by originId, eventType"
+    "filter eventType = 'FILLED_AVAIL'\n| stats count(*) as avails, sum(avail.filledDuration) as filled_s by originId"
 )
-METRICS: Final = {"requests": "AdDecisionServer.Ads", "avails": "Avail.FilledDuration"}
+FILLED: Final = "Avail.FilledDuration"
 
 
 def window(at: datetime) -> tuple[datetime, datetime]:
@@ -53,43 +57,42 @@ def window(at: datetime) -> tuple[datetime, datetime]:
 
 
 def counted(siblings: Sequence[str], start: datetime, end: datetime) -> dict[str, dict[str, int]]:
-    """``AWS/MediaTailor``'s sample counts per sibling: ADS responses and avails."""
+    """``AWS/MediaTailor``'s avails and filled milliseconds per sibling (``Avail.FilledDuration``)."""
     queries = [
         {
             "Id": f"m{n}_{kind}",
             "MetricStat": {
                 "Metric": {
                     "Namespace": "AWS/MediaTailor",
-                    "MetricName": metric,
+                    "MetricName": FILLED,
                     "Dimensions": [{"Name": "ConfigurationName", "Value": sibling}],
                 },
                 "Period": int(WINDOW.total_seconds()),
-                "Stat": "SampleCount",
+                "Stat": stat,
             },
         }
         for n, sibling in enumerate(siblings)
-        for kind, metric in METRICS.items()
+        for kind, stat in (("avails", "SampleCount"), ("filled_ms", "Sum"))
     ]
-    found: dict[str, dict[str, int]] = {s: dict.fromkeys(METRICS, 0) for s in siblings}
+    found: dict[str, dict[str, int]] = {s: {"avails": 0, "filled_ms": 0} for s in siblings}
     client = aws.client("cloudwatch")
     for chunk in range(0, len(queries), 500):
         result = client.get_metric_data(MetricDataQueries=queries[chunk : chunk + 500], StartTime=start, EndTime=end)
         for series in result["MetricDataResults"]:
             n, kind = series["Id"][1:].split("_", 1)
-            found[siblings[int(n)]][kind] = int(sum(series.get("Values", [])))
+            found[siblings[int(n)]][kind] = round(sum(series.get("Values", [])))
     return found
 
 
 def logged(start: datetime, end: datetime) -> dict[str, dict[str, int]]:
-    """The siblings' ADS log events per sibling: ``MAKING_ADS_REQUEST`` and ``FILLED_AVAIL``."""
+    """The siblings' logged avails and filled milliseconds per sibling (``FILLED_AVAIL``)."""
     config = settings()
     config.require("prefix")
     rows = smoke.insights(names.log_group(config.prefix), QUERY, (start - EDGE).timestamp(), (end + EDGE).timestamp())
-    found: dict[str, dict[str, int]] = {}
-    for row in rows:
-        kind = "requests" if row["eventType"] == "MAKING_ADS_REQUEST" else "avails"
-        found.setdefault(row["originId"], dict.fromkeys(METRICS, 0))[kind] = int(row["n"])
-    return found
+    return {
+        row["originId"]: {"avails": int(row["avails"]), "filled_ms": round(float(row.get("filled_s") or 0) * 1000)}
+        for row in rows
+    }
 
 
 def created(group: str) -> datetime | None:
@@ -100,12 +103,12 @@ def created(group: str) -> datetime | None:
 
 
 def reconcile(siblings: Sequence[str], at: datetime) -> dict[str, Any]:
-    """Each sibling's counted and logged requests and avails over the hour :func:`window` gives, and the requests'
-    shortfall.
+    """Each sibling's counted and logged avails and filled time over the hour :func:`window` gives, and the filled
+    time the log is missing.
 
     An hour that began before the siblings' log group existed is skipped (``skipped``): Logs Insights refuses a query
-    that ends before a group's creation, and requests made before the siblings' deliveries existed were never
-    logged. The first hour reconciled on a new stage starts after the group's creation.
+    that ends before a group's creation, and avails served before the siblings' deliveries existed were never logged.
+    The first hour reconciled on a new stage starts after the group's creation.
     """
     start, end = window(at)
     config = settings()
@@ -114,25 +117,30 @@ def reconcile(siblings: Sequence[str], at: datetime) -> dict[str, Any]:
     if born is None or born > start:
         reason = "no siblings' log group yet" if born is None else f"the siblings' log group was created {born}"
         logger.info("hour skipped", extra={"start": start.isoformat(), "reason": reason})
-        return {"start": start.isoformat(), "end": end.isoformat(), "unlogged_requests": 0, "skipped": reason}
+        return {"start": start.isoformat(), "end": end.isoformat(), "unlogged_filled_s": 0.0, "skipped": reason}
     by_metrics, by_log = counted(siblings, start, end), logged(start, end)
-    missing = {
-        sibling: max(0, by_metrics[sibling]["requests"] - by_log.get(sibling, {}).get("requests", 0))
-        for sibling in siblings
-    }
+    nothing = {"avails": 0, "filled_ms": 0}
+    missing: dict[str, float] = {}
+    for sibling in siblings:
+        short_ms = by_metrics[sibling]["filled_ms"] - by_log.get(sibling, nothing)["filled_ms"]
+        missing[sibling] = short_ms / 1000 if short_ms > TOLERANCE_MS else 0.0
     report = {
         sibling: {
             "counted": by_metrics[sibling],
-            "logged": by_log.get(sibling, dict.fromkeys(METRICS, 0)),
-            "unlogged_requests": missing[sibling],
+            "logged": by_log.get(sibling, nothing),
+            "unlogged_filled_s": missing[sibling],
         }
         for sibling in siblings
     }
-    unlogged = sum(missing.values())
-    short = {s: report[s] for s, n in missing.items() if n}
+    short = {s: report[s] for s, seconds in missing.items() if seconds}
     if short:
-        logger.warning("ad requests missing from the ADS log", extra={"start": start.isoformat(), "siblings": short})
-    return {"start": start.isoformat(), "end": end.isoformat(), "unlogged_requests": unlogged, "siblings": report}
+        logger.warning("filled ad time missing from the ADS log", extra={"start": start.isoformat(), "siblings": short})
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "unlogged_filled_s": round(sum(missing.values()), 3),
+        "siblings": report,
+    }
 
 
 @metrics.log_metrics
@@ -145,5 +153,5 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     at = datetime.fromisoformat(scheduled.replace("Z", "+00:00")) if scheduled else datetime.now(UTC)
     result = reconcile(config.release_siblings, at)
     if "skipped" not in result:  # an hour not measured has no datapoint (the alarm treats it as not breaching)
-        metrics.add_metric(name="UnloggedAdsRequests", unit=MetricUnit.Count, value=result["unlogged_requests"])
+        metrics.add_metric(name="UnloggedFilledSeconds", unit=MetricUnit.Seconds, value=result["unlogged_filled_s"])
     return result

@@ -127,8 +127,9 @@ class MarkerDetector(Construct):
 
 class LogReconciler(Construct):
     """Every hour, ``fast_channels.functions.release.reconcile`` compares each sibling's ADS log with
-    ``AWS/MediaTailor``'s counts and publishes the ad requests the log is missing (``UnloggedAdsRequests``); the alarm
-    ``<prefix>-release-log-loss`` fires on any. A gap under-counts delivery, which reads the same log's beacons.
+    ``AWS/MediaTailor``'s filled ad time and publishes what the log is missing (``UnloggedFilledSeconds``); the alarm
+    ``<prefix>-release-log-loss`` fires on a second or more. A gap under-counts delivery, which reads the same log's
+    beacons.
 
     Args:
         prefix: deployment prefix.
@@ -200,13 +201,14 @@ class LogReconciler(Construct):
             name=f"{prefix}-release-log-loss",
             metric=cw.Metric(
                 namespace=METRICS_NAMESPACE,
-                metric_name="UnloggedAdsRequests",
+                metric_name="UnloggedFilledSeconds",
                 dimensions_map={"service": "release.reconcile"},
                 statistic=cw.Stats.SUM,
                 period=Duration.hours(1),
             ),
             threshold=1,
-            description="MediaTailor made ad requests its vended ADS log does not have: delivery, which counts that "
-            "log's beacons, is under-counted for those breaks (see the function's log for the siblings and the hour)",
+            description="MediaTailor filled ad time its vended ADS log does not have (Avail.FilledDuration against "
+            "FILLED_AVAIL): delivery, which counts that log's beacons, is under-counted for those breaks (see the "
+            "function's log for the siblings and the hour)",
             topic=topic,
         )

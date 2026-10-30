@@ -3960,7 +3960,7 @@
         "AlarmActions": [
           "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
         ],
-        "AlarmDescription": "MediaTailor made ad requests its vended ADS log does not have: delivery, which counts that log's beacons, is under-counted for those breaks (see the function's log for the siblings and the hour)",
+        "AlarmDescription": "MediaTailor filled ad time its vended ADS log does not have (Avail.FilledDuration against FILLED_AVAIL): delivery, which counts that log's beacons, is under-counted for those breaks (see the function's log for the siblings and the hour)",
         "AlarmName": "fastm-release-log-loss",
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "Dimensions": [
@@ -3970,7 +3970,7 @@
           }
         ],
         "EvaluationPeriods": 1,
-        "MetricName": "UnloggedAdsRequests",
+        "MetricName": "UnloggedFilledSeconds",
         "Namespace": "FastChannels",
         "OKActions": [
           "arn:aws:sns:us-east-1:123456789012:fastm-alerts"

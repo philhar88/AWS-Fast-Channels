@@ -519,7 +519,7 @@ def test_the_siblings_log_is_reconciled_with_mediatailors_counts_every_hour(depl
     alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
     loss = alarms["fastm-release-log-loss"]
     assert (loss["MetricName"], loss["Threshold"], loss["TreatMissingData"]) == (
-        "UnloggedAdsRequests",
+        "UnloggedFilledSeconds",
         1,
         "notBreaching",
     )
