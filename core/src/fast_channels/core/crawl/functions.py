@@ -81,9 +81,9 @@ def pa_meta(prefix: str, *, content_base_url: str) -> Function:
                 ttl_minimum_seconds=CACHE_SECONDS,
                 ttl_maximum_seconds=CACHE_SECONDS,
                 key=f"{{% '{CACHE_KEY_PREFIX}' & $string(scte.segmentation_upid) %}}",
-                scope=CacheScope.TITLE,
-                reason=CACHE_REASON,
             ),
+            cache_scope=CacheScope.TITLE,
+            cache_reason=CACHE_REASON,
             output={
                 "temp.c_ok": f"{{% response.statusCode = 200 and response.body.v = {CONTEXT_VERSION} %}}",
                 # Bounded for R-F1: the publisher keeps hdr within the limit, the expression proves it.

@@ -58,10 +58,10 @@ bundle is applied. An id is created once and never updated, so a release that ch
 
 ## Function caches
 
-MediaTailor caches the answers of an `HTTP_REQUEST` Function even when the Function sets no `Cache`, under a key that
-does not seem to hold the evaluated URL ([ADR 0033](adr/0033-every-function-request-cached-by-scope.md)). One
-session's or one break's answer could then reach another. So every `HTTP_REQUEST` in the bundle sets `Cache`, and its
-`Cache` names a scope and the reason for it. Validator R-F8 holds the key and the TTL to the scope:
+Every `HTTP_REQUEST` in the bundle declares a cache scope (`CacheScope`) and the reason for it
+([ADR 0033](adr/0033-every-function-request-cached-by-scope.md)). Anything cacheable is cached, and its key names
+exactly what makes an answer unique: too few values serve one session's or break's answer to another, too many only
+spend upstream calls. Validator R-F8 holds the `Cache`, its key and its TTL to the scope:
 
 | Scope | One answer per | The key names | `TtlMaximumSeconds` at most |
 |---|---|---|---|
@@ -70,6 +70,7 @@ session's or one break's answer could then reach another. So every `HTTP_REQUEST
 | `session` | session | `session.uuid` | 300 s |
 | `session_break` | session and break | `session.uuid` and the break's event id | the shortest grid break (30 s) |
 | `global` | playback configuration | nothing but the key's `'<name>\|v<N>\|'` prefix | 300 s |
+| `none` | call: never cached (a single-use call such as a ticket redeem) | no `Cache` | — |
 
 - A key reads its scope's identifiers and no other input, and never `player_params.*` or `avail.random` (R-F4).
 - A `break` key names its channel because SCTE-35 event ids are unique per channel only. A break-scoped Function is

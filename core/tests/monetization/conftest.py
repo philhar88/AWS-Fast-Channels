@@ -55,9 +55,9 @@ def pa_meta(prefix: str = PREFIX, **http: Any) -> Function:
             ttl_minimum_seconds=300,
             ttl_maximum_seconds=300,
             key="{% 'meta|v1|' & $string(scte.segmentation_upid) %}",
-            scope=CacheScope.TITLE,
-            reason=TITLE_REASON,
         ),
+        "cache_scope": CacheScope.TITLE,
+        "cache_reason": TITLE_REASON,
         "output": {
             "temp.c_ok": "{% response.statusCode = 200 and response.body.v = 1 %}",
             "temp.c_hdr": "{% $substring($string(response.body.hdr), 0, 1000) %}",
@@ -121,13 +121,8 @@ def redeem() -> Contribution:
                 body=body,
                 headers={"Content-Type": "application/json"},
                 request_timeout_milliseconds=800,
-                cache=Cache(
-                    ttl_minimum_seconds=300,
-                    ttl_maximum_seconds=300,
-                    key="{% 'redeem|v1|' & session.uuid %}",
-                    scope=CacheScope.SESSION,
-                    reason="A ticket is redeemed once per session; no other session may ever see that answer.",
-                ),
+                cache_scope=CacheScope.NONE,
+                cache_reason="A ticket is single-use: each session's redeem must reach the service, never a cache.",
                 output={"temp.redeem": "{% response.statusCode = 200 ? 'bound' : 'anon' %}"},
             ),
         )

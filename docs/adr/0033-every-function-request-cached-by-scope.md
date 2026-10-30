@@ -1,36 +1,30 @@
-# 0033 — Every Function request is cached, keyed by the scope its answer is valid for
+# 0033 — Every Function request declares how its answers may be reused, and is cached by that scope
 
 **Status:** Accepted
 
 ## Context
 
 A MediaTailor Monetization Function of type `HTTP_REQUEST` may set `Cache`: `TtlMinimumSeconds` and
-`TtlMaximumSeconds` (1–300 s) and a `Key` expression. The user guide describes caching only through `Cache`, and it
-documents no cache for a request that sets none.
+`TtlMaximumSeconds` (1–300 s) and a `Key` expression. Cached answers are shared by every session of a playback
+configuration and split into 4–5 partitions (the crawl lookup measured 4 with herds of 100 and 300 sessions and 5 with
+herds of 12 and 40). Without `Cache`, every call goes to the upstream.
 
-During the release module's smoke tests (October 2026), MediaTailor answered such a request from a cache anyway:
+Every Function call spends time and upstream capacity: part of the 2,000 ms that the request-path hooks share and of
+the Live maximum that also covers the ad request, and, at a break herd, one upstream call per session. So the owner
+decided that every request is cached wherever its answer can be reused, and that its key holds exactly the values
+that make an answer unique. A
+key with too few values serves one session's or one break's answer to another: an auction keyed on the break alone
+gives every viewer the first viewer's bids. A key with values the answer does not depend on only spends cache memory
+and upstream calls.
 
-- A PRE_ADS `HTTP_REQUEST` with a literal URL and no `Cache` called its upstream once, at the first break. For the
-  next 40 minutes and six breaks it called it no more, also under releases with new FunctionIds. The hook reported
-  success and its latency stayed at 43–60 ms after the upstream was made to answer in 2,500 ms, beyond the request's
-  1,000 ms timeout.
-- A URL that varied per break, in its query or its path, gave one or two upstream calls, then none for later breaks
-  with other event ids. So the implicit key does not seem to contain the evaluated URL.
-- The same request with an explicit `Cache` keyed on the break's event id (1 s) called the upstream once per break.
-
-Without an explicit key, the answer of one session or break can be served to another. That breaks requests whose
-answers are per viewer or per break: a ticket redeem (one session's binding returned to another) or an auction (one
-session's bids served to every session). The behaviour is reported to AWS as a documentation gap or defect.
-
-Validator R-F4 (DESIGN §7) forbade `session.*` in keys, because the cache is shared by every session of a playback
-configuration and split into 4–5 partitions, so a per-viewer key hits rarely. That reasoning holds for hit rates, but
-for per-session answers the key is what keeps them apart, not what makes them hit.
+Validator R-F4 (DESIGN §7) forbade `session.*` in keys, because per-viewer keys hit rarely across the partitions. That
+holds for hit rates, but for per-session answers the key is what keeps them apart, not what makes them hit.
 
 ## Decision
 
-Every `HTTP_REQUEST` in the release bundle sets `Cache`. Its `Cache` declares a scope and gives the reason for that
-scope in words. Those two members stay in the bundle and are left out of `PutFunction`. The key names exactly the
-scope's identifiers, and the TTL fits how long one answer stays right:
+Every `HTTP_REQUEST` in the release bundle declares a cache scope and gives the reason for it in words. Those two
+members stay in the bundle and are left out of `PutFunction`. Anything cacheable is cached: the request sets `Cache`,
+its key names exactly the scope's identifiers, and the TTL fits how long one answer stays right.
 
 | Scope | One answer per | The key names | `TtlMaximumSeconds` at most |
 |---|---|---|---|
@@ -38,11 +32,15 @@ scope's identifiers, and the TTL fits how long one answer stays right:
 | `break` | break of a channel | the channel (a `\|<channel>\|` segment) and `scte.event_id` or `scte.segmentation_event_id` | the shortest break the stage airs (30 s) |
 | `session` | viewing session | `session.uuid` | 300 s |
 | `session_break` | session and break (an auction) | `session.uuid` and the break's event id | the shortest break (30 s) |
-| `global` | playback configuration | nothing beyond the key's prefix (only with a written reason) | 300 s |
+| `global` | playback configuration | nothing beyond the key's prefix | 300 s |
+| `none` | call (never cached) | no `Cache` | — |
+
+`none` is for a single-use call that must reach its service every time, such as M4's ticket redeem.
 
 Validator R-F8 enforces it, beside the other R-F rules:
 
-- a request with no `Cache`, a scope or a reason missing, or a reason that is not a sentence, is refused;
+- a request with no scope, or a reason that is not a sentence, is refused;
+- a scope other than `none` without `Cache` is refused, and `none` with `Cache` is refused;
 - a key must read one value of every identifier group of its scope and no other input, so a key cannot claim a wider
   scope than it varies by;
 - a `break` key must name its sibling's channel, because SCTE-35 event ids are unique per channel only. A
@@ -59,14 +57,16 @@ key with the channel. The PRE_ADS auction of the ad-server chain (M8-09) is `ses
 
 ## Consequences
 
-- No request in the bundle can fall back on the undocumented default cache. A request that would need no caching
-  still gets a key that makes every answer unique, and at worst it caches nothing useful.
-- Per-session keys cost memory and hit only on a session's own repeat calls. The 4–5 cache partitions make even those
-  hits uncertain. A session-scoped request therefore still has to tolerate one upstream call per call it makes.
+- Every answer's reuse is explicit and checked before anything is put. A request that should never be reused says
+  so (`none`) and why.
+- Per-session keys cost memory and hit only on a session's own repeat calls, and the 4–5 partitions make even those
+  hits uncertain. A session-scoped request still has to tolerate one upstream call per call it makes.
 - A `break` request is per sibling, not per deployment, because its key names the channel: more FunctionIds per
   release (the 20-per-hook execution limit is unaffected).
-- The rule does not repair the default cache. A request mapped outside the bundle (a hand-made configuration) can
-  still be served from it, so the finding stays open with AWS.
-- Evidence: the release module's smoke runs (the upstream's own invocation log against
-  `PreAdsRequestHook.Invocations`), and the M3-x2 live check of a `session_break` key on a throwaway stage: one
-  upstream call per session and break.
+- A request mapped outside the bundle (a hand-made configuration) is not covered.
+- Evidence, from the upstream's own invocation log matched to the ADS's request log on a throwaway stage (6 sessions,
+  7–8 breaks per configuration):
+  - a `session_break` key: one upstream call for each of 39, 48 and 42 (session, break) pairs, and no answer
+    reached another session or break;
+  - a `break` key: 31 calls for 39 session-breaks, up to 5–6 per break for 6 sessions (the cache's partitions);
+  - no `Cache`: one call per ADS request.

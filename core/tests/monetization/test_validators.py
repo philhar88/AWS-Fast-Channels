@@ -153,13 +153,11 @@ def _output(stem: str, output: dict[str, str]) -> Function:
     )
 
 
-CONSTANT = Cache(
-    ttl_minimum_seconds=1,
-    ttl_maximum_seconds=1,
-    key="{% 'x|v1|' %}",
-    scope=CacheScope.GLOBAL,
-    reason="A test request whose answer is the same for every session and break.",
-)
+CONSTANT: dict[str, Any] = {
+    "cache": Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=1, key="{% 'x|v1|' %}"),
+    "cache_scope": CacheScope.GLOBAL,
+    "cache_reason": "A test request whose answer is the same for every session and break.",
+}
 
 
 def _http(stem: str, **configuration: Any) -> Function:
@@ -172,8 +170,8 @@ def _http(stem: str, **configuration: Any) -> Function:
                     "method_type": "GET",
                     "url": "https://x.example.com/a",
                     "request_timeout_milliseconds": 200,
-                    "cache": CONSTANT,
                 }
+                | CONSTANT
                 | configuration
             )
         ),
@@ -242,12 +240,7 @@ def test_request_limits(kit: SimpleNamespace) -> None:
 
 def test_cache_rules(kit: SimpleNamespace) -> None:
     def cached(**cache: Any) -> list[str]:
-        settings = {
-            "ttl_minimum_seconds": 300,
-            "ttl_maximum_seconds": 300,
-            "scope": CacheScope.TITLE,
-            "reason": kit.TITLE_REASON,
-        } | cache
+        settings = {"ttl_minimum_seconds": 300, "ttl_maximum_seconds": 300} | cache
         found = v.check_function(kit.pa_meta(cache=Cache(**settings)), prefix="fastm")
         return [x.message for x in found if x.rule in {Rule.F1, Rule.F3, Rule.F4}]
 
@@ -277,14 +270,17 @@ def test_cache_rules(kit: SimpleNamespace) -> None:
 AUCTION_KEY = "{% 'auction|v1|' & session.uuid & '|' & scte.event_id %}"
 
 
-def _scoped(scope: CacheScope, key: str, *, ttl: int = 1) -> Cache:
-    return Cache(
-        ttl_minimum_seconds=1, ttl_maximum_seconds=ttl, key=key, scope=scope, reason="One answer per scope, in test."
-    )
+def _scoped(scope: CacheScope, key: str | None, *, ttl: int = 1) -> dict[str, Any]:
+    """An HTTP request's cache declaration: a ``Cache`` keyed ``key`` and its scope with a reason."""
+    return {
+        "cache": Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=ttl, key=key),
+        "cache_scope": scope,
+        "cache_reason": "One answer per scope, in a test.",
+    }
 
 
-def _cache_messages(cache: Cache | None, **check: Any) -> list[str]:
-    found = v.check_function(_http("fastm_x", cache=cache), prefix="fastm", **check)
+def _cache_messages(declaration: dict[str, Any], **check: Any) -> list[str]:
+    found = v.check_function(_http("fastm_x", **declaration), prefix="fastm", **check)
     return [f"{x.where}: {x.message}" for x in found if x.rule is Rule.F8]
 
 
@@ -293,23 +289,44 @@ def _pre_ads(kit: SimpleNamespace, step: Function, **bundle: Any) -> Bundle:
     return kit.make_bundle(contributions=[kit.Contribution("t", lambda _: [tree])], **bundle)
 
 
-def test_every_request_declares_a_cache(kit: SimpleNamespace) -> None:
-    """ADR-0033: MediaTailor answered an HTTP_REQUEST that set no Cache from a cache, for 40 minutes."""
-    assert _cache_messages(None) == [
-        "function fastm_x: sets no Cache, but MediaTailor may answer it from a cache anyway (ADR-0033): declare a "
-        "Cache with the scope its answer is valid for and a key that names it"
+def test_every_request_declares_its_cache_scope(kit: SimpleNamespace) -> None:
+    """ADR-0033: anything cacheable is cached, with a key that names what makes an answer unique."""
+    undeclared = {"cache": None, "cache_scope": None, "cache_reason": None}
+    assert _cache_messages(undeclared) == [
+        "function fastm_x: declares its CacheScope, one of ['title', 'break', 'session', 'session_break', 'global', "
+        "'none']: anything cacheable is cached, with a key that names what makes an answer unique; none only for a "
+        "single-use call"
     ]
-    unscoped = Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=1, key="{% 'x|v1|' %}")
-    assert _cache_messages(unscoped) == [
-        "function fastm_x Cache: declares its Scope, one of ['title', 'break', 'session', 'session_break', 'global']"
+    # A Cache without a declared scope cannot be checked against one.
+    assert _cache_messages(_scoped(CacheScope.GLOBAL, "{% 'x|v1|' %}") | {"cache_scope": None}) == [
+        "function fastm_x: declares its CacheScope, one of ['title', 'break', 'session', 'session_break', 'global', "
+        "'none']: anything cacheable is cached, with a key that names what makes an answer unique; none only for a "
+        "single-use call"
     ]
     for reason in (None, "", "   ", "because"):
-        terse = unscoped.model_copy(update={"scope": CacheScope.GLOBAL, "reason": reason})
+        terse = _scoped(CacheScope.GLOBAL, "{% 'x|v1|' %}") | {"cache_reason": reason}
         assert _cache_messages(terse) == [
-            "function fastm_x Cache: gives the reason for scope global in words (a sentence, not a token)"
+            "function fastm_x: gives the reason for CacheScope global in words (a sentence, not a token)"
         ], reason
-    # The kit's redeem (M4's shape) is session-scoped: one session's ticket answer never reaches another session.
+    assert _cache_messages(_scoped(CacheScope.SESSION, None) | {"cache": None}) == [
+        "function fastm_x: a CacheScope session request sets Cache: anything cacheable is cached"
+    ]
+
+
+def test_a_single_use_call_is_never_cached(kit: SimpleNamespace) -> None:
+    """``none`` is for a call that must reach its service every time, such as M4's ticket redeem."""
+    single_use = {"cache": None, "cache_scope": CacheScope.NONE, "cache_reason": "A ticket is redeemed only once."}
+    assert _cache_messages(single_use) == []
+    assert _cache_messages(single_use | {"cache_reason": "single use"}) == [
+        "function fastm_x: gives the reason for CacheScope none in words (a sentence, not a token)"
+    ]
+    assert _cache_messages(
+        single_use | {"cache": Cache(ttl_minimum_seconds=1, ttl_maximum_seconds=1, key="{% 'r|v1|' & session.uuid %}")}
+    ) == ["function fastm_x Cache: a CacheScope none request sets no Cache"]
+    # The kit's redeem has M4's shape: per sibling, at PRE_SESSION, never cached.
     assert kit.rules(v.validate_bundle(kit.make_bundle(contributions=[kit.redeem(), kit.crawl()]))) == set()
+    with pytest.raises(ValueError, match="never cached"):
+        v.scope_validity(CacheScope.NONE)
 
 
 @pytest.mark.parametrize(
@@ -370,7 +387,7 @@ def test_a_ttl_never_outlives_its_scope() -> None:
     ]
     assert v.scope_validity(CacheScope.BREAK, break_seconds=0) == 1  # the floor
     assert v.scope_validity(CacheScope.SESSION_BREAK, break_seconds=900) == 300  # the cache's own maximum
-    assert {scope: v.scope_validity(scope) for scope in CacheScope} == {
+    assert {scope: v.scope_validity(scope) for scope in CacheScope if scope is not CacheScope.NONE} == {
         CacheScope.TITLE: 300,
         CacheScope.BREAK: 30,
         CacheScope.SESSION: 300,
@@ -380,7 +397,7 @@ def test_a_ttl_never_outlives_its_scope() -> None:
 
 
 def test_the_bundle_bounds_break_answers_by_its_shortest_break(kit: SimpleNamespace) -> None:
-    auction = _http("fastm_pa_auction", cache=_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=60))
+    auction = _http("fastm_pa_auction", **_scoped(CacheScope.SESSION_BREAK, AUCTION_KEY, ttl=60))
     for grid, rejected in (((30, 60, 90, 120), True), ((60, 90, 120), False)):
         bundle = _pre_ads(kit, auction, grid_seconds=grid, stored_requests=[f"fast-pod-{s}s" for s in grid])
         found = kit.messages(v.validate_bundle(bundle), Rule.F8)
@@ -392,9 +409,7 @@ def test_a_break_key_names_the_channel(kit: SimpleNamespace) -> None:
 
     def lookup(channel: str | None) -> Function:
         segment = f"{channel}|" if channel else ""
-        return _http(
-            "fastm_pa_lookup", cache=_scoped(CacheScope.BREAK, f"{{% 'lookup|v1|{segment}' & scte.event_id %}}")
-        )
+        return _http("fastm_pa_lookup", **_scoped(CacheScope.BREAK, f"{{% 'lookup|v1|{segment}' & scte.event_id %}}"))
 
     assert kit.messages(v.validate_bundle(_pre_ads(kit, lookup("fastm-demo"))), Rule.F8) == []
     for wrong in (None, "fastm-dem", "fastm-demo2"):
@@ -403,9 +418,7 @@ def test_a_break_key_names_the_channel(kit: SimpleNamespace) -> None:
             "'|fastm-demo|' segment"
             for letter in "abz"
         ], wrong
-    keyless = _http(
-        "fastm_pa_lookup", cache=_scoped(CacheScope.BREAK, "{% 'lookup|v1|' %}").model_copy(update={"key": None})
-    )
+    keyless = _http("fastm_pa_lookup", **_scoped(CacheScope.BREAK, None))
     assert "a break key of fastm-demo-p-a names its channel as a '|fastm-demo|' segment" in {
         m.split(": ")[1] for m in kit.messages(v.validate_bundle(_pre_ads(kit, keyless)), Rule.F8)
     }
@@ -427,10 +440,11 @@ def test_scope_and_reason_stay_out_of_the_request(kit: SimpleNamespace) -> None:
         "TtlMaximumSeconds": 300,
         "Key": "{% 'meta|v1|' & $string(scte.segmentation_upid) %}",
     }
+    assert "CacheScope" not in meta.put_request()["HttpRequestConfiguration"]
     stored = bundle_document(kit.make_bundle(contributions=[kit.crawl()]))
-    cache = next(f for f in stored["bundle"]["functions"] if f["FunctionId"] == "fastm_pa_meta")
-    assert cache["HttpRequestConfiguration"]["Cache"]["Scope"] == "title"
-    assert cache["HttpRequestConfiguration"]["Cache"]["Reason"] == kit.TITLE_REASON
+    request = next(f for f in stored["bundle"]["functions"] if f["FunctionId"] == "fastm_pa_meta")
+    assert request["HttpRequestConfiguration"]["CacheScope"] == "title"
+    assert request["HttpRequestConfiguration"]["CacheReason"] == kit.TITLE_REASON
     assert Bundle.model_validate(stored["bundle"]).digest == stored["digest"]
 
 

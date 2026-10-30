@@ -22,11 +22,11 @@ Rules (:class:`Rule`):
   re-exports every committed key; the session controls (suppression mode and value together) are committed as
   DESIGN §5.3 sets them.
 - **R-F7** Executor timeout ≤ the hook's remaining budget; each request's timeout (and their sum) < the executor's.
-- **R-F8** Every ``HTTP_REQUEST`` sets ``Cache`` with a :class:`~.functions.CacheScope` and the reason for it in
-  words; its key names exactly the scope's identifiers (``title``: the UPID; ``break``: the channel and the event id;
-  ``session``: ``session.uuid``; ``session_break``: both; ``global``: nothing), and ``TtlMaximumSeconds`` stays within
-  what one answer is valid for (a break scope: the shortest break; 1 s at least). MediaTailor answers a request from
-  a cache even when it sets none (ADR-0033), so the key is what keeps one session's or break's answer from another.
+- **R-F8** Every ``HTTP_REQUEST`` declares a :class:`~.functions.CacheScope` and the reason for it in words
+  (ADR-0033). Anything cacheable is cached: a scope other than ``none`` sets ``Cache``, whose key names exactly the
+  scope's identifiers (``title``: the UPID; ``break``: the channel and the event id; ``session``: ``session.uuid``;
+  ``session_break``: both; ``global``: nothing) and whose ``TtlMaximumSeconds`` stays within what one answer is valid
+  for (a break scope: the shortest break; 1 s at least). ``none``, for a single-use call, sets no ``Cache``.
 - **R-P1** The POST body is valid JSON when every variable renders as ``""`` and uses only ``session.uuid``,
   ``session.avail_duration_secs`` and ``scte.event_id``, each inside a JSON string; no PRE_ADS function rewrites
   the body, the URL or the variables they read.
@@ -393,20 +393,35 @@ def _check_http(at: str, http: HttpRequestConfiguration, *, break_seconds: int) 
             yield _violation(Rule.F1, f"{at} Headers[{name}]", "header names ≤256 and values ≤8,192 characters")
         if name.lower() in RESTRICTED_HEADERS:
             yield _violation(Rule.F1, f"{at} Headers[{name}]", "a restricted header is dropped at run time")
+    yield from _check_cache_declaration(at, http)
     if (cache := http.cache) is None:
-        yield _violation(
-            Rule.F8,
-            at,
-            "sets no Cache, but MediaTailor may answer it from a cache anyway (ADR-0033): declare a Cache with the "
-            "scope its answer is valid for and a key that names it",
-        )
         return
     if {cache.ttl_minimum_seconds, cache.ttl_maximum_seconds} - set(CACHE_TTL_SECONDS):
         yield _violation(Rule.F1, f"{at} Cache", "TTLs are 1-300 seconds")
     if cache.ttl_maximum_seconds < cache.ttl_minimum_seconds:
         yield _violation(Rule.F1, f"{at} Cache", "TtlMaximumSeconds must be at least TtlMinimumSeconds")
     yield from _check_cache_key(f"{at} Cache.Key", cache.key)
-    yield from _check_cache_scope(f"{at} Cache", cache, break_seconds=break_seconds)
+    if http.cache_scope not in (None, CacheScope.NONE):
+        yield from _check_cache_scope(f"{at} Cache", cache, http.cache_scope, break_seconds=break_seconds)
+
+
+def _check_cache_declaration(at: str, http: HttpRequestConfiguration) -> Iterator[Violation]:
+    """R-F8: the request declares a scope with a reason; anything but ``none`` is cached, ``none`` is not."""
+    scope = http.cache_scope
+    if scope is None:
+        yield _violation(
+            Rule.F8,
+            at,
+            f"declares its CacheScope, one of {[s.value for s in CacheScope]}: anything cacheable is cached, with a "
+            "key that names what makes an answer unique; none only for a single-use call",
+        )
+        return
+    if len((http.cache_reason or "").strip()) < CACHE_REASON_MIN:
+        yield _violation(Rule.F8, at, f"gives the reason for CacheScope {scope} in words (a sentence, not a token)")
+    if scope is CacheScope.NONE and http.cache is not None:
+        yield _violation(Rule.F8, f"{at} Cache", "a CacheScope none request sets no Cache")
+    if scope is not CacheScope.NONE and http.cache is None:
+        yield _violation(Rule.F8, at, f"a CacheScope {scope} request sets Cache: anything cacheable is cached")
 
 
 def _leftmost(node: Node) -> Node:
@@ -433,8 +448,14 @@ def _check_cache_key(where: str, key: str | None) -> Iterator[Violation]:
 
 
 def scope_validity(scope: CacheScope, *, break_seconds: int = BREAK_SECONDS_MIN) -> int:
-    """How long one answer of ``scope`` stays right, in seconds (R-F8): at least 1, at most the cache's 300."""
+    """How long one answer of ``scope`` stays right, in seconds (R-F8): at least 1, at most the cache's 300.
+
+    Raises:
+        ValueError: ``scope`` is ``none``, which is never cached.
+    """
     match scope:
+        case CacheScope.NONE:
+            raise ValueError("a CacheScope none request is never cached")
         case CacheScope.BREAK | CacheScope.SESSION_BREAK:
             seconds = break_seconds
         case _:
@@ -447,34 +468,29 @@ def _names(paths: Iterable[str], identifiers: Iterable[str]) -> bool:
     return any(p == i or p.startswith(f"{i}.") for p in paths for i in identifiers)
 
 
-def _check_cache_scope(where: str, cache: Cache, *, break_seconds: int) -> Iterator[Violation]:
-    """R-F8 on one document: the scope, its reason, the identifiers its key reads, and the TTL."""
-    if cache.scope is None:
-        yield _violation(Rule.F8, where, f"declares its Scope, one of {[s.value for s in CacheScope]}")
-        return
-    if len((cache.reason or "").strip()) < CACHE_REASON_MIN:
-        yield _violation(Rule.F8, where, f"gives the reason for scope {cache.scope} in words (a sentence, not a token)")
-    if cache.ttl_maximum_seconds > (validity := scope_validity(cache.scope, break_seconds=break_seconds)):
+def _check_cache_scope(where: str, cache: Cache, scope: CacheScope, *, break_seconds: int) -> Iterator[Violation]:
+    """R-F8 on one cached document: the identifiers its key reads, and the TTL, against its scope."""
+    if cache.ttl_maximum_seconds > (validity := scope_validity(scope, break_seconds=break_seconds)):
         yield _violation(
             Rule.F8,
             where,
-            f"TtlMaximumSeconds {cache.ttl_maximum_seconds} outlives a {cache.scope} answer: at most {validity} s",
+            f"TtlMaximumSeconds {cache.ttl_maximum_seconds} outlives a {scope} answer: at most {validity} s",
         )
     value = _value(f"{where}.Key", cache.key or "")
     if value.analysis is None:
         return  # no key (R-F4) or an unreadable one (R-F3)
-    groups = SCOPE_KEYS[cache.scope]
+    groups = SCOPE_KEYS[scope]
     paths = value.analysis.paths
     for group in groups:
         if not _names(paths, group):
             names = group[0] if len(group) == 1 else f"one of {list(group)}"
-            yield _violation(Rule.F8, f"{where}.Key", f"a {cache.scope} key names {names}")
+            yield _violation(Rule.F8, f"{where}.Key", f"a {scope} key names {names}")
     allowed = [identifier for group in groups for identifier in group]
     if beyond := sorted(p for p in paths if not _names([p], allowed)):
         yield _violation(
             Rule.F8,
             f"{where}.Key",
-            f"reads {beyond}, which a {cache.scope} answer does not vary by: declare the scope those values make it",
+            f"reads {beyond}, which a {scope} answer does not vary by: declare the scope those values make it",
         )
 
 
@@ -497,8 +513,9 @@ def _check_break_keys(sibling: Sibling, trees: Iterable[_Tree]) -> Iterator[Viol
     """R-F8 for one sibling: a ``break`` key names the sibling's channel, because SCTE-35 event ids are unique per
     channel only (the cache is per configuration, and a key must not rely on that to be unique)."""
     for function in {f.function_id: f for tree in trees for f in tree.functions}.values():
-        cache = function.http_request_configuration and function.http_request_configuration.cache
-        if cache and cache.scope is CacheScope.BREAK and sibling.channel not in _key_segments(cache.key):
+        if (http := function.http_request_configuration) is None or http.cache_scope is not CacheScope.BREAK:
+            continue
+        if sibling.channel not in _key_segments(http.cache.key if http.cache else None):
             yield _violation(
                 Rule.F8,
                 f"function {function.function_id} Cache.Key",
