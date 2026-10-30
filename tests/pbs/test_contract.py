@@ -5,9 +5,10 @@
   group timeout, failing or malformed, module execution off for the account, hook ids absent from the plan: zero
   third-party calls, for every privacy mode.
 - **Header isolation:** no ``X-Fast-*`` header and no ``User-Agent`` reaches a bidder.
-- **Wire fields:** the pod fields reach OpenRTB 2.5 and 2.6 bidders intact; content metadata in ``app.content``,
-  OpenRTB 2.6 fields in ``app.content.ext`` on Prebid Server 3.43.0, which drops them as first-class fields, and as
-  first-class fields on 4.x (``FAST_PBS_VERSION``).
+- **Wire fields:** the pod fields reach OpenRTB 2.5 and 2.6 bidders intact; the OpenRTB 2.6 content fields as
+  first-class fields reach them on 4.x and are dropped on 3.43.0, which is why the service carries them in
+  ``app.content.ext`` there (``FAST_PBS_VERSION``). The content metadata's contract, T1 and T2, is
+  :mod:`test_crawl_contract`.
 - **The impression rule:** every rendered inline ad has an impression; ours is on every ad: the service's tracker,
   or the module's own on the house fallback.
 - **The PDS contract:** every ``/policy`` and ``/select`` call the module makes validates against the contract's
@@ -24,10 +25,10 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from local_mocks import (
-    CONTENT,
     NATIVE_CONTENT,
     POLICY_TICKETS,
     POSITIVE,
+    PUBLISHER_DOMAIN,
     THIRD_PARTIES,
     TRACKER_ENR,
     Mocks,
@@ -157,20 +158,6 @@ def test_pod_fields_reach_bidders_intact(mocks: Mocks, pbs: Pbs, path: str) -> N
     assert [imp.get("ssai") for imp in imps] == [3] * 3
 
 
-def test_content_metadata_reaches_bidders_with_2_6_fields_in_ext_on_3_43(mocks: Mocks, pbs: Pbs) -> None:
-    started = time.time()
-    pbs.auction("CTX1")
-
-    for path in THIRD_PARTIES:
-        [call] = mocks.calls_to(path, started)
-        content = call.body["app"]["content"]
-        assert {key: content[key] for key in ("id", "title", "genre", "cat", "cattax", "len", "language")} == {
-            key: CONTENT[key] for key in ("id", "title", "genre", "cat", "cattax", "len", "language")
-        }, path
-        assert content["ext"] == CONTENT["ext"], path
-        assert content["livestream"] == 1, "the stored request's constants stay"
-
-
 @pytest.mark.parametrize("path", ["/amt", "/echo26", "/ownbook/openrtb"])
 def test_native_2_6_content_fields_reach_bidders_on_4_x_and_are_dropped_on_3_43(
     mocks: Mocks, pbs: Pbs, path: str
@@ -188,7 +175,7 @@ def test_native_2_6_content_fields_reach_bidders_on_4_x_and_are_dropped_on_3_43(
         assert "data" not in content, "first-party data (the title's ids) stays with the own book"
         return
     [data] = content["data"]
-    assert data["id"] == "fast-catalog"
+    assert data["name"] == PUBLISHER_DOMAIN
     assert data.get("cids") == (["tears-of-steel"] if SETTINGS.pbs_major >= 4 else None)
 
 

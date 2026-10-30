@@ -29,5 +29,5 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0020](0020-demand-through-the-prebid-server-guidance.md) | Programmatic demand through the AWS Prebid Server guidance | Proposed |
 | [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Accepted |
 | [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
-| [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Proposed |
+| [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Accepted |
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |

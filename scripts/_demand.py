@@ -780,12 +780,13 @@ class DemandStage:
 
     def check_pds_state(self) -> None:
         """With ``modules.pds.enabled`` the Data and Media stacks must have written the parameters the Pds stack
-        reads (``/<prefix>/pds/*``: its table's and buckets' names, the CDN, the ladder; ``make deploy`` first);
-        without it, a Pds stack left from before is deleted."""
+        reads (``/<prefix>/pds/*``: its table's and buckets' names, the CDN, the ladder, and with ``modules.crawl``
+        the catalog-context bucket; ``make deploy`` first); without it, a Pds stack left from before is deleted."""
         if not self.config.modules.pds.enabled:
             self.delete_stack(self.client("cloudformation"), self.pds_stack)
             return
-        wanted = [pds_names.parameter_name(self.prefix, parameter) for parameter in pds_names.Parameter]
+        read = pds_names.stack_parameters(crawl=self.config.modules.crawl.enabled)
+        wanted = [pds_names.parameter_name(self.prefix, parameter) for parameter in read]
         if missing := self.client("ssm").get_parameters(Names=wanted).get("InvalidParameters"):
             raise DemandError(
                 f"the PDS's parameters {sorted(missing)} are missing: run `make deploy` with modules.pds.enabled first"

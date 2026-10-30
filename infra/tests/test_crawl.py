@@ -152,8 +152,8 @@ def test_the_path_contract_names_the_route_and_its_origin() -> None:
 
 
 def test_the_module_changes_nothing_else_in_the_media_stack(deployment: Callable[..., Any], normalized: Any) -> None:
-    """Crawl on adds the bucket, its policy and auto-delete, the origin with its access control, the behaviour and the
-    bucket's outputs to the Media stack, and changes nothing else."""
+    """Crawl on adds the bucket, its policy and auto-delete, the origin with its access control, the behaviour, the
+    bucket's outputs and its name for the Pds stack to the Media stack, and changes nothing else."""
     on = normalized(Template.from_stack(deployment(FASTM).stage.media))
     off = normalized(Template.from_stack(deployment(CRAWL_OFF).stage.media))
     added = sorted(set(on["Resources"]) - set(off["Resources"]))
@@ -165,7 +165,11 @@ def test_the_module_changes_nothing_else_in_the_media_stack(deployment: Callable
         "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs",
         "CustomS3AutoDeleteObjectsCustomResourceProviderRole",
         "DeliveryDistributionOrigin4S3OriginAccessControl",
+        "PdsCatalogContextBucketParameter",
     ], added
+    parameter = on["Resources"][added[-1]]["Properties"]
+    assert parameter["Name"] == "/fastm/pds/catalog-context-bucket"
+    assert parameter["Value"] == {"Ref": _catalog_bucket(Template.from_stack(deployment(FASTM).stage.media))}
     assert sorted(set(on["Outputs"]) - set(off["Outputs"])) == [
         "PublishOutputFnGetAttCatalogContextsBucketE67C84ADArnFB352F9B",
         "PublishOutputRefCatalogContextsBucketE67C84ADBF7FF690",

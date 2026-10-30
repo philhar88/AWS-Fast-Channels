@@ -69,6 +69,13 @@ class Settings:
     """The crawl module's bucket of catalog context objects (``catalog/ctx/v1/<content_id>.json``)."""
     publisher_domain: str = field(default_factory=lambda: _env("PUBLISHER_DOMAIN"))
     """The publisher's domain, the registry of catalog content ids in context objects (empty: not configured)."""
+    crawl_holdout_percent: int | None = field(
+        default_factory=lambda: int(raw) if (raw := _env("CRAWL_HOLDOUT_PERCENT")) else None
+    )
+    """Share of session-breaks in the crawl module's ``crawl-v1`` holdout; None when the module is off."""
+    pbs_version: str = field(default_factory=lambda: _env("PBS_VERSION"))
+    """The stage's Prebid Server (Java) release (``modules.demand.pbs_version``), which decides how the PDS sends
+    the OpenRTB 2.6 content fields."""
     region: str = field(default_factory=lambda: _env("AWS_REGION"))
     ledger_table: str = field(default_factory=lambda: _env("LEDGER_TABLE"))
     """The ops module's ledger table (``<prefix>-ledger``)."""

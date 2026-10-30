@@ -163,7 +163,8 @@ https://<cdn>/ads/b.gif?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>
 MediaTailor fires it server-side and logs each firing as a `BEACON_FIRED` event with these parameters, which is how
 delivery is counted: fills deduplicated by `(sid, evid)`, ad impressions by `(sid, evid, crid)`, because a pod holds
 several ads. The counterparty's count is what bills; ours is a seller-side server count. `enr` is the content-enrichment
-arm of the break.
+arm of the break: 1 enriched, 0 in the `crawl-v1` holdout or with the crawl module off
+([content-enrichment.md](content-enrichment.md#measuring-the-uplift)).
 
 ## The own book
 
@@ -245,9 +246,10 @@ versioned, non-secret seeds, so the offline simulator and holdout audits recompu
 ## Patch contributors
 
 Other modules add `app.content` fields and decision-record fields through the `PatchContributor` interface
-(`fast_channels.core.pds.contributors`) without the PDS knowing them; the content-enrichment module contributes the
-show's metadata this way. Contributions fail open: a contributor that raises, or that sets a field an earlier one set,
-is skipped and named in the record.
+(`fast_channels.core.pds.contributors`) without the PDS knowing them. With `modules.crawl` on, the policy function
+loads the content-enrichment module's contributor, which adds the show's metadata and the record fields `enr` and `ctx`
+([content-enrichment.md](content-enrichment.md#the-openrtb-patch)). Contributions fail open: a contributor that
+raises, or that sets a field an earlier one set, is skipped and named in the record.
 
 ## The service
 

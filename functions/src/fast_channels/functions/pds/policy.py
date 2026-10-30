@@ -3,7 +3,8 @@
 Behind the PDS's internal load balancer (Powertools ``ALBResolver``). The answer comes from
 ``fast_channels.core.pds.policy.decide`` with the current snapshot (``store``): until viewer identity exists every
 session is CONTEXTUAL (a ticket that is missing, malformed or not looked up), probes are SAFE, kids configurations
-KIDS. The module waits 50 ms for it; anything but a 200 with a known schema leaves the stored request alone (own book
+KIDS. With the crawl module on, its patch contributor (``functions.crawl.patch``) adds the title's ``app.content``. The
+module waits 50 ms for the answer; anything but a 200 with a known schema leaves the stored request alone (own book
 and house, no third party). Each answer is logged as a ``pds.policy`` decision record, which a subscription carries
 into the lake.
 """
@@ -20,11 +21,14 @@ from pydantic import ValidationError
 from fast_channels.core.pds.models import PolicyRequest
 from fast_channels.core.pds.policy import decide
 from fast_channels.core.pds.records import policy_record
+from fast_channels.functions.crawl.patch import catalog_contexts, contributor
 from fast_channels.functions.pds.http import json_response, refused_fields
 from fast_channels.functions.pds.store import snapshot_store
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
+
+    from fast_channels.core.pds.contributors import PatchContributor
 
 logger = Logger()
 metrics = Metrics()
@@ -33,6 +37,12 @@ app = ALBResolver()
 
 store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
+
+
+def contributors() -> tuple[PatchContributor, ...]:
+    """The patch contributors of the deployed modules: the crawl module's when it is on."""
+    crawl = contributor()
+    return (crawl,) if crawl is not None else ()
 
 
 @app.post("/policy")
@@ -56,7 +66,7 @@ def policy() -> Response[str]:
 def _answer(request: PolicyRequest, started: float) -> Response[str]:
     logger.set_correlation_id(request.decision_id)
     snapshot = store().get()
-    decision = decide(request, snapshot.allow_list, origin_facing=snapshot.networks)
+    decision = decide(request, snapshot.allow_list, origin_facing=snapshot.networks, contributors=contributors())
     body = decision.response.model_dump_json()
     record = policy_record(request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3))
     logger.info("decision", extra={**record.model_dump(mode="json"), "snapshot": snapshot.version})
@@ -75,5 +85,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     return app.resolve(event, context)
 
 
-if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):  # pragma: no cover - load the snapshot during init, not on a request
+if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):  # pragma: no cover - load during init, not on a request
     store().load()
+    if contributors():
+        catalog_contexts().load()
