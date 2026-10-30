@@ -189,7 +189,10 @@ VEGETA: Final = {
 WARMUP_RATE_PER_TASK: Final = 25
 """Synthetic auctions per second per healthy target when a new task's warm-up starts (P0-21: 50-100/s per task for
 2-3 minutes warms a JVM's JIT). The replay goes through the load balancer, which spreads it over every healthy target,
-so the new task gets about this rate."""
+so a lone new task gets about this rate, and when several warm up at once (a rollout, a scale from zero) each gets
+about twice it. With the PDS sidecar sharing the task's 2 vCPU, 50 gave concurrent warm-ups 100-140/s each, and the
+sidecar's queue wait reached p99 150 ms with sheds; 25 kept it at p99 4 ms (max 19 ms) with none (ADR-0036). ALB
+slow start carries live traffic onto a task that joins a serving fleet, so the warm-up only warms the JIT."""
 WARMUP_HEALTHY_WAIT_SECONDS: Final = 600
 """How long a warm-up waits for its task to become a healthy target before it gives up (and fails)."""
 WARMUP_SECONDS: Final = 150

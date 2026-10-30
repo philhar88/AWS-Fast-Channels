@@ -61,11 +61,11 @@ SELECT_TIMEOUT_MS: Final = "PDS_SELECT_TIMEOUT_MS"
 
 
 def deadlines(environment: Mapping[str, str] = os.environ) -> dict[str, float]:
-    """Path -> how long (s) its caller waits: the module's ``/policy`` and ``/select`` timeouts (80 and 200 ms
+    """Path -> how long (s) its caller waits: the module's ``/policy`` and ``/select`` timeouts (50 and 150 ms
     without the settings), the auction's ``tmax`` for the own book."""
     return {
-        Endpoint.POLICY.value: int(environment.get(POLICY_TIMEOUT_MS) or 80) / 1000,
-        Endpoint.SELECT.value: int(environment.get(SELECT_TIMEOUT_MS) or 200) / 1000,
+        Endpoint.POLICY.value: int(environment.get(POLICY_TIMEOUT_MS) or 50) / 1000,
+        Endpoint.SELECT.value: int(environment.get(SELECT_TIMEOUT_MS) or 150) / 1000,
         Endpoint.OWN_BOOK.value: TMAX_MS / 1000,
     }
 

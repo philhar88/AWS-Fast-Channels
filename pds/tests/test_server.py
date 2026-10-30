@@ -224,9 +224,9 @@ def test_a_request_its_caller_stopped_waiting_for_is_shed_not_computed() -> None
 
 
 def test_the_deadlines_are_the_modules_timeouts() -> None:
-    assert server.deadlines({}) == {"/policy": 0.08, "/select": 0.2, "/ownbook/openrtb": 0.5}
-    waits = server.deadlines({"PDS_POLICY_TIMEOUT_MS": "50", "PDS_SELECT_TIMEOUT_MS": "150"})
-    assert (waits["/policy"], waits["/select"]) == (0.05, 0.15)
+    assert server.deadlines({}) == {"/policy": 0.05, "/select": 0.15, "/ownbook/openrtb": 0.5}
+    waits = server.deadlines({"PDS_POLICY_TIMEOUT_MS": "80", "PDS_SELECT_TIMEOUT_MS": "200"})
+    assert (waits["/policy"], waits["/select"]) == (0.08, 0.2)
 
 
 def test_the_loop_starts_the_due_refreshes_between_requests() -> None:

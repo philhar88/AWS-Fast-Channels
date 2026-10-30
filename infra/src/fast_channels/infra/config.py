@@ -646,16 +646,16 @@ class PdsModule(_Module):
     """Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct
     lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per
     break."""
-    policy_timeout_ms: int = Field(default=80, gt=0)
-    """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone. The handler
-    takes under 3 ms, but its internal load balancer adds 20-40 ms to invoke a Lambda target (measured, M2-x2)."""
-    policy_group_timeout_ms: int = Field(default=110, gt=0)
+    policy_timeout_ms: int = Field(default=50, gt=0)
+    """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone. The sidecar
+    on the task's loopback answered the 400-session herds at p99 12-14 ms, max 36 ms at the module (ADR-0036)."""
+    policy_group_timeout_ms: int = Field(default=75, gt=0)
     """Timeout of the hook group that holds the ``/policy`` call (at least ``policy_timeout_ms``)."""
-    select_timeout_ms: int = Field(default=200, gt=0)
+    select_timeout_ms: int = Field(default=150, gt=0)
     """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids. ``/select`` reserves the
-    pod's line ads in DynamoDB first: 25-50 ms, and up to about 110 ms on a first call after an idle spell of a minute
-    or more (DynamoDB has dropped the connection), plus 20-40 ms of the load balancer's (measured, M2-x2)."""
-    select_group_timeout_ms: int = Field(default=250, gt=0)
+    pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-100 ms): the 400-session herds measured
+    p99 65-96 ms, max 111-166 ms at the module (ADR-0036)."""
+    select_group_timeout_ms: int = Field(default=200, gt=0)
     """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
     demo_lines: tuple[DemoLine, ...] = Field(default=(), max_length=8)
     """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's

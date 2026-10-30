@@ -137,10 +137,10 @@ class PbsSettings(BaseModel):
     publisher_domain: str
     """Domain in ``source.schain`` (the seller's advertising system)."""
     app_name: str = Field(default="FAST Channels", min_length=1, max_length=100)
-    policy_timeout_ms: int = Field(default=80, gt=0)
-    policy_group_timeout_ms: int = Field(default=110, gt=0)
-    select_timeout_ms: int = Field(default=200, gt=0)
-    select_group_timeout_ms: int = Field(default=250, gt=0)
+    policy_timeout_ms: int = Field(default=50, gt=0)
+    policy_group_timeout_ms: int = Field(default=75, gt=0)
+    select_timeout_ms: int = Field(default=150, gt=0)
+    select_group_timeout_ms: int = Field(default=200, gt=0)
     house_ads: tuple[HouseAd, ...] = ()
     """The kit's house ads, which the module renders when a break would otherwise be empty (``/policy`` unavailable
     and the own book silent, or ``/select`` unavailable and the auction without a house ad)."""
