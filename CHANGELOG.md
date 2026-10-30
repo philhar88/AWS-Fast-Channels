@@ -60,6 +60,15 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 
   The operations page covers deploy order, stages, teardown and the modules' security controls. The architecture and
   README pages cover the module stacks, their outputs and constructs.
+- **Correlation chains and `scripts/trace.py`** ([docs/observability.md](docs/observability.md#correlation-chains)):
+  - the five chains (viewer, rail, recommender, content, change), and the keys that join each one;
+  - `trace.py` also follows a decision id `<sid>.<evid>` (with its session), a release's change id and its release
+    tag `rNNNN` (each to the other, through the Release Controller's state table);
+  - it searches the modules' log groups: the PDS sidecar, Prebid Server's container log, the siblings' logs and the
+    module stacks;
+  - `--lake` adds an Athena leg over the decision records, the MediaTailor log copies and the archived ledger;
+  - a name prefix that ends in the deployment prefix no longer picks up another stage's log groups (`fastci` and
+    `fastciads`).
 - **Ops module, lake and census events** (`modules.ops.enabled`): a per-stage lake (bucket in the Data stack;
   `FastChannels-<prefix>-Ops` with the Glue database `<prefix>_lake`, the Athena workgroup `<prefix>-lake` with a
   10 GiB scan limit, and the views `v_breaks` and `v_fill_by_pc`). The lake reads the CloudFront Parquet logs

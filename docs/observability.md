@@ -7,6 +7,7 @@ alarms and notifications.
 
 - [Logging and tracing matrix](#logging-and-tracing-matrix)
 - [Correlation contract](#correlation-contract)
+- [Correlation chains](#correlation-chains)
 - [Tracing an id](#tracing-an-id)
 - [Dashboard and alarms](#dashboard-and-alarms)
 - [Lake](#lake)
@@ -35,6 +36,10 @@ log-group-scoped policy.
 | AgentCore Runtime | Application log records through ADOT (`otel-rt-logs` stream, with `correlation_id`, `actor`, `mode`, `model_id`); message content only with `observability.capture_prompts` ([below](#what-the-agent-runtime-records)); vended application and usage logs | `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT`; `/aws/vendedlogs/bedrock-agentcore/<prefix>/runtime/<LOG_TYPE>` | OpenTelemetry spans with Transaction Search only |
 | AgentCore Gateway, Memory | Vended application logs; the Gateway's logs record every request and response body, with no caller identity | `/aws/vendedlogs/bedrock-agentcore/<prefix>/<gateway\|memory>/APPLICATION_LOGS` | Trace deliveries with Transaction Search only |
 | Cognito | Administrative API calls in CloudTrail; the Essentials feature plan does not export user-activity logs | CloudTrail | |
+| Pod Decision Service (`pds`) | The sidecar's JSON lines: the decision records `pds.policy` and `pds.select` (with `decision_id`, `sid`, `evid`, `pc` and, in `pds.policy`, `upid` and `fv`), the own book's lines and a `pds stats` line per task each minute. The delivery function logs `pds.delivery` | `/aws/ecs/<prefix>-pds` (the sidecar); the Pds stack's function log groups; copies in the lake (`pds_policy`, `pds_select`, `pds_delivery`) | Metrics in `FastChannels` by `service` `pds` ([pds.md](pds.md#the-service)) |
+| Prebid Server (`demand`) | The container's log, with the fast-ctv module's `fast-ctv-request` and `fast-ctv-pod` lines (the break's `sid`, `evid`, the policy and `/select` outcome) | The guidance stack's container log group (`<prefix>-pbs-…PrebidContainerLogGroup…`) | Metric filters in `FastChannels/PrebidServer/<prefix>` (fallbacks, house pods) |
+| Monetized configurations (`release`) | The siblings' vended logs: ad decision server, manifest service and transcode logs, without the fields that can hold the origin secret or a ticket; the Release Controller's functions and state machines | `/aws/vendedlogs/mediatailor/<prefix>-release` (its own KMS key; only named readers may read it, [release-controller.md](release-controller.md#the-siblings-logs)); `/aws/vendedlogs/states/<prefix>-release*` | Per-sibling metric filters and alarms |
+| Ledger (`ops`) | Every unattended action and money event, hash-chained | The table `<prefix>-ledger` and its Object-Locked archive; the lake table `ledger` ([below](#ledger)) | |
 
 ## Correlation contract
 
@@ -53,6 +58,22 @@ From a viewer complaint to the schedule: the player's `cdn-rid` or session id fi
 records; their `evid` and `upid` name the break; the break's event id belongs to one `PROGRAM#` item, which names the
 asset; the asset's `correlation_id` finds its encode.
 
+## Correlation chains
+
+With the modules, five chains join what a viewer saw to the decisions, the content and the change behind it. Each is a
+row of keys that the next record also carries. `scripts/trace.py` follows them ([below](#scriptstracepy)).
+
+| Chain | Keys, in order | Where each key is | In v4.0.0 |
+|---|---|---|---|
+| **Viewer** | MediaTailor session id `sid` → `decision_id` = `<sid>.<evid>` → our impression tracker's `d=` → `BEACON_FIRED` → delivery | `sid` in the ADS request and every MediaTailor log; `decision_id` in the PDS's `pds.policy`, `pds.select` and `pds.delivery` records, on our tracker's URL (`d=<sid>.<evid>`, so prefetched breaks join too, which carry no `adBreakCorrelationId`) and in the ledger's money events; delivery in `IMP#`/`FILL#` items and `pds_delivery` | Yes, from the MediaTailor session. The design's viewer id `cid`, minted by a playback API before the session, is not part of v4.0.0, so the chain starts at `sid` |
+| **Rail** | Rail request `rid` → `cid` on the ticket | — | No: the recommender rail is not part of v4.0.0 |
+| **Recommender** | Run id → rail item → Bedrock request id | — | No: the recommender is not part of v4.0.0 |
+| **Content** | Ingest `correlation_id` → asset → UPID (`FST3` + content id) → `evid` → `sid` and our tracker | The ingest's logs and the asset (above); the UPID in the program's breaks, the HLS `DATERANGE`, the ADS request (`upid=`) and `pds.policy`; with `crawl`, the title's catalog context object `catalog/ctx/v1/<content id>.json` | Yes |
+| **Change** | Ledger `change_id` → release `fv` = `rNNNN` → playback configuration | `change_id` (a ULID) in the Release Controller's state table, the ledger's `correlation_id` and the siblings' `fast:change` tag; `rNNNN` in the `X-Fast-Fv` header MediaTailor sends, the `fv` of every `pds.policy` record, the siblings' `fast:release` tag and every FunctionId (`<prefix>_…_rNNNN`) | Yes, with `release` |
+
+The break key is the SCTE-35 event id `evid`. MediaTailor's own `adBreakCorrelationId` takes two values per break and is
+absent on prefetch, so no chain uses it.
+
 ## Tracing an id
 
 ### `scripts/trace.py`
@@ -63,12 +84,25 @@ uv run python scripts/trace.py seed-sintel-1a2b3c4d --since 6h    # ingest corre
 uv run python scripts/trace.py 49f0c250-9e3c-4997-a723-3cd95eff9d42   # MediaTailor playback session id
 uv run python scripts/trace.py 20261016T120000-sintel-1a2b3c --full   # program name: whole log messages
 uv run python scripts/trace.py <runtime session id> --prefix news     # another deployment
+uv run python scripts/trace.py <sid>.<evid> --lake --since 2h        # decision id: the viewer chain, lake too
+uv run python scripts/trace.py <change id> --lake                    # a release: the change chain
+uv run python scripts/trace.py r0007                                 # a release tag (fv)
 ```
 
 The script finds the deployment's log groups (tagged `fast:app=<prefix>`, or named by the stacks and services as in
-the matrix above), expands the identifier with what the media library links to it (an asset's ingest correlation
-ids; `evid=<event id>` for each break of a program), runs one Logs Insights query per 50 log groups over the last
-`--since` (default 24 h) and prints one time-ordered timeline (abridged):
+the matrix above), expands the identifier with what is linked to it, runs one Logs Insights query per 50 log groups over the last
+`--since` (default 24 h) and prints one time-ordered timeline. The links:
+
+- the media library: an asset's ingest correlation ids, and `evid=<event id>` for each break of a program;
+- a decision id `<sid>.<evid>`: its session id, whose MediaTailor records belong to the viewer chain;
+- the Release Controller's state table: a change id's release tag `rNNNN`, or a release tag's change id.
+
+With the modules the log groups include the PDS sidecar's, Prebid Server's container log, the siblings' logs and the
+module stacks' functions. `--lake` also runs one Athena query per lake table in the stage's workgroup, over the
+partitions since `--since`: the decision records (`pds_policy`, `pds_select`, `pds_delivery` by `decision_id`, `sid`,
+`evid`, `upid`, `fv`), the MediaTailor log copies (by `sessionid`) and the archived ledger (by `correlation_id` and
+`subject`). Its rows join the timeline as `lake/<table>`. It needs the ops module, and `athena:StartQueryExecution`,
+`glue:GetTables` and read access to the lake bucket. The output, abridged:
 
 ```
 2026-10-16T12:00:01.112Z  ingest.trigger                      INFO | starting ingest | …
@@ -79,8 +113,8 @@ ids; `evid=<event id>` for each break of a program), runs one Logs Insights quer
 
 Each line shows the UTC time, the source (the Powertools service of a function, else the log group) and a summary of
 the record (`--full` prints the whole message). It exits with status 1 when nothing matched. CloudFront logs are
-Parquet objects in S3 and are not searched; query them with Amazon Athena (Hive-partitioned Parquet), for example by
-`cmcd-session-id` or the `sid=` of an ad request.
+not searched: the lake's `cloudfront_access` table has no query string, so query it with Amazon Athena by
+`cmcd_session_id`, or the v3.0 Parquet logs in the logs bucket for the `sid=` of an ad request.
 
 ### Saved Logs Insights queries
 
@@ -177,6 +211,9 @@ adding; filter on the partition keys to keep scans small.
 | `v_breaks` | One row per aired break by SCTE-35 event id (`evid`): UPID, channel, the ad marker's `START-DATE`, the first ADS request, configurations, sessions, ADS requests, filled avails and seconds | — |
 | `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate | — |
 | `v_zero_ads_sessions` | Sessions that saw at least three ad breaks and made no ad request, with the day, configuration and first and last break | — |
+| `ledger` | The ledger's archived records ([below](#ledger)) | `day` (`yyyy/MM/dd`) |
+| `pds_policy`, `pds_select`, `pds_delivery` | With `pds`: the Pod Decision Service's decision records, one row per call or tracker firing, with `decision_id`, `sid`, `evid` and `pc` ([pds.md](pds.md#decision-records)). Filter on `record = 'pds.<kind>'`: the objects hold an empty line between records | `datehour` |
+| `v_crawl_kpis` | With `crawl`: coverage, bids, fill and price by hour, playback configuration and holdout arm ([content-enrichment.md](content-enrichment.md#measuring-the-uplift)) | — |
 
 Column names are the log fields in lower case (`eventtype`, `adsrequesturl`, `cs_uri_stem`, `cmcd_session_id`).
 Nested log objects (`avail`, `vastresponse`, `beaconinfo`) are JSON text: read them with `json_extract_scalar`. The
@@ -221,10 +258,10 @@ the stream's 24 hours; redrive them). Records never hold a viewer id.
 
 ## Runbooks, flags and the probe
 
-With the ops module each stage has eight runbooks (D§18.8), one allow-listed Step Functions state machine each,
+With the ops module each stage has eight runbooks, one allow-listed Step Functions state machine each,
 `<prefix>-runbook-<id>`. A trigger starts one; its function reads the kill switches, gathers the facts, decides and
-appends one [ledger](#ledger) entry to the chain `runbook/<id>`. Acting unattended is L2 autonomy, which needs
-ADR-0023, so for now every runbook runs its dry-run path: the entry (`action` `runbook.dry_run`, `correlation_id` =
+appends one [ledger](#ledger) entry to the chain `runbook/<id>`. Acting unattended (L2 autonomy) is not enabled in
+v4.0.0, so every runbook runs its dry-run path: the entry (`action` `runbook.dry_run`, `correlation_id` =
 the execution name) records what the runbook would do and why. A runbook whose kill switch is off records
 `runbook.disabled`.
 
@@ -244,7 +281,7 @@ page instead. Start a runbook by hand with its trigger as input, for example
 `aws stepfunctions start-execution --state-machine-arn <arn of <prefix>-runbook-r14> --input '{"detail": {...}}'`.
 
 **Kill switches** are AWS AppConfig feature flags: the profile `flags` of the application `<prefix>-fast`, deployed
-to the environment `<prefix>` (D§19.5; `core.flags`). Flag keys cannot hold dots, so the design's `ops.freeze` is the
+to the environment `<prefix>` (`core.flags`). Flag keys cannot hold dots, so the design's `ops.freeze` is the
 attribute `freeze` of the flag `ops`:
 
 | Flag | Attributes | Default |
@@ -255,7 +292,7 @@ attribute `freeze` of the flag `ops`:
 | `crawl` | — | on |
 | `recs` | `strategy`: `popularity` (the kill switch), `recommender` | `popularity` |
 | `release` | `promote` | on |
-| `ops` | `act` (off until ADR-0023), `freeze` (R9), `restart` (R12), `ca_alerts` (R13), `shed` (R17) | every switch on, `act` off |
+| `ops` | `act` (off: runbooks do not act in v4.0.0), `freeze` (R9), `restart` (R12), `ca_alerts` (R13), `shed` (R17) | every switch on, `act` off |
 
 A switch that is on lets its consumer run; a module that is not deployed reads none. The stack deploys these
 defaults; change a flag in the AppConfig console (a new version, deployed all at once). The next stack deployment
