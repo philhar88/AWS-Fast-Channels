@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack, Tags
 
+from fast_channels.core.ad_server import AdServer
 from fast_channels.core.demand import MODULE, MODULE_TAG
 from fast_channels.infra.constructs.demand.origin_waf import OriginGate
 
@@ -36,6 +37,7 @@ class DemandEdgeStack(Stack):
             prefix=config.prefix,
             rate_limit_per_ip=config.modules.demand.rate_limit_per_ip,
             removal_policy=config.removal_policy,
+            cache_reads=config.modules.demand.ad_server is not AdServer.NONE,
         )
         CfnOutput(
             self,

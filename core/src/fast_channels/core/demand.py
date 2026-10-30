@@ -42,6 +42,9 @@ class Parameter(StrEnum):
     IMAGE_URI = "image-uri"
     GUIDANCE = "guidance"
     """``<tag>@<commit>`` of the deployed guidance, with its overlays."""
+    AD_SERVER_URL = "ad-server-url"
+    """The mock ad server's base URL (``ad_server: mock``), which the ``Demand`` stack writes and the ``Release``
+    stack's ad-server siblings call."""
 
 
 def parameter_path(prefix: str, parameter: Parameter | None = None) -> str:
@@ -161,6 +164,13 @@ class DemandNetwork(BaseModel):
     """Key of the ``lambda`` simulator's code package in the guidance's assets bucket."""
     container_log_group: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_./#-]{1,512}$")
     """Prebid Server's container log group (the guidance's task definition), where the fast-ctv module logs."""
+    internal_alb_dns: str | None = Field(
+        default=None, pattern=r"^internal-[A-Za-z0-9-]+\.[a-z0-9-]+\.elb\.amazonaws\.com$"
+    )
+    """The guidance's internal load balancer, which takes Prebid Cache's writes from the tasks (the ad-server mode's
+    ``cache.<prefix>.fast.internal`` record)."""
+    internal_alb_zone_id: str | None = Field(default=None, pattern=r"^Z[A-Z0-9]+$")
+    """Its canonical hosted zone (the record is an alias)."""
 
 
 def census_gate(prefix: str) -> str:
