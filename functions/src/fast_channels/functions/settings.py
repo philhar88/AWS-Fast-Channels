@@ -109,6 +109,8 @@ class Settings:
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
     release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
     """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
+    release_siblings: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_SIBLINGS"))
+    """The monetized channels' sibling configurations (comma-separated ``RELEASE_SIBLINGS``)."""
     release_lock_seconds: int = field(default_factory=lambda: int(_env("RELEASE_LOCK_SECONDS") or 0))
     """How long the Release Controller's lock outlives an execution that died holding it (its timeout)."""
     release_profile: str = field(default_factory=lambda: _env("RELEASE_PROFILE"))

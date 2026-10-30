@@ -94,6 +94,11 @@ All notable changes to this project are documented here. The format follows
   policy. `deploy-demand` deploys the stack after Pds; deleting it reaps what the controller created. The Media stack
   writes the SSM parameters `/<prefix>/release/*` it reads. The Pod Decision Service's delivery function also counts
   the siblings' impressions, through a subscription filter on their log group.
+- **Release log reconciliation** (`modules.release`). Every hour, each sibling's vended ADS log is compared with
+  `AWS/MediaTailor`'s own counts (`AdDecisionServer.Ads` sample counts against `MAKING_ADS_REQUEST`, and avails
+  against `FILLED_AVAIL` for context); `<prefix>-release-log-loss` fires when MediaTailor made ad requests the log
+  does not have. MediaTailor was seen leaving a requested, filled break out of its log; delivery, which reads that
+  log's beacons, would under-count it.
 - **Release Controller: smoke gate, promotion and rollback** (`modules.release`,
   [docs/release-controller.md](docs/release-controller.md#promotion-and-rollback), ADRs 0019, 0021, 0023). After a
   release configures a channel's idle sibling, a probe session smoke-tests it for two breaks and soaks it for three
@@ -104,8 +109,10 @@ All notable changes to this project are documented here. The format follows
   runs R1: the sibling is remapped to its last good tree and the plan names the stable sibling. Per-sibling metric
   filters on the siblings' log group count each break's first ad marker, ad requests and empty responses, and
   `<sibling>-markers-without-ads-request` fires when more than half of the markers had no request in 2 of 10 minutes
-  (an invalid rendered body sends no request and logs no error). Each sibling keeps three Function trees; older ones
-  are deleted.
+  (an invalid rendered body sends no request and logs no error). A PRE_ADS request that times out inside an executor
+  is no Function or hook error, so the smoke judge and the pointer poll read each request's `Function.Latency`
+  against its own timeout from the release's bundle: at the timeout in two minutes, the smoke fails or the pointer
+  deployment is stopped, and R1 runs. Each sibling keeps three Function trees; older ones are deleted.
 - **Monetization desired state** (`fast_channels.core.monetization`, for the release module):
   MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
   PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the

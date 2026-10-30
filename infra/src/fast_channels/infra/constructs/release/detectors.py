@@ -25,15 +25,19 @@ one alarm per configuration fires when, in :data:`LOSSY_MINUTES` of :data:`WINDO
 from collections.abc import Sequence
 from typing import Final
 
-from aws_cdk import Duration
+from aws_cdk import Duration, Stack
 from aws_cdk import aws_cloudwatch as cw
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_scheduler as scheduler
+from aws_cdk import aws_scheduler_targets as scheduler_targets
 from aws_cdk import aws_sns as sns
 from constructs import Construct
 
 from fast_channels.core.monetization import names
+from fast_channels.infra import nag
 from fast_channels.infra.constructs.alerts import alarm
-from fast_channels.infra.constructs.functions import METRICS_NAMESPACE
+from fast_channels.infra.constructs.functions import METRICS_NAMESPACE, FastFunction
 
 EVENTS: Final = names.MARKER_METRICS
 """ADS log event type -> metric (namespace ``FastChannels``, dimension ``ConfigurationName``)."""
@@ -118,3 +122,85 @@ class MarkerDetector(Construct):
                 "rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
                 topic=topic,
             )
+
+
+class LogReconciler(Construct):
+    """Every hour, ``fast_channels.functions.release.reconcile`` compares each sibling's ADS log with
+    ``AWS/MediaTailor``'s counts and publishes the ad requests the log is missing (``UnloggedAdsRequests``); the alarm
+    ``<prefix>-release-log-loss`` fires on any. A gap under-counts delivery, which reads the same log's beacons.
+
+    Args:
+        prefix: deployment prefix.
+        siblings: the sibling configurations.
+        environment: the Release Controller's function environment (the prefix, the release table).
+        topic: the stage's alert topic.
+        log_retention: of the function's logs.
+
+    Attributes:
+        function: the reconciliation. alarm: its alarm.
+    """
+
+    def __init__(
+        self,
+        scope: Construct,
+        id: str,
+        *,
+        prefix: str,
+        siblings: Sequence[str],
+        environment: dict[str, str],
+        topic: sns.ITopic,
+        log_retention: logs.RetentionDays,
+    ) -> None:
+        super().__init__(scope, id)
+        self.function = FastFunction(
+            self,
+            "Function",
+            handler="fast_channels.functions.release.reconcile.handler",
+            description="Release: ad requests MediaTailor made but left out of the siblings' ADS log (hourly)",
+            environment=environment | {"RELEASE_SIBLINGS": ",".join(siblings)},
+            timeout=Duration.minutes(5),
+            memory_size=256,
+            log_retention=log_retention,
+        )
+        self.function.allow(["cloudwatch:GetMetricData", "logs:GetQueryResults"], ["*"])  # no resource-level
+        nag.acknowledge(self.function, {nag.LAMBDA_DLQ: "Invoked by an hourly schedule; the next run repeats it"})
+        role = iam.Role(
+            self,
+            "ScheduleRole",
+            description="EventBridge Scheduler: run the release log reconciliation",
+            assumed_by=iam.ServicePrincipal(
+                "scheduler.amazonaws.com", conditions={"StringEquals": {"aws:SourceAccount": Stack.of(self).account}}
+            ),
+        )
+        nag.acknowledge_references(
+            role,
+            {nag.wildcard_resource(f"{self.function.function.function_arn}:*"): "Scheduler L2 grant: the versions"},
+        )
+        scheduler.Schedule(
+            self,
+            "Schedule",
+            description=f"Release log reconciliation of {prefix} every hour",
+            schedule=scheduler.ScheduleExpression.rate(Duration.hours(1)),
+            target=scheduler_targets.LambdaInvoke(
+                self.function.function,
+                input=scheduler.ScheduleTargetInput.from_object({"scheduled_time": "<aws.scheduler.scheduled-time>"}),
+                retry_attempts=1,
+                role=role,
+            ),
+        )
+        self.alarm = alarm(
+            self,
+            "Alarm",
+            name=f"{prefix}-release-log-loss",
+            metric=cw.Metric(
+                namespace=METRICS_NAMESPACE,
+                metric_name="UnloggedAdsRequests",
+                dimensions_map={"service": "release.reconcile"},
+                statistic=cw.Stats.SUM,
+                period=Duration.hours(1),
+            ),
+            threshold=1,
+            description="MediaTailor made ad requests its vended ADS log does not have: delivery, which counts that "
+            "log's beacons, is under-counted for those breaks (see the function's log for the siblings and the hour)",
+            topic=topic,
+        )

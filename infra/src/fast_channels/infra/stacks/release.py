@@ -24,7 +24,7 @@ from fast_channels.infra.constructs.ops.lake import LAKE_SUFFIX_PATH
 from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release import bundle as rendering
 from fast_channels.infra.constructs.release.controller import PointerSettings, ReleaseController, SmokeSettings
-from fast_channels.infra.constructs.release.detectors import MarkerDetector
+from fast_channels.infra.constructs.release.detectors import LogReconciler, MarkerDetector
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
 from fast_channels.infra.constructs.release.pointer import ReleasePointer
 from fast_channels.infra.constructs.release.prefetch import Prefetcher
@@ -183,6 +183,16 @@ class ReleaseStack(Stack):
             name="release-zero-ads-sessions",
         )
         self.logs.grant_read(self.zero_ads.function.function.role)  # type: ignore[arg-type]
+        self.reconciler = LogReconciler(
+            self,
+            "LogReconciler",
+            prefix=prefix,
+            siblings=siblings,
+            environment={"FAST_PREFIX": prefix},
+            topic=topic,
+            log_retention=retention,
+        )
+        self.logs.grant_read(self.reconciler.function.function.role)  # type: ignore[arg-type]
         self.impressions = self._impressions(prefix)
         self.logs.grant_read(self.controller.smoke.function.role)  # type: ignore[arg-type]
         outputs = {
@@ -191,6 +201,10 @@ class ReleaseStack(Stack):
             "BundleKey": (self.controller.desired.get_att_string("BundleKey"), "The bundle this deployment rendered"),
             "StateTableName": (self.controller.table.table_name, "The Release Controller's state"),
             "DriftFunction": (self.controller.drift.function.function_name, "The drift check (hourly)"),
+            "LogReconcilerFunction": (
+                self.reconciler.function.function.function_name,
+                "The siblings' ADS log against MediaTailor's counts (hourly)",
+            ),
             "SiblingLogGroup": (self.logs.log_group.log_group_name, "The siblings' MediaTailor logs (KMS)"),
             "Siblings": (json.dumps([s.name for s in self.rendered.bundle.siblings]), "Sibling configurations"),
         }

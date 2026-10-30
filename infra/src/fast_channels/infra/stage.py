@@ -220,6 +220,7 @@ class FastChannelsStage(Stage):
                 controller.promote.node.path,
                 controller.reaper.node.path,
                 self.release.zero_ads.function.node.path,
+                self.release.reconciler.function.node.path,
                 controller.smoke.node.path,
             ]
             if self.release.prefetcher is not None:  # it writes the siblings' prefetch schedules
