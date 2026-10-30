@@ -63,7 +63,7 @@ def _block(
     )
 
 
-def _cache_read(group: str) -> wafv2.CfnRuleGroup.RuleProperty:
+def _cache_read() -> wafv2.CfnRuleGroup.RuleProperty:
     """``fast-cache-read``: block ``/cache`` unless the method is ``GET`` or ``HEAD`` and ``uuid`` is a uuid4."""
     method = wafv2.CfnRuleGroup.FieldToMatchProperty(method={})
     reads = [_match(method, verb, position="EXACTLY") for verb in CACHE_READ_METHODS]
@@ -211,7 +211,6 @@ class OriginGate(Construct):
                         )
                     ),
                 ),
-                *([_cache_read(name)] if cache_reads else []),
                 _block(
                     "fast-rate",
                     2,
@@ -224,5 +223,6 @@ class OriginGate(Construct):
                         )
                     ),
                 ),
+                *([_cache_read()] if cache_reads else []),
             ],
         )
