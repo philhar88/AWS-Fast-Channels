@@ -376,9 +376,10 @@ Descoped before the release (the owner, 2026-10-30; each is a two-way door):
   CI job for the 3.43.0 the guidance ships.
 - **One stored request per route** (`fast-pod`, `fast-pod-kids`, and the ad-server route's) instead of one per break
   length: the POST body sends the break's length (`ext.fast.pod_s`) and the fast-ctv module shapes the pod. A stage
-  deployed from the pre-release branch still holds per-length `fast-pod-<n>s` objects; `deploy-demand` prunes them
-  once the new configuration reads back, and `--keep-stale` keeps them until the release has re-applied the
-  siblings' new body ([docs/demand.md](docs/demand.md)).
+  deployed from the pre-release branch upgrades in this order: `deploy-demand` (it uploads the new stored requests
+  and deletes nothing), the Release stack's rollout (every sibling sends the new body), then `upload-config --prune`,
+  which deletes the per-length `fast-pod-<n>s` objects except any a live configuration still names
+  ([docs/demand.md](docs/demand.md)).
 - **The ad-server mode is experimental** and off by default (`modules.demand.ad_server: none`); no default
   end-to-end leg runs it.
 
