@@ -1,6 +1,7 @@
 """``FastChannels-<prefix>-Release``: the release module (``modules.release``), beside the Prebid Server guidance."""
 
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, RemovalPolicy, Stack, Tags
@@ -11,8 +12,12 @@ from aws_cdk import aws_logs_destinations as logs_destinations
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.ad_server import AdServer, AdServerContribution, ads_url
 from fast_channels.core.crawl.functions import CrawlContribution
+from fast_channels.core.demand import Parameter as DemandParameter
+from fast_channels.core.demand import parameter_path
 from fast_channels.core.monetization import names
+from fast_channels.core.monetization.bundle import SIBLING_PLACEHOLDER, AdServerRoute
 from fast_channels.core.monetization.playback import SiblingRole
 from fast_channels.core.monetization.prefetch import PrefetchPolicy
 from fast_channels.core.pds import names as pds_names
@@ -39,11 +44,28 @@ if TYPE_CHECKING:
     from fast_channels.infra.config import FastChannelsConfig
 
 
-def contributions(config: FastChannelsConfig) -> list[BundleContribution]:
+def contributions(config: FastChannelsConfig, *, pbs_origin: str) -> list[BundleContribution]:
     """The other modules' function trees in the bundle: the crawl module's PRE_ADS content lookup when
-    ``modules.crawl.enabled`` and ``pre_ads``."""
-    crawl = config.modules.crawl
-    return [CrawlContribution()] if crawl.enabled and crawl.pre_ads else []
+    ``modules.crawl.enabled`` and ``pre_ads``, and the ad-server route's auction with ``modules.demand.ad_server``."""
+    crawl, demand = config.modules.crawl, config.modules.demand
+    found: list[BundleContribution] = [CrawlContribution()] if crawl.enabled and crawl.pre_ads else []
+    if demand.ad_server is not AdServer.NONE:
+        found.append(AdServerContribution(pbs_origin=pbs_origin))
+    return found
+
+
+def ad_server_route(config: FastChannelsConfig, *, mock_url: str) -> AdServerRoute | None:
+    """The pair siblings' ad-server route (``modules.demand.ad_server``), or None for the direct route: the mock's
+    URL (``mock_url``, the Demand stack's parameter) or the publisher's GAM or FreeWheel tag."""
+    demand = config.modules.demand
+    match demand.ad_server:
+        case AdServer.NONE:
+            return None
+        case AdServer.MOCK:
+            return AdServerRoute(
+                url=ads_url(AdServer.MOCK, mock_url=mock_url, sibling=SIBLING_PLACEHOLDER), origin=True
+            )
+    return AdServerRoute(url=ads_url(demand.ad_server, tag=demand.ad_server_tag), origin=False)
 
 
 def break_lengths_ms(config: FastChannelsConfig) -> tuple[int, ...]:
@@ -88,12 +110,21 @@ class ReleaseStack(Stack):
         def parameter(name: str) -> str:
             return ssm.StringParameter.value_for_string_parameter(self, name)
 
+        pbs_origin = f"https://{network.cloudfront_domain}"
+        mock = config.modules.demand.ad_server is AdServer.MOCK
+
+        def route(hide: Callable[[str], str]) -> AdServerRoute | None:
+            """The ad-server route, the mock's URL (a deploy-time value) through the bundle's placeholders."""
+            url = hide(parameter(parameter_path(prefix, DemandParameter.AD_SERVER_URL))) if mock else ""
+            return ad_server_route(config, mock_url=url)
+
         self.rendered = rendering.render(
             config,
-            pbs_origin=f"https://{network.cloudfront_domain}",
+            pbs_origin=pbs_origin,
             content_base_url=parameter(names.parameter_name(prefix, names.Parameter.CONTENT_BASE_URL)),
             channel_urls={c: parameter(names.channel_parameter_name(prefix, c)) for c in config.release_channels},
-            contributions=contributions(config),
+            contributions=contributions(config, pbs_origin=pbs_origin),
+            ad_server=route,
         )
         topic = sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, prefix))
         self.logs = ReleaseLogs(self, "Logs", prefix=prefix, retention=retention, removal_policy=removal)

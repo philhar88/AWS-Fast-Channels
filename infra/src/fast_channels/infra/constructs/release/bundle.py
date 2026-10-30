@@ -9,11 +9,13 @@ bundle again, stores it under its digest and announces it.
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from fast_channels.core.ad_server import stored_request_id as ad_server_stored_request_id
 from fast_channels.core.monetization.bundle import (
+    AdServerRoute,
     Bundle,
     BundleContribution,
     ChannelInput,
@@ -32,6 +34,10 @@ if TYPE_CHECKING:
 _TOKEN: Final = re.compile(r"\$\{Token\[[^\]]*\]\}")
 STORED_REQUESTS: Final = tuple(stored_request_id(s, kids=kids) for kids in (False, True) for s in POD_SECONDS)
 """What the Prebid Server configuration serves (``core.pbs_config.render``): validator R-P5 checks the bodies."""
+AD_SERVER_STORED_REQUESTS: Final = tuple(
+    ad_server_stored_request_id(s, kids=kids) for kids in (False, True) for s in POD_SECONDS
+)
+"""What it serves too with ``modules.demand.ad_server`` set (the auction's stored requests)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,15 +78,17 @@ def render(
     content_base_url: str,
     channel_urls: Mapping[str, str],
     contributions: Sequence[BundleContribution] = (),
+    ad_server: Callable[[Callable[[str], str]], AdServerRoute | None] | None = None,
 ) -> RenderedBundle:
     """The deployment's bundle: its monetized channels (``modules.release.channels``, and the lab channel), the
-    Prebid Server origin, and
-    the module's contributions.
+    Prebid Server origin, and the module's contributions. ``ad_server`` builds the pair siblings' ad-server route
+    from deploy-time values (passed through the placeholders, like the channels' URLs).
 
     Raises:
         InvalidBundleError: the bundle breaks a validator.
     """
     placeholders = _Placeholders()
+    route = ad_server(placeholders.hide) if ad_server else None
     iac = {channel.name: channel for channel in config.iac_channels}
     lab = config.lab_channel.name if config.lab_channel else None
     channels = [
@@ -98,11 +106,12 @@ def render(
         content_base_url=placeholders.hide(content_base_url),
         pbs_origin=pbs_origin,
         log_percent=config.observability.mediatailor_log_percent,
-        stored_requests=STORED_REQUESTS,
+        stored_requests=STORED_REQUESTS + (AD_SERVER_STORED_REQUESTS if route else ()),
         grid_seconds=POD_SECONDS,
         tier=RolloutTier(config.modules.release.strategy.value),
         probe_sibling=config.modules.release.probe_sibling,
         contributions=contributions,
+        ad_server=route,
     )
     require_valid(validate_bundle(bundle))
     document = json.dumps(bundle_document(bundle)["bundle"], sort_keys=True, separators=(",", ":"))

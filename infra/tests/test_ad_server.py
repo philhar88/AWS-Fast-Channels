@@ -181,6 +181,35 @@ def test_a_third_party_ad_server_has_no_mock(deployment: GetDeployment) -> None:
     assert d.stage.demand.ad_server is None
 
 
+@pytest.mark.parametrize("overrides", [MOCK, GAM], ids=["mock", "gam"])
+def test_the_bundle_routes_the_pair_to_the_ad_server(deployment: GetDeployment, overrides: dict[str, Any]) -> None:
+    """The bundle is validated at synth with the route: the pair siblings call the ad server, each after its own
+    auction, and the probe stays on Prebid Server."""
+    bundle = deployment(overrides, extra=EXTRA).stage.release.rendered.bundle
+    routes = {s.name: s.route.value for s in bundle.siblings}
+    assert routes == {"fastm-demo-p-a": "ad_server", "fastm-demo-p-b": "ad_server", "fastm-demo-p-z": "pbs"}
+    assert {f.function_id for f in bundle.functions} >= {
+        "fastm_demo_p_a_pa_auction",
+        "fastm_demo_p_b_pa_auction",
+        "fastm_ps_hb",
+    }
+    assert "fast-adsrv-pod-60s" in bundle.stored_requests
+    a = next(s for s in bundle.siblings if s.letter == "a")
+    if overrides is MOCK:  # the mock's URL is the Demand stack's parameter, resolved at deploy
+        assert a.playback.ad_decision_server_url.startswith("https://cdk-token-")
+        assert a.playback.sends_origin
+    else:
+        assert a.playback.ad_decision_server_url.startswith("https://pubads.g.doubleclick.net/gampad/ads?")
+        assert not a.playback.sends_origin and not a.playback.headers
+
+
+def test_without_an_ad_server_the_bundle_is_the_direct_route(deployment: GetDeployment) -> None:
+    bundle = deployment({**MOCK, "modules.demand.ad_server": "none"}, extra=EXTRA).stage.release.rendered.bundle
+    assert {s.route.value for s in bundle.siblings} == {"pbs"}
+    assert not [s for s in bundle.stored_requests if s.startswith("fast-adsrv-")]
+    assert not [f for f in bundle.functions if f.function_id.endswith(("pa_auction", "ps_hb"))]
+
+
 def test_template_snapshot(
     deployment: GetDeployment, normalized: Callable[..., Any], snapshot_json: SnapshotAssertion
 ) -> None:
