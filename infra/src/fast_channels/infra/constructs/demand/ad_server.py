@@ -112,12 +112,8 @@ class MockAdServer(Construct):
             auto_deploy=True,
             throttle=apigateway.ThrottleSettings(rate_limit=THROTTLE_RATE, burst_limit=THROTTLE_BURST),
         )
-        nag.acknowledge(
-            stage,
-            {
-                "AwsSolutions-APIG1": f"{WHY}; the function logs every answer with its line, session and break",
-            },
-        )
+        access = f"{WHY}; the function logs every answer with its line, session and break"
+        nag.acknowledge(stage, {"AwsSolutions-APIG1": access, "Serverless-APIGWAccessLogging": access})
         nag.acknowledge(
             self.api,
             {

@@ -68,11 +68,16 @@ def test_no_unacknowledged_findings(
     assert [v for r in reports for v in r.get("violations", [])] == []
 
 
-@pytest.mark.parametrize("simulator", ["lambda", "guidance_stack"])
+@pytest.mark.parametrize(
+    ("simulator", "ad_server"),
+    [("lambda", "none"), ("guidance_stack", "none"), ("lambda", "mock")],
+    ids=["lambda", "guidance_stack", "mock-ad-server"],
+)
 def test_no_unacknowledged_findings_beside_the_guidance(
-    fresh_deployment: Callable[..., Any], tmp_path: Path, simulator: str
+    fresh_deployment: Callable[..., Any], tmp_path: Path, simulator: str, ad_server: str
 ) -> None:
-    """The ``fastm`` stage with the Demand stack, which exists once the guidance is deployed."""
+    """The ``fastm`` stage with the Demand stack, which exists once the guidance is deployed, and with the mock ad
+    server (M8-09)."""
     network = {
         "vpc_id": "vpc-0123456789abcdef0",
         "private_subnets": [
@@ -85,11 +90,14 @@ def test_no_unacknowledged_findings_beside_the_guidance(
         "cloudfront_domain": "d111111abcdef8.cloudfront.net",
         "target_group_arn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastm-pbs/0123456789abcd",
         "simulator_code_key": "simulator/0123456789abcdef.zip",
+        "internal_alb_dns": "internal-fastm-pbs-Internal-1234567890.us-east-1.elb.amazonaws.com",
+        "internal_alb_zone_id": "Z35SXDOTRQ7X7K",
     }
     deployment = fresh_deployment(
         {
             **FASTM,
             "modules.demand.simulator": simulator,
+            "modules.demand.ad_server": ad_server,
             "modules.demand.dayparts": [{"cron": "cron(50 17 * * ? *)", "min": 3}],
         },
         outdir=tmp_path,
