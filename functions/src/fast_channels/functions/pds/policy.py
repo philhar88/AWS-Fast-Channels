@@ -4,7 +4,7 @@ Behind the PDS's internal load balancer (Powertools ``ALBResolver``). The answer
 ``fast_channels.core.pds.policy.decide`` with the current snapshot (``store``): until viewer identity exists every
 session is CONTEXTUAL (a ticket that is missing, malformed or not looked up), probes are SAFE, kids configurations
 KIDS. With the crawl module on, its patch contributor (``functions.crawl.patch``) adds the title's ``app.content``. The
-module waits 50 ms for the answer; anything but a 200 with a known schema leaves the stored request alone (own book
+module waits 80 ms for the answer; anything but a 200 with a known schema leaves the stored request alone (own book
 and house, no third party). Each answer is logged as a ``pds.policy`` decision record, which a subscription carries
 into the lake.
 """

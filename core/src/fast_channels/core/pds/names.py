@@ -27,6 +27,12 @@ class Endpoint(StrEnum):
         return {"/policy": "policy", "/select": "select", "/ownbook/openrtb": "ownbook"}[self.value]
 
 
+def target_group(prefix: str, endpoint: Endpoint) -> str:
+    """The load balancer's target group of ``endpoint``: a fixed name, which its function's invoke permission names
+    (``infra.constructs.lambda_target``)."""
+    return f"{prefix}-pds-{endpoint.function_suffix}"
+
+
 def table_name(prefix: str) -> str:
     """The PDS's DynamoDB table (lines, budgets, caps, sessions, reservations)."""
     return f"{prefix}-pds"

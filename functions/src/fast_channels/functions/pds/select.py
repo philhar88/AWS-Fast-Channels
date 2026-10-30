@@ -7,13 +7,15 @@ Behind the PDS's internal load balancer (Powertools ``ALBResolver``). The answer
   ``budget.Budgets.shard`` picks), and a line whose price cannot be reserved is left out.
 
 Each ad carries our impression tracker on the CDN (``core.pds.pod.tracker_url``), with the break's content-enrichment
-arm (``enr``, ``functions.crawl.patch.arm``: 0 with the crawl module off). The module waits 100 ms for the
-answer (``modules.pds.select_timeout_ms``, 150 ms); anything but a 200 with a known schema makes it render the
-auction's house ads (``SELECT_FALLBACK``). So the reservations get their own DynamoDB client (100 ms timeouts, one
-attempt), which the budget view's background reads keep connected, and stop after :data:`RESERVE_BEFORE_S`: a line
-not reserved by then is left out, never answered unreserved. A reservation that DynamoDB committed after the
-module gave up stays until the sweeper releases it. Each answer is logged as a ``pds.select`` decision record, which a
-subscription carries into the lake.
+arm (``enr``, ``functions.crawl.patch.arm``: 0 with the crawl module off). The module waits
+``modules.pds.select_timeout_ms`` (200 ms) for the answer, of which the internal load balancer takes 20-40 ms to invoke
+the function; anything but a 200 with a known schema makes it render the auction's house ads (``SELECT_FALLBACK``). So
+the reservations get their own DynamoDB client (100 ms timeouts, one attempt), which the budget view's background reads
+keep connected while breaks follow each other. After an idle minute or more DynamoDB has dropped that connection, and
+the first reservation reopens it (up to about 110 ms at 1,769 MB, measured). Reservations stop after
+:data:`RESERVE_BEFORE_S`: a line not reserved by then is left out, never answered unreserved. A reservation that
+DynamoDB committed after the module gave up stays until the sweeper releases it. Each answer is logged as a
+``pds.select`` decision record, which a subscription carries into the lake.
 """
 
 import os
@@ -58,9 +60,10 @@ app = ALBResolver()
 store = snapshot_store
 """The function's snapshot store (one per execution environment)."""
 REQUEST_CONFIG: Final = Config(connect_timeout=0.1, read_timeout=0.1, retries={"total_max_attempts": 1})
-"""The reservations' client: on the request path, inside the module's 100 ms."""
-RESERVE_BEFORE_S: Final = 0.09
-"""No reservation starts later than this into a request: the answer must reach the module within 150 ms."""
+"""The reservations' client: on the request path, inside the module's 200 ms."""
+RESERVE_BEFORE_S: Final = 0.05
+"""No reservation starts later than this into a request: 50 ms, a reservation that reopens its connection (up to about
+110 ms) and the load balancer's 20-40 ms fit the module's 200 ms."""
 
 
 @cache

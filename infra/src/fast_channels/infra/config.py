@@ -646,14 +646,16 @@ class PdsModule(_Module):
     """Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct
     lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per
     break."""
-    policy_timeout_ms: int = Field(default=50, gt=0)
-    """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone."""
-    policy_group_timeout_ms: int = Field(default=80, gt=0)
+    policy_timeout_ms: int = Field(default=80, gt=0)
+    """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone. The handler
+    takes under 3 ms, but its internal load balancer adds 20-40 ms to invoke a Lambda target (measured, M2-x2)."""
+    policy_group_timeout_ms: int = Field(default=110, gt=0)
     """Timeout of the hook group that holds the ``/policy`` call (at least ``policy_timeout_ms``)."""
-    select_timeout_ms: int = Field(default=150, gt=0)
+    select_timeout_ms: int = Field(default=200, gt=0)
     """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids. ``/select`` reserves the
-    pod's line ads in DynamoDB first (p99 74 ms measured, about 130 ms on a first call after an idle spell)."""
-    select_group_timeout_ms: int = Field(default=200, gt=0)
+    pod's line ads in DynamoDB first: 25-50 ms, and up to about 110 ms on a first call after an idle spell of a minute
+    or more (DynamoDB has dropped the connection), plus 20-40 ms of the load balancer's (measured, M2-x2)."""
+    select_group_timeout_ms: int = Field(default=250, gt=0)
     """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
     provisioned_concurrency: int = Field(default=2, ge=0)
     """Provisioned concurrency per function while any channel runs; 0 while none does."""

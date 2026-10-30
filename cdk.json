@@ -121,10 +121,10 @@
         },
         "pds": {
           "enabled": false,
-          "policy_timeout_ms": 50,
-          "policy_group_timeout_ms": 80,
-          "select_timeout_ms": 150,
-          "select_group_timeout_ms": 200,
+          "policy_timeout_ms": 80,
+          "policy_group_timeout_ms": 110,
+          "select_timeout_ms": 200,
+          "select_group_timeout_ms": 250,
           "provisioned_concurrency": 2,
           "demo_lines": []
         },

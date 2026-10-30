@@ -219,8 +219,8 @@ def test_pbs_settings_follow_the_stage(tmp_path: Path) -> None:
 
     assert (settings.prefix, settings.simulator, settings.server_instances) == ("fastx", True, 2)
     assert (settings.tracker_base_url, settings.publisher_domain) == ("https://media.example.com", "media.example.com")
-    assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (50, 80)
-    assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (150, 200)
+    assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (80, 110)
+    assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (200, 250)
     assert settings.pbs_version == config.modules.demand.pbs_version.value
 
 
