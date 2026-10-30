@@ -138,7 +138,15 @@
           "strategy": "demo",
           "lab_channel": true,
           "probe_sibling": true,
-          "secret_rotation_days": 90
+          "secret_rotation_days": 90,
+          "prefetch": {
+            "enabled": true,
+            "siblings": ["a", "b", "k", "l"],
+            "horizon_breaks": 20,
+            "retrieval_lead_seconds": 150,
+            "retrieval_end_seconds": 30,
+            "shaping_window_seconds": 90
+          }
         },
         "crawl": {
           "enabled": false,

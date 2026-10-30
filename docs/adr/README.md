@@ -31,3 +31,4 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Accepted |
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |
+| [0033](0033-prefetch-single-schedules.md) | Ad prefetch with rolling SINGLE schedules from the schedule of record | Accepted |

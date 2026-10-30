@@ -139,8 +139,27 @@ def pc(name: str, tags: dict[str, str]) -> dict[str, Any]:
     return {"Name": name, "PlaybackConfigurationArn": f"{PC}{name}", "Tags": tags}
 
 
-def expect_sibling_deleted(mediatailor: Stubber, logs: Stubber, sibling: str) -> None:
-    """``channel_ops.delete_deliveries`` (by the sources' resource ARN), then the configuration."""
+def expect_sibling_deleted(
+    mediatailor: Stubber, logs: Stubber, sibling: str, *, schedules: tuple[str, ...] = ()
+) -> None:
+    """Its prefetch schedules, ``channel_ops.delete_deliveries`` (by the sources' resource ARN), then the
+    configuration."""
+    mediatailor.add_response(
+        "list_prefetch_schedules",
+        {
+            "Items": [
+                {
+                    "Arn": f"arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/{sibling}/{name}",
+                    "Name": name,
+                    "PlaybackConfigurationName": sibling,
+                }
+                for name in schedules
+            ]
+        },
+        {"PlaybackConfigurationName": sibling, "ScheduleType": "ALL"},
+    )
+    for name in schedules:
+        mediatailor.add_response("delete_prefetch_schedule", {}, {"Name": name, "PlaybackConfigurationName": sibling})
     logs.add_response(
         "describe_delivery_sources",
         {
@@ -183,8 +202,8 @@ def test_the_reaper_deletes_only_what_the_controller_owns_in_dependency_order(st
             ]
         },
     )
-    for sibling in ("fastm-demo-p-a", "fastm-demo-p-b"):
-        expect_sibling_deleted(mediatailor, logs, sibling)
+    expect_sibling_deleted(mediatailor, logs, "fastm-demo-p-a", schedules=("pf-1027354323", "pf-1670600651"))
+    expect_sibling_deleted(mediatailor, logs, "fastm-demo-p-b")
     s3.add_response("delete_object", {}, {"Bucket": "fastm-media", "Key": "plan/playback/fastm-demo.json"})
     mediatailor.add_response(
         "list_functions",
@@ -217,6 +236,7 @@ def test_the_reaper_raises_other_errors_and_ignores_create(stub: Stub, context: 
     assert reaper.handler(reaper_event("Create"), context) == {"PhysicalResourceId": "fastm-release-reaper"}
     mediatailor, logs = stub("mediatailor"), stub("logs")
     mediatailor.add_response("list_playback_configurations", {"Items": [pc("fastm-demo-p-a", OWNED)]})
+    mediatailor.add_response("list_prefetch_schedules", {"Items": []})
     logs.add_response(
         "describe_delivery_sources",
         {"deliverySources": [{"name": "fastm-demo-p-a-ads", "resourceArns": [f"{PC}fastm-demo-p-a"]}]},

@@ -111,6 +111,12 @@ class Settings:
     """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
     release_table: str = field(default_factory=lambda: _env("RELEASE_TABLE"))
     """The Release Controller's state table (``<prefix>-release``)."""
+    prefetch_policy: str = field(default_factory=lambda: _env("PREFETCH_POLICY"))
+    """JSON of ``modules.release.prefetch``'s timing (``core.monetization.prefetch.PrefetchPolicy``)."""
+    prefetch_letters: tuple[str, ...] = field(default_factory=lambda: _csv("PREFETCH_SIBLINGS"))
+    """The sibling letters that get prefetch schedules (comma-separated, e.g. ``a,b``)."""
+    break_lengths_ms: tuple[int, ...] = field(default_factory=lambda: tuple(int(ms) for ms in _csv("BREAK_LENGTHS_MS")))
+    """The stage's break lengths (the default ladder's slate grid), comma-separated milliseconds."""
     release_log_destination: str = field(default_factory=lambda: _env("RELEASE_LOG_DESTINATION"))
     """ARN of the siblings' vended-log destination (the module's KMS-encrypted log group)."""
     lake_deliveries: str = field(default_factory=lambda: _env("LAKE_DELIVERIES"))

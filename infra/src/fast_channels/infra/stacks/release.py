@@ -13,7 +13,9 @@ from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.monetization import names
+from fast_channels.core.monetization.prefetch import PrefetchPolicy
 from fast_channels.core.pds import names as pds_names
+from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.alerts import alert_topic_arn
 from fast_channels.infra.constructs.ops import ConfigurationAlarms, ZeroAdsDetector
@@ -22,6 +24,7 @@ from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release import bundle as rendering
 from fast_channels.infra.constructs.release.controller import ReleaseController
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
+from fast_channels.infra.constructs.release.prefetch import Prefetcher
 from fast_channels.infra.stacks.edge import EDGE_REGION
 
 if TYPE_CHECKING:
@@ -37,6 +40,23 @@ def contributions(config: FastChannelsConfig) -> list[BundleContribution]:
     ``modules.crawl.enabled`` and ``pre_ads``."""
     crawl = config.modules.crawl
     return [CrawlContribution()] if crawl.enabled and crawl.pre_ads else []
+
+
+def break_lengths_ms(config: FastChannelsConfig) -> tuple[int, ...]:
+    """Every break length of the monetized channels: their ladders' slate grids."""
+    ladders = {c.ladder for c in config.channels.iac if c.name in config.modules.release.channels}
+    return tuple(sorted({config.ladder(name).grid.gop_exact(gops) for name in ladders for gops in BREAK_SLATE_GOPS}))
+
+
+def prefetch_policy(config: FastChannelsConfig) -> PrefetchPolicy:
+    """``modules.release.prefetch``'s timing as the prefetcher reads it."""
+    prefetch = config.modules.release.prefetch
+    return PrefetchPolicy(
+        horizon_breaks=prefetch.horizon_breaks,
+        retrieval_lead_s=prefetch.retrieval_lead_seconds,
+        retrieval_end_s=prefetch.retrieval_end_seconds,
+        shaping_window_s=prefetch.shaping_window_seconds,
+    )
 
 
 class ReleaseStack(Stack):
@@ -78,13 +98,14 @@ class ReleaseStack(Stack):
             log_type: {"destination": arn(self, "logs", "delivery-destination", name, colon=True), "s3": s3_layout}
             for log_type, name in (("AD_DECISION_SERVER_LOGS", lake_ads), ("MANIFEST_SERVICE_LOGS", lake_manifest))
         }
+        bus = events.EventBus.from_event_bus_name(self, "Bus", f"{prefix}-fast-channels")
         self.controller = ReleaseController(
             self,
             "Controller",
             prefix=prefix,
             channels=release.channels,
             bundle=self.rendered.document,
-            event_bus=events.EventBus.from_event_bus_name(self, "Bus", f"{prefix}-fast-channels"),
+            event_bus=bus,
             topic=topic,
             ledger_table=f"{prefix}-ledger",
             media_bucket=parameter(names.parameter_name(prefix, names.Parameter.MEDIA_BUCKET)),
@@ -94,6 +115,24 @@ class ReleaseStack(Stack):
             origin_secret_region=EDGE_REGION,
             log_retention=retention,
             removal_policy=removal,
+        )
+        self.prefetcher = (
+            Prefetcher(
+                self,
+                "Prefetcher",
+                prefix=prefix,
+                channels=release.channels,
+                letters=release.prefetch.siblings,
+                policy=prefetch_policy(config),
+                break_lengths_ms=break_lengths_ms(config),
+                state_table=self.controller.table.table_name,
+                event_bus=bus,
+                alert_topic=topic,
+                log_retention=retention,
+                removal_policy=removal,
+            )
+            if release.prefetch.enabled
+            else None
         )
         self.sibling_alarms = ConfigurationAlarms(
             self,
@@ -121,6 +160,11 @@ class ReleaseStack(Stack):
             "SiblingLogGroup": (self.logs.log_group.log_group_name, "The siblings' MediaTailor logs (KMS)"),
             "Siblings": (json.dumps([s.name for s in self.rendered.bundle.siblings]), "Sibling configurations"),
         }
+        if self.prefetcher is not None:
+            outputs["PrefetchFunction"] = (
+                self.prefetcher.function.function.function_name,
+                "The prefetcher (every 5 minutes, after a re-plan or a channel start)",
+            )
         for name, (value, description) in outputs.items():
             CfnOutput(self, name, value=value, description=description)
 

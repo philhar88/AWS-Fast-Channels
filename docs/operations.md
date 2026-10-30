@@ -97,6 +97,12 @@ it costs.
 | `modules.release.lab_channel` | bool | `true` | Create the stopped lab channel `<prefix>-lab`, started only to smoke-test a release while the monetized channel is stopped. |
 | `modules.release.probe_sibling` | bool | `true` | Create a house-only probe playback configuration per channel, for canaries and smoke tests. |
 | `modules.release.secret_rotation_days` | int | `90` | Days between rotations of the origin secret that MediaTailor sends to the demand origin. |
+| `modules.release.prefetch.enabled` | bool | `true` | Create a SINGLE prefetch schedule for each of the next breaks of a running monetized channel, so MediaTailor asks the ad decision server minutes ahead, spread over a window, and transcodes new creatives before they air. Retrieval transcodes bill whether or not the break airs; the horizon stays short and re-planned breaks lose their schedules. |
+| `modules.release.prefetch.siblings` | str[] | `["a", "b", "k", "l"]` | Sibling letters that get schedules: the general pair and the kids pair (the probe `z` never does). |
+| `modules.release.prefetch.horizon_breaks` | int | `20` | Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration). |
+| `modules.release.prefetch.retrieval_lead_seconds` | int | `150` | Retrieval opens this long before the break. |
+| `modules.release.prefetch.retrieval_end_seconds` | int | `30` | Retrieval closes this long before the break (transcodes take about 20 s). |
+| `modules.release.prefetch.shaping_window_seconds` | int | `90` | MediaTailor spreads the sessions' prefetch requests over this many seconds (`RETRIEVAL_WINDOW` traffic shaping); 0 sends them as the sessions arrive. |
 | `modules.crawl.enabled` | bool | `false` | Deploy show-level content metadata: a catalog context object per title, a cached PRE_ADS lookup by UPID and the OpenRTB `app.content` fields in each ad request, with a holdout that measures the uplift. |
 | `modules.crawl.pre_ads` | bool | `true` | Map the cached PRE_ADS lookup on the monetized playback configurations. |
 | `modules.crawl.holdout_percent` | int | `20` | Share of session-breaks that get no enrichment, the uplift measurement's control arm. |

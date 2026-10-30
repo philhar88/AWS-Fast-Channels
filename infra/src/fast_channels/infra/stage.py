@@ -216,6 +216,8 @@ class FastChannelsStage(Stage):
             controller = self.release.controller
             # The controller's writers, and the readers of the siblings' logs (the zero-ad-sessions detector).
             exempt = [controller.apply.node.path, controller.reaper.node.path, self.release.zero_ads.function.node.path]
+            if self.release.prefetcher is not None:  # it writes the siblings' prefetch schedules
+                exempt.append(self.release.prefetcher.function.node.path)
         return ReleaseGuard(
             prefix=config.prefix, channels=config.modules.release.channels, region=region, exempt=exempt
         )
