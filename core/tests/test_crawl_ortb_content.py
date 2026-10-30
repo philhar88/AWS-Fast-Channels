@@ -20,7 +20,6 @@ from fast_channels.core.crawl.ortb_content import (
     content_id,
     from_context,
     from_header,
-    native_2_6,
 )
 from fast_channels.core.crawl.taxonomy import default_genre_map, load_taxonomy
 from fast_channels.core.pds.models import Mode
@@ -67,27 +66,21 @@ NEWER = {
 """Its OpenRTB 2.6-202505 fields."""
 
 
-def test_on_3_43_the_2_6_fields_travel_in_ext() -> None:
-    content = app_content(from_context(context()), mode=Mode.CONTEXTUAL, native=False, channel=CHANNEL)
-    assert content == TEARS_OF_STEEL | {"ext": NEWER}
-
-
-def test_on_4_4_every_field_is_native() -> None:
-    content = app_content(from_context(context()), mode=Mode.CONTEXTUAL, native=True, channel=CHANNEL)
+def test_every_field_is_native() -> None:
+    """Prebid Server Java 4.4.0 models the OpenRTB 2.6-202505 content fields: none travels in ``ext``."""
+    content = app_content(from_context(context()), mode=Mode.CONTEXTUAL, channel=CHANNEL)
     assert content == TEARS_OF_STEEL | NEWER
 
 
 @pytest.mark.parametrize("mode", [Mode.FULL, Mode.KIDS])
-@pytest.mark.parametrize("native", [False, True])
-def test_full_and_kids_send_what_contextual_sends(mode: Mode, native: bool) -> None:
+def test_full_and_kids_send_what_contextual_sends(mode: Mode) -> None:
     metadata = from_context(context())
-    contextual = app_content(metadata, mode=Mode.CONTEXTUAL, native=native, channel=CHANNEL)
-    assert app_content(metadata, mode=mode, native=native, channel=CHANNEL) == contextual
+    contextual = app_content(metadata, mode=Mode.CONTEXTUAL, channel=CHANNEL)
+    assert app_content(metadata, mode=mode, channel=CHANNEL) == contextual
 
 
-@pytest.mark.parametrize("native", [False, True])
-def test_pseudonymous_sends_genre_and_category_never_the_title(native: bool) -> None:
-    content = app_content(from_context(context()), mode=Mode.PSEUDONYMOUS, native=native, channel=CHANNEL)
+def test_pseudonymous_sends_genre_and_category_never_the_title() -> None:
+    content = app_content(from_context(context()), mode=Mode.PSEUDONYMOUS, channel=CHANNEL)
     newer = {"realtime": 0, "firstbroadcast": 0, "genres": ["652", "325"], "gtax": 9}
     common = {
         "genre": "Science Fiction",
@@ -98,49 +91,32 @@ def test_pseudonymous_sends_genre_and_category_never_the_title(native: bool) -> 
         "prodq": 1,
         "channel": {"id": "fastm-demo", "domain": PUBLISHER},
     }
-    assert content == common | (newer if native else {"ext": newer})
+    assert content == common | newer
     assert "Tears" not in json.dumps(content) and "tears-of-steel" not in json.dumps(content)
 
 
-@pytest.mark.parametrize("native", [False, True])
-def test_safe_sends_nothing(native: bool) -> None:
-    assert app_content(from_context(context()), mode=Mode.SAFE, native=native, channel=CHANNEL) == {}
+def test_safe_sends_nothing() -> None:
+    assert app_content(from_context(context()), mode=Mode.SAFE, channel=CHANNEL) == {}
 
 
 def test_an_episode_carries_its_series_season_and_number() -> None:
     episode = context("sintel", series_title="Open Movies", season="1", episode=0)
-    content = app_content(from_context(episode), mode=Mode.FULL, native=True)
+    content = app_content(from_context(episode), mode=Mode.FULL)
     assert (content["series"], content["season"], content["episode"]) == ("Open Movies", "1", 0)
     assert "channel" not in content, "no channel without a sibling configuration"
-    pseudonymous = app_content(from_context(episode), mode=Mode.PSEUDONYMOUS, native=True)
+    pseudonymous = app_content(from_context(episode), mode=Mode.PSEUDONYMOUS)
     assert not NAMING & pseudonymous.keys()
 
 
-@pytest.mark.parametrize(("content", "mode", "native"), list(product(SAMPLES, Mode, [False, True])))
-def test_taxonomies_are_explicit_and_every_value_is_present(content: str, mode: Mode, native: bool) -> None:
+@pytest.mark.parametrize(("content", "mode"), list(product(SAMPLES, Mode)))
+def test_taxonomies_are_explicit_and_every_value_is_present(content: str, mode: Mode) -> None:
     """Validator V7: ``cattax`` and ``gtax`` 9 wherever ``cat`` and ``genres`` are sent; and no empty values."""
-    sent = app_content(from_context(context(content)), mode=mode, native=native, channel=CHANNEL)
-    newer = sent if native else sent.get("ext", {})
-    assert isinstance(newer, dict)
+    sent = app_content(from_context(context(content)), mode=mode, channel=CHANNEL)
     assert ("cat" in sent) == ("cattax" in sent) and sent.get("cattax", 9) == 9
-    assert ("genres" in newer) == ("gtax" in newer) and newer.get("gtax", 9) == 9
-    assert all(value not in (None, "", []) for value in {**sent, **newer}.values())
+    assert ("genres" in sent) == ("gtax" in sent) and sent.get("gtax", 9) == 9
+    assert all(value not in (None, "", []) for value in sent.values())
     if mode is Mode.SAFE:
         assert sent == {}
-
-
-@pytest.mark.parametrize(
-    ("version", "native"),
-    [("3.43.0", False), ("4.3.9", False), ("4.4.0", True), ("4.10.0", True), ("10.0.0", True)],
-)
-def test_the_release_decides_native_carriage(version: str, native: bool) -> None:
-    assert native_2_6(version) is native
-
-
-@pytest.mark.parametrize("version", ["", "4.4", "v4.4.0", "4.4.0-SNAPSHOT"])
-def test_a_release_that_is_not_a_version_is_refused(version: str) -> None:
-    with pytest.raises(ValueError, match="not a Prebid Server release"):
-        native_2_6(version)
 
 
 @pytest.mark.parametrize(
@@ -190,8 +166,8 @@ def test_header_content_is_the_snapshots_without_what_names_the_title() -> None:
     ctx = context()
     parsed = from_header(ctx.hdr, genre_names=NAMES)
     assert parsed is not None
-    full = app_content(from_context(ctx), mode=Mode.CONTEXTUAL, native=True, channel=CHANNEL)
-    from_hdr = app_content(parsed, mode=Mode.CONTEXTUAL, native=True, channel=CHANNEL)
+    full = app_content(from_context(ctx), mode=Mode.CONTEXTUAL, channel=CHANNEL)
+    from_hdr = app_content(parsed, mode=Mode.CONTEXTUAL, channel=CHANNEL)
     assert from_hdr == {k: v for k, v in full.items() if k not in {"title", "producer", "kwarray", "data"}}
 
 

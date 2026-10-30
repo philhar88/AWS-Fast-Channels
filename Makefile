@@ -96,9 +96,9 @@ deploy-demand: console ## Deploy the demand module of STAGE: its stacks, the gui
 destroy-demand: ## Destroy the demand module of STAGE, with what the guidance retains; then list what is left
 	uv run python scripts/prebid_guidance.py destroy $(DEMAND_ARGS) $(DEMAND_OPTS)
 
-PBS_VERSION ?= 3.43.0
+PBS_VERSION ?= 4.4.0
 
-pbs-test: ## Build Prebid Server Java (PBS_VERSION, default 3.43.0) with the fast-ctv module and run its JUnit tests
+pbs-test: ## Build Prebid Server Java (PBS_VERSION, default 4.4.0) with the fast-ctv module and run its JUnit tests
 	uv run python scripts/pbs_module.py build --pbs-version $(PBS_VERSION)
 	uv run python scripts/pbs_module.py test --pbs-version $(PBS_VERSION)
 

@@ -77,7 +77,6 @@ it costs.
 | `modules.demand.enabled` | bool | `false` | Deploy programmatic demand: the Guidance for Deploying a Prebid Server on AWS as its own app at a pinned tag, with the repository's overlays and Prebid Server module, the guidance's bidder simulator in demo mode, census-gated scaling and an origin rule that admits only this stage's MediaTailor requests. |
 | `modules.demand.mode` | `own_book` or `demo` | `"demo"` | `own_book`: own-book bids only (no simulator); `demo`: the own book plus the guidance's bidder simulator, every number labelled simulated. |
 | `modules.demand.guidance_tag` | str | `"v1.4.0"` | Tag of the guidance, pinned with its commit and the hash of every file the overlays patch. |
-| `modules.demand.pbs_version` | `3.43.0` or `4.4.0` | `"3.43.0"` | Prebid Server (Java) release of the image. 4.4.0 carries the OpenRTB 2.6 content fields first-class; set `3.43.0` and redeploy to roll back. |
 | `modules.demand.simulator` | `guidance_stack` or `lambda` | `"guidance_stack"` | `guidance_stack`: the guidance's simulator stack (its own VPC with two NAT gateways); `lambda`: the same handler as a Lambda target behind an internal load balancer in the Prebid Server VPC, which needs no VPC of its own. |
 | `modules.demand.tasks.min` | int | `2` | Prebid Server tasks while any channel runs (the tier minimum); 0 while none does. |
 | `modules.demand.tasks.max` | int | `4` | Most Prebid Server tasks (the ECS service maximum). |

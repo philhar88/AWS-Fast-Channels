@@ -33,12 +33,12 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
-from pbs_process import PBS_VERSION, PREFIX
+from pbs_process import PREFIX
 from pydantic import JsonValue, ValidationError
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl.catalog_context import build_context, header
-from fast_channels.core.crawl.ortb_content import app_content, channel_of, from_context, native_2_6
+from fast_channels.core.crawl.ortb_content import app_content, channel_of, from_context
 from fast_channels.core.crawl.taxonomy import default_genre_map, load_taxonomy
 from fast_channels.core.pds.models import (
     OWN_BOOK,
@@ -60,8 +60,6 @@ TRACKER_ENR: Final = 1
 """The service's trackers carry ``enr=1`` here and the module's own ``enr=0``, so a test can tell them apart."""
 THIRD_PARTIES: Final = ("/amt", "/echo26")
 """Bidders that are not the own book: the no-hook contract counts calls to these."""
-NATIVE: Final = native_2_6(PBS_VERSION)
-"""This release models the OpenRTB 2.6 content fields, so the policy answer sends them natively."""
 PUBLISHER_DOMAIN: Final = "cdn.example"
 """The stage's publisher domain (``pbs_process.SETTINGS``), the registry of the catalog's content ids."""
 CONTEXTS: Final = {
@@ -86,7 +84,6 @@ HOLDOUT_SID: Final = "sid-holdout-3"
 CRAWL: Final = CrawlContributor(
     contexts=lambda: CONTEXTS,
     holdout_percent=20,
-    native=NATIVE,
     publisher_domain=PUBLISHER_DOMAIN,
     genre_names=load_taxonomy(),
 )
@@ -94,7 +91,6 @@ CRAWL: Final = CrawlContributor(
 NATIVE_CONTENT: Final = app_content(
     from_context(CONTEXTS[TITLE]),
     mode=Mode.FULL,
-    native=True,
     channel=channel_of(f"{PREFIX}-demo-p-a", domain=PUBLISHER_DOMAIN),
 )
 """The ``app_content`` of ticket ``NATIVE1`` on any release: the mapping with the OpenRTB 2.6 content fields as

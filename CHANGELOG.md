@@ -137,8 +137,8 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   Decision Service (contract version 1, strict both ways; never in `SAFE` or `KIDS` breaks), and an exitpoint hook
   renders the pod `/select` returns as one VAST 4.2 document for MediaTailor ad buffet, with our impression tracker on
   every ad and a house-only fallback. A break without a valid session, configuration, event id or duration is not
-  asked about. `scripts/pbs_module.py` builds Prebid Server Java 3.43.0 with the module exactly as the guidance's
-  image does (pinned commit, Corretto 21, Maven 3.9.11) and runs its JUnit tests, which ask and render every example
+  asked about. `scripts/pbs_module.py` builds Prebid Server Java with the module exactly as the image does
+  (pinned commit, Maven 3.9.11) and runs its JUnit tests, which ask and render every example
   in `contracts/fixtures/pds/`; `tests/pbs` (marker `pbs`) runs the no-hook contract matrix, header isolation, wire
   fields and the impression rule against the jar, and validates every call it makes against the contract's models.
   New CI job `pbs-module` and make targets `pbs-test`, `pbs-contract`.
@@ -171,13 +171,13 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   target: probe auctions without a ticket through the guidance's CloudFront, at 50/s per healthy target for 150 s,
   with a pinned, checksum-verified vegeta on CodeBuild. Undeliverable events go to a dead-letter queue that alarms. `prebid_guidance.py herd` replays a break
   herd.
-- **Demand: Prebid Server Java 4.4.0** (`modules.demand.pbs_version: 4.4.0`): the image builds 4.4.0 on Corretto 25
-  (guidance overlay O6 makes the JDK a build argument; O4 ports the guidance's `amt` adapter configuration to 4.x),
-  and the rendered configuration adds the two settings 4.x requires. CI builds and tests the module and the contract
-  on both releases (`make pbs-test pbs-contract PBS_VERSION=4.4.0`). On 4.4.0 the OpenRTB 2.6 content fields reach
-  bidders first-class; 3.43.0 drops them. The `fastm` and `fastci` stages run 4.4.0; rolling back is
-  `pbs_version: 3.43.0` and a redeploy. The guidance's log analytics stays off: its reporter logs every request
-  header, the ticket and the origin secret included. See [docs/demand.md](docs/demand.md#the-fast-ctv-module).
+- **Demand: Prebid Server Java 4.4.0, the only supported release** (`core.pbs_config.PBS_VERSION`, ADR-0020
+  amended). The image builds 4.4.0 on Corretto 25, not the guidance's 3.43.0: guidance overlay O6 makes the JDK a
+  build argument, and O4 ports the guidance's `amt` adapter configuration to 4.x. The rendered configuration adds
+  the two settings 4.x requires. CI builds and tests the module and the contract on 4.4.0 (`make pbs-test
+  pbs-contract`). The OpenRTB 2.6 content fields reach bidders first-class; 3.43.0 drops them, and there is no
+  setting to select it. The guidance's log analytics stays off: its reporter logs every request header, the ticket
+  and the origin secret included. See [docs/demand.md](docs/demand.md#the-fast-ctv-module).
 - **Demand: the e2e demand leg**: the `End-to-end` workflow's `leg: demand` (job
   `e2e-demand`, up to 4 hours) deploys `STAGE=fastci MODULES=ops,demand` and the demand module, runs
   `tests/e2e/test_11_demand_edge.py` (grid durations, the origin rule group, off-grid 400, an account without the
@@ -340,8 +340,7 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   1,000 characters. It reads no session or player value and fails open.
 - **Content metadata in bid requests and the uplift holdout** (`crawl` module): the Pod Decision Service's `/policy`
   answer fills OpenRTB 2.6 `app.content` from a copy of the catalog context objects (refreshed every 30 s, with the
-  `x-fast-ctx` header for a title the copy lacks): the 2.6 fields in `content.ext` on Prebid Server 3.43.0 and
-  natively from 4.4.0 (`modules.demand.pbs_version`). PSEUDONYMOUS breaks get no field that names the title, SAFE
+  `x-fast-ctx` header for a title the copy lacks), the OpenRTB 2.6 fields first-class. PSEUDONYMOUS breaks get no field that names the title, SAFE
   breaks none. A `crawl-v1` holdout (`modules.crawl.holdout_percent`, 20 %) gets no enrichment; the arm (`enr`) and
   where the metadata was found (`ctx`) are in the `pds.policy` record, and the arm in our impression tracker. The
   lake view `v_crawl_kpis` reports coverage, bids, fill and price by hour, playback configuration and arm.

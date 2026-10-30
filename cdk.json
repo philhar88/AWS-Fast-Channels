@@ -109,7 +109,6 @@
           "enabled": false,
           "mode": "demo",
           "guidance_tag": "v1.4.0",
-          "pbs_version": "3.43.0",
           "simulator": "guidance_stack",
           "tasks": {
             "min": 2,

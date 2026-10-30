@@ -12,10 +12,9 @@ What a break sends depends on its privacy mode (:func:`app_content`):
 - ``SAFE`` gets nothing: no third party sees the request.
 
 The stored request already sets ``livestream``, ``context`` and ``cattax``, so the patch adds only the title's
-fields. Prebid Server Java 3.43.0 silently drops the OpenRTB 2.6-202505 content fields it does not model (``genres``,
-``gtax``, ``realtime``, ``firstbroadcast``, ``data[].cids``); before 4.4.0 they travel in ``app.content.ext``, and from
-4.4.0 natively (:func:`native_2_6`). Under the patch's first-party-data rule (``fpd.bidders``: the own book only),
-Prebid Server passes ``app.content.data`` to the own book alone, so third parties see the content id in ``id``.
+fields, the OpenRTB 2.6-202505 ones (``genres``, ``gtax``, ``realtime``, ``firstbroadcast``, ``data[].cids``)
+natively: Prebid Server Java 4.4.0 models them. Under the patch's first-party-data rule (``fpd.bidders``: the own book
+only), Prebid Server passes ``app.content.data`` to the own book alone, so third parties see the content id in ``id``.
 """
 
 import re
@@ -33,8 +32,6 @@ from fast_channels.core.timeline import UPID_FORMAT_ID
 if TYPE_CHECKING:
     from pydantic import JsonValue
 
-NATIVE_FROM: Final = (4, 4, 0)
-"""The first Prebid Server Java release that models every OpenRTB 2.6 content field the patch sends."""
 NOT_LIVE: Final = 0
 """``realtime`` and ``firstbroadcast`` of VOD-sourced FAST: not a live event, not a first broadcast."""
 NAMING: Final = frozenset({"id", "title", "series", "season", "episode", "len", "kwarray", "producer", "data"})
@@ -85,18 +82,6 @@ class Metadata:
     kwarray: tuple[str, ...] = ()
     cids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     """``(registry, ids)`` pairs, the publisher's first."""
-
-
-def native_2_6(pbs_version: str) -> bool:
-    """Whether Prebid Server Java ``pbs_version`` (``3.43.0``, ``4.4.0``) models the 2.6 content fields natively.
-
-    Raises:
-        ValueError: ``pbs_version`` is not ``<major>.<minor>.<patch>``.
-    """
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", pbs_version):
-        raise ValueError(f"not a Prebid Server release: {pbs_version!r}")
-    major, minor, patch = (int(part) for part in pbs_version.split("."))
-    return (major, minor, patch) >= NATIVE_FROM
 
 
 def content_id(upid: str) -> str | None:
@@ -173,16 +158,12 @@ def from_header(value: str, *, genre_names: Mapping[str, str]) -> Metadata | Non
     )
 
 
-def app_content(
-    metadata: Metadata, *, mode: Mode, native: bool, channel: Channel | None = None
-) -> dict[str, JsonValue]:
+def app_content(metadata: Metadata, *, mode: Mode, channel: Channel | None = None) -> dict[str, JsonValue]:
     """``app.content`` of a break of ``metadata``'s title in ``mode`` (empty in SAFE).
 
     Args:
         metadata: the title's metadata.
         mode: the break's privacy mode.
-        native: send the OpenRTB 2.6-202505 fields natively (Prebid Server Java 4.4.0 and later) rather than in
-            ``ext``.
         channel: the channel the break airs on.
     """
     if mode is Mode.SAFE:
@@ -213,6 +194,4 @@ def app_content(
         content = {key: value for key, value in content.items() if key not in NAMING}
         newer = {key: value for key, value in newer.items() if key not in NAMING}
     content = {key: value for key, value in content.items() if value not in (None, "")}
-    if native:
-        return content | newer
-    return content | {"ext": newer}
+    return content | newer

@@ -29,7 +29,6 @@ SETTINGS = PbsSettings(
     server_instances=2,
     tracker_base_url=CDN,
     publisher_domain="d111111abcdef8.cloudfront.net",
-    pbs_version="4.4.0",
     ad_server=True,
 )
 

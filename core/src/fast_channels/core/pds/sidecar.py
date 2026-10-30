@@ -245,7 +245,7 @@ def sidecar(
         log_retention_days: the sidecar's log retention (``observability.log_retention_days``).
         policy_timeout_ms, select_timeout_ms: the module's timeouts (``modules.pds``): the sidecar sheds a request
             that waited that long for a worker.
-        crawl: with the crawl module on, its environment (``CRAWL_HOLDOUT_PERCENT``, ``PBS_VERSION``, and
+        crawl: with the crawl module on, its environment (``CRAWL_HOLDOUT_PERCENT``, and
             ``PUBLISHER_DOMAIN`` when set).
         catalog_context_bucket: with the crawl module on, its catalog-context bucket.
     """

@@ -253,7 +253,7 @@ def test_the_real_guidance_synthesizes_with_the_sidecar(tmp_path: Path) -> None:
         **os.environ,
         "CDK_OUTDIR": str(tmp_path),
         "CDK_CONTEXT_JSON": json.dumps(context),
-        "OVERRIDE_ECR_REGISTRY": "123456789012.dkr.ecr.us-east-1.amazonaws.com/fastcid-pbs:3.43.0-0123",
+        "OVERRIDE_ECR_REGISTRY": "123456789012.dkr.ecr.us-east-1.amazonaws.com/fastcid-pbs:4.4.0-0123",
         "JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION": "1",
         "VIRTUAL_ENV": str(venv),
         "PATH": f"{venv / 'bin'}:{os.environ['PATH']}",

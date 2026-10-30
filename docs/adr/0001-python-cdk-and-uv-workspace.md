@@ -23,6 +23,6 @@ language; most AWS samples use TypeScript CDK with Python functions, which means
 - CDK still needs Node.js for the CLI and jsii runtime; the CLI is pinned in the root `package.json`.
 - **Amended by [0020](0020-demand-through-the-prebid-server-guidance.md):** the optional demand module adds a JVM
   fleet, Prebid Server Java on x86 Fargate (the guidance's image and its jlinked runtime are x86), and one Java
-  module of ours, `pbs/fast-ctv`. CI builds it with Amazon Corretto 21 and Maven 3.9.11 on an x86 runner, against
-  the pinned Prebid Server Java release, and runs its JUnit and contract tests (`pbs-module`). Everything else stays
+  module of ours, `pbs/fast-ctv`. CI builds it with Amazon Corretto 25 and Maven 3.9.11 on an x86 runner, against
+  the pinned Prebid Server Java release (4.4.0), and runs its JUnit and contract tests (`pbs-module`). Everything else stays
   Python.

@@ -206,29 +206,28 @@ mapping in `fast_channels.core.crawl.ortb_content`).
   (a title published in the last 30 seconds), it uses the `x-fast-ctx` header of the PRE_ADS lookup when the header
   names the same content id. The header has no title, series, producer or keywords, so those breaks carry the
   genres, categories, rating, length, language and quality only.
-- **The fields**, for Tears of Steel on Prebid Server 3.43.0 (`modules.demand.pbs_version`), with
-  `publisher_domain: example.com`:
+- **The fields**, for Tears of Steel, with `publisher_domain: example.com`:
 
   ```json
   {"id": "tears-of-steel", "title": "Tears of Steel", "genre": "Science Fiction", "contentrating": "TV-14",
    "len": 734, "language": "en", "prodq": 1, "producer": {"name": "Blender Foundation", "domain": "blender.org"},
    "kwarray": ["live-action"], "channel": {"id": "fastm-demo", "domain": "example.com"},
-   "cat": ["652", "325"], "cattax": 9,
-   "ext": {"realtime": 0, "firstbroadcast": 0, "genres": ["652", "325"], "gtax": 9,
-           "data": [{"name": "example.com", "cids": ["tears-of-steel"]}]}}
+   "cat": ["652", "325"], "cattax": 9, "realtime": 0, "firstbroadcast": 0, "genres": ["652", "325"], "gtax": 9,
+   "data": [{"name": "example.com", "cids": ["tears-of-steel"]}]}
   ```
 
-  Prebid Server Java 3.43.0 drops `genres`, `gtax`, `realtime`, `firstbroadcast` and `data[].cids` without a warning,
-  so they travel in `ext` there. From 4.4.0 the same fields are native (no `ext`). `livestream: 1`, `context: 1`
+  The OpenRTB 2.6-202505 fields (`genres`, `gtax`, `realtime`, `firstbroadcast`, `data[].cids`) are native: Prebid
+  Server Java 4.4.0, the only supported release ([ADR 0020](adr/0020-demand-through-the-prebid-server-guidance.md)),
+  models them, and nothing travels in `ext`. `livestream: 1`, `context: 1`
   and `cattax: 9` come from the stored request on every break. `series`, `season` and `episode` appear for
   episodes; `channel` is the channel of the sibling playback configuration.
 - **By privacy mode** ([pds.md](pds.md#privacy-modes)). FULL, CONTEXTUAL and KIDS (with `regs.coppa`) breaks get the
   whole object. PSEUDONYMOUS breaks get genres, categories, rating, language, quality and the channel, but nothing
   that names the title: no `id`, `title`, `series`, `season`, `episode`, `len`, `kwarray`, `producer` or `data`. SAFE
   breaks get nothing.
-- **Who sees `data`.** From 4.4.0, Prebid Server passes `app.content.data` only to the bidders that the answer's
-  first-party-data rule names (`fpd.bidders`: the own book), so third parties read the content id in `id`. On 3.43.0
-  the `ext` copy reaches every bidder. Either way it holds catalog ids only.
+- **Who sees `data`.** Prebid Server passes `app.content.data` only to the bidders that the answer's
+  first-party-data rule names (`fpd.bidders`: the own book), so third parties read the content id in `id`. It holds
+  catalog ids only.
 - **Fail open.** A break without a UPID, a title in neither the copy nor the header, or a contributor failure is
   served without `app_content`, and the rest of the answer is unchanged.
 - The function reads only the catalog-context bucket's `catalog/ctx/v1/` prefix (list and get), whose name the Media

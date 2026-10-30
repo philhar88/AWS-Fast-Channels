@@ -69,11 +69,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every release a stage may select (modules.demand.pbs_version), with the JDK its build needs:
+        # The supported release (core.pbs_config.PBS_VERSION, ADR-0020), with the JDK its build needs:
         # vendor/prebid-guidance/PIN.toml ([pbs_java.builds], overlay O6).
         include:
-          - pbs: "3.43.0"
-            java: "21"
           - pbs: "4.4.0"
             java: "25"
     env:

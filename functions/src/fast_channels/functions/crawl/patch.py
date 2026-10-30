@@ -34,7 +34,6 @@ from fast_channels.core.crawl.ortb_content import (
     content_id,
     from_context,
     from_header,
-    native_2_6,
 )
 from fast_channels.core.crawl.taxonomy import load_taxonomy
 from fast_channels.core.pds.buckets import crawl_holdout
@@ -140,14 +139,12 @@ class CrawlContributor:
     Args:
         contexts: the current copy of the catalog context objects.
         holdout_percent: the ``crawl-v1`` holdout's share of session-breaks.
-        native: send the OpenRTB 2.6-202505 content fields natively (Prebid Server Java 4.4.0 and later).
         publisher_domain: ``content.channel.domain``, when configured.
         genre_names: Content Taxonomy 3.1 names by id, for the header's ``genre``.
     """
 
     contexts: Callable[[], Contexts]
     holdout_percent: int
-    native: bool
     publisher_domain: str | None = None
     genre_names: Mapping[str, str] = field(default_factory=dict)
 
@@ -162,7 +159,7 @@ class CrawlContributor:
         if not enr or metadata is None:
             return Contribution(record=record)
         channel = channel_of(request.pc, domain=self.publisher_domain)
-        return Contribution(app_content(metadata, mode=mode, native=self.native, channel=channel), record)
+        return Contribution(app_content(metadata, mode=mode, channel=channel), record)
 
     def metadata(self, request: PolicyRequest) -> tuple[Metadata | None, Source]:
         """The break's metadata and where it was found: the copy first, then a header naming the same title."""
@@ -189,16 +186,15 @@ def contributor() -> CrawlContributor | None:
     """The PDS's crawl contributor, or None with the module off (no ``CRAWL_HOLDOUT_PERCENT``).
 
     Raises:
-        RuntimeError: the module is on without ``CATALOG_CONTEXT_BUCKET`` or ``PBS_VERSION``.
+        RuntimeError: the module is on without ``CATALOG_CONTEXT_BUCKET``.
     """
     configured = settings()
     if configured.crawl_holdout_percent is None:
         return None
-    configured.require("catalog_context_bucket", "pbs_version")
+    configured.require("catalog_context_bucket")
     return CrawlContributor(
         contexts=catalog_contexts().get,
         holdout_percent=configured.crawl_holdout_percent,
-        native=native_2_6(configured.pbs_version),
         publisher_domain=configured.publisher_domain or None,
         genre_names=load_taxonomy(),
     )

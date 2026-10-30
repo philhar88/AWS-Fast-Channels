@@ -40,7 +40,7 @@ from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, 
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.manifests import expected_signature, ladder_signature, parse_multivariant
 from fast_channels.core.monetization import names as release_names
-from fast_channels.core.pbs_config import POD_SECONDS, HouseAd, house_ads, render, simulator_host
+from fast_channels.core.pbs_config import PBS_VERSION, POD_SECONDS, HouseAd, house_ads, render, simulator_host
 from fast_channels.core.pds import names as pds_names
 from fast_channels.core.pds.book import house_creatives
 from fast_channels.core.pds.sidecar import CONTEXT as SIDECAR_CONTEXT
@@ -260,7 +260,6 @@ def crawl_environment(config: FastChannelsConfig) -> dict[str, str] | None:
         return None
     return {
         "CRAWL_HOLDOUT_PERCENT": str(crawl.holdout_percent),
-        "PBS_VERSION": config.modules.demand.pbs_version.value,
         **({"PUBLISHER_DOMAIN": crawl.publisher_domain} if crawl.publisher_domain else {}),
     }
 
@@ -528,7 +527,7 @@ class DemandStage:
         config = json.loads((self.checkout / CONFIG_ROOT / "docker-build-config.json").read_text())
         version, jdk = config["GIT_TAG_VERSION"], GUIDANCE_JDK
         release: tuple[str, Any] | None = None
-        if (wanted := self.config.modules.demand.pbs_version.value) != version:
+        if (wanted := PBS_VERSION) != version:
             if (spec := pin.pbs_java_builds.get(wanted)) is None:
                 raise DemandError(f"PIN.toml [pbs_java.builds] has no build of Prebid Server Java {wanted}")
             version, jdk, release = wanted, spec.jdk, (wanted, spec)
