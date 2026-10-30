@@ -359,11 +359,12 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
   its stack is created, so `deploy-demand` on an existing stage left Prebid Server on the old configuration (seen
   live: the module's timeouts stayed at their old values in S3). `deploy-demand` now syncs the rendered
   configuration after every guidance deploy: it uploads what differs from the guidance's settings and stored-requests
-  buckets, reads every object back and refuses a mismatch, then prunes what an earlier configuration left (under the
-  managed prefixes only, keeping the guidance's own files, each listed before it is deleted), and rolls the tasks
-  only if something changed. `upload-config` runs that step alone. `--keep-stale` uploads without pruning, the
-  first step of a body-format change ([docs/demand.md](docs/demand.md#deploy-and-destroy): release the new body to
-  the siblings before pruning what the old one named).
+  buckets, reads every object back and refuses a mismatch, lists what an earlier configuration left, and rolls
+  the tasks only if something changed. `upload-config` runs that step alone. With `--prune` it also deletes the
+  stale objects (under the managed prefixes only, keeping the guidance's own files, each listed first), except the
+  stored requests a live playback configuration or Function still names, which it reads from MediaTailor first: a
+  sibling of an earlier release never loses the stored request it asks for
+  ([docs/demand.md](docs/demand.md#deploy-and-destroy) gives the order for a body-format change).
 - **Demand: a break the PDS could not answer still gets a pod**. When `/policy` timed out, the module served
   the break SAFE (own book only), but with the own book silent too the pod was empty and the slate aired: on fastm 3.8%
   of pods hit a policy timeout and 69% of those came back empty. Now, if such a pod would be empty, or `/select` is

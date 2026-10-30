@@ -4,7 +4,7 @@ Stubber standing in for AWS. The live deploy, smoke and destroy run in the e2e d
 import io
 import json
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -16,10 +16,12 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from fast_channels.core import ad_server
 from fast_channels.core.ad_server import POD_CACHE_CONTEXT, PodCacheFunction
 from fast_channels.core.demand import Parameter
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.monetization import playback
 from fast_channels.core.pds.sidecar import CONTEXT, Sidecar, sidecar
 from fast_channels.core.specs import vast_key
 
@@ -1192,16 +1194,142 @@ def test_the_prune_keeps_what_the_guidance_ships(config_stage: _demand.DemandSta
         config_stage.config_location("stored_impressions/preroll-config.json", values)
 
 
-def test_stale_configuration_is_pruned_after_the_upload_and_the_tasks_roll(
+PER_LENGTH_BODY: Final = '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod-{{session.avail_duration_secs}}s"}}}}'
+"""A sibling of a release before the single stored request."""
+PER_LENGTH_AUCTION: Final = (
+    "{% $string({'ext': {'prebid': {'storedrequest': {'id': 'fast-adsrv-pod-' & "
+    "$string(session.avail_duration_secs) & 's'}}}}) %}"
+)
+
+
+class FakeMediaTailor:
+    """Playback configurations and Functions by name, with their request bodies."""
+
+    def __init__(
+        self, configurations: Mapping[str, str | None], functions: Mapping[str, str | None] | None = None
+    ) -> None:
+        self.configurations, self.functions = dict(configurations), dict(functions or {})
+
+    def get_paginator(self, operation: str) -> Any:
+        items = {
+            "list_playback_configurations": [{"Name": name} for name in self.configurations],
+            "list_functions": [{"FunctionId": function_id} for function_id in self.functions],
+        }[operation]
+
+        class Paginator:
+            def paginate(self) -> Iterator[dict[str, Any]]:
+                yield {"Items": items}
+
+        return Paginator()
+
+    def get_playback_configuration(self, *, Name: str) -> dict[str, Any]:  # noqa: N803 - the API's names
+        body = self.configurations[Name]
+        return {"Name": Name} | ({"AdDecisionServerConfiguration": {"HttpRequest": {"Body": body}}} if body else {})
+
+    def get_function(self, *, FunctionId: str) -> dict[str, Any]:  # noqa: N803 - the API's names
+        body = self.functions[FunctionId]
+        return {"FunctionId": FunctionId} | ({"HttpRequestConfiguration": {"Body": body}} if body else {})
+
+
+def with_mediatailor(stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, mediatailor: FakeMediaTailor) -> None:
+    clients = stage.client
+    monkeypatch.setattr(
+        stage, "client", lambda service, region=None: mediatailor if service == "mediatailor" else clients(service)
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "patterns"),
+    [
+        (playback.ads_body(kids=False), ["fast-pod"]),
+        (playback.ads_body(kids=True), ["fast-pod-kids"]),
+        (PER_LENGTH_BODY, ["fast-pod-*s"]),
+        (ad_server.auction_body(kids=False), ["fast-adsrv-pod"]),
+        (PER_LENGTH_AUCTION, ["fast-adsrv-pod-*s"]),
+        (None, []),
+        ('{"sid":"{{session.uuid}}"}', []),
+        ("storedrequest=fast-pod", None),
+    ],
+)
+def test_a_request_body_names_its_stored_requests_as_patterns(body: str | None, patterns: list[str] | None) -> None:
+    assert _demand.stored_request_patterns(body) == patterns
+
+
+def test_without_prune_nothing_is_deleted_and_the_stale_objects_are_listed(
     config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The guidance never deletes: without the prune, the stored requests of an earlier configuration stay in S3, and
-    Prebid Server would serve them to anything that still names them."""
+    """The default for every deploy: live siblings of an earlier release may still name what is stale."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    account = next(location for location in rendered if location[1].startswith("stored_accounts/"))
+    s3 = FakeS3({**{k: v for k, v in rendered.items() if k != account}, **SHIPPED, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert config_stage.upload_config("https://cdn.example") == [account[1]]
+    assert s3.objects == {**rendered, **SHIPPED, **STALE} and s3.deletes == []
+    assert rolls == ["rolled"], "the upload still rolls the tasks"
+    listed = capsys.readouterr().out
+    assert "5 stale configuration objects" in listed
+    assert "run upload-config with --prune after every sibling uses the new body" in listed
+
+
+def test_the_prune_keeps_what_a_live_configuration_still_names(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stable sibling of an earlier release still sends the per-length body: deleting ``fast-pod-60s`` would answer
+    its every 60 s break with 400 and the slate. The rest goes."""
     rendered = config_stage.config_objects("https://cdn.example")
     s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE})
     rolls = with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(
+        config_stage,
+        monkeypatch,
+        FakeMediaTailor(
+            {
+                "fastcix-demo-p-a": PER_LENGTH_BODY,
+                "fastcix-demo-p-b": playback.ads_body(kids=False),
+                "fastcix-demo": None,
+                "other-demo-p-a": '{"ext":{"prebid":{"storedrequest":{"id":"fast-*"}}}}',
+            },
+            {"fastcix_demo_p_b_pa_auction": PER_LENGTH_AUCTION, "other_pa_auction": "{% 'storedrequest' %}"},
+        ),
+    )
 
-    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted(key for _, key in STALE)
+    deleted = config_stage.upload_config("https://cdn.example", prune=True)
+
+    kept = {
+        (STORED_BUCKET, "stored_requests/fast-pod-60s.json"),
+        (STORED_BUCKET, "stored_requests/fast-pod-kids-120s.json"),  # fast-pod-*s matches the kids ids too
+    }
+    assert sorted(deleted) == sorted(key for bucket, key in STALE if (bucket, key) not in kept)
+    assert s3.objects == {**rendered, **SHIPPED, **UNMANAGED, **{location: STALE[location] for location in kept}}
+    assert rolls == ["rolled"]
+    listed = capsys.readouterr().out
+    assert (
+        f"keeping s3://{STORED_BUCKET}/stored_requests/fast-pod-60s.json: still named by "
+        "playback configuration fastcix-demo-p-a"
+    ) in listed
+    assert "fast-adsrv-pod.json" not in "".join(line for line in listed.splitlines() if "keeping" in line), (
+        "fast-adsrv-pod-*s does not match the single id; another stage's configurations are not read"
+    )
+
+
+def test_the_prune_deletes_once_every_configuration_uses_the_new_body(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+    body = playback.ads_body(kids=False)
+    with_mediatailor(
+        config_stage,
+        monkeypatch,
+        FakeMediaTailor(
+            {"fastcix-demo-p-a": body, "fastcix-demo-p-b": body, "fastcix-demo-p-z": body},
+            {"fastcix_demo_p_a_crawl_lookup": None},  # the ad-server mode is off: no auction names fast-adsrv-pod
+        ),
+    )
+
+    assert sorted(config_stage.upload_config("https://cdn.example", prune=True)) == sorted(key for _, key in STALE)
     assert s3.objects == {**rendered, **SHIPPED, **UNMANAGED}
     assert (s3.puts, rolls) == ([], ["rolled"])
     listed = capsys.readouterr().out
@@ -1209,36 +1337,48 @@ def test_stale_configuration_is_pruned_after_the_upload_and_the_tasks_roll(
     assert f"s3://{STORED_BUCKET}/stored_requests/fast-pod-60s.json" in listed, "listed before they go"
 
 
-def test_keep_stale_uploads_and_only_lists_what_is_stale(
+def test_an_auction_function_keeps_the_stored_request_it_names(
     config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The first step of a body-format change: the new configuration is beside the old until the siblings' rollout
-    has moved them off it (docs/demand.md)."""
+    """The ad-server route names its stored request in a PRE_ADS Function, not in the playback configuration."""
     rendered = config_stage.config_objects("https://cdn.example")
-    account = next(location for location in rendered if location[1].startswith("stored_accounts/"))
-    s3 = FakeS3({**{k: v for k, v in rendered.items() if k != account}, **STALE})
-    rolls = with_s3(config_stage, monkeypatch, s3)
+    s3 = FakeS3({**rendered, **STALE})
+    with_s3(config_stage, monkeypatch, s3)
+    function = {"fastcix_demo_p_a_pa_auction": ad_server.auction_body(kids=False)}
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({}, function))
 
-    assert config_stage.upload_config("https://cdn.example", prune=False) == [account[1]]
-    assert s3.objects == {**rendered, **STALE} and s3.deletes == []
-    assert rolls == ["rolled"], "the upload still rolls the tasks"
-    assert "keeping 5 stale configuration objects" in capsys.readouterr().out
-    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted(key for _, key in STALE), "then pruned"
+    assert "stored_requests/fast-adsrv-pod.json" not in config_stage.upload_config("https://cdn.example", prune=True)
+    assert (STORED_BUCKET, "stored_requests/fast-adsrv-pod.json") in s3.objects
+    assert "still named by function fastcix_demo_p_a_pa_auction" in capsys.readouterr().out
 
 
-def test_deploy_and_upload_config_take_keep_stale(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_body_the_guard_cannot_read_keeps_every_stored_request(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **STALE})
+    with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({"fastcix-demo-p-a": "storedrequest=fast-pod-60s"}))
+
+    deleted = config_stage.upload_config("https://cdn.example", prune=True)
+
+    assert sorted(deleted) == ["prebid-server/current/old-config.yaml", "stored_accounts/fastold.json"]
+    assert all(key.startswith("stored_requests/") for _, key in set(s3.objects) & set(STALE))
+
+
+def test_deploy_and_upload_config_take_prune(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[bool] = []
 
     class Stage:
         prefix = "fastcix"
 
-        def upload_config(self, content_base_url: str, *, prune: bool = True) -> list[str]:
+        def upload_config(self, content_base_url: str, *, prune: bool = False) -> list[str]:
             calls.append(prune)
             return []
 
     monkeypatch.setattr(prebid_guidance, "demand_stage", lambda args: Stage())
     monkeypatch.setattr(prebid_guidance, "content_base_url", lambda args, prefix: "https://cdn.example")
-    for argv in (["upload-config", "--keep-stale"], ["upload-config"]):
+    for argv in (["upload-config"], ["upload-config", "--prune"]):
         assert prebid_guidance.main([*argv, "--prefix", "fastcix"]) == 0
     assert calls == [False, True]
 
@@ -1248,9 +1388,10 @@ def test_nothing_is_pruned_when_the_upload_does_not_read_back(
 ) -> None:
     s3 = FakeS3({**STALE}, corrupt=frozenset({"prebid-server/current/prebid-config.yaml"}))
     rolls = with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({}))
 
     with pytest.raises(_demand.DemandError, match="not the rendered one"):
-        config_stage.upload_config("https://cdn.example")
+        config_stage.upload_config("https://cdn.example", prune=True)
     assert (s3.deletes, rolls) == ([], [])
 
 
@@ -1260,7 +1401,8 @@ def test_the_prune_refuses_anything_outside_the_managed_prefixes(
     rendered = config_stage.config_objects("https://cdn.example")
     s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE}, ignore_prefix=True)
     rolls = with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({}))
 
     with pytest.raises(_demand.DemandError, match="refusing to prune outside the managed configuration prefixes"):
-        config_stage.upload_config("https://cdn.example")
+        config_stage.upload_config("https://cdn.example", prune=True)
     assert (s3.deletes, rolls) == ([], [])
