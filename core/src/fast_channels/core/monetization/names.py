@@ -104,6 +104,20 @@ MARKER_METRICS: Final = {
 the MediaTailor ADS log event each counts. ``AdMarkersFound`` counts a break's first marker only (not the
 ``EXT-X-DATERANGE`` found again when it gains its duration)."""
 METRICS_NAMESPACE: Final = "FastChannels"
+REAL_TIME_REQUESTS: Final = "RealTimeAdsRequests"
+"""``MAKING_ADS_REQUEST`` events without a ``prefetchScheduleName`` (namespace :data:`METRICS_NAMESPACE`, dimension
+``ConfigurationName``): requests at the break, not prefetch retrievals."""
+
+
+def real_time_alarm(configuration: str) -> str:
+    """A prefetched sibling's alarm: more than half of its ad requests in 5 minutes were real time (no actions: an
+    input of :func:`burst_alarm`)."""
+    return f"{configuration}-real-time-requests"
+
+
+def burst_alarm(prefix: str) -> str:
+    """The composite alarm: the PDS's policy fallbacks with a prefetched sibling's requests mostly real time."""
+    return f"{prefix}-pds-burst-real-time"
 
 
 def markers_alarm(configuration: str) -> str:

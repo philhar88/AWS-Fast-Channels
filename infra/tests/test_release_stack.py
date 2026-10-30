@@ -502,6 +502,48 @@ def test_the_marker_detector_counts_a_breaks_first_marker_and_alarms_on_two_loss
     assert "fastm-lab-x-markers-without-ads-request" not in names_
 
 
+def test_a_real_time_herd_with_policy_fallbacks_names_its_cause(deployment: GetDeployment) -> None:
+    """ADR-0036: real-time requests counted per configuration; one alarm per prefetched sibling (no actions) on more
+    than half its requests in real time; a composite with the PDS's policy-fallback alarm that notifies. Only with
+    the PDS's alarms (the guidance's container log group) and prefetch."""
+    group = "fastm-pbs-CloudFrontEntryDeploymentECSTaskPrebidContainerLogGroup2F818201-abc"
+    d = deployment(RELEASE, extra={NETWORK_CONTEXT: {**NETWORK, "container_log_group": group}})
+    template = d.template(d.stage.release)
+    filters = {f["FilterName"]: f for f in resources(template, "AWS::Logs::MetricFilter").values()}
+    real_time = filters["RealTimeAdsRequests"]
+    assert real_time["FilterPattern"] == (
+        '{ ($.eventType = "MAKING_ADS_REQUEST") && ($.prefetchScheduleName NOT EXISTS) }'
+    )
+    assert real_time["MetricTransformations"][0]["Dimensions"] == [{"Key": "ConfigurationName", "Value": "$.originId"}]
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    shares = {name: a for name, a in alarms.items() if name.endswith("-real-time-requests")}
+    assert sorted(shares) == ["fastm-demo-p-a-real-time-requests", "fastm-demo-p-b-real-time-requests"]
+    for share in shares.values():
+        assert (share["Threshold"], share["ComparisonOperator"]) == (50, "GreaterThanThreshold")
+        assert "AlarmActions" not in share, "an input of the composite"
+        [expression] = [m for m in share["Metrics"] if "Expression" in m]
+        assert expression["Expression"] == "IF(FILL(requests, 0) >= 20, 100 * FILL(realtime, 0) / requests, 0)"
+    composites = {c["AlarmName"]: c for c in resources(template, "AWS::CloudWatch::CompositeAlarm").values()}
+    burst = composites["fastm-pds-burst-real-time"]
+    rule = json.dumps(burst["AlarmRule"])
+    assert "alarm:fastm-pds-policy-fallbacks" in rule and rule.count("RealTime") == 2, rule
+    assert burst["AlarmActions"] and burst["OKActions"]
+    without = deployment(RELEASE, extra=EXTRA)  # no container log group: the PDS's alarms do not exist
+    names_ = {
+        c["AlarmName"]
+        for c in resources(without.template(without.stage.release), "AWS::CloudWatch::CompositeAlarm").values()
+    }
+    assert "fastm-pds-burst-real-time" not in names_
+    off = deployment(
+        {**RELEASE, "modules.release.prefetch.enabled": False},
+        extra={NETWORK_CONTEXT: {**NETWORK, "container_log_group": group}},
+    )
+    names_ = {
+        c["AlarmName"] for c in resources(off.template(off.stage.release), "AWS::CloudWatch::CompositeAlarm").values()
+    }
+    assert "fastm-pds-burst-real-time" not in names_
+
+
 def test_the_siblings_log_is_reconciled_with_mediatailors_counts_every_hour(deployment: GetDeployment) -> None:
     d = deployment(RELEASE, extra=EXTRA)
     template = d.template(d.stage.release)

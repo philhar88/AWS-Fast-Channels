@@ -317,7 +317,9 @@ the module saw `/policy` at p99 12-18 ms and `/select` at p99 65-134 ms, with no
 endpoint. The sidecar used 1-3% of a
 vCPU over a herd minute and about 100 MB; its pool's queue wait stayed under 10 ms. Each request costs it about 1.1 ms
 of CPU, so a new task's warm-up (25 auctions/s per healthy target) and ALB slow start keep it clear of Prebid Server's
-JIT. A request that waited for a worker past its caller's timeout is answered 503 at once (`Shed`).
+JIT. A request that waited for a worker past its caller's timeout is answered 503 at once (`Shed`). A task decides
+about 25 auctions/s at 0 fallbacks; a sub-second herd of about 50 a task outruns its CPU and is served SAFE, and
+`<prefix>-pds-burst-real-time` says so ([sizing](demand.md#sizing-prebid-server-for-a-break)).
 
 ```sql
 SELECT mode, reason, ip_rule, count(*) AS breaks, approx_percentile(latency_ms, 0.99) AS p99_ms

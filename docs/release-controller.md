@@ -347,6 +347,8 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-rotation-failed` | An origin-secret rotation failed: the ledger's `rotation.fail` says at which step; run it again |
 | `<prefix>-release-candidate` | Any of the above (but drift) on a pair sibling: rolls a pointer deployment back (AppConfig monitor) and runs R1 |
 | `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
+| `<sibling>-real-time-requests` | On a prefetched sibling, more than 50% of at least 20 ad requests in 5 minutes were real time (`RealTimeAdsRequests`: `MAKING_ADS_REQUEST` with no `prefetchScheduleName`). Late joiners and mid-break joiners are real time by design, so a small audience that zaps a lot can raise it alone; it has no actions of its own |
+| `<prefix>-pds-burst-real-time` | The PDS's `<prefix>-pds-policy-fallbacks` and any `<sibling>-real-time-requests` together: MediaTailor asked for every session at the marker at once (a retrieval it did not use, or a break published closer than the retrieval lead), a sub-second herd the tasks' CPU cannot absorb, and those breaks were served SAFE ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)). With the PDS and prefetch on |
 
 Every alarm treats missing data as not breaching. The alerts go to the stage's alert topic.
 

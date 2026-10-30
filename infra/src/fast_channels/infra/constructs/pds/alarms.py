@@ -27,6 +27,7 @@ from aws_cdk import aws_cloudwatch as cw
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
+from fast_channels.core.pds.names import policy_fallbacks_alarm
 from fast_channels.infra.constructs.alerts import alarm
 
 if TYPE_CHECKING:
@@ -105,7 +106,7 @@ class ModuleAlarms(Construct):
         self.policy = alarm(
             self,
             "PolicyFallbacksAlarm",
-            name=f"{prefix}-pds-policy-fallbacks",
+            name=policy_fallbacks_alarm(prefix),
             metric=share(("PolicyFallbacks",), "Breaks without the /policy patch, %"),
             threshold=POLICY_SHARE,
             comparison=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,

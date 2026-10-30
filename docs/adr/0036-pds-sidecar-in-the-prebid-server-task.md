@@ -123,6 +123,13 @@ augmenting. dont fork the whole pbs guidance for this".
   records every reservation, whoever wrote it.
 - **Lines under 16 KB.** Fargate's awslogs driver splits a longer log line into several events, and a decision record
   split that way never reaches the lake. The largest record measured is below.
+- **A sub-second herd is a degraded mode, not a sizing target.** A natural real-time break spreads over about one
+  manifest poll (3-6 s), and prefetch spreads it further. When MediaTailor asks for every session at the marker at once
+  (it could not use a retrieval, or a break had no schedule), about 50 auctions a task in half a second outrun the
+  task's 2 vCPU, and the module serves the breaks it could not decide SAFE: own book and house ads, never an empty pod
+  (measured below). The alarm `<prefix>-pds-burst-real-time` names that cause: the policy-fallback alarm together with
+  a prefetched sibling whose ad requests were mostly real time ([release-controller.md](../release-controller.md#alarms)).
+  Tasks are sized for the natural spread ([demand.md](../demand.md#sizing-prebid-server-for-a-break)).
 - **Follow-up, not done here:** O1 (the stack prefix and bootstrap context) and O7 (the deployment percentages) could
   become augmentations of the same wrapper, which would retire two patches.
 
@@ -180,6 +187,74 @@ budgets (50 and 200 ms; 80 and 200 ms before them): 0 policy fallbacks, 0 select
 - **The largest decision record** was 4.6 KB (`pds.select`, four slots, 20 bids), well under the 16 KB at which
   Fargate's log driver splits a line.
 
+### Sub-second herds
+
+A herd on another throwaway stage (2 tasks, the pre-#82 prefetcher) had one break whose retrievals MediaTailor did
+not use: its 100 sessions asked in real time within 0.44 s (52 in one 100 ms slot), and 65 of the 100 auctions got
+`POLICY_UNAVAILABLE`. The same sessions' earlier real-time break, spread over 3.06 s, had none. Joining the module's
+lines with the sidecar's records by session split the time:
+
+- for the fallbacks that reached it, the sidecar's `/policy` handler took p50 4.9 ms (0.8 ms normally); for the
+  auctions that got the patch, the module saw p50 23 ms more than the handler;
+- in the sidecar, the pool's queue wait reached p50 31 ms and p99 85 ms, and the event loop lagged up to 62 ms (1-2
+  ms normally); the own book's handler, pure CPU, took p50 60 ms (0.6 ms); reservations p50 186 ms (21 ms);
+- 7 requests were shed, and 17 more fallbacks never reached the handler in time;
+- the containers' CPU per minute stayed low: the burst lasts half a second.
+
+Replays reproduced it: synthetic MediaTailor POSTs through the guidance's CloudFront (distinct sessions,
+no probe header, the 120 s stored request), 2 warm tasks unless noted:
+
+| Arrivals | Rate per task | One process: policy / select fallbacks, module `policy_ms` max | Two processes |
+|---|---|---|---|
+| 100 in 0.49 s, shaped like the break above | about 100/s | 71 / 31, 163 ms | 64 / 29, 176 ms |
+| 100 in 0.98 s | about 50/s | 16 / 5, 77 ms | 37 / 35, 106 ms |
+| 100 in 1.95 s | about 25/s | 3 / 0, 71 ms | 0 / 0, 25 ms |
+| 200 evenly over 4 s | 25/s | 0 / 0, 20 ms | 0 / 0, 16 ms |
+| 400 evenly over 4 s (single process twice) | 50/s | 0 / 0, 23 and 17 ms | 1 / 2, 58 ms |
+| 100 in 0.49 s on **4** tasks | 25 per task in 0.5 s | | 7 / 15, 94 ms |
+
+- **Capacity:** about 25 auctions/s per task at 0 fallbacks; the first fallbacks near 50/s per task. Every auction
+  in every run returned a pod (a module line with winners): the fallbacks were SAFE pods of the own book's and house
+  ads, and the select fallbacks the auction's house ads.
+- **`/select` in a burst** is bound by the reservations' contention: 100 transactions on the same lines' 4 budget
+  shards within half a second. More tasks do not lift it (15 select fallbacks on 4 tasks).
+- **Two server processes per task** (one per vCPU, each with its own snapshot, refresh and pool, `/policy` and the
+  own book on a pool of their own) did not help: the limit is the task's CPU, shared with Prebid Server's two event
+  loops, not the interpreter lock alone. With a process per vCPU the burst's handlers still ran 7-14× slower, and the
+  part of the time outside the sidecar grew (p50 28 ms). At the natural spread one process measured equal or better
+  (handler p99 about 4 ms against 14 ms), so the sidecar stays one process.
+- **Free-threaded Python (3.14t)**, the other way past the lock, was considered and not tried: the C extensions the
+  sidecar serves with (uvloop, httptools, pydantic-core) would each need free-threaded builds and a thread-safety
+  review, and the two-process run shows the CPU, which free threading does not add, is the limit.
+- **More CPU per task** (4 vCPU) or more tasks per break would absorb the burst, at their cost for every break; not
+  done, since the burst comes from a failure path whose known trigger (an unconsumed retrieval) M3-06's #82 removed.
+- **One HTTP 500** in the first burst on a warm task was Prebid Server's metrics race (a
+  `ConcurrentModificationException` in `AdapterTypeMetrics.requestType`, a `HashMap.computeIfAbsent` from
+  `Metrics.updateAuctionTcfAndLmtMetrics`): the warm-up's probe auctions run with no bidder (`/policy` answers SAFE
+  with `bidders: []` to a probe), so the first real auctions create the simulator adapter's metric keys on both event
+  loops at once. Follow-up, deferred: a warm-up that reaches every configured adapter through stored bid responses
+  (Prebid Server answers an adapter from the stored body only when it builds exactly one request, and calls the real
+  bidder otherwise, so each adapter's single request must be proved first) would create those keys and warm the
+  adapters' code, without a bid request to any partner.
+
+### Reservation holds
+
+A line ad reserved at `/select` is released two hours later if no impression arrived (`RELEASE_AFTER`; the sweeper
+runs every 15 minutes). The bursts above (about 2,300 auctions in an hour) held a $1 demo line's whole budget for those two hours.
+With prefetch a reservation is taken up to 150 s before its break, so a viewer who leaves before the break holds
+budget for the same two hours. Measured:
+
+- MediaTailor's `BEACON_FIRED` reached the siblings' log p50 8.0 s and p99 12.5 s after it fired (76 events, the
+  persistent dev stage), and the delivery function wrote its record p50 8.4 s and p99 12.7 s after (52 records);
+- over 14 days and every stage: 1,554 impressions, 775 line ads delivered, 0 late deliveries.
+
+A reservation's impression therefore arrives within its retrieval lead (at most 150 s), the break (at most 120.12 s)
+and the log's delay (13 s at p99): under 5 minutes. **Recommendation, for a later change:** release a reservation 10
+minutes after it was made (twice that) with the sweeper every 5 minutes, so an unaired reservation returns its budget
+within 15 minutes instead of 2 hours 15. The late path stays: MediaTailor retries a failed beacon for up to an hour,
+and an impression after its release is still credited (`LATE`), so a retry costs at most one ad's price in
+overspend. None has been seen.
+
 ## Consequences
 
 - Per stage with the PDS, the internal load balancer (about $16 a month plus LCUs), three functions with their
@@ -197,4 +272,7 @@ budgets (50 and 200 ms; 80 and 200 ms before them): 0 policy fallbacks, 0 select
   its reservation's DynamoDB transaction tail (p99 to 125 ms): the module measured p99 65-134 ms, max 111-166 ms, and
   with a 150 ms budget one real-time 400-session break lost 1 pod in 400 to the auction's house ads. The design's
   150 ms waits for a cheaper reservation, not for the transport.
+- Capacity: about 25 auctions/s per task at 0 fallbacks at the natural spread, the first fallbacks near 50/s
+  ([demand.md](../demand.md#sizing-prebid-server-for-a-break) sizes tasks from that). A sub-second herd is served SAFE,
+  never empty, and `<prefix>-pds-burst-real-time` says why.
 - When AWS publishes the guidance as a construct library, the wrapper becomes ordinary composition.

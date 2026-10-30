@@ -39,6 +39,11 @@ def table_name(prefix: str) -> str:
     return f"{prefix}-pds"
 
 
+def policy_fallbacks_alarm(prefix: str) -> str:
+    """More than 1% of breaks in 5 minutes served without the PDS's ``/policy`` patch (``infra``'s ``ModuleAlarms``)."""
+    return f"{prefix}-pds-policy-fallbacks"
+
+
 def publisher_alarm(prefix: str) -> str:
     """The snapshot publisher's dead-letter alarm."""
     return f"{prefix}-pds-publisher-dead-letters"
