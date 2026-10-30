@@ -248,25 +248,47 @@ def test_a_retrieved_break_keeps_its_schedule_over_a_small_start_shift() -> None
     assert (result.kept, result.delete, result.create) == (["pf-1135467694"], [], [])
 
 
-@pytest.mark.parametrize(("shift_s", "moved"), [(2.1, False), (2.9, False), (4.0, True), (-4.0, True)])
-def test_before_retrieval_a_break_moved_only_beyond_half_a_segment(shift_s: float, moved: bool) -> None:
-    """Before retrieval opens a new schedule costs nothing, so a real move re-creates it. Starts are compared in whole
-    seconds (MediaTailor's resolution) against half a 6.006 s segment."""
+@pytest.mark.parametrize(("shift_s", "moved"), [(2.1, False), (2.9, False), (-2.9, False), (4.0, True), (-4.0, True)])
+@pytest.mark.parametrize("retrieval", ["not open yet", "open, sessions retrieved"])
+def test_a_break_moved_only_beyond_half_a_segment(shift_s: float, moved: bool, retrieval: str) -> None:
+    """Starts are compared in whole seconds (MediaTailor's resolution) against half a 6.006 s segment, whatever the
+    schedule's retrieval state: the schedule of record decides, and a small shift does not throw away retrieved ads."""
     first = brk(1, 8)
     shifted = Break(1, first.upid, first.start + timedelta(seconds=shift_s), first.duration_ms, first.program)
-    result = plan([shifted], [existing(first)], configuration=SIBLING, policy=POLICY, now=NOW, tags=TAGS)
+    now = NOW if retrieval == "not open yet" else first.start - timedelta(seconds=100)
+    result = plan([shifted], [existing(first)], configuration=SIBLING, policy=POLICY, now=now, tags=TAGS)
     assert (result.delete == ["pf-1"]) is moved and (result.kept == ["pf-1"]) is not moved
 
 
-@pytest.mark.parametrize(("shift_s", "moved"), [(15.0, False), (-19.0, False), (-25.0, True), (75.0, True)])
-def test_once_retrieval_opened_only_a_break_out_of_its_consumption_window_moved(shift_s: float, moved: bool) -> None:
-    """MediaTailor puts the retrieved ads in the first break of the consumption window with the schedule's event id
-    (UG, "How prefetching works"): a break still inside the window (20 s before to 10 s after its end) keeps them."""
-    first = brk(1, 8)
-    shifted = Break(1, first.upid, first.start + timedelta(seconds=shift_s), first.duration_ms, first.program)
-    retrieving = first.start - timedelta(seconds=100)  # retrieval opened 50 s ago, sessions retrieved
-    result = plan([shifted], [existing(first)], configuration=SIBLING, policy=POLICY, now=retrieving, tags=TAGS)
-    assert (result.delete == ["pf-1"]) is moved
+def stored(request: dict[str, Any]) -> dict[str, Any]:
+    """The ``ListPrefetchSchedules`` item MediaTailor keeps for a ``CreatePrefetchSchedule`` request: whole seconds."""
+    whole = {k: v.replace(microsecond=0) for k, v in request["Consumption"].items() if isinstance(v, datetime)}
+    retrieval = {k: v.replace(microsecond=0) for k, v in request["Retrieval"].items() if isinstance(v, datetime)}
+    return {
+        "Name": request["Name"],
+        "ScheduleType": request["ScheduleType"],
+        "Retrieval": request["Retrieval"] | retrieval,
+        "Consumption": request["Consumption"] | whole,
+    }
+
+
+def test_a_run_over_an_unchanged_schedule_writes_nothing() -> None:
+    """Idempotence: the plan is a function of the schedule of record. Planned once, then run again a few minutes later
+    while Channel Assembly's approximate starts jitter by up to 1.4 s, it creates and deletes nothing."""
+    breaks = [
+        Break(100 + n, "sintel", at(5 + 4 * n) + timedelta(milliseconds=900), 60060, "p-sintel") for n in range(6)
+    ]
+    first = plan(breaks, [], configuration=SIBLING, policy=POLICY, now=NOW, tags=TAGS)
+    assert len(first.create) == 6
+    jittered = [
+        Break(b.event_id, b.upid, b.start + timedelta(milliseconds=(-1) ** n * 1400), b.duration_ms, b.program)
+        for n, b in enumerate(breaks)
+    ]
+    again = plan(
+        jittered, [stored(r) for r in first.create], configuration=SIBLING, policy=POLICY, now=at(3), tags=TAGS
+    )
+    assert (again.create, again.delete) == ([], [])
+    assert again.kept == [b.name for b in breaks if b.start >= at(3) + timedelta(seconds=60)]
 
 
 def test_expired_and_foreign_schedules_are_left_alone() -> None:

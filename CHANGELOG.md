@@ -89,9 +89,9 @@ All notable changes to this project are documented here. The format follows
   variables and `session.avail_duration_secs`. Retrieval runs 150 s to 30 s before the break with `RETRIEVAL_WINDOW`
   traffic shaping over 90 s, so the ad request herd leaves the marker and new creatives are prepared before they air.
   Schedules are create-only: those of moved or re-planned breaks are deleted, a sibling with a RECURRING schedule is
-  refused (alarm `<prefix>-release-prefetch`), and the reaper deletes them with the siblings. A break whose retrieval
-  has opened has moved only if it left its consumption window, so a shift of Channel Assembly's start by a second or
-  two keeps the retrieved ads.
+  refused (alarm `<prefix>-release-prefetch`), and the reaper deletes them with the siblings. A break has moved only
+  when its start is more than 3 s from its schedule's (in whole seconds); a smaller shift of Channel Assembly's start
+  keeps the schedule and its retrieved ads, and a run over an unchanged schedule writes nothing.
 - **Release Controller: the apply path** (`modules.release`, `FastChannels-<prefix>-Release`,
   [docs/release-controller.md](docs/release-controller.md)). CDK renders and validates the release bundle;
   `Custom::DesiredState` stores it by digest and puts `Desired State Rendered` on the bus; the state machine

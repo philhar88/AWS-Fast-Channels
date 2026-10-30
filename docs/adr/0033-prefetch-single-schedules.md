@@ -57,6 +57,19 @@ retrieval window, and can spread those requests over a time window (`RETRIEVAL_W
   always, and reservations are taken at retrieval. Delivery joins use our tracker (`d=<sid>.<evid>`), never
   `adBreakCorrelationId` or `FILLED_AVAIL.adsRequestUrl`. A reservation whose break the session never watched is
   released by the sweeper after its 2 hours.
+- **The schedule of record decides (the owner's direction, 2026-10-30).** "Because the channel assembly schedule is
+  somewhat deterministic you should be able to do elegant prefetch schedule mostly aligned with that. The few late
+  joiners getting realtime is ok. People joining during a break also being realtime partial render of ads is ok."
+  - Every upcoming break's schedule derives from `GetChannelSchedule` alone, and a run over an unchanged schedule
+    writes nothing.
+  - A break has moved only when its start is more than 3 s (half a 6.006 s segment) from its schedule's, both in
+    whole seconds (MediaTailor keeps schedule times in whole seconds, P0-02). A smaller shift is Channel Assembly's
+    approximate start moving between reads, and keeps the schedule untouched, retrieved ads included.
+  - Lane D's M8-08 run 5 (2026-10-30) showed the cost of chasing a shift. A 2 s exact comparison deleted a schedule
+    every session had retrieved, after a 1.2 s shift. Every session then made a second auction at the break, with
+    double reservations.
+  - Late joiners and viewers who join during a break get real-time insertion (a partial render for the latter). That
+    is accepted behaviour: nothing is built to avoid it.
 - **No YO on prefetch configurations:** a sibling's model cannot carry `YieldOptimizationConfiguration`.
 - `modules.release.prefetch.enabled` (on by default with the module) turns it off; the timings are settings.
 
