@@ -1,17 +1,21 @@
-"""``POST /ownbook/openrtb`` behind the internal load balancer: OpenRTB in, the own book's bids out."""
+"""``POST /ownbook/openrtb``: OpenRTB in, the own book's bids out."""
 
 import json
-from dataclasses import dataclass
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.snapshot import EMPTY, Snapshot, SnapshotBase, build
-from fast_channels.functions.pds import ownbook
+from fast_channels.functions.pds.store import snapshot_store
 from fast_channels.functions.settings import settings
+from fast_channels.pds import ownbook, state
+
+if TYPE_CHECKING:
+    from fast_channels.pds.http import Answer
 
 CDN = "https://d111111abcdef8.cloudfront.net"
 LINE = Line(
@@ -30,20 +34,6 @@ OWN = Book(
     house=(Creative(crid="house1", creative_id="house-ad-1", hls_uri=f"{CDN}/h1.m3u8", duration_ms=30030),),
 )
 SNAPSHOT = build(SnapshotBase(lines=(LINE,)), own=OWN, now=datetime(2026, 10, 29, tzinfo=UTC))
-
-
-@dataclass
-class Context:
-    function_name: str = "fastm-pds-ownbook"
-    function_version: str = "3"
-    memory_limit_in_mb: int = 1024
-    invoked_function_arn: str = "arn:aws:lambda:us-east-1:123456789012:function:fastm-pds-ownbook:live"
-    aws_request_id: str = "request-1"
-    log_group_name: str = "/aws/lambda/fastm-pds-ownbook"
-    log_stream_name: str = "stream"
-
-    def get_remaining_time_in_millis(self) -> int:
-        return 3000
 
 
 class Fake:
@@ -79,16 +69,8 @@ def openrtb(slots: int = 2, rqddurs: list[int] | None = None) -> str:
     )
 
 
-def alb(body: str | None, *, path: str = "/ownbook/openrtb") -> dict[str, Any]:
-    return {
-        "requestContext": {"elb": {"targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/pds/2"}},
-        "httpMethod": "POST",
-        "path": path,
-        "queryStringParameters": {},
-        "headers": {"content-type": "application/json", "host": "pds.fastm.fast.internal"},
-        "body": body,
-        "isBase64Encoded": False,
-    }
+def ask(body: str) -> Answer:
+    return ownbook.answer(body.encode(), time.perf_counter())
 
 
 def logged(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
@@ -97,10 +79,10 @@ def logged(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
 
 @pytest.mark.usefixtures("fake")
 def test_each_slot_gets_the_house_ads_and_the_lines(caplog: pytest.LogCaptureFixture) -> None:
-    response = ownbook.handler(alb(openrtb()), Context())
+    response = ask(openrtb())
 
-    assert response["statusCode"] == 200
-    answer = json.loads(response["body"])
+    assert response.status == 200
+    answer = json.loads(response.body)
     [seat] = answer["seatbid"]
     assert (answer["id"], seat["seat"]) == ("auction-7", "ownbook")
     assert [(b["impid"], b["crid"], b["price"], b.get("dealid")) for b in seat["bid"]] == [
@@ -123,26 +105,26 @@ def test_each_slot_gets_the_house_ads_and_the_lines(caplog: pytest.LogCaptureFix
 def test_a_line_without_budget_is_not_bid(fake: Fake) -> None:
     fake.spent = frozenset({"direct-1"})
 
-    answer = json.loads(ownbook.handler(alb(openrtb(1)), Context())["body"])
+    answer = json.loads(ask(openrtb(1)).body)
 
     assert [b["crid"] for b in answer["seatbid"][0]["bid"]] == ["house1"]
 
 
-def test_no_bid_is_a_204(fake: Fake) -> None:
+def test_no_bid_is_a_204_and_so_is_a_sidecar_without_a_snapshot(fake: Fake) -> None:
+    assert ask(openrtb(rqddurs=[15])).status == 204, "nothing fits a 15 s slot"
     fake.snapshot = EMPTY
 
-    response = ownbook.handler(alb(openrtb()), Context())
+    response = ask(openrtb())
 
-    assert (response["statusCode"], response["body"]) == (204, "")
-    assert ownbook.handler(alb(openrtb(rqddurs=[15])), Context())["statusCode"] == 204
+    assert (response.status, response.body) == (204, "")
 
 
 @pytest.mark.usefixtures("fake")
 @pytest.mark.parametrize("body", ["", "not json", json.dumps({"imp": []}), json.dumps({"id": "a", "imp": [{}]})])
 def test_a_request_that_is_not_openrtb_is_a_400(body: str) -> None:
-    response = ownbook.handler(alb(body), Context())
+    response = ask(body)
 
-    assert (response["statusCode"], json.loads(response["body"])) == (400, {"error": "invalid"})
+    assert (response.status, json.loads(response.body)) == (400, {"error": "invalid request"})
 
 
 def test_a_failure_is_a_500(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,28 +133,26 @@ def test_a_failure_is_a_500(fake: Fake, monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(ownbook, "response", broken)
 
-    response = ownbook.handler(alb(openrtb()), Context())
+    response = ask(openrtb())
 
-    assert (response["statusCode"], json.loads(response["body"])) == (500, {"error": "internal"})
-
-
-@pytest.mark.usefixtures("fake")
-def test_other_paths_are_not_found() -> None:
-    assert ownbook.handler(alb(openrtb(), path="/policy"), Context())["statusCode"] == 404
+    assert (response.status, json.loads(response.body)) == (500, {"error": "internal"})
 
 
 def test_the_stores_read_the_configured_bucket_and_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The own book and ``/select`` share one budget view, on the reservations' client."""
     monkeypatch.setenv("PDS_CONFIG_BUCKET", "fastm-pds-config")
     monkeypatch.setenv("PDS_TABLE", "fastm-pds")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     settings.cache_clear()
-    ownbook.store.cache_clear()
-    ownbook.budgets.cache_clear()
+    for cached in (snapshot_store, state.budgets, state.dynamodb):
+        cached.cache_clear()
     try:
         assert ownbook.store()._bucket == "fastm-pds-config"
         budgets = ownbook.budgets()
         assert budgets._table == "fastm-pds"
         assert budgets._lines() == ()
+        assert budgets.client is state.dynamodb()
     finally:
-        ownbook.store.cache_clear()
-        ownbook.budgets.cache_clear()
+        for cached in (snapshot_store, state.budgets, state.dynamodb):
+            cached.cache_clear()
         settings.cache_clear()

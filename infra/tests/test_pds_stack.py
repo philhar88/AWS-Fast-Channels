@@ -8,9 +8,8 @@ import pytest
 
 from fast_channels.core.demand import NETWORK_CONTEXT
 from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord
-from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, SnapshotBase
+from fast_channels.core.pds.snapshot import SnapshotBase
 from fast_channels.infra.constructs.pds.decisions import LOG_FIELDS
-from fast_channels.infra.constructs.pds.service import census_gate_definition
 
 if TYPE_CHECKING:
     from aws_cdk.assertions import Template
@@ -60,10 +59,9 @@ LINES = [
         "caps": {"per_session": 4},
     },
 ]
-OWN_BOOK = "fast_channels.functions.pds.ownbook.handler"
 DELIVERY = "fast_channels.functions.pds.delivery.handler"
 SWEEPER = "fast_channels.functions.pds.sweeper.handler"
-SELECT = "fast_channels.functions.pds.select.handler"
+SIDECAR_LOGS = "/aws/ecs/fastm-pds"
 
 
 def resources(template: Template, kind: str) -> dict[str, dict[str, Any]]:
@@ -100,7 +98,6 @@ def test_the_pds_stack_reads_the_data_stack_by_parameter_not_by_weak_reference(d
     text = json.dumps(template)
     assert "FastChannels-fastm-Data" not in text, "no weak reference to the Data stack"
     assert "FastChannels-fastm-Media" not in text, "nor to the Media stack"
-    assert '"StackName": "FastChannels-fastm-Demand"' in text, "the zone: Demand and Pds always deploy together"
     ssm = {p["Default"] for p in template["Parameters"].values() if p["Type"].startswith("AWS::SSM::Parameter")}
     assert ssm - {"/cdk-bootstrap/hnb659fds/version"} == {
         "/fastm/pds/config-bucket",
@@ -118,11 +115,7 @@ def test_the_pds_stack_exists_only_with_the_module_and_the_guidances_network(dep
     stage = deployment(PDS, extra=EXTRA).stage
 
     assert stage.pds.stack_name == "FastChannels-fastm-Pds"
-    assert {s.stack_name for s in stage.pds.dependencies} == {
-        "FastChannels-fastm-Data",
-        "FastChannels-fastm-Demand",
-        "FastChannels-fastm-Ops",
-    }
+    assert {s.stack_name for s in stage.pds.dependencies} == {"FastChannels-fastm-Data", "FastChannels-fastm-Ops"}
     assert deployment({**PDS, "modules.pds.enabled": False}, extra=EXTRA).stage.pds is None
 
 
@@ -151,95 +144,40 @@ def test_the_state_is_the_data_stacks(deployment: GetDeployment) -> None:
     assert not [p for p in off_media if p["Name"].startswith("/fastm/pds/")]
 
 
-def test_the_load_balancer_answers_only_prebid_server_at_pds(deployment: GetDeployment) -> None:
+def test_the_sidecar_answers_prebid_server_so_no_endpoint_is_here(deployment: GetDeployment) -> None:
+    """``/policy``, ``/select`` and ``/ownbook/openrtb`` are the sidecar's, in the guidance's task (ADR-0036): no
+    load balancer, record, alias, provisioned-concurrency gate or hot-path function is left, nor the guidance's VPC."""
     d = deployment(PDS, extra=EXTRA)
     template = d.template(d.stage.pds)
-    balancer = only(template, "AWS::ElasticLoadBalancingV2::LoadBalancer")
-    ingress = only(template, "AWS::EC2::SecurityGroupIngress")
-    record = only(template, "AWS::Route53::RecordSet")
-    listener = only(template, "AWS::ElasticLoadBalancingV2::Listener")
-    rules = resources(template, "AWS::ElasticLoadBalancingV2::ListenerRule")
-    groups = resources(template, "AWS::ElasticLoadBalancingV2::TargetGroup")
+    text = json.dumps(template.to_json())
+    handlers = {f["Handler"] for f in resources(template, "AWS::Lambda::Function").values()}
 
-    assert balancer["Scheme"] == "internal"
-    assert sorted(balancer["Subnets"]) == sorted(s["id"] for s in NETWORK["private_subnets"])
-    assert (ingress["SourceSecurityGroupId"], ingress["FromPort"], ingress["ToPort"]) == (
-        NETWORK["task_security_group_id"],
-        80,
-        80,
-    )
-    assert record["Name"] == "pds.fastm.fast.internal."
-    assert (listener["Port"], listener["Protocol"]) == (80, "HTTP")
-    assert listener["DefaultActions"][0]["FixedResponseConfig"]["StatusCode"] == "404"
-    paths = []
-    for rule in rules.values():
-        conditions = {c["Field"]: c for c in rule["Conditions"]}
-        paths.extend(conditions["path-pattern"]["PathPatternConfig"]["Values"])
-        assert conditions["http-request-method"]["HttpRequestMethodConfig"]["Values"] == ["POST"]
-    assert sorted(paths) == ["/ownbook/openrtb", "/policy", "/select"]
-    aliases = resources(template, "AWS::Lambda::Alias")
-    assert {a["Name"] for a in aliases.values()} == {"live"}
-    assert all(g["TargetType"] == "lambda" for g in groups.values())
-    assert sorted(g["Targets"][0]["Id"]["Ref"] for g in groups.values()) == sorted(aliases)
-    attributes = {a["Key"]: a["Value"] for a in balancer["LoadBalancerAttributes"]}
-    assert attributes["idle_timeout.timeout_seconds"] == "120"  # above Prebid Server's 60 s keep-alive
+    for kind in (
+        "AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "AWS::ElasticLoadBalancingV2::TargetGroup",
+        "AWS::Route53::RecordSet",
+        "AWS::Lambda::Alias",
+        "AWS::StepFunctions::StateMachine",
+        "AWS::EC2::SecurityGroup",
+    ):
+        assert not template.find_resources(kind), kind
+    assert not [h for h in handlers if h.split(".")[-2] in {"policy", "select", "ownbook"}], handlers
+    assert NETWORK["vpc_id"] not in text and "subnet-" not in text
+    outputs = template.to_json()["Outputs"]
+    assert {"DecisionLogGroup", "DeliveryFunction", "PublisherFunction"} <= set(outputs)
+    assert not {"Endpoint", "PolicyFunction", "SelectFunction", "OwnBookFunction", "CensusGateArn"} & set(outputs)
 
 
-def joined(value: Any) -> str:
-    """A CloudFormation string with its ``Ref``s as ``${name}``."""
-    match value:
-        case {"Fn::Join": [separator, parts]}:
-            return str(separator).join(joined(part) for part in parts)
-        case {"Ref": name}:
-            return f"${{{name}}}"
-        case str():
-            return value
-    raise AssertionError(f"not a string: {value}")
-
-
-def test_only_the_stages_own_target_groups_may_invoke_the_functions(deployment: GetDeployment) -> None:
-    """CDK's ``LambdaTarget`` lets Elastic Load Balancing invoke a function unconditioned, from any account's target
-    group (a confused deputy). Each alias's permission names the account and its target group, by the group's fixed
-    name, and exists before the group registers the target."""
+def test_the_sidecars_decision_records_are_subscribed_on_its_log_group(deployment: GetDeployment) -> None:
+    """Both of the log group's two subscription filters: one per record kind, each to its stream."""
     d = deployment(PDS, extra=EXTRA)
-    resources_ = d.template(d.stage.pds).to_json()["Resources"]
-    groups = {k: r for k, r in resources_.items() if r["Type"] == "AWS::ElasticLoadBalancingV2::TargetGroup"}
-    permissions = {
-        k: r["Properties"]
-        for k, r in resources_.items()
-        if r["Type"] == "AWS::Lambda::Permission"
-        and r["Properties"]["Principal"] == "elasticloadbalancing.amazonaws.com"
+    filters = resources(d.template(d.stage.pds), "AWS::Logs::SubscriptionFilter").values()
+    sidecar = {f["FilterName"]: f["FilterPattern"] for f in filters if f["LogGroupName"] == SIDECAR_LOGS}
+
+    assert sidecar == {
+        "fastm-pds-policy-records": '{ $.record = "pds.policy" }',
+        "fastm-pds-select-records": '{ $.record = "pds.select" }',
     }
-
-    names = sorted(g["Properties"]["Name"] for g in groups.values())
-    assert names == ["fastm-pds-ownbook", "fastm-pds-policy", "fastm-pds-select"]
-    account, region = d.stage.pds.account, d.stage.pds.region
-    arns = {joined(p["SourceArn"]) for p in permissions.values()}
-    assert {p["SourceAccount"] for p in permissions.values()} == {account}
-    assert arns == {f"arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{n}/*" for n in names}
-    for group in groups.values():
-        [alias] = [group["Properties"]["Targets"][0]["Id"]["Ref"]]
-        mine = [k for k, p in permissions.items() if p["FunctionName"] == {"Ref": alias}]
-        assert len(mine) == 1 and mine[0] in group["DependsOn"], (alias, group.get("DependsOn"))
-
-
-def test_the_policy_function_is_outside_the_vpc_and_reads_only_the_snapshot(deployment: GetDeployment) -> None:
-    d = deployment(PDS, extra=EXTRA)
-    template = d.template(d.stage.pds)
-    functions = resources(template, "AWS::Lambda::Function")
-    [policy] = [f for f in functions.values() if f["Handler"] == "fast_channels.functions.pds.policy.handler"]
-
-    assert "VpcConfig" not in policy
-    assert (policy["Runtime"], policy["Architectures"], policy["MemorySize"], policy["Timeout"]) == (
-        "python3.14",
-        ["arm64"],
-        1769,
-        3,
-    )
-    assert set(policy["Environment"]["Variables"]) >= {"PDS_CONFIG_BUCKET", "FAST_PREFIX"}
-    s3 = [s for s in statements(template, "PolicyFunctionRole") if str(s["Action"]).startswith("s3:")]
-    assert [s["Action"] for s in s3] == ["s3:GetObject"]
-    assert json.dumps(s3[0]["Resource"]).endswith(f'/{SNAPSHOT_KEY}"]]}}')
 
 
 def test_the_publisher_runs_on_deploy_and_hourly_with_the_demo_demand(deployment: GetDeployment) -> None:
@@ -285,22 +223,6 @@ def test_the_publisher_reads_only_the_kits_and_writes_only_budgets(deployment: G
     assert [s["Condition"] for s in ledger] == [{"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["pds/*"]}}]
     parameter = by_action['"ssm:GetParameter"']
     assert "parameter/fastm/pds/ladder-version" in json.dumps(parameter["Resource"])
-
-
-def test_the_own_book_is_warm_and_reads_the_snapshot_and_budgets(deployment: GetDeployment) -> None:
-    d = deployment(PDS, extra=EXTRA)
-    template = d.template(d.stage.pds)
-    name, own_book = function(template, OWN_BOOK)
-
-    assert "VpcConfig" not in own_book
-    assert (own_book["MemorySize"], own_book["Timeout"]) == (1769, 3)
-    assert set(own_book["Environment"]["Variables"]) >= {"PDS_CONFIG_BUCKET", "PDS_TABLE"}
-    granted = statements(template, name[:-8] + "Role")
-    assert {json.dumps(s["Action"]) for s in granted} >= {'"s3:GetObject"', '"dynamodb:BatchGetItem"'}
-    [batch] = [s for s in granted if s["Action"] == "dynamodb:BatchGetItem"]
-    assert batch["Condition"] == {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["BUDGET#*"]}}
-    gate = json.dumps(only(template, "AWS::StepFunctions::StateMachine"))
-    assert gate.count("ProvisionedConcurrentExecutions") == 3, "the three functions are warmed"
 
 
 def test_delivery_reads_the_impression_beacons_of_the_stages_mediatailor_log(deployment: GetDeployment) -> None:
@@ -387,49 +309,6 @@ def test_policy_records_flow_into_the_lake(deployment: GetDeployment) -> None:
     assert (columns["reserved"], columns["reason"], columns["below_floor"]) == ("array<string>", "string", "bigint")
 
 
-def test_the_census_gate_warms_the_functions_while_channels_run(deployment: GetDeployment) -> None:
-    d = deployment(PDS, extra=EXTRA)
-    template = d.template(d.stage.pds)
-    assert template.find_resources("AWS::StepFunctions::StateMachine")
-    rule = only(template, "AWS::Events::Rule")
-    assert rule["EventPattern"]["detail-type"] == ["Census Changed"]
-
-    none = {"policy": 0, "select": 0, "ownbook": 0}
-    cold = deployment({**PDS, "modules.pds.provisioned_concurrency": none}, extra=EXTRA)
-    assert cold.template(cold.stage.pds).find_resources("AWS::StepFunctions::StateMachine"), "it releases what was set"
-
-
-def test_without_provisioned_concurrency_the_gate_only_releases() -> None:
-    definition = census_gate_definition(functions=[("arn:f1", 0), ("arn:f2", 0)], parameter="/p")
-    states = definition["States"]
-
-    assert not [name for name in states if name.startswith("Provision")]
-    assert states["AnyChannel"]["Choices"][0]["Next"] == "Release0"
-    assert states["AnyChannel"]["Default"] == "Release0"
-
-
-def test_census_gate_definition() -> None:
-    definition = census_gate_definition(
-        functions=[("arn:f1", 20), ("arn:f2", 30), ("arn:f3", 0)], parameter="/fastm/ops/running-channels"
-    )
-    states = definition["States"]
-
-    assert states["Provision0"]["Next"] == "Provision1" and states["Provision1"]["Next"] == "Provision2"
-    assert states["Provision1"]["Arguments"] == {
-        "FunctionName": "arn:f2",
-        "Qualifier": "live",
-        "ProvisionedConcurrentExecutions": 30,
-    }
-    assert states["Provision0"]["Arguments"]["ProvisionedConcurrentExecutions"] == 20
-    unprovision = states["Provision2"]  # a count of 0 removes what an earlier configuration set
-    assert unprovision["Resource"].endswith(":deleteProvisionedConcurrencyConfig") and unprovision["End"]
-    assert unprovision["Catch"][0]["Next"] == "Unprovisioned2" and states["Unprovisioned2"]["End"]
-    assert states["Release1"]["Next"] == "Release2" and states["Release2"]["End"]
-    assert states["Release0"]["Next"] == "Release1" and states["Released0"]["Next"] == "Release1"
-    assert states["Released2"]["End"]
-    assert states["WaitBeforeRelease"]["Seconds"] == 900
-
-
 @pytest.mark.parametrize("overrides", [PDS], ids=["pds"])
 def test_template_snapshot(
     deployment: GetDeployment,
@@ -440,32 +319,6 @@ def test_template_snapshot(
     d = deployment(overrides, extra=EXTRA)
 
     assert normalized(d.template(d.stage.pds)) == snapshot_json
-
-
-def test_select_reserves_line_ads_and_answers_with_our_tracker(deployment: GetDeployment) -> None:
-    d = deployment(PDS, extra=EXTRA)
-    template = d.template(d.stage.pds)
-    name, select = function(template, SELECT)
-
-    assert "VpcConfig" not in select
-    assert (select["MemorySize"], select["Timeout"]) == (1769, 3)
-    assert set(select["Environment"]["Variables"]) >= {
-        "PDS_CONFIG_BUCKET",
-        "PDS_TABLE",
-        "LEDGER_TABLE",
-        "CONTENT_BASE_URL",
-    }
-    keys = sorted(
-        (json.dumps(s["Action"]), s["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"])
-        for s in statements(template, name[:-8] + "Role")
-        if "Condition" in s
-    )
-    assert keys == [
-        ('"dynamodb:BatchGetItem"', ["BUDGET#*"]),
-        ('"dynamodb:PutItem"', ["RES#*"]),
-        ('"dynamodb:PutItem"', ["pds/*"]),
-        ('"dynamodb:UpdateItem"', ["BUDGET#*", "CAP#*"]),
-    ]
 
 
 def test_the_module_fallback_alarms_watch_prebid_servers_log(deployment: GetDeployment) -> None:

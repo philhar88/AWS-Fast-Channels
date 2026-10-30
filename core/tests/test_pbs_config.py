@@ -26,7 +26,6 @@ from fast_channels.core.pbs_config import (
     PbsSettings,
     account,
     house_ads,
-    pds_host,
     prebid_config,
     private_zone,
     render,
@@ -185,22 +184,22 @@ def test_shipped_adapters_are_off_and_the_simulator_follows_the_mode() -> None:
         assert adapters[SIMULATOR] == {"enabled": simulator}
 
 
-def test_the_own_book_and_the_module_call_the_pds_on_its_stable_private_name() -> None:
+def test_the_own_book_and_the_module_call_the_pds_sidecar_on_the_tasks_loopback() -> None:
+    """ADR-0036: the PDS is a container of the same task, on 127.0.0.1:8090."""
     config = prebid_config(SETTINGS)
     module = config["hooks"]["fast-ctv"]
 
     assert private_zone("fastm") == "fastm.fast.internal"
-    assert pds_host("fastm") == "pds.fastm.fast.internal"
     assert config["adapters"]["generic"]["aliases"][OWN_BOOK] == {
         "enabled": True,
-        "endpoint": "http://pds.fastm.fast.internal/ownbook/openrtb",
+        "endpoint": "http://127.0.0.1:8090/ownbook/openrtb",
         "ortb-version": "ORTB_2_6",
     }
     assert module == {
         "enabled": True,
-        "policy-url": "http://pds.fastm.fast.internal/policy",
-        "policy-timeout-ms": 80,
-        "select-url": "http://pds.fastm.fast.internal/select",
+        "policy-url": "http://127.0.0.1:8090/policy",
+        "policy-timeout-ms": 50,
+        "select-url": "http://127.0.0.1:8090/select",
         "select-timeout-ms": 200,
         "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
         "house-ads": "[]",

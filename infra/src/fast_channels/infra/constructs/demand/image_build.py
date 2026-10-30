@@ -7,6 +7,9 @@ the stage's dedicated bootstrap bucket under ``pbs-image/``, starts the build wi
 ``build-image.sh`` refuses a Prebid Server Java tag that no longer resolves to its pinned commit, then runs
 ``docker build`` with ``INCLUDE_AMT_BIDDER=true`` and pushes ``<repository>:<tag>``; tags are content hashes, so
 they are immutable.
+
+With the PDS module on it also holds the PDS sidecar's repository (``<prefix>-pds``): the same project builds that
+image from a context of its own (``pds/build-image.sh``), naming the repository in ``REPOSITORY_URI``.
 """
 
 from typing import Final
@@ -19,6 +22,7 @@ from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
 from fast_channels.core.demand import IMAGE_SOURCE_PREFIX, assets_bucket, image_build_project, image_repository
+from fast_channels.core.pds import names as pds_names
 from fast_channels.infra import nag
 
 KEEP_IMAGES = 10
@@ -32,11 +36,13 @@ class ImageBuild(Construct):
 
     Args:
         prefix: deployment prefix (names).
-        removal_policy: of the repository (with ``DESTROY`` its images go with it).
+        removal_policy: of the repositories (with ``DESTROY`` their images go with them).
         log_retention: of the build logs.
+        pds: also the PDS sidecar's repository (``modules.pds.enabled``).
 
     Attributes:
         repository: the ECR repository ``<prefix>-pbs``.
+        pds_repository: the ECR repository ``<prefix>-pds``, or None.
         project: the CodeBuild project ``<prefix>-pbs-image``.
     """
 
@@ -48,18 +54,24 @@ class ImageBuild(Construct):
         prefix: str,
         removal_policy: RemovalPolicy,
         log_retention: logs.RetentionDays,
+        pds: bool = False,
     ) -> None:
         super().__init__(scope, id)
-        self.repository = ecr.Repository(
-            self,
-            "Repository",
-            repository_name=image_repository(prefix),
-            image_scan_on_push=True,
-            image_tag_mutability=ecr.TagMutability.IMMUTABLE,
-            lifecycle_rules=[ecr.LifecycleRule(description="Keep the newest images", max_image_count=KEEP_IMAGES)],
-            removal_policy=removal_policy,
-            empty_on_delete=removal_policy == RemovalPolicy.DESTROY,
-        )
+
+        def repository(id: str, name: str) -> ecr.Repository:
+            return ecr.Repository(
+                self,
+                id,
+                repository_name=name,
+                image_scan_on_push=True,
+                image_tag_mutability=ecr.TagMutability.IMMUTABLE,
+                lifecycle_rules=[ecr.LifecycleRule(description="Keep the newest images", max_image_count=KEEP_IMAGES)],
+                removal_policy=removal_policy,
+                empty_on_delete=removal_policy == RemovalPolicy.DESTROY,
+            )
+
+        self.repository = repository("Repository", image_repository(prefix))
+        self.pds_repository = repository("PdsRepository", pds_names.image_repository(prefix)) if pds else None
         sources = s3.Bucket.from_bucket_name(self, "Sources", assets_bucket(prefix, Aws.ACCOUNT_ID, Aws.REGION))
         log_group = logs.LogGroup(self, "Logs", retention=log_retention, removal_policy=removal_policy)
         self.project = codebuild.Project(
@@ -80,6 +92,8 @@ class ImageBuild(Construct):
             logging=codebuild.LoggingOptions(cloud_watch=codebuild.CloudWatchLoggingOptions(log_group=log_group)),
         )
         self.repository.grant_pull_push(self.project)
+        if self.pds_repository is not None:
+            self.pds_repository.grant_pull_push(self.project)
         sources.grant_read(self.project, f"{IMAGE_SOURCE_PREFIX}*")
         stack = Stack.of(self)
         nag.acknowledge(

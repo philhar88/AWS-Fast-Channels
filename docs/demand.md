@@ -79,15 +79,15 @@ deploy time. Golden copies for a sample stage are in `core/tests/__snapshots__/t
 
 | File | Content |
 |---|---|
-| `current-config/prebid-config.yaml` | Replaces the guidance's default file, so it repeats every default it keeps. Changes: `server.http.server-instances` = `modules.demand.server_instances`; the five shipped adapters (`appnexus`, `ix`, `openx`, `pubmatic`, `rubicon`) off; the simulator (`amt`) on in `demo` mode only; the own book `ownbook`, a `generic` alias on `http://pds.<prefix>.fast.internal/ownbook/openrtb` (OpenRTB 2.6); `hooks.fast-ctv` (policy and select URLs and timeouts, the tracker template, the kit's house ads as `house-ads`, request logging); GDPR out of scope unless a request signals it; the unprotected log-level endpoint off |
+| `current-config/prebid-config.yaml` | Replaces the guidance's default file, so it repeats every default it keeps. Changes: `server.http.server-instances` = `modules.demand.server_instances`; the five shipped adapters (`appnexus`, `ix`, `openx`, `pubmatic`, `rubicon`) off; the simulator (`amt`) on in `demo` mode only; the own book `ownbook`, a `generic` alias on the PDS sidecar's `http://127.0.0.1:8090/ownbook/openrtb` (OpenRTB 2.6); `hooks.fast-ctv` (policy and select URLs and timeouts, the tracker template, the kit's house ads as `house-ads`, request logging); GDPR out of scope unless a request signals it; the unprotected log-level endpoint off |
 | `stored_requests/fast-pod-{30,60,90,120}s.json` | One pod (`podid` 1) of one to four 30 s slots (`poddur` = the break, `rqddurs` [30], `slotinpod` 1 first, -1 last); `app.content` `livestream` 1, `context` 1, `cattax` 9; a complete `source.schain`; `regs.coppa` 0; `imp.ssai` 3; `tmax` 500; bidder: the own book only, with up to 9 bids per slot (`ext.prebid.multibid`; Prebid Server otherwise keeps one bid per bidder and slot, and the house ads would never reach the module); no `device` or `user` |
 | `stored_requests/fast-pod-kids-{…}s.json` | The same with `regs.coppa` 1, for child-directed playback configurations |
 | `stored_accounts/<prefix>.json` | The execution plan: `processed-auction-request` → `fast-ctv-policy` inside `modules.pds.policy_group_timeout_ms`, `exitpoint` → `fast-ctv-vast` inside `select_group_timeout_ms`. Activity Controls deny `transmitEids`, `transmitUfpd` and `transmitPreciseGeo` to every bidder but the own book. Debug output is off |
 
-The Pod Decision Service is named `pds.<prefix>.fast.internal`, in the stage's private hosted zone in the Prebid
-Server VPC. The configuration can therefore be rendered, and deployed, before the service exists. Until then the
-policy hook falls back and every pod is the own book's, or empty. Nothing in the configuration is secret: the origin
-secret lives only in the WAF rule group and the playback configurations.
+The Pod Decision Service is a sidecar in each Prebid Server task, on `http://127.0.0.1:8090`
+([docs/pds.md](pds.md#the-service), ADR-0036), so the configuration names no host of its own. A stage without the PDS
+has nothing on that port: the policy hook falls back and every pod is the own book's, or the kit's house ads. Nothing
+in the configuration is secret: the origin secret lives only in the WAF rule group and the playback configurations.
 
 ## The fast-ctv module
 
@@ -211,10 +211,17 @@ its target tracking (CPU, memory, requests per target):
 |---|---|---|
 | **Census gate** (`<prefix>-demand-census-gate`, Step Functions with JSONata, SDK calls only) | The channel census's `Census Changed` event on the stage's bus (the ops module: the running-channel count crossed zero) | **First channel starts:** the scalable target's minimum goes to `tasks.min` (the tier minimum) and the desired count to at least that. **Last channel stops:** it waits 15 minutes, reads the census's last count (`/<prefix>/ops/running-channels`) again, and if no channel runs sets the minimum and the desired count to 0. A restart within the 15 minutes keeps Prebid Server up |
 | **Dayparts** (`modules.demand.dayparts`) | Application Auto Scaling scheduled actions `<prefix>-daypart-<n>` at their `cron` (UTC) | Raise the minimum ahead of a busy daypart (fire at least 10 minutes before its first break); target tracking covers the time between them |
-| **Warm-up** (`<prefix>-pbs-warmup`, CodeBuild on arm64) | Every task of the service that reaches `RUNNING` (`ECS Task State Change`): census, daypart or target-tracking scale-outs alike | Waits until the task is a healthy target of the guidance's load balancer (up to 10 minutes; a draining task is skipped), then replays MediaTailor's POST through the guidance's CloudFront with origin secret A, at `WARMUP_RATE_PER_TASK` (50) auctions/s per healthy target, so the new task gets about 50/s, for `WARMUP_SECONDS` (150 s), with vegeta 12.13.0 (download checksum-verified). Every request is a probe (`X-Fast-Probe: 1`) without a ticket: own book and house only, no partner sees it |
+| **Warm-up** (`<prefix>-pbs-warmup`, CodeBuild on arm64) | Every task of the service that reaches `RUNNING` (`ECS Task State Change`): census, daypart or target-tracking scale-outs alike | Waits until the task is a healthy target of the guidance's load balancer (up to 10 minutes; a draining task is skipped), then replays MediaTailor's POST through the guidance's CloudFront with origin secret A, at `WARMUP_RATE_PER_TASK` (25) auctions/s per healthy target, so a lone new task gets about 25/s and tasks warming together about 50/s each, for `WARMUP_SECONDS` (150 s), with vegeta 12.13.0 (download checksum-verified). Every request is a probe (`X-Fast-Probe: 1`) without a ticket: own book and house only, no partner sees it |
 
 Undeliverable events of both rules go to the dead-letter queue `<prefix>-demand-dead-letters`, which alarms to the
 stage's alert topic.
+
+With `modules.pds`, `scripts/guidance_app.py` also sets **ALB slow start** (180 s) on the guidance's Prebid Server
+target groups, which route round robin (slow start does not work with least outstanding requests or weighted random):
+a task that joins a serving fleet (a scale-out, a rollout) gets a linearly growing share of live requests while its
+JIT and its PDS sidecar warm. Measured on a 2 to 3 scale-out: the new task took 17 of a 100-session break's auctions
+(the others 42 and 41), with no fallback. Slow start does not apply to a scale from zero, whose tasks register
+together with no other healthy target; the census gate's warm-up before the first break covers that.
 
 `deploy-demand` starts the gate once with the census's current count, so a stage with no channel running scales to
 zero 15 minutes after its deploy. It then warms the running tasks that no warm-up build has named and waits for them:
@@ -243,8 +250,8 @@ make destroy-demand STAGE=fastm    # everything deploy-demand created, then the 
 order (DESIGN §4.3):
 
 1. **The repository's stacks** `FastChannels-<prefix>-DemandEdge` (us-east-1: origin secrets A and B, the rule group)
-   and `-DemandBuild` (the image repository `<prefix>-pbs`, the x86 build project `<prefix>-pbs-image`, the policy
-   `<prefix>-guidance-cfn-exec`).
+   and `-DemandBuild` (the image repository `<prefix>-pbs`, with `modules.pds` the sidecar's `<prefix>-pds`, the
+   x86 build project `<prefix>-pbs-image`, the policy `<prefix>-guidance-cfn-exec`).
 2. **A CDK bootstrap of the guidance's own** (stack `<prefix>-cdk-bootstrap`, qualifier = the prefix, bucket
    `<prefix>-cdk-assets-<account>-<region>`, repository `<prefix>-cdk-images-<account>-<region>`, the AWS managed S3
    key). Its CloudFormation execution role has `<prefix>-guidance-cfn-exec` instead of AdministratorAccess: per-service
@@ -253,24 +260,29 @@ order (DESIGN §4.3):
    The guidance never touches the account's shared `hnb659fds` bootstrap.
 3. **The image**: the guidance's unmodified Dockerfile with `INCLUDE_AMT_BIDDER=true`, the overlays and the fast-ctv
    module, built by CodeBuild on x86 and tagged `<pbs version>-<context hash>` (an unchanged context reuses its image).
-   The build refuses a Prebid Server Java tag that no longer resolves to the pinned commit.
+   The build refuses a Prebid Server Java tag that no longer resolves to the pinned commit. With `modules.pds`, the
+   same project builds the PDS sidecar's image (`pds/Dockerfile`, tagged by its context hash) into `<prefix>-pds`.
 4. **The guidance**, with the rendered configuration in its checkout (it uploads it at create time) and these
    parameters on the renamed stack's key (`<prefix>-pbs:<Name>`): `SpotInstanceWeight=0` (Fargate only),
    `ECSTaskMinCapacity`/`ECSTaskMaxCapacity` = `modules.demand.tasks`, `EnableLogAnalytics=false`,
    `ExtraWafRuleGroupArn` = the rule group, and the simulator: `SimulatorEndpoint=http://sim.<prefix>.fast.internal/`
    in `lambda` mode; in `guidance_stack` mode the guidance's simulator stack `<prefix>-pbs-sim` is deployed first
    (`EnableRtbFabric=false`) and its outputs become the VPC-peering parameters. Every stack is tagged `fast:app`,
-   `fast:owner=iac` and `fast:module=demand`.
+   `fast:owner=iac` and `fast:module=demand`. With `modules.pds`, the guidance's app is deployed through
+   `scripts/guidance_app.py`, which adds the PDS sidecar to its task: the container, 6 GiB of task memory, the
+   sidecar's grants and its log group ([docs/pds.md](pds.md#how-the-sidecar-joins-the-guidances-task)). It needs
+   the Data and Media stacks' `/<prefix>/pds/*` parameters (`make deploy` first).
 5. **The SSM contract** `/<prefix>/demand/`: `cloudfront-domain`, `settings-bucket`, `stored-requests-bucket`,
    `cluster-arn`, `service-arn`, `task-security-group-id`, `vpc-id`, `private-subnet-ids`, `alb-arn`, `web-acl-arn`,
    `image-uri`, `guidance`. The repository's later stacks read the guidance only through these.
 6. **`FastChannels-<prefix>-Demand`**, with the guidance's network and service as context: the private zone, in
    `lambda` mode the simulator with its code package ([above](#demo-demand-and-the-bidder-simulator)), the census
    gate, the daypart actions and the warm-up ([scaling](#scaling-the-census-gate-dayparts-and-warm-up)). With
-   `modules.pds.enabled`, **`FastChannels-<prefix>-Pds`** follows with the same context: the Pod Decision Service at
-   `pds.<prefix>.fast.internal` ([docs/pds.md](pds.md#the-service)). With `modules.release.enabled`,
+   `modules.pds.enabled`, **`FastChannels-<prefix>-Pds`** follows with the same context: the PDS beside its sidecar
+   (the publisher, delivery, the sweeper, the fallback alarms and the decision records' streams,
+   [docs/pds.md](pds.md#the-service)). With `modules.release.enabled`,
    **`FastChannels-<prefix>-Release`** follows: the Release Controller, whose bundle names the guidance's CloudFront
-   domain ([docs/release-controller.md](release-controller.md#deploy-and-destroy)). Then one run of each census
+   domain ([docs/release-controller.md](release-controller.md#deploy-and-destroy)). Then one run of the census
    gate with the current count.
 7. **The smoke test**: a synthetic MediaTailor POST with origin secret A for each grid duration must answer 200 with a
    VAST 4.2 document as `application/xml` (empty until the Pod Decision Service exists: the module logs

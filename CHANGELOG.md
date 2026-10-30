@@ -52,13 +52,22 @@ All notable changes to this project are documented here. The format follows
   selection (tier-0 lines first, accepted net value, cross-bidder creative, advertiser and category separation, pods
   that fit the break, prefetch rounding, standalones for ad buffet, empty pods for avails under 30 s), trackers,
   decision records, deterministic buckets and the ad-load price stub. Pure code: nothing is deployed yet.
-- **Pod Decision Service** (`modules.pds`, `FastChannels-<prefix>-Pds`, [docs/pds.md](docs/pds.md#the-service)):
-  `POST /policy` behind an internal load balancer at `pds.<prefix>.fast.internal` in the Prebid Server VPC, which
-  admits only the Prebid Server tasks. The function runs outside the VPC and is kept warm by a census-gated
-  provisioned concurrency while channels run. A snapshot publisher keeps the demand allow-list and CloudFront's
-  origin-facing networks in a private config bucket; each `/policy` decision record goes to the lake (`pds_policy`).
-  The Data stack holds the module's table `<prefix>-pds` and the config bucket; `deploy-demand` deploys the stack after
-  the Demand stack and `destroy-demand` deletes it first.
+- **Pod Decision Service** (`modules.pds`, [docs/pds.md](docs/pds.md#the-service), ADR-0036): `POST /policy`,
+  `POST /select` and the own book run as a sidecar in each Prebid Server task, on `127.0.0.1:8090`.
+  - The sidecar is the workspace member `pds`: uvicorn over the same pure `core.pds` rules, its endpoints on a bounded
+    thread pool, shedding what its callers stopped waiting for. Its image is built for x86 into `<prefix>-pds`.
+  - `scripts/guidance_app.py` adds it to the guidance's own stack without a patch: the container, which Prebid Server
+    waits for, 6 GiB of task memory, its grants, its S3 reads in the VPC's gateway endpoint policy, a DynamoDB gateway
+    endpoint for its tables, and ALB slow start for new tasks.
+  - `FastChannels-<prefix>-Pds` keeps the snapshot publisher (the demand allow-list and CloudFront's origin-facing
+    networks in a private config bucket), delivery, the sweeper, the fallback alarms and the decision records'
+    streams into the lake (`pds_policy`, `pds_select`, from the sidecar's log group).
+  - The Data stack holds the module's table `<prefix>-pds` and the config bucket. `deploy-demand` deploys the stack
+    after the Demand stack, and `destroy-demand` deletes it first.
+  - In 400-session break herds the module measured `/policy` at p99 12-18 ms and `/select` at p99 65-134 ms with
+    no fallback, so `modules.pds.policy_timeout_ms` is 50 ms again (group 75) and `select_timeout_ms` stays 200 ms,
+    bound by the reservation's DynamoDB transaction. The demand module's warm-up replays 25 auctions/s per healthy
+    target (it was 50).
 - **Own book, reservations and delivery** ([docs/pds.md](docs/pds.md#the-own-book), ADR-0022 accepted):
   `POST /ownbook/openrtb` bids the default ladder's house ads at $0.01 (`ext.fast.house`) and the creatives of each
   line with budget left (`modules.pds.demo_lines`, now set on `fastm` and `fastci`) at their CPM, a tier-0 line with

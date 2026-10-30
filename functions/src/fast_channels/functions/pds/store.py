@@ -1,13 +1,14 @@
-"""What PDS functions serve from, loaded during init and refreshed off the request path: the snapshot (every 30 s)
-and, for the own book, its lines' budgets (:mod:`fast_channels.functions.pds.budget`).
+"""What the PDS serves from, loaded once and refreshed off the request path: the snapshot (every 30 s) and, for the
+own book and ``/select``, the lines' budgets (:mod:`fast_channels.functions.pds.budget`). The PDS sidecar
+(``fast_channels.pds.state``) and the publisher's functions use them.
 
-``load()`` reads the value once, during the function's init. Afterwards ``get()`` never waits: when a refresh is due
-it starts one in a background thread and serves what it has. Lambda freezes the thread between invocations; it carries
-on during the next one. A failed refresh keeps the value already loaded and is tried again sooner.
+``load()`` reads the value once (a function's init, the sidecar's startup). Afterwards ``get()`` never waits: when a
+refresh is due it starts one in a background thread and serves what it has; the sidecar also calls ``get()`` every
+second. A failed refresh keeps the value already loaded and is tried again sooner.
 
 The snapshot is ``snapshot/current.json``, read with a conditional GET (``If-None-Match`` with the last ETag, so an
-unchanged snapshot costs a 304 and no parsing). A function that never loaded one serves ``EMPTY``, the fail-safe
-snapshot (no third-party bidder, no viewer address, no own book).
+unchanged snapshot costs a 304 and no parsing). Until one loads, the store holds ``EMPTY``, the fail-safe snapshot
+(no third-party bidder, no viewer address, no own book), and the sidecar answers ``/policy`` and ``/select`` 503.
 """
 
 import threading

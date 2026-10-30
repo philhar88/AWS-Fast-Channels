@@ -192,9 +192,8 @@ class FastChannelsStage(Stage):
         network = DemandNetwork.model_validate_json(raw) if isinstance(raw, str) else DemandNetwork.model_validate(raw)
         self.demand = DemandStack(self, "Demand", config=config, network=network, **stacks)
         if config.modules.pds.enabled:
-            self.pds = PdsStack(self, "Pds", config=config, network=network, zone=self.demand.dns.zone, **stacks)
+            self.pds = PdsStack(self, "Pds", config=config, network=network, **stacks)
             self.pds.add_stack_dependency(self.data, "The PDS's table and config bucket are the Data stack's")
-            self.pds.add_stack_dependency(self.demand, "The PDS's record is in the Demand stack's private zone")
             if self.ops is not None:
                 self.pds.add_stack_dependency(self.ops, "The decision records' tables are in the lake's database")
         if config.modules.release.enabled:

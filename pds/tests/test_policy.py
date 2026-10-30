@@ -1,17 +1,20 @@
-"""``POST /policy`` behind the internal load balancer: ALB events in, the patch and one decision record out."""
+"""``POST /policy``: the request body in, the patch and one decision record out."""
 
-import base64
 import json
+import time
 from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from fast_channels.core.pds.snapshot import EMPTY, Snapshot, SnapshotBase, build, demo_demand
-from fast_channels.functions.pds import policy
+from fast_channels.functions.pds.store import snapshot_store
 from fast_channels.functions.settings import settings
+from fast_channels.pds import policy
+
+if TYPE_CHECKING:
+    from fast_channels.pds.http import Answer
 
 SID = "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d"
 VIEWER = "81.2.69.160"
@@ -23,20 +26,6 @@ SNAPSHOT = build(
     ip_ranges="1",
     now=datetime(2026, 10, 29, tzinfo=UTC),
 )
-
-
-@dataclass
-class Context:
-    function_name: str = "fastm-pds-policy"
-    function_version: str = "7"
-    memory_limit_in_mb: int = 1024
-    invoked_function_arn: str = "arn:aws:lambda:us-east-1:123456789012:function:fastm-pds-policy:live"
-    aws_request_id: str = "request-1"
-    log_group_name: str = "/aws/lambda/fastm-pds-policy"
-    log_stream_name: str = "stream"
-
-    def get_remaining_time_in_millis(self) -> int:
-        return 3000
 
 
 class _Store:
@@ -73,16 +62,8 @@ def question(**fields: Any) -> dict[str, Any]:
     return body | fields
 
 
-def alb(body: str | None, *, path: str = "/policy", method: str = "POST", encode: bool = False) -> dict[str, Any]:
-    return {
-        "requestContext": {"elb": {"targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:1:targetgroup/pds/1"}},
-        "httpMethod": method,
-        "path": path,
-        "queryStringParameters": {},
-        "headers": {"content-type": "application/json", "host": "pds.fastm.fast.internal"},
-        "body": base64.b64encode(body.encode()).decode() if encode and body else body,
-        "isBase64Encoded": encode,
-    }
+def ask(body: str) -> Answer:
+    return policy.answer(body.encode(), time.perf_counter())
 
 
 def records(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
@@ -92,11 +73,10 @@ def records(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
 
 @pytest.mark.usefixtures("snapshot")
 def test_a_contextual_session_gets_the_demo_bidder_and_its_device(caplog: pytest.LogCaptureFixture) -> None:
-    response = policy.handler(alb(json.dumps(question())), Context())
+    response = ask(json.dumps(question()))
 
-    assert response["statusCode"] == 200
-    assert response["headers"]["Content-Type"] == "application/json"
-    answer = json.loads(response["body"])
+    assert response.status == 200
+    answer = json.loads(response.body)
     assert answer == {
         "v": 1,
         "decision_id": f"{SID}.820461826",
@@ -117,7 +97,7 @@ def test_a_contextual_session_gets_the_demo_bidder_and_its_device(caplog: pytest
         "ok",
         SNAPSHOT.version,
     )
-    assert policy.logger.get_correlation_id() == f"{SID}.820461826"
+    assert record["correlation_id"] == f"{SID}.820461826"
     assert VIEWER not in json.dumps(record, default=str)
 
 
@@ -132,7 +112,7 @@ def test_a_contextual_session_gets_the_demo_bidder_and_its_device(caplog: pytest
     ],
 )
 def test_modes(fields: dict[str, Any], mode: str, reason: str, bidders: dict[str, Any], coppa: int) -> None:
-    answer = json.loads(policy.handler(alb(json.dumps(question(**fields)), encode=True), Context())["body"])
+    answer = json.loads(ask(json.dumps(question(**fields))).body)
 
     assert (answer["mode"], answer["reason"], answer["bidders"], answer["regs"]["coppa"]) == (
         mode,
@@ -142,36 +122,36 @@ def test_modes(fields: dict[str, Any], mode: str, reason: str, bidders: dict[str
     )
 
 
-def test_without_a_snapshot_no_third_party_and_no_address(snapshot: _Store) -> None:
+def test_without_a_snapshot_the_answer_is_an_immediate_503(snapshot: _Store, caplog: pytest.LogCaptureFixture) -> None:
+    """The module then serves the break SAFE (own book only) and, with the own book silent too, renders the kit's
+    house ads (HOUSE_CONFIG); no decision is recorded."""
     snapshot.snapshot = EMPTY
 
-    answer = json.loads(policy.handler(alb(json.dumps(question())), Context())["body"])
+    started = time.perf_counter()
+    response = ask(json.dumps(question()))
+    elapsed_ms = (time.perf_counter() - started) * 1000
 
-    assert (answer["mode"], answer["bidders"], answer["device"]["ip"]) == ("CONTEXTUAL", {}, None)
+    assert (response.status, json.loads(response.body)) == (503, {"error": "no snapshot"})
+    assert elapsed_ms < 20, "far inside the module's wait"
+    assert records(caplog) == []
 
 
 @pytest.mark.usefixtures("snapshot")
 @pytest.mark.parametrize("body", ["", "not json", json.dumps(question(v=2)), json.dumps(question(evid=""))])
 def test_a_request_outside_the_contract_is_refused(body: str, capfd: pytest.CaptureFixture[str]) -> None:
-    response = policy.handler(alb(body), Context())
+    response = ask(body)
 
-    assert (response["statusCode"], json.loads(response["body"])) == (400, {"error": "invalid request"})
+    assert (response.status, json.loads(response.body)) == (400, {"error": "invalid request"})
     assert "AbCd" not in capfd.readouterr().out
 
 
 @pytest.mark.usefixtures("snapshot")
 def test_the_ticket_is_never_logged(capfd: pytest.CaptureFixture[str]) -> None:
     ticket = "AbCdEfGhIjKlMnOpQrStUv"
-    policy.handler(alb(json.dumps(question(t=ticket))), Context())
-    policy.handler(alb(json.dumps(question(t=ticket, extra="x"))), Context())
+    ask(json.dumps(question(t=ticket)))
+    ask(json.dumps(question(t=ticket, extra="x")))
 
     assert ticket not in capfd.readouterr().out
-
-
-@pytest.mark.usefixtures("snapshot")
-def test_other_paths_and_methods_are_not_found() -> None:
-    assert policy.handler(alb("{}", path="/select"), Context())["statusCode"] == 404
-    assert policy.handler(alb(None, method="GET"), Context())["statusCode"] == 404
 
 
 def test_a_failure_is_a_500(snapshot: _Store, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,17 +160,17 @@ def test_a_failure_is_a_500(snapshot: _Store, monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(policy, "decide", broken)
 
-    response = policy.handler(alb(json.dumps(question())), Context())
+    response = ask(json.dumps(question()))
 
-    assert (response["statusCode"], json.loads(response["body"])) == (500, {"error": "internal"})
+    assert (response.status, json.loads(response.body)) == (500, {"error": "internal"})
 
 
 def test_the_store_reads_the_configured_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PDS_CONFIG_BUCKET", "fastm-pds-config")
     settings.cache_clear()
-    policy.store.cache_clear()
+    snapshot_store.cache_clear()
     try:
         assert policy.store()._bucket == "fastm-pds-config"
     finally:
-        policy.store.cache_clear()
+        snapshot_store.cache_clear()
         settings.cache_clear()

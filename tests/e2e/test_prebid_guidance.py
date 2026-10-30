@@ -209,7 +209,7 @@ def test_render_config_writes_the_stage_configuration(tmp_path: Path) -> None:
         ]
     )
     config = (out / "current-config/prebid-config.yaml").read_text()
-    assert '"http://pds.fastm.fast.internal/policy"' in config
+    assert '"http://127.0.0.1:8090/policy"' in config  # the PDS sidecar (ADR-0036)
     assert '"https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}' in config
 
 
@@ -219,7 +219,7 @@ def test_pbs_settings_follow_the_stage(tmp_path: Path) -> None:
 
     assert (settings.prefix, settings.simulator, settings.server_instances) == ("fastx", True, 2)
     assert (settings.tracker_base_url, settings.publisher_domain) == ("https://media.example.com", "media.example.com")
-    assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (80, 110)
+    assert (settings.policy_timeout_ms, settings.policy_group_timeout_ms) == (50, 75)
     assert (settings.select_timeout_ms, settings.select_group_timeout_ms) == (200, 250)
     assert settings.pbs_version == config.modules.demand.pbs_version.value
 

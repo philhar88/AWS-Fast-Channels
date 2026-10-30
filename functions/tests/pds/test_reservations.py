@@ -31,7 +31,7 @@ from fast_channels.core.pds.delivery import (
 from fast_channels.functions.pds.reservations import Hold, Refusal, deliver, release, reserve, set_budgets
 
 if TYPE_CHECKING:
-    from conftest import Tables
+    from dynamodb_local import Tables
 
 NOW = datetime(2026, 10, 29, 15, 0, tzinfo=UTC)
 SID = "0a1e6454-90e6-423a-80c6-5e02eff31cdc"

@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from fast_channels.core.demo_demand import InlineCreative, vast_ad
 from fast_channels.core.naming import PREFIX_PATTERN
 from fast_channels.core.pds.book import AD_SYSTEM
+from fast_channels.core.pds.names import PORT as PDS_PORT
 from fast_channels.core.timeline import whole_seconds
 
 POD_SECONDS: Final = (30, 60, 90, 120)
@@ -63,6 +64,8 @@ VIDEO_PROTOCOLS: Final = (3, 6, 7, 8)
 _HOST: Final = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
 
 
+PDS_BASE_URL: Final = f"http://127.0.0.1:{PDS_PORT}"
+"""The Pod Decision Service as Prebid Server reaches it: the sidecar in the same task (ADR-0036)."""
 SIMULATOR_RECORD: Final = "sim"
 """The bidder simulator's record in the stage's private zone (``lambda`` mode)."""
 
@@ -70,11 +73,6 @@ SIMULATOR_RECORD: Final = "sim"
 def private_zone(prefix: str) -> str:
     """The stage's private hosted zone in the Prebid Server VPC: ``<prefix>.fast.internal``."""
     return f"{prefix}.fast.internal"
-
-
-def pds_host(prefix: str) -> str:
-    """Stable name of the Pod Decision Service's internal load balancer, known before the service exists."""
-    return f"pds.{private_zone(prefix)}"
 
 
 def simulator_host(prefix: str) -> str:
@@ -139,8 +137,8 @@ class PbsSettings(BaseModel):
     publisher_domain: str
     """Domain in ``source.schain`` (the seller's advertising system)."""
     app_name: str = Field(default="FAST Channels", min_length=1, max_length=100)
-    policy_timeout_ms: int = Field(default=80, gt=0)
-    policy_group_timeout_ms: int = Field(default=110, gt=0)
+    policy_timeout_ms: int = Field(default=50, gt=0)
+    policy_group_timeout_ms: int = Field(default=75, gt=0)
     select_timeout_ms: int = Field(default=200, gt=0)
     select_group_timeout_ms: int = Field(default=250, gt=0)
     house_ads: tuple[HouseAd, ...] = ()
@@ -163,7 +161,8 @@ class PbsSettings(BaseModel):
 
     @property
     def pds_base_url(self) -> str:
-        return f"http://{pds_host(self.prefix)}"
+        """The Pod Decision Service: the sidecar on the task's loopback (ADR-0036)."""
+        return PDS_BASE_URL
 
     @property
     def tracker_template(self) -> str:

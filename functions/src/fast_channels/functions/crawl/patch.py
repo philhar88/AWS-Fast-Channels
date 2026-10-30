@@ -1,4 +1,4 @@
-"""The crawl module's ``/policy`` patch contributor, which the PDS's policy function loads when ``modules.crawl`` is
+"""The crawl module's ``/policy`` patch contributor, which the PDS sidecar's ``/policy`` loads when ``modules.crawl`` is
 on (docs/content-enrichment.md, DESIGN §9.6 and §9.8).
 
 For each break it:
@@ -10,7 +10,7 @@ For each break it:
 3. patches ``app.content`` (``core.crawl.ortb_content``) on the enriched arm only, and records the arm and where the
    metadata was found (``contributed.enr``, ``contributed.ctx``) in both.
 
-The copy is read during the function's init and refreshed every 30 seconds in the background, so no request waits on
+The copy is read before the sidecar listens and refreshed every 30 seconds in the background, so no request waits on
 S3: a list of ``catalog/ctx/v1/`` and a GET of each object whose ETag changed. It holds catalog metadata only.
 """
 

@@ -47,7 +47,7 @@ lint: ## Format check and lint (Python + console)
 	cd console && npm run lint
 
 typecheck: ## Static type checks (mypy strict + tsc)
-	uv run mypy core/src functions/src agent/src infra/src
+	uv run mypy core/src functions/src pds/src agent/src infra/src
 	MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e
 	MYPYPATH=tests/pbs uv run mypy tests/pbs
 	cd console && npm run typecheck

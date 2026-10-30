@@ -23,7 +23,7 @@ from fast_channels.functions.pds.reservations import Hold, reserve, set_budgets
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
-    from conftest import Tables
+    from dynamodb_local import Tables
 
 FIXTURES = Path(__file__).parent / "fixtures" / "beacon_fired.jsonl"
 CDN = "https://d111111abcdef8.cloudfront.net"

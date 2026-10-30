@@ -32,7 +32,7 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: uv run ruff format --check
       - run: uv run ruff check
-      - run: uv run mypy core/src functions/src agent/src infra/src
+      - run: uv run mypy core/src functions/src pds/src agent/src infra/src
       - name: mypy scripts tests/e2e
         run: uv run mypy scripts tests/e2e
         env:

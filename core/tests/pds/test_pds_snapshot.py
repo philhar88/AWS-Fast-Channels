@@ -5,7 +5,6 @@ from ipaddress import ip_network
 import pytest
 from pydantic import ValidationError
 
-from fast_channels.core.pbs_config import pds_host
 from fast_channels.core.pds import names
 from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.policy import Demand
@@ -93,10 +92,9 @@ def test_a_snapshot_is_strict() -> None:
 
 
 def test_resource_names() -> None:
-    assert [e.function_suffix for e in names.Endpoint] == ["policy", "select", "ownbook"]
-    assert f"{names.RECORD}.fastm.fast.internal" == pds_host("fastm")
+    assert [e.value for e in names.Endpoint] == ["/policy", "/select", "/ownbook/openrtb"]
     assert names.table_name("fastm") == "fastm-pds"
-    assert names.census_gate("fastm") == "fastm-pds-census-gate"
+    assert (names.sidecar_log_group("fastm"), names.image_repository("fastm")) == ("/aws/ecs/fastm-pds", "fastm-pds")
     assert names.publisher_alarm("fastm") == "fastm-pds-publisher-dead-letters"
     assert names.dead_letter_alarm("fastm", "delivery") == "fastm-pds-delivery-dead-letters"
     assert names.parameter_name("fastm", names.Parameter.LADDER_VERSION) == "/fastm/pds/ladder-version"

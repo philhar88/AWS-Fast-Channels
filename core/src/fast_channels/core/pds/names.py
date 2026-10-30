@@ -9,38 +9,34 @@ from fast_channels.core.tags import tag_key
 MODULE: Final = "pds"
 MODULE_TAG: Final = tag_key("module")
 """``fast:module=pds`` marks what the module deploys (inventory)."""
-ALIAS: Final = "live"
-"""The alias every PDS function serves from; provisioned concurrency is set on it."""
-RECORD: Final = "pds"
-"""The service's record in the stage's private zone: ``pds.<prefix>.fast.internal`` (``core.pbs_config.pds_host``)."""
+PORT: Final = 8090
+"""The sidecar's port on the Prebid Server task's loopback: ``http://127.0.0.1:8090`` (``core.pbs_config``)."""
+CONTAINER: Final = "Pds-Container"
+"""The sidecar's container in the guidance's task definition, beside its ``Prebid-Container``."""
 
 
 class Endpoint(StrEnum):
-    """The service's paths on its internal load balancer, each a function of its own."""
+    """The sidecar's paths."""
 
     POLICY = "/policy"
     SELECT = "/select"
     OWN_BOOK = "/ownbook/openrtb"
 
-    @property
-    def function_suffix(self) -> str:
-        return {"/policy": "policy", "/select": "select", "/ownbook/openrtb": "ownbook"}[self.value]
+
+def sidecar_log_group(prefix: str) -> str:
+    """The sidecar's log group: its decision records (``pds.policy``, ``pds.select``), the own book's lines and its
+    stats. The guidance stack creates it (``scripts/guidance_app.py``); the Pds stack subscribes the lake to it."""
+    return f"/aws/ecs/{prefix}-pds"
 
 
-def target_group(prefix: str, endpoint: Endpoint) -> str:
-    """The load balancer's target group of ``endpoint``: a fixed name, which its function's invoke permission names
-    (``infra.constructs.lambda_target``)."""
-    return f"{prefix}-pds-{endpoint.function_suffix}"
+def image_repository(prefix: str) -> str:
+    """The ECR repository of the sidecar's images (the DemandBuild stack's, beside the Prebid Server images')."""
+    return f"{prefix}-pds"
 
 
 def table_name(prefix: str) -> str:
     """The PDS's DynamoDB table (lines, budgets, caps, sessions, reservations)."""
     return f"{prefix}-pds"
-
-
-def census_gate(prefix: str) -> str:
-    """The state machine that sets the functions' provisioned concurrency with the running channels."""
-    return f"{prefix}-pds-census-gate"
 
 
 def publisher_alarm(prefix: str) -> str:
@@ -72,7 +68,8 @@ class Parameter(StrEnum):
     """The SSM parameters ``/<prefix>/pds/<name>`` the Data and Media stacks write for the Pds stack.
 
     The Pds stack exists only in a synth with the guidance's network, so it cannot take weak references to them:
-    their own deploys (``make deploy``, without that network) would drop the outputs those need.
+    their own deploys (``make deploy``, without that network) would drop the outputs those need. The guidance's
+    deploy reads the config and catalog-context buckets' names too, for the sidecar's environment and grants.
     """
 
     CONFIG_BUCKET = "config-bucket"
@@ -84,8 +81,8 @@ class Parameter(StrEnum):
     LADDER_VERSION = "ladder-version"
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
     CATALOG_CONTEXT_BUCKET = "catalog-context-bucket"
-    """The crawl module's catalog-context bucket, whose objects the policy function copies (Media stack, with the
-    module on)."""
+    """The crawl module's catalog-context bucket, whose objects the PDS sidecar copies (Media stack, with the module
+    on)."""
 
 
 class Published(StrEnum):
@@ -95,8 +92,8 @@ class Published(StrEnum):
     """The delivery function's ARN (with the release module on): the Release stack subscribes it to the siblings' log
     group, so their impressions are counted too."""
     POLICY_LOG_GROUP = "policy-log-group"
-    """The ``/policy`` function's log group (with the release module on): the release smoke test counts a session's
-    decision records there."""
+    """The log group of the ``pds.policy`` decision records, the sidecar's (with the release module on): the release
+    smoke test counts a session's decision records there."""
 
 
 def stack_parameters(*, crawl: bool) -> tuple[Parameter, ...]:

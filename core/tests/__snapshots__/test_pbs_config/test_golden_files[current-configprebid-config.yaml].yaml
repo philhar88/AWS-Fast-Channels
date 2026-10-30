@@ -27,14 +27,14 @@ adapters:
     aliases:
       ownbook:
         enabled: true
-        endpoint: "http://pds.fastm.fast.internal/ownbook/openrtb"
+        endpoint: "http://127.0.0.1:8090/ownbook/openrtb"
         ortb-version: "ORTB_2_6"
 hooks:
   fast-ctv:
     enabled: true
-    policy-url: "http://pds.fastm.fast.internal/policy"
-    policy-timeout-ms: 80
-    select-url: "http://pds.fastm.fast.internal/select"
+    policy-url: "http://127.0.0.1:8090/policy"
+    policy-timeout-ms: 50
+    select-url: "http://127.0.0.1:8090/select"
     select-timeout-ms: 200
     tracker-template: "https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
     house-ads: "[]"

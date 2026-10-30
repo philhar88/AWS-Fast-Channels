@@ -85,12 +85,21 @@ patch = "patches/O7-ecs-deployment.patch"
 # SHA-256 of upstream files the overlays and the rendered configuration rely on without patching them: the
 # configuration layering (bootstrap.sh copies current/ over default/), the defaults that core/pbs_config.py repeats,
 # the build configuration the image build replaces for other releases, the amt adapter configuration that
-# amt-bidder/pbs-4/ ports to 4.x, and the deploy-time upload of the configuration directories.
+# amt-bidder/pbs-4/ ports to 4.x, and the deploy-time upload of the configuration directories. With the PDS on,
+# scripts/guidance_app.py relies on the stack class build_app instantiates (prebid_server_stack.py), the task
+# definitions' ids and Prebid Server's container (ecs_task_construct.py, in both entry deployments), the task size
+# it overrides (stack_constants.py) and the VPC's one S3 gateway endpoint, whose policy it extends (vpc_construct.py);
+# app.py and cloudfront_entry_deployment.py are pinned above.
 [relied_on]
 "deployment/ecr/prebid-server/bootstrap.sh" = "e1471a62147312d8f89b57ce118020f6026fe002101702c843d5579eb24c7317"
 "deployment/ecr/prebid-server/default-config/entrypoint.sh" = "e9b0221b372d27ce95aaa9d38156521b746b19fb15a3b313bd539dda1fe12dcf"
 "deployment/ecr/prebid-server/default-config/prebid-config.yaml" = "5ec52a0f79bb955ae2cfe440b4fd0a304cfeea06116f3e968a49625ddcabea7e"
 "deployment/ecr/prebid-server/docker-build-config.json" = "80283a077f218d255ce9c0671cedd3f677cbe5bb5289322dad87b6aefc6d4255"
 "source/infrastructure/custom_resources/prebid_configs_lambda/upload_prebid_configs.py" = "b262eeced3f499668972da5f1c662e1f9dbac8f4f830319f8d44ff39d0c8bacf"
+"source/infrastructure/prebid_server/alb_entry_deployment.py" = "8ac3f6598c486cf52c99c78cae2cab56216eaa74d5dc7f32784c7ec01151365f"
 "source/infrastructure/prebid_server/container_image_construct.py" = "4cc3e2ddef2c21eff8f394dc605f7bd0b0c07726fa3834c19b00df42dcccadad"
+"source/infrastructure/prebid_server/ecs_task_construct.py" = "38f34d616655879f9c6b24b26f7d7e5d025b0f98e4dd35a22e6d418d6f4f1d1f"
+"source/infrastructure/prebid_server/prebid_server_stack.py" = "4560cdbc2f69de930b9b5108e03a7f9995f8a395320907975fa834b68947617a"
+"source/infrastructure/prebid_server/stack_constants.py" = "6489d7d53bc76995e04915990d641ddf32406c9eafe2612fd897111793f9f026"
+"source/infrastructure/prebid_server/vpc_construct.py" = "7a166ab0e42447d32334f3ab987da6c48f3708bb88307ae2c836efec3f9d5270"
 "source/loadtest/amt-bidder/AmtConfiguration.java" = "a360fed0828ed33b5e487a355e3570e8859ce7266c04ebf7b2fb44b583a97f1c"

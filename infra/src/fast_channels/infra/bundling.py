@@ -1,5 +1,6 @@
 """Docker-free bundling of uv workspace packages for Lambda and AgentCore (Python 3.14, arm64), with a Docker
-fallback: one pipeline for the functions code asset and the agent code zip."""
+fallback: one pipeline for the functions code asset and the agent code zip. The PDS sidecar's image
+(``scripts/_demand.py``) installs its package with the same pipeline for x86 (:func:`install_package`)."""
 
 import os
 import shutil
@@ -19,20 +20,28 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[4]
 UV_IMAGE: Final = "ghcr.io/astral-sh/uv:python3.14-bookworm"
 """Image of the Docker fallback, used when ``uv`` is not on the build host's PATH."""
 _PLATFORM: Final = "aarch64-manylinux2014"
+X86_PLATFORM: Final = "x86_64-manylinux_2_28"
+"""The sidecar image's platform: the guidance's x86 task, on a Debian base (glibc 2.41)."""
 _PYTHON: Final = "3.14"
 _EXPORT: Final = ("export", "--frozen", "--no-dev", "--no-editable", "--no-hashes", "--quiet")
-_INSTALL: Final = (
-    "pip",
-    "install",
-    "--no-sources",
-    "--no-installer-metadata",
-    "--no-compile-bytecode",
-    "--quiet",
-    "--python-platform",
-    _PLATFORM,
-    "--python",
-    _PYTHON,
-)
+
+
+def _install(platform: str) -> tuple[str, ...]:
+    return (
+        "pip",
+        "install",
+        "--no-sources",
+        "--no-installer-metadata",
+        "--no-compile-bytecode",
+        "--quiet",
+        "--python-platform",
+        platform,
+        "--python",
+        _PYTHON,
+    )
+
+
+_INSTALL: Final = _install(_PLATFORM)
 
 
 LAMBDA_TASK_ROOT: Final = "/var/task"
@@ -57,16 +66,9 @@ class _UvBundling:
 
     # jsii passes ``options`` positionally.
     def try_bundle(self, output_dir: str, options: BundlingOptions) -> bool:
-        uv = shutil.which("uv")
-        if uv is None:
+        if shutil.which("uv") is None:
             return False
-        with tempfile.TemporaryDirectory() as work:
-            requirements = Path(work) / "requirements.txt"
-            run = [uv, *_EXPORT, "--package", self._package, "--output-file", str(requirements)]
-            subprocess.run(run, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
-            refresh = _refresh_workspace_packages(requirements)
-            install = [uv, *_INSTALL, *refresh, "--target", output_dir, "--requirement", str(requirements)]
-            subprocess.run(install, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
+        install_package(self._package, Path(output_dir))
         for source, name in self._extra_files.items():
             shutil.copyfile(REPO_ROOT / source, Path(output_dir) / name)
         if self._compile_bytecode:
@@ -74,6 +76,25 @@ class _UvBundling:
         if self._normalize_modes:
             normalize_modes(Path(output_dir))
         return True
+
+
+def install_package(package: str, target: Path, *, platform: str = _PLATFORM) -> None:
+    """Install workspace package ``package`` and its locked dependency closure into ``target`` for ``platform``,
+    without bytecode.
+
+    Raises:
+        FileNotFoundError: ``uv`` is not on PATH.
+    """
+    uv = shutil.which("uv")
+    if uv is None:
+        raise FileNotFoundError("uv")
+    with tempfile.TemporaryDirectory() as work:
+        requirements = Path(work) / "requirements.txt"
+        run = [uv, *_EXPORT, "--package", package, "--output-file", str(requirements)]
+        subprocess.run(run, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
+        refresh = _refresh_workspace_packages(requirements)
+        install = [uv, *_install(platform), *refresh, "--target", str(target), "--requirement", str(requirements)]
+        subprocess.run(install, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
 
 
 def _refresh_workspace_packages(requirements: Path) -> list[str]:
@@ -87,9 +108,10 @@ def _refresh_workspace_packages(requirements: Path) -> list[str]:
     return [arg for name in names for arg in ("--refresh-package", name)]
 
 
-def compile_bytecode(root: Path) -> None:
+def compile_bytecode(root: Path, *, under: str = LAMBDA_TASK_ROOT) -> None:
     """Precompile every module under ``root`` for the runtime's Python, as unchecked hash-based ``.pyc`` files that
-    name their source under :data:`LAMBDA_TASK_ROOT`, deterministically (:data:`_DETERMINISTIC`).
+    name their source under ``under`` (where the runtime finds ``root``: :data:`LAMBDA_TASK_ROOT` for a function),
+    deterministically (:data:`_DETERMINISTIC`).
 
     Lambda's code directory is read-only, so a bundle without bytecode compiles every module it imports on each cold
     start: the PDS's imports took 1,134 ms without ``.pyc`` and 168 ms with them (locally), and its functions logged
@@ -100,7 +122,7 @@ def compile_bytecode(root: Path) -> None:
     """
     if f"{sys.version_info.major}.{sys.version_info.minor}" != _PYTHON:
         raise RuntimeError(f"bytecode for Python {_PYTHON} needs that Python, not {sys.version.split()[0]}")
-    command = [sys.executable, *_COMPILE, "-s", str(root), "-p", LAMBDA_TASK_ROOT, str(root)]
+    command = [sys.executable, *_COMPILE, "-s", str(root), "-p", under, str(root)]
     subprocess.run(command, check=True, env={**os.environ, **_DETERMINISTIC})  # noqa: S603 - fixed argv, no shell
 
 

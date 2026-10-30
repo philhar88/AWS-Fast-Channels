@@ -563,8 +563,8 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ({"modules.demand.pbs_version": "4.3.0"}, "Input should be '3.43.0' or '4.4.0'"),
         ({"modules.demand.guidance_tag": "main"}, "String should match pattern"),
         (
-            {"modules.pds.policy_group_timeout_ms": 70},
-            "policy_group_timeout_ms (70) is shorter than policy_timeout_ms (80)",
+            {"modules.pds.policy_group_timeout_ms": 40},
+            "policy_group_timeout_ms (40) is shorter than policy_timeout_ms (50)",
         ),
         (
             {"modules.pds.select_timeout_ms": 300},
