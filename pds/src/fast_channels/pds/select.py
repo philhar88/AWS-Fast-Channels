@@ -36,7 +36,7 @@ from fast_channels.functions.pds.reservations import Hold, reserve
 from fast_channels.functions.settings import settings
 from fast_channels.pds import state
 from fast_channels.pds.http import INTERNAL, NO_SNAPSHOT, REFUSED, Answer, refused_fields
-from fast_channels.pds.telemetry import counters
+from fast_channels.pds.telemetry import counters, window
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -108,6 +108,7 @@ def _reserver(request: SelectRequest, started: float) -> Reserve:
                 holds.append(Hold(line=line, crids=crids, shard=shard))
         if not holds:
             return frozenset(refused)
+        reserving = time.perf_counter()
         try:
             done = reserve(
                 dynamodb(),
@@ -129,6 +130,8 @@ def _reserver(request: SelectRequest, started: float) -> Reserve:
             )
             counters.add("ReservationErrors")
             return everything
+        finally:
+            window.add("reserve_ms", (time.perf_counter() - reserving) * 1000)
         return frozenset(refused | set(done.refused))
 
     return reserve_lines

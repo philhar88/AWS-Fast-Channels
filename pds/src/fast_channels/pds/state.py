@@ -4,7 +4,8 @@ before the server listens (:func:`load`) and refreshed in background threads off
 
 The process never freezes between requests, as a Lambda execution environment does, so the refreshes run on time and
 the budget view's reads every 5 s keep the reservations' connection to DynamoDB open while breaks follow each other.
-The own book and ``/select`` share that one view.
+The own book and ``/select`` share that one view, whose reads are timed into the minute's stats (``budget_read_ms``):
+a DynamoDB round trip from the task every 5 s, busy or idle.
 
 Every client is created here, on one thread, before the worker threads use it: boto3 makes clients from a session that
 is not thread-safe, and the clients themselves are.
@@ -26,6 +27,7 @@ from fast_channels.functions.pds.budget import Budgets
 from fast_channels.functions.pds.reservations import item_key
 from fast_channels.functions.pds.store import snapshot_store
 from fast_channels.functions.settings import settings
+from fast_channels.pds.telemetry import window
 
 WORKERS: Final = 16
 """The server's worker threads, and the reservations' connections: every endpoint runs on one, so neither the pod
@@ -47,11 +49,23 @@ def dynamodb() -> Any:
     return boto3.client("dynamodb", config=REQUEST_CONFIG)
 
 
+class TimedBudgets(Budgets):
+    """The budget view, each read's duration into the minute's stats (``budget_read_ms``)."""
+
+    def _fetch(self) -> Any:
+        started = time.perf_counter()
+        try:
+            return super()._fetch()
+        finally:
+            if self._lines():
+                window.add("budget_read_ms", (time.perf_counter() - started) * 1000)
+
+
 @cache
 def budgets() -> Budgets:
     """The lines' budgets, read on the reservations' client: its reads every 5 s keep that connection open."""
     settings().require("pds_table")
-    return Budgets(settings().pds_table, lines=lambda: store().current.lines, client=dynamodb())
+    return TimedBudgets(settings().pds_table, lines=lambda: store().current.lines, client=dynamodb())
 
 
 def has_snapshot() -> bool:
@@ -59,12 +73,13 @@ def has_snapshot() -> bool:
     return store().current.version != EMPTY.version
 
 
-def warm() -> None:
+def warm() -> float | None:
     """Open the reservations' connection to DynamoDB before the first break: that break would otherwise pay its DNS,
-    TCP and TLS set-up inside the module's wait."""
+    TCP and TLS set-up inside the module's wait. Returns how long the first call took (ms), or None."""
     if not (lines := store().current.lines):
-        return
+        return None
     settings().require("pds_table")
+    started = time.perf_counter()
     try:
         dynamodb().batch_get_item(
             RequestItems={
@@ -73,6 +88,8 @@ def warm() -> None:
         )
     except (BotoCoreError, ClientError) as error:
         logger.warning("the reservations' connection is not open", extra={"error": type(error).__name__})
+        return None
+    return round((time.perf_counter() - started) * 1000, 1)
 
 
 def load() -> dict[str, Any]:
@@ -80,12 +97,16 @@ def load() -> dict[str, Any]:
     and how long it took. A load that fails leaves the empty value, which its refresh replaces once it succeeds."""
     started = time.perf_counter()
     snapshot = store().load()
-    budgets().load()
-    warm()
+    reading = time.perf_counter()
+    budgets().load()  # the client's first call: DNS, TCP and TLS, then the budget shards
+    first_call_ms = round((time.perf_counter() - reading) * 1000, 1) if snapshot.lines else None
+    second_call_ms = warm()
     contexts = len(catalog_contexts().load()) if contributor() is not None else None
     return {
         "snapshot": snapshot.version if has_snapshot() else None,
         "lines": len(snapshot.lines),
         "catalog_contexts": contexts,
+        "dynamodb_first_call_ms": first_call_ms,
+        "dynamodb_second_call_ms": second_call_ms,
         "load_ms": round((time.perf_counter() - started) * 1000, 1),
     }
