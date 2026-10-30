@@ -291,6 +291,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Demand: a changed setting reaches an existing stage.** The guidance uploads its configuration directory only when
+  its stack is created, so `deploy-demand` on an existing stage left Prebid Server on the old configuration (seen
+  live: the module's timeouts stayed at their old values in S3). `deploy-demand` now syncs the rendered
+  configuration after every guidance deploy: it uploads what differs from the guidance's settings and stored-requests
+  buckets, reads every object back and refuses a mismatch, and rolls the tasks only if something changed.
+  `upload-config` runs that step alone.
 - **Demand: a break the PDS could not answer still gets a pod** (M2-x4). When `/policy` timed out, the module served
   the break SAFE (own book only), but with the own book silent too the pod was empty and the slate aired: on fastm 3.8%
   of pods hit a policy timeout and 69% of those came back empty. Now, if such a pod would be empty, or `/select` is
