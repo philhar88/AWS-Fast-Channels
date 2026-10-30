@@ -4,6 +4,8 @@ fallback, and the policy function with the module on."""
 import base64
 import io
 import json
+import uuid
+from collections import Counter
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -105,9 +107,13 @@ def test_the_arm_is_the_crawl_v1_bucket_of_the_session_break() -> None:
 
 
 def test_the_holdout_is_its_share_of_session_breaks() -> None:
-    breaks = [(f"s{n}", str(evid)) for n in range(500) for evid in range(10)]
+    """The unit is the session-break: 100,000 of them (MediaTailor-like session ids, SCTE-35 event ids) fall into the
+    holdout at 20 % ± 0.5 pp (about 4 sd), and a session's breaks are not all in one arm."""
+    breaks = [(str(uuid.UUID(int=n * 7919 + 1)), str(820461826 + evid)) for n in range(10_000) for evid in range(10)]
     share = sum(1 - arm(sid, evid, 20) for sid, evid in breaks) / len(breaks)
-    assert 0.19 <= share <= 0.21
+    assert abs(share - 0.20) <= 0.005, share
+    per_session = Counter(sid for sid, evid in breaks if arm(sid, evid, 20) == 0)
+    assert 0 < max(per_session.values()) < 10, "arms vary across one session's breaks"
 
 
 # --- the contributor ------------------------------------------------------------------------------------------------
