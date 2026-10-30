@@ -2,7 +2,9 @@
 
 **Status:** Proposed (amends [0001](0001-python-cdk-and-uv-workspace.md) and
 [0002](0002-l2-constructs-over-solutions-constructs.md), exception A). It is accepted when the demand and Pod Decision
-Service modules pass their end-to-end legs.
+Service modules pass their end-to-end legs. Its placement of the Pod Decision Service is superseded, and its
+deployment of the guidance amended (a wrapper of the guidance's app adds the sidecar), by
+[0036](0036-pds-sidecar-in-the-prebid-server-task.md).
 
 ## Context
 The optional demand module ([docs/demand.md](../demand.md)) puts an auction behind the channel's ad breaks.
@@ -89,7 +91,9 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
     geolocation from every bidder but the own book.
 
   The configuration is rendered without secrets.
-- **The Pod Decision Service runs in the Prebid Server VPC**, behind an internal Application Load Balancer at
+- **The Pod Decision Service runs in the Prebid Server VPC** (superseded by
+  [0036](0036-pds-sidecar-in-the-prebid-server-task.md): a sidecar in the Prebid Server task), behind an internal
+  Application Load Balancer at
   `pds.<prefix>.fast.internal` that admits only the Prebid Server tasks' security group. Its functions run outside
   the VPC (the load balancer invokes them), and a census-gated provisioned concurrency keeps them warm while channels
   run. The reason is the 50 ms `/policy` budget: in a live test over API Gateway and a NAT gateway, a third of

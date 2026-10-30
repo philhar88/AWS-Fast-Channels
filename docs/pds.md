@@ -184,7 +184,7 @@ imp it bids every ad below whose duration, rounded half up, is one of the slot's
 - The lines, the kit's creatives and the house ads are in the snapshot. The publisher reads the default ladder from
   `/<prefix>/pds/ladder-version` at every run, so a new ladder's kit is bid within the hour.
 - Like the bidder simulator's creatives, the own book's are the default ladder's: monetize channels on that ladder.
-- A line is bid until its budget is reserved: the function reads the lines' budget shards every 5 seconds, off the
+- A line is bid until its budget is reserved: the sidecar reads the lines' budget shards every 5 seconds, off the
   request path, and leaves out a line that no shard can take one more impression from, or whose shards it cannot
   read.
 
@@ -246,40 +246,78 @@ versioned, non-secret seeds, so the offline simulator and holdout audits recompu
 ## Patch contributors
 
 Other modules add `app.content` fields and decision-record fields through the `PatchContributor` interface
-(`fast_channels.core.pds.contributors`) without the PDS knowing them. With `modules.crawl` on, the policy function
+(`fast_channels.core.pds.contributors`) without the PDS knowing them. With `modules.crawl` on, the sidecar's `/policy`
 loads the content-enrichment module's contributor, which adds the show's metadata and the record fields `enr` and `ctx`
 ([content-enrichment.md](content-enrichment.md#the-openrtb-patch)). Contributions fail open: a contributor that
 raises, or that sets a field an earlier one set, is skipped and named in the record.
 
 ## The service
 
-`FastChannels-<prefix>-Pds` runs in the Prebid Server guidance's VPC. Like the Demand stack it needs the guidance's
-network, so `scripts/prebid_guidance.py deploy` deploys it right after the Demand stack, whose private zone it adds a
-record to, and `destroy` deletes it first ([docs/demand.md](demand.md#deploy-and-destroy)). Its state is the Data
+The PDS's hot path is a **sidecar in each Prebid Server task** ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md)):
+a second container of the guidance's task definition, on `127.0.0.1:8090`, which the fast-ctv module and the own book
+call on the task's loopback. Its code is the workspace member `pds` (`fast_channels.pds`), on the same pure
+`fast_channels.core.pds` rules. Everything else is in `FastChannels-<prefix>-Pds`, beside the guidance.
+
+| Part | What it is |
+|---|---|
+| Sidecar | `Pds-Container` in each of the guidance's `PrebidTaskDef`s, added by `scripts/guidance_app.py` ([below](#how-the-sidecar-joins-the-guidances-task)). uvicorn with uvloop and httptools, one process, serving `POST /policy`, `POST /select`, `POST /ownbook/openrtb` and `GET /health` on `127.0.0.1:8090` (anything else is a 404). Each request's endpoint runs on a pool of 16 worker threads with the locked boto3, so neither a reservation nor the pod rules hold the event loop; a request that waited for a worker past its caller's timeout is answered 503 at once (`Shed`). Before it listens it loads the snapshot, the lines' budgets and, with `modules.crawl`, the catalog contexts, and opens the reservations' DynamoDB connection; then the loop starts the due refreshes every second, so they stay current and the connection stays open between breaks. The container's health check connects to the port: it listens once its loads are done. Prebid Server's container starts once the sidecar is healthy. Without a snapshot `/policy` and `/select` answer 503 at once: the module serves the break SAFE and, with the own book silent, renders the kit's house ads (`HOUSE_CONFIG`). Keep-alive 120 s, above Prebid Server's 60 s, so the client closes an idle connection first |
+| `/policy` | Answers with `decide()` and the current snapshot, and logs one `pds.policy` decision record |
+| `/select` | Answers with the pod rules on the current snapshot. It reserves the pod's line ads (`TransactWriteItems` on `BUDGET#`, `CAP#` and `RES#` items and the ledger's `pds/*` chains) on a DynamoDB client with 100 ms timeouts and one attempt, through the VPC's DynamoDB gateway endpoint, which the budget view's reads every 5 s keep connected; no reservation starts after 50 ms. It puts our tracker on every ad and logs one `pds.select` decision record (with the crids reserved) |
+| `/ownbook/openrtb` | Reads the snapshot and the lines' budget shards (`BatchGetItem` on `BUDGET#*` only), and logs one line per request with the imps, durations and bids |
+| Metrics and stats | In the `FastChannels` namespace, by `service` (`pds`), emitted every minute: `PolicyDecisions` (by `mode`), `PolicyNoViewerIp`, `PolicyNoSnapshot`, `PolicyRefused` (a 400), `PolicyErrors` (a 500); `SelectDecisions` (by `reason`), `LineAdsReserved`, `LineAdsRefused` (by `reason`: `budget`, `cap`, `conflict`), `ReservationErrors`, `ReservationsTooLate`, `SelectNoSnapshot`, `SelectRefused`, `SelectErrors`; `OwnBookBids`, `OwnBookRefused`, `OwnBookErrors`; `Shed` (by endpoint); `LoopLagMaxMs`. Each minute a `pds stats` line per task gives each endpoint's latency (count, p50, p99, max), the reservations' and the budget reads' DynamoDB round trips, the pool's queue wait, the event loop's lag, the process's CPU share of one vCPU and its peak memory |
+| Image | `<prefix>-pds:<context hash>`: the package and its locked dependencies for x86 with deterministic bytecode, on a digest-pinned `python:3.14-slim`, run as uid 1000 on a read-only root filesystem, restarted in place if it exits. Built by the stage's x86 CodeBuild project (`deploy-demand`, `build-image`) |
+| Grants | On the task role, which Prebid Server's container shares: `s3:GetObject` on the snapshot; `dynamodb:BatchGetItem` on `BUDGET#*`, `UpdateItem` on `BUDGET#*` and `CAP#*`, `PutItem` on `RES#*`; `PutItem` on the ledger's `pds/*` chains; with `modules.crawl`, listing and reading the catalog-context objects (`core.pds.sidecar`). The S3 reads also join the guidance VPC's S3 gateway endpoint policy |
+| Delivery function | On the subscription to the MediaTailor log group. It writes `IMP#`, `FILL#`, the reservations and budget shards, and appends to the ledger's `pds/*` chains; metrics `Impressions`, `Fills`, `LineAdsDelivered`, `LateDeliveries`. Its records go to the lake as `pds_delivery` |
+| Release sweeper | Every 15 minutes (EventBridge Scheduler), with a dead-letter queue and alarm |
+| Fallback alarms | Metric filters on Prebid Server's container log (`deploy-demand` reads its group from the task definition) count the module's `fast-ctv-pod` lines, those whose `/policy` patch was not applied (`POLICY_…`, `NO_POLICY_HOOK`), those whose pod is the house fallback (`SELECT_FALLBACK`), the module's errors (an empty VAST) and the pods of the kit's house ads from the module's configuration (`HOUSE_CONFIG`: a break that would otherwise have been empty), leaving out the warm-up's and the herd's synthetic auctions, in `FastChannels/PrebidServer/<prefix>`. `<prefix>-pds-policy-fallbacks` fires above 1% of breaks in 5 minutes and `<prefix>-pds-select-fallbacks` above 0.5% (house fallbacks and errors); below 20 auctions in 5 minutes either fires once 5 breaks fell back, so a stage with few viewers still learns the PDS is down |
+| Snapshot | `snapshot/current.json` in the private config bucket (never the CDN, never the ingest bucket), with each version kept 30 days under `snapshot/history/`. It holds the demand allow-list (in demo mode the guidance's bidder simulator, `amt`), shed bidders, the floor, CloudFront's origin-facing networks from `ip-ranges.json`, which the viewer-IP rule needs, and the own book (lines, their creatives, the house ads; the publisher reads only the kits' `vast.xml` and `demo/creatives.json` in the media bucket, and sets the lines' budget shards). The publisher writes it when the stack deploys and every hour, and only when its content changed. The sidecar reads it before it listens and then every 30 seconds in the background with a conditional GET, so no request waits on S3 |
+| Decision records | The sidecar logs to `/aws/ecs/<prefix>-pds` (the guidance stack creates it; output `DecisionLogGroup`). One subscription per record kind sends `pds.policy` and `pds.select` to their Firehose streams (`<prefix>-pds-policy`, `-select`), the group's two filter slots; the delivery function's log group sends `pds.delivery` (`-delivery`). The streams write to the lake bucket under `pds/<kind>/<yyyy>/<MM>/<dd>/<HH>/`, within a minute, and the lake tables `pds_policy`, `pds_select` and `pds_delivery` read them. A record must stay under 16 KB: Fargate's log driver splits a longer line, and its parts never parse |
+
+`FastChannels-<prefix>-Pds` needs the guidance's network context (the fallback alarms read Prebid Server's container
+log group) and the sidecar's log group, so `scripts/prebid_guidance.py deploy` deploys it after the guidance and the
+Demand stack, and `destroy` deletes it first ([docs/demand.md](demand.md#deploy-and-destroy)). Its state is the Data
 stack's: the table `<prefix>-pds` and the private config bucket exist with `modules.pds.enabled` and stay until
 `make destroy`. The Data stack writes the config, lake and media bucket names to `/<prefix>/pds/config-bucket`,
 `/<prefix>/pds/lake-bucket` and `/<prefix>/pds/media-bucket`, and the Media stack the CDN's content base URL and the
 default ladder to `/<prefix>/pds/content-base-url` and `/<prefix>/pds/ladder-version`. The Pds stack resolves them
-at deploy (the ladder at every publish): it takes no cross-stack reference to those stacks, whose own deploys
-(`make deploy`) never see the guidance's network. `deploy-demand` refuses to deploy it while one is missing.
+at deploy (the ladder at every publish), and the guidance's deploy reads the config and catalog-context buckets' for
+the sidecar: no cross-stack reference to those stacks, whose own deploys (`make deploy`) never see the guidance.
+`deploy-demand` refuses to deploy while one is missing.
 
-| Part | What it is |
-|---|---|
-| Load balancer | An internal Application Load Balancer in the guidance's private subnets at `pds.<prefix>.fast.internal`, HTTP on port 80. Its security group admits only the Prebid Server tasks' security group. `POST /policy`, `POST /select` and `POST /ownbook/openrtb` go to their functions; anything else gets a 404 |
-| `/policy` function | Python 3.14 on arm64, 1,769 MB (one vCPU), outside the VPC: the load balancer invokes it, so it has no network-interface cold start. The load balancer calls its `live` alias. It answers with `decide()` and the current snapshot, logs one `pds.policy` decision record and the metrics `PolicyDecisions` (by `mode`), `PolicyNoViewerIp`, `PolicyRefused` (a 400) and `PolicyErrors` (a 500) in the `FastChannels` namespace, each by `service` |
-| `/select` function | Like `/policy`'s. It answers with the pod rules on the current snapshot, reserves the pod's line ads (`TransactWriteItems` on `BUDGET#`, `CAP#` and `RES#` items and the ledger's `pds/*` chains, on a DynamoDB client with 100 ms timeouts and one attempt, opened during init and kept open by the budget view's reads while breaks follow each other; after an idle minute DynamoDB has dropped it and the first reservation reopens it, up to about 110 ms; no reservation starts after 50 ms, since the module waits 200 ms, of which the load balancer takes 20-40 ms), puts our tracker on every ad, and logs one `pds.select` decision record (with the crids reserved) and the metrics `SelectDecisions` (by `reason`), `LineAdsReserved`, `ReservationErrors`, `SelectRefused` and `SelectErrors` |
-| `/ownbook/openrtb` function | Like `/policy`'s (1,769 MB, outside the VPC, the `live` alias, warm while channels run). It reads the snapshot and the lines' budget shards (`BatchGetItem` on `BUDGET#*` only), and logs one line per request with the imps, durations and bids, and the metrics `OwnBookBids`, `OwnBookRefused` and `OwnBookErrors` |
-| Delivery function | On the subscription to the MediaTailor log group. It writes `IMP#`, `FILL#`, the reservations and budget shards, and appends to the ledger's `pds/*` chains; metrics `Impressions`, `Fills`, `LineAdsDelivered`, `LateDeliveries`. Its records go to the lake as `pds_delivery` |
-| Release sweeper | Every 15 minutes (EventBridge Scheduler), with a dead-letter queue and alarm |
-| Fallback alarms | Metric filters on Prebid Server's container log (`deploy-demand` reads its group from the task definition) count the module's `fast-ctv-pod` lines, those whose `/policy` patch was not applied (`POLICY_…`, `NO_POLICY_HOOK`), those whose pod is the house fallback (`SELECT_FALLBACK`), the module's errors (an empty VAST) and the pods of the kit's house ads from the module's configuration (`HOUSE_CONFIG`: a break that would otherwise have been empty), leaving out the warm-up's and the herd's synthetic auctions, in `FastChannels/PrebidServer/<prefix>`. `<prefix>-pds-policy-fallbacks` fires above 1% of breaks in 5 minutes and `<prefix>-pds-select-fallbacks` above 0.5% (house fallbacks and errors); below 20 auctions in 5 minutes either fires once 5 breaks fell back, so a stage with few viewers still learns the PDS is down |
-| Census gate | `<prefix>-pds-census-gate`, Step Functions with JSONata and SDK calls only, on `Census Changed`. When the first channel starts it sets `modules.pds.provisioned_concurrency` (per function: 20 for `/policy`, 30 for `/select`, 20 for `/ownbook/openrtb`, sized from a 100-session herd's peaks of 8, 17 and 9) on each function's `live` alias; 15 minutes after the last one stops, if none runs then, it removes it. `deploy-demand` runs it once with the census's current count. A count of 0 removes that function's, and with every count 0 every run removes them all, so lowering the setting also removes what was set |
-| Snapshot | `snapshot/current.json` in the private config bucket (never the CDN, never the ingest bucket), with each version kept 30 days under `snapshot/history/`. It holds the demand allow-list (in demo mode the guidance's bidder simulator, `amt`), shed bidders, the floor, CloudFront's origin-facing networks from `ip-ranges.json`, which the viewer-IP rule needs, and the own book (lines, their creatives, the house ads; the publisher reads only the kits' `vast.xml` and `demo/creatives.json` in the media bucket, and sets the lines' budget shards). The publisher writes it when the stack deploys and every hour, and only when its content changed. Each function reads it during its init and then every 30 seconds in the background with a conditional GET, so no request waits on S3; one that has never read it serves no third-party bidder and no viewer address |
-| Decision records | A subscription on each function's log group sends its records to a Firehose stream (`<prefix>-pds-policy`, `-select`, `-delivery`), which writes them to the lake bucket under `pds/<kind>/<yyyy>/<MM>/<dd>/<HH>/`, within a minute. The lake tables `pds_policy`, `pds_select` and `pds_delivery` read them |
+### How the sidecar joins the guidance's task
 
-Why in the VPC and warm: `/policy` gets 80 ms, of which the load balancer's Lambda invoke takes 20-40 ms (the
-handler under 3 ms). Reached over API Gateway and a NAT gateway, a third of MediaTailor's
-auctions fell back to the own book in a live test, every first break among them, because the function and its
-connections were cold.
+The guidance is not patched for it. With `modules.pds` on, `deploy-demand` deploys the guidance with
+`scripts/guidance_app.py` instead of its `app.py`:
+
+1. It imports the checkout's `app` module, puts a subclass of the guidance's own `PrebidServerStack` where `build_app`
+   looks for the stack class, and calls `build_app` unchanged.
+2. The subclass builds the guidance's stack, then augments it from the CDK context `fastPds` (`core.pds.sidecar`:
+   the image, the environment, the grants, the sizes):
+   - each `PrebidTaskDef` (one per entry deployment; CloudFormation's conditions deploy one) gets `Pds-Container`,
+     essential, with a health check (`/health`, every 5 s), non-blocking awslogs with a 25 MiB buffer and an in-place
+     restart policy; `Prebid-Container` gets a dependency on it, `HEALTHY`;
+   - the task gets 2 vCPU (the guidance's, shared by both containers with equal weights) and 6 GiB (the guidance's
+     4 GiB plus 2), as overrides of the L1 task definition;
+   - the guidance VPC gets a DynamoDB gateway endpoint whose policy admits only item calls on the PDS table and the
+     ledger, so reservations do not go out through a NAT gateway;
+   - the guidance's Prebid Server target groups get ALB slow start (180 s), which their round-robin routing allows;
+   - the task role gets the sidecar's grants;
+   - the policy of the guidance VPC's S3 gateway endpoint, which otherwise lets through only the guidance's own
+     buckets, gets the sidecar's S3 reads (the snapshot object; with `modules.crawl` the catalog-context objects),
+     for the account's resources only;
+   - the stack gets the log group `/aws/ecs/<prefix>-pds`, at its root.
+
+`vendor/prebid-guidance/PIN.toml [relied_on]` hashes the upstream files this relies on, so an upstream change fails
+`prebid_guidance.py verify`, and `tests/e2e/test_guidance_app.py` synthesizes the pinned guidance through the
+wrapper. A stage without the PDS deploys the guidance's `app.py` as before.
+
+Measured in break herds of up to 400 sessions on 2 tasks ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#evidence)):
+the module saw `/policy` at p99 12-18 ms and `/select` at p99 65-134 ms, with no fallback at the budgets of 50 and
+200 ms. `/select` is mostly its reservation: one 5-item DynamoDB transaction, p50 22-24 ms, through the gateway
+endpoint. The sidecar used 1-3% of a
+vCPU over a herd minute and about 100 MB; its pool's queue wait stayed under 10 ms. Each request costs it about 1.1 ms
+of CPU, so a new task's warm-up (25 auctions/s per healthy target) and ALB slow start keep it clear of Prebid Server's
+JIT. A request that waited for a worker past its caller's timeout is answered 503 at once (`Shed`).
 
 ```sql
 SELECT mode, reason, ip_rule, count(*) AS breaks, approx_percentile(latency_ms, 0.99) AS p99_ms
@@ -288,8 +326,8 @@ WHERE datehour >= date_format(current_timestamp - interval '1' hour, '%Y/%m/%d/%
 GROUP BY 1, 2, 3
 ```
 
-Filter on `record`: each function log message keeps its trailing newline and Firehose's message extraction adds one,
-so every other line of the lake objects is empty, and Athena reads it as a row of nulls.
+Filter on `record`: a function's log message keeps its trailing newline and Firehose's message extraction adds one,
+so lines of the lake objects can be empty, and Athena reads them as rows of nulls.
 
 Delivery by hour: fills and impressions as distinct keys (a record is one firing of the tracker), and what the
 lines' delivered ads cost:

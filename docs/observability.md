@@ -157,7 +157,7 @@ count with the last one it recorded in the SSM parameter `/<prefix>/ops/running-
 and the other is not it puts a `Census Changed` event (`running`, `previous`, `correlation_id` = the census execution
 name; [contract](../contracts/events.schema.json)) on the deployment's bus, then records the new count. An event is
 therefore at most one census interval (5 minutes) late, and a failed put is repeated by the next census, so consumers
-(Prebid Server scaling, provisioned concurrency, canaries) must treat it as at-least-once. The parameter always holds
+(Prebid Server scaling, canaries) must treat it as at-least-once. The parameter always holds
 the latest count; read it instead of listing channels.
 
 ## Lake

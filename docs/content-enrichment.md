@@ -200,8 +200,8 @@ With the module on, the Pod Decision Service's `/policy` answer carries the brea
 Prebid Server module merges into `app.content` before the auction (`fast_channels.functions.crawl.patch`, the
 mapping in `fast_channels.core.crawl.ortb_content`).
 
-- **Where the metadata comes from.** The content id is the break's UPID without `FST3`. The policy function keeps a
-  copy of the context objects: it reads them during its init, then lists `catalog/ctx/v1/` every 30 seconds in the
+- **Where the metadata comes from.** The content id is the break's UPID without `FST3`. The PDS sidecar keeps a
+  copy of the context objects: it reads them before it listens, then lists `catalog/ctx/v1/` every 30 seconds in the
   background and reads only the objects whose ETag changed, so no request waits on S3. For a title the copy lacks
   (a title published in the last 30 seconds), it uses the `x-fast-ctx` header of the PRE_ADS lookup when the header
   names the same content id. The header has no title, series, producer or keywords, so those breaks carry the

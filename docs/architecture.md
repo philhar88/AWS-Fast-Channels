@@ -35,7 +35,7 @@ One CDK `Stage` (`FastChannelsStage`) holds a deployment. Its id is `FastChannel
 | `…-DemandEdge` | Demand | The two origin secrets and the WAF rule group the Prebid Server guidance's web ACL references first, in us-east-1 ([demand.md](demand.md)) | Only with `modules.demand.enabled`; named `…-DemandEdge-<region>` outside us-east-1 |
 | `…-DemandBuild` | Demand | The Prebid Server image repository, its x86 CodeBuild project, and the CloudFormation execution policy of the guidance's dedicated CDK bootstrap | Only with `modules.demand.enabled` |
 | `…-Demand` | Demand | Beside the guidance: the private zone `<prefix>.fast.internal` in its VPC, in `lambda` mode the bidder simulator behind an internal load balancer, the census gate, the daypart scheduled actions and the warm-up of new Prebid Server tasks | Only once `make deploy-demand` has deployed the guidance (it passes the guidance's network as context) |
-| `…-Pds` | Demand | The Pod Decision Service in the guidance's VPC: its internal load balancer at `pds.<prefix>.fast.internal`, the `/policy` function, the snapshot publisher, the census gate of its provisioned concurrency and the decision records' stream into the lake ([pds.md](pds.md#the-service)) | Only with `modules.pds.enabled`, by `make deploy-demand` right after Demand |
+| `…-Pds` | Demand | The Pod Decision Service beside its sidecar (the sidecar answers Prebid Server from inside the guidance's task, ADR-0036): the snapshot publisher, delivery, the reservations' sweeper, the fallback alarms and the decision records' streams into the lake ([pds.md](pds.md#the-service)) | Only with `modules.pds.enabled`, by `make deploy-demand` right after Demand |
 | `…-Release` | Release | Beside the guidance: the Release Controller (the bundle, the apply state machine, its state table, the drift check, the reaper), the siblings' KMS-encrypted log group, their hook alarms and zero-ad-sessions detector ([release-controller.md](release-controller.md)) | Only with `modules.release.enabled`, once `make deploy-demand` has deployed the guidance (after Pds) |
 | `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only by `make account-baseline`, for `observability.transaction_search: enable`; never by `make deploy` or `make destroy`. One per account and region, termination protected, retained |
 | `FastChannels-AsRun` | Account | The as-run router: the one subscription on the as-run log, putting every event on the default event bus for `observability.as_run: shared` deployments; its alarms and dead-letter queue ([ADR-0032](adr/0032-shared-as-run-router.md)) | Only by `make as-run-router`, never by `make deploy` or `make destroy`. One per account and region, termination protected |
@@ -68,9 +68,9 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 | Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` (not with `modules.models`) |
 | Crawl | `CatalogContextBaseUrl`, `CatalogContextPublisherName` |
 | DemandEdge | `OriginRuleGroupArn`, `OriginSecretAArn`, `OriginSecretBArn` |
-| DemandBuild | `ImageRepositoryUri`, `ImageBuildProject`, `GuidanceExecutionPolicyArn` |
+| DemandBuild | `ImageRepositoryUri`, `ImageBuildProject`, `GuidanceExecutionPolicyArn`; with `pds`, `PdsImageRepositoryUri` |
 | Demand | `PrivateZoneId`, `CensusGateArn`, `WarmUpProjectName`, `SimulatorFunction` (`lambda` mode only) |
-| Pds | `Endpoint`, `PolicyFunction`, `PublisherFunction`, `CensusGateArn`, `ConfigBucketName`, `TableName` |
+| Pds | `DecisionLogGroup` (the sidecar's), `DeliveryFunction`, `SweeperFunction`, `PublisherFunction`, `ConfigBucketName`, `TableName` |
 
 ```bash
 aws cloudformation describe-stacks --stack-name FastChannels-Media \
@@ -255,14 +255,13 @@ module path.
 | `ops.flags` | `OpsAppConfig` | AppConfig application `<prefix>-fast` with its `flags` feature-flag profile |
 | `ops.canary` | `ProbeCanary` | The probe canary, its census-driven start and stop, and its off-air alarm |
 | `demand.origin_waf` | `OriginGate` | The origin secrets and the WAF rule group that requires one of them |
-| `demand.image_build` | `ImageBuild` | The Prebid Server image repository and its x86 build project |
+| `demand.image_build` | `ImageBuild` | The Prebid Server image repository (and with `modules.pds` the sidecar's) and their x86 build project |
 | `demand.guidance_bootstrap` | `GuidanceExecutionPolicy` | The execution policy of the guidance's dedicated CDK bootstrap |
 | `demand.private_dns` | `PrivateDns` | The private hosted zone `<prefix>.fast.internal` |
 | `demand.simulator` | `LambdaSimulator` | The bidder simulator as a function behind an internal load balancer (`lambda` mode) |
 | `demand.scaling` | `CensusGate`, `Dayparts` | Prebid Server's task minimum by the running channels; scheduled actions ahead of dayparts |
 | `demand.warmup` | `WarmUp` | The warm-up project and the rule that starts it for every new Prebid Server task |
 | `pds.tables`, `pds.config_bucket` | `PdsTable`, `ConfigBucket`, `SnapshotPublisher` | The PDS table and private config bucket (Data stack); the snapshot publisher (Pds stack) |
-| `pds.service` | `PdsFunction`, `PdsService`, `PdsCensusGate` | Each endpoint's function and `live` alias; the internal load balancer and its record; the provisioned-concurrency gate |
 | `pds.decisions` | `DecisionLog` | One kind of decision record into the lake |
 | `crawl.publisher` | `ContextPublisher` | The catalog context publisher and its triggers |
 

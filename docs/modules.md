@@ -117,10 +117,12 @@ operations signal, never air time.
 | `demand` | Prebid Server is down or answers late | MediaTailor gets no pod, and the Channel Assembly slate plays the break |
 | `demand` | A request without the stage's origin secret | The origin's WAF rule group blocks it at the edge (403) |
 | `demand` | A break length off the 30.03 s grid | The stored request does not exist: Prebid Server answers 400 and the slate plays |
-| `demand` | A new Prebid Server task is still cold | The warm-up waits until the task is a healthy target, then sends it probe auctions, which only the own book and house ads answer. Cold tasks time out on more `/policy` calls (2.6 % during a measured warm-up), so real traffic should start after it: open a daypart at least 10 minutes before its first break |
-| `pds` | `/policy` misses its 80 ms timeout | The module serves the break from the own book only (`POLICY_UNAVAILABLE`). Measured at 200 auctions/s with 50 ms: 0.13 % of auctions fell back, p99 32 ms. A channel with breaks minutes apart pays the load balancer's Lambda invoke cold: 25-50 ms at the module, so 50 ms timed out one break in eight |
-| `pds` | The function has never read its snapshot | It allows no third-party bidder and passes no viewer address |
-| `pds` | `/select` is missing or failing | The module renders a house-only pod (`SELECT_FALLBACK`) |
+| `demand` | A new Prebid Server task is still cold | The warm-up waits until the task is a healthy target, then sends it probe auctions, which only the own book and house ads answer, and ALB slow start ramps live traffic onto a task that joins a serving fleet (180 s; not a scale from zero). Cold tasks time out on more `/policy` calls (2.6 % during a measured warm-up), so real traffic should start after it: open a daypart at least 10 minutes before its first break |
+| `pds` | `/policy` misses its 50 ms timeout | The module serves the break from the own book only (`POLICY_UNAVAILABLE`). The PDS sidecar answered 400-session break herds at p99 12-18 ms, max 36 ms at the module (ADR-0036) |
+| `pds` | The sidecar has never read its snapshot | `/policy` and `/select` answer 503 at once: the module serves the break SAFE and, with the own book silent, renders the kit's house ads (`HOUSE_CONFIG`) |
+| `pds` | The sidecar is overloaded | A request that waited for a worker past its caller's timeout is answered 503 at once (`Shed`): the module falls back for that break, and the queue drains |
+| `pds` | The sidecar exits | ECS restarts it in place; meanwhile the module's calls are refused and it falls back as above |
+| `pds` | `/select` is missing or failing | The module renders a house-only pod (`SELECT_FALLBACK`), or the kit's house ads without one (`HOUSE_CONFIG`) |
 | `crawl` | The publisher cannot use a catalog item | It logs the error, counts it in `ContextsInvalid` and leaves the title's object as it was. A trigger that still fails after its retries goes to a dead-letter queue, whose alarm `<prefix>-crawl-publisher-dead-letters` notifies the alert topic |
 | `crawl` | With the PRE_ADS lookup (follows): the context object of a title cannot be read | The break is requested without the metadata |
 | `release` | A deployment would change the policy of a running channel | The deployment fails before anything changes, and the channel keeps airing |
@@ -154,7 +156,8 @@ These are us-east-1 list prices, rounded. Lines marked *measured* come from runs
 - a demand deploy, smoke test and destroy cycle cost about $0.45. The destroy took 85 minutes, 59 of them for the
   guidance's ElastiCache user group;
 - 17 minutes of a monetized stage airing one channel cost about $0.25 more than the stage's idle cost: two Prebid
-  Server tasks and their warm-up, the PDS's provisioned concurrency, and two load tests at 200 auctions/s.
+  Server tasks and their warm-up, the PDS's provisioned concurrency (the PDS now runs in those tasks, ADR-0036),
+  and two load tests at 200 auctions/s.
 
 Destroy throwaway stages with the guidance deployed right after use: they cost by the hour even with every channel
 stopped.
