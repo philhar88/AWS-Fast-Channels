@@ -325,10 +325,8 @@ def test_the_config_prune_keeps_every_file_the_guidance_ships_in_the_managed_dir
     )
 
 
-@applied
-def test_o5_simulator_bids_with_the_configured_creatives(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def o5_handler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The applied simulator handler, loaded from a copy in ``tmp_path`` beside two configured creatives."""
     handler_dir = CHECKOUT / "source/loadtest/bidder_simulator/lambdas/loadtest_bidder"
     for name in ("handler.py", "bid_response.json"):
         (tmp_path / name).write_bytes((handler_dir / name).read_bytes())
@@ -357,6 +355,19 @@ def test_o5_simulator_bids_with_the_configured_creatives(
     assert spec and spec.loader
     handler = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(handler)
+    return handler
+
+
+def sim_bid_requests(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    """The simulator's ``sim-bid-request`` lines."""
+    return [json.loads(r.getMessage()) for r in caplog.records if "sim-bid-request" in r.getMessage()]
+
+
+@applied
+def test_o5_simulator_bids_with_the_configured_creatives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    handler = o5_handler(tmp_path, monkeypatch)
     request = {"id": "r", "imp": [{"id": f"s{n}", "video": {"rqddurs": [30]}} for n in (1, 2)]}
 
     with caplog.at_level(logging.INFO):
@@ -369,5 +380,42 @@ def test_o5_simulator_bids_with_the_configured_creatives(
     ]
     assert bids[0]["burl"].endswith("cr=sim1&p=${AUCTION_PRICE}")
     assert "nurl" not in bids[0]
-    logged = [json.loads(r.getMessage()) for r in caplog.records if "sim-bid-request" in r.getMessage()]
-    assert logged == [{"evt": "sim-bid-request", "imps": 2, "header_names": ["x-prebid"]}]
+    assert sim_bid_requests(caplog) == [
+        {
+            "evt": "sim-bid-request",
+            "imps": 2,
+            "header_names": ["x-prebid"],
+            "xff_entries": 0,
+            "device_ip": None,
+            "device_ipv6": None,
+        }
+    ]
+
+
+@applied
+def test_o5_logs_the_device_address_as_received_and_never_a_header_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The line's address is the request body's, so a request Prebid Server masked (``transmitPreciseGeo`` denied:
+    IPv4 to its /24, IPv6 to its first 56 bits) cannot put the viewer's full address in the simulator's log, even
+    when a header carries it (test_14_demand_pods asserts both on a deployed stage)."""
+    handler = o5_handler(tmp_path, monkeypatch)
+    masked = {"ip": "198.51.100.0", "ipv6": "2001:db8:1234:5600::", "ua": "Mozilla/5.0 (SMART-TV; Linux)"}
+    request = {"id": "r", "imp": [{"id": "s1", "video": {"rqddurs": [30]}}], "device": masked}
+    headers = {"x-forwarded-for": "198.51.100.7, 10.0.1.9", "X-Prebid": "pbs", "user-agent": "client 2001:db8::7"}
+
+    with caplog.at_level(logging.INFO):
+        handler.lambda_handler({"body": json.dumps(request), "headers": headers}, None)
+
+    [line] = sim_bid_requests(caplog)
+    assert line == {
+        "evt": "sim-bid-request",
+        "imps": 1,
+        "header_names": ["user-agent", "x-forwarded-for", "x-prebid"],
+        "xff_entries": 2,
+        "device_ip": "198.51.100.0",
+        "device_ipv6": "2001:db8:1234:5600::",
+    }
+    logged = "".join(r.getMessage() for r in caplog.records)
+    for value in ("198.51.100.7", "10.0.1.9", "2001:db8::7", "client", "SMART-TV"):
+        assert value not in logged, value

@@ -60,7 +60,7 @@ hashes.
 | O1 | `source/infrastructure/app.py`, `prebid_server/prebid_glue_constructs.py` | CDK context `stackPrefix` (stacks `<prefix>-pbs`, `<prefix>-pbs-sim`, and the Glue database `<prefix>-prebid-server-<region>-metricsetl-database`) and a dedicated bootstrap (`bootstrapQualifier`, `fileAssetsBucketName`, `imageAssetsRepositoryName`) | The shipped app hard-codes its stack names and the default bootstrap qualifier, whose execution role is often AdministratorAccess. Its Glue database name is the one name unique per account and Region that ignores the stack, so two prefixed deployments collided |
 | O2 | the web ACL custom resource, `cloudfront_waf_construct.py`, `stack_cfn_parameters.py`, `cloudfront_entry_deployment.py` | Stack parameter `ExtraWafRuleGroupArn`: the web ACL references that rule group at priority 0 | The guidance has no extension point for customer rules, and deletes its web ACL with the lock token from creation, so a later `UpdateWebACL` breaks stack deletion. Rotating the origin secret updates our rule group only |
 | O4 | `source/loadtest/amt-bidder/copy-bidder-files.sh` | Ends by running `copy-fast-ctv.sh`, which copies the fast-ctv module into the Prebid Server tree | The guidance's only injection point for code (`INCLUDE_AMT_BIDDER=true`) |
-| O5 | the bidder simulator's `handler.py` | `video_creatives.json` beside the handler replaces the shipped creatives; one log line per request with the header names it received | The shipped creatives (5, 15 and 30 s progressive MP4s, one advertiser domain) cannot fill a CTV pod |
+| O5 | the bidder simulator's `handler.py` | `video_creatives.json` beside the handler replaces the shipped creatives; one log line per request (`sim-bid-request`) with the header names it received (never a value), the number of `X-Forwarded-For` entries, and `device.ip`/`device.ipv6` as the request body carries them | The shipped creatives (5, 15 and 30 s progressive MP4s, one advertiser domain) cannot fill a CTV pod |
 | O7 | `ecs_service_construct.py` | Minimum healthy 100%, maximum 200% | A forced deployment, the way a new configuration is loaded, otherwise runs at 50% of the desired tasks |
 
 `PIN.toml` also pins files the overlays rely on without patching them: the Dockerfile (the injection point), the
@@ -483,12 +483,15 @@ are the only residue. The Pod Decision Service's table and config bucket are the
 `make destroy`. `inventory` lists anything else tagged `fast:module=demand` or `pds` for the prefix, or named for it,
 and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
 
-**The demand leg** (the `End-to-end` workflow with `leg: demand`, or the same
-steps locally) deploys `STAGE=fastci MODULES=ops,demand` (the `fastci` stage with only those modules on), runs
-`make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`. It then destroys the demand module, the stage and the
-ledger archive, and fails on any residue but KMS keys pending deletion. A run takes about two and a half hours and
-costs a few US dollars. The tests take a few minutes and must start within the census gate's 15 minutes: the leg runs
-no channel, so the gate then scales Prebid Server to zero.
+**The demand leg** (BUILD-PLAN §12.3 `e2e-demand`; the `End-to-end` workflow with `leg: demand`, or the same
+steps locally) deploys `STAGE=fastci MODULES=ops,demand,pds,release,crawl` (the `fastci` stage with only those
+modules on), runs `make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`, `test_12_release.py`,
+`test_13_crawl.py` and `test_14_demand_pods.py`. It then destroys the demand module, the stage and the ledger archive,
+and fails on any residue but KMS keys pending deletion. A run takes about three hours and costs a few US dollars. The
+edge tests must start within the census gate's 15 minutes, before the gate scales Prebid Server to zero with no
+channel running. The pods test then starts the channel, waits for the gate to scale Prebid Server out again (and for
+the warm-ups; the PDS is a sidecar of those tasks), and plays four viewers, two late joiners and a mid-break joiner through MediaTailor for three breaks: about
+30 minutes ([tests/e2e/README.md](../tests/e2e/README.md)).
 
 **The ad-server leg** (`tests/e2e/test_15_ad_server.py`, experimental: no default leg runs it) needs the stage
 `fastciads`: `fastci` with

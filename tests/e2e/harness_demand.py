@@ -40,6 +40,16 @@ class DemandEdge:
     def domain(self) -> str:
         return self.parameters[Parameter.CLOUDFRONT_DOMAIN.value]
 
+    @property
+    def cluster(self) -> str:
+        """Prebid Server's ECS cluster."""
+        return self.parameters[Parameter.CLUSTER_ARN.value]
+
+    @property
+    def service(self) -> str:
+        """Prebid Server's ECS service."""
+        return self.parameters[Parameter.SERVICE_ARN.value]
+
     @cached_property
     def secret(self) -> str:
         secrets = self.session.client("secretsmanager", region_name=EDGE_REGION)

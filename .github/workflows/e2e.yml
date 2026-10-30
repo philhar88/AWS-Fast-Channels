@@ -14,7 +14,7 @@ on:
         type: boolean
         default: false
       leg:
-        description: "v3: the v3.0.0 leg; demand: the demand module (fastci with ops and demand only)"
+        description: "v3: the v3.0.0 leg; demand: the demand path (fastci with ops, demand, pds, release and crawl)"
         type: choice
         options: [v3, demand]
         default: v3
@@ -71,14 +71,17 @@ jobs:
         if: always() && !inputs.keep
         run: npx cdk destroy '**' --force -c "fast-channels.prefix=$PREFIX"
 
-  # The demand module (BUILD-PLAN §12.3 e2e-demand): the stage's repository stacks with ops and demand, the Prebid
-  # Server guidance on its own bootstrap, the synthetic edge tests (pods are empty until the Pod Decision Service),
-  # then everything destroyed and inventoried. Costs about US$2-4 per run.
+  # The demand path (BUILD-PLAN §12.3 e2e-demand): the stage's repository stacks with ops, demand, pds, release and
+  # crawl, the Prebid Server guidance on its own bootstrap, the synthetic edge tests, the release and crawl modules'
+  # tests, then viewers on the channel's stable sibling through MediaTailor, Prebid Server and the Pod Decision Service
+  # (test_14_demand_pods.py); then everything destroyed and inventoried. Costs about US$3-5 per run.
   e2e-demand:
     if: inputs.leg == 'demand'
     runs-on: ubuntu-24.04-arm
     environment: e2e
     timeout-minutes: 240
+    env:
+      MODULES: ops,demand,pds,release,crawl
     steps:
       - name: Check the prefix
         run: |
@@ -98,23 +101,26 @@ jobs:
           role-to-assume: ${{ secrets.AWS_E2E_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-duration-seconds: 14400
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked --all-packages && npm ci
       - name: Deploy the stage
-        run: make deploy STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+        run: make deploy STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"
       - name: Deploy the demand module
-        run: make deploy-demand STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+        run: make deploy-demand STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"
       - name: Demand tests
-        run: uv run pytest tests/e2e/test_11_demand_edge.py -m e2e --prefix "$PREFIX" -v
+        run: >-
+          uv run pytest tests/e2e/test_11_demand_edge.py tests/e2e/test_12_release.py tests/e2e/test_13_crawl.py
+          tests/e2e/test_14_demand_pods.py -m e2e --prefix "$PREFIX" -v
       - name: Destroy the demand module
         if: always() && !inputs.keep
-        run: make destroy-demand STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+        run: make destroy-demand STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"
       - name: Destroy the stage
         if: always() && !inputs.keep
         run: |
-          make destroy STAGE=fastci MODULES=ops,demand PREFIX="$PREFIX"
+          make destroy STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"
           uv run python scripts/ledger_verify.py purge --prefix "$PREFIX" --apply --bypass-governance
       - name: Inventory
         if: always() && !inputs.keep
         run: |
           uv run python scripts/cleanup.py --prefix "$PREFIX"
-          uv run python scripts/prebid_guidance.py inventory --stage fastci --modules ops,demand --prefix "$PREFIX"
+          uv run python scripts/prebid_guidance.py inventory --stage fastci --modules "$MODULES" --prefix "$PREFIX"
