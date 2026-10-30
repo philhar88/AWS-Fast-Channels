@@ -4,17 +4,19 @@ fallback, and the policy function with the module on."""
 import base64
 import io
 import json
+import threading
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from itertools import permutations
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
-import boto3
 import pytest
+from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
-from botocore.stub import Stubber
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl.catalog_context import CONTEXT_PREFIX, CatalogContext, build_context, context_key
@@ -186,73 +188,123 @@ def test_pseudonymous_and_safe() -> None:
 # --- the copy of the catalog ----------------------------------------------------------------------------------------
 
 
-@pytest.fixture
-def s3() -> Iterator[tuple[Stubber, Any]]:
-    client = boto3.client("s3", region_name="us-east-1", aws_access_key_id="t", aws_secret_access_key="t")
-    with Stubber(client) as stubber:
-        yield stubber, client
-        stubber.assert_no_pending_responses()
+class FakeS3:
+    """The S3 calls :class:`CatalogContexts` makes, answered by ``Key`` and safe across threads.
+
+    ``CatalogContexts`` reads changed objects concurrently (``patch.READERS``), and a botocore ``Stubber`` answers in
+    the order its responses were queued, so concurrent GETs would get each other's bodies. Each GET here waits until
+    ``in_flight`` reads have started (if set), so the reads really overlap, then sleeps its object's ``delays`` entry,
+    so they finish in a chosen order. ``completed`` records that order.
+    """
+
+    def __init__(self, delays: dict[str, float] | None = None, *, in_flight: int | None = None) -> None:
+        self.objects: dict[str, tuple[str, bytes]] = {}
+        self.delays = delays or {}
+        self.denied = False
+        self.lists = 0
+        self.reads: list[str] = []
+        self.completed: list[str] = []
+        self._lock = threading.Lock()
+        self._together = threading.Barrier(in_flight, timeout=10) if in_flight else None
+
+    def put(self, content: str, etag: str, text: bytes | None = None) -> None:
+        self.objects[content] = (etag, text if text is not None else CONTEXTS[content].model_dump_json().encode())
+
+    def get_paginator(self, operation: str) -> Any:
+        assert operation == "list_objects_v2"
+        return self
+
+    def paginate(self, *, Bucket: str, Prefix: str) -> list[dict[str, Any]]:  # noqa: N803 - the S3 parameter names
+        assert (Bucket, Prefix) == (BUCKET, CONTEXT_PREFIX)
+        self.lists += 1
+        if self.denied:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "ListObjectsV2")
+        contents = [{"Key": context_key(content), "ETag": etag} for content, (etag, _) in self.objects.items()]
+        return [{"Contents": contents, "IsTruncated": False}]
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 parameter names
+        assert Bucket == BUCKET and Key.startswith(CONTEXT_PREFIX)
+        content = Key.removeprefix(CONTEXT_PREFIX).removesuffix(".json")
+        with self._lock:
+            self.reads.append(content)
+        if self._together is not None:
+            self._together.wait()
+        time.sleep(self.delays.get(content, 0.0))
+        with self._lock:
+            self.completed.append(content)
+        return {"Body": body(self.objects[content][1])}
 
 
-def listing(stubber: Stubber, objects: dict[str, str]) -> None:
-    contents = [{"Key": context_key(content), "ETag": etag} for content, etag in objects.items()]
-    stubber.add_response(
-        "list_objects_v2", {"Contents": contents, "IsTruncated": False}, {"Bucket": BUCKET, "Prefix": CONTEXT_PREFIX}
-    )
-
-
-def reading(stubber: Stubber, content: str, text: bytes | None = None) -> None:
-    payload = text if text is not None else CONTEXTS[content].model_dump_json().encode()
-    stubber.add_response("get_object", {"Body": body(payload)}, {"Bucket": BUCKET, "Key": context_key(content)})
-
-
-def test_loads_the_bucket_then_reads_only_what_changed(s3: tuple[Stubber, Any]) -> None:
-    stubber, client = s3
-    clock = Clock()
-    copy = CatalogContexts(BUCKET, client=client, clock=clock, spawn=inline)
-    listing(stubber, {"sintel": '"a"', "tears-of-steel": '"b"'})
-    reading(stubber, "sintel")
-    reading(stubber, "tears-of-steel")
+def test_loads_the_bucket_then_reads_only_what_changed() -> None:
+    s3, clock = FakeS3({"sintel": 0.02}), Clock()
+    copy = CatalogContexts(BUCKET, client=s3, clock=clock, spawn=inline)
+    s3.put("sintel", '"a"')
+    s3.put("tears-of-steel", '"b"')
     assert copy.load() == {"sintel": CONTEXTS["sintel"], "tears-of-steel": CONTEXTS["tears-of-steel"]}
+    assert sorted(s3.reads) == ["sintel", "tears-of-steel"]
 
     clock.now += patch.REFRESH_SECONDS
-    listing(stubber, {"sintel": '"a"', "tears-of-steel": '"b"'})
-    assert set(copy.get()) == {"sintel", "tears-of-steel"}, "unchanged: one list, no GET"
+    s3.reads.clear()
+    assert set(copy.get()) == {"sintel", "tears-of-steel"}
+    assert (s3.lists, s3.reads) == (2, []), "unchanged: one list, no GET"
 
     clock.now += patch.REFRESH_SECONDS
     changed = CONTEXTS["tears-of-steel"].model_copy(update={"contentrating": "TV-MA"})
-    listing(stubber, {"tears-of-steel": '"c"', "elephants-dream": '"d"'})
-    reading(stubber, "tears-of-steel", changed.model_dump_json().encode())
-    reading(stubber, "elephants-dream")
+    del s3.objects["sintel"]
+    s3.put("tears-of-steel", '"c"', changed.model_dump_json().encode())
+    s3.put("elephants-dream", '"d"')
     assert copy.get() == {"tears-of-steel": changed, "elephants-dream": CONTEXTS["elephants-dream"]}
+    assert sorted(s3.reads) == ["elephants-dream", "tears-of-steel"]
 
 
-def test_an_invalid_object_is_skipped(s3: tuple[Stubber, Any], caplog: pytest.LogCaptureFixture) -> None:
-    stubber, client = s3
-    copy = CatalogContexts(BUCKET, client=client, spawn=inline)
-    listing(stubber, {"sintel": '"a"', "tears-of-steel": '"b"', "elephants-dream": '"c"'})
-    reading(stubber, "sintel", b"not json")
-    reading(stubber, "tears-of-steel")
-    reading(stubber, "elephants-dream", CONTEXTS["sintel"].model_dump_json().encode())  # under another title's key
+INVALID: Final = ("sintel", "tears-of-steel", "elephants-dream")
+"""The objects of the invalid-object case: not JSON, valid, and another title's context under this title's key."""
+
+
+@pytest.mark.parametrize("finishing", list(permutations(INVALID)))
+def test_an_invalid_object_is_skipped_whatever_order_the_reads_finish_in(
+    finishing: tuple[str, ...], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The three reads overlap (each waits until all three have started) and finish in ``finishing`` order."""
+    s3 = FakeS3({content: 0.01 * finishing.index(content) for content in INVALID}, in_flight=len(INVALID))
+    s3.put("sintel", '"a"', b"not json")
+    s3.put("tears-of-steel", '"b"')
+    s3.put("elephants-dream", '"c"', CONTEXTS["sintel"].model_dump_json().encode())  # under another title's key
+    copy = CatalogContexts(BUCKET, client=s3, spawn=inline)
+
     assert copy.load() == {"tears-of-steel": CONTEXTS["tears-of-steel"]}
     [warning] = [r for r in caplog.records if r.getMessage() == "catalog contexts skipped"]
-    assert vars(warning)["invalid"] == ["sintel", "elephants-dream"]
+    assert vars(warning)["invalid"] == ["sintel", "elephants-dream"], "in listing order, not completion order"
+    assert sorted(s3.completed) == sorted(INVALID)
 
 
-def test_a_failed_refresh_keeps_the_copy_and_retries_sooner(s3: tuple[Stubber, Any]) -> None:
-    stubber, client = s3
-    clock = Clock()
-    copy = CatalogContexts(BUCKET, client=client, clock=clock, spawn=inline)
-    listing(stubber, {"sintel": '"a"'})
-    reading(stubber, "sintel")
+def test_the_invalid_object_case_does_finish_in_different_orders() -> None:
+    """A guard on the test above: its delays do change the completion order, so the order-independence it asserts is
+    not vacuous."""
+    orders = set()
+    for finishing in [INVALID, INVALID[::-1]]:
+        s3 = FakeS3({content: 0.05 * finishing.index(content) for content in INVALID}, in_flight=len(INVALID))
+        for content in INVALID:
+            s3.put(content, '"a"')
+        CatalogContexts(BUCKET, client=s3, spawn=inline).load()
+        orders.add(tuple(s3.completed))
+    assert orders == {INVALID, INVALID[::-1]}, orders
+
+
+def test_a_failed_refresh_keeps_the_copy_and_retries_sooner() -> None:
+    s3, clock = FakeS3(), Clock()
+    copy = CatalogContexts(BUCKET, client=s3, clock=clock, spawn=inline)
+    s3.put("sintel", '"a"')
     copy.load()
 
     clock.now += patch.REFRESH_SECONDS
-    stubber.add_client_error("list_objects_v2", service_error_code="AccessDenied", http_status_code=403)
+    s3.denied = True
     assert copy.get() == {"sintel": CONTEXTS["sintel"]}
     clock.now += RETRY_SECONDS
-    listing(stubber, {"sintel": '"a"'})
+    s3.denied = False
     assert copy.get() == {"sintel": CONTEXTS["sintel"]}
+    assert s3.lists == 3
+    assert s3.reads == ["sintel"], "the retry lists again and reads nothing that has not changed"
 
 
 # --- configuration and the policy function --------------------------------------------------------------------------
