@@ -256,8 +256,11 @@ def test_a_length_the_module_cannot_build_a_pod_for_is_an_empty_vast(
 
     assert response.status_code == 200
     assert ads(response.text) == []
-    line = next(line for line in pbs.log.read_text().splitlines() if '"fast-ctv-pod"' in line and "REJECTED" in line)
+    lines = pbs.log.read_text().splitlines()
+    line = next(line for line in reversed(lines) if '"fast-ctv-pod"' in line and "REJECTED" in line)  # this auction's
     assert "POLICY_" not in line and "SELECT_FALLBACK" not in line, line
+    code = "OUT_OF_RANGE" if isinstance(seconds, int) else "UNREADABLE"
+    assert f'"select":"REJECTED {code}"' in line, line
     assert mocks.calls_to("/policy", started) == [], "rejected before the policy is asked"
     assert mocks.third_party_calls(started) == [], "and before any bidder"
 

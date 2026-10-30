@@ -261,7 +261,7 @@ public class FastCtvVastHookTest {
 
         assertThat(body(result)).isEqualTo(PodRenderer.EMPTY_VAST);
         assertThat(lines).singleElement().satisfies(line -> {
-            assertThat(line).contains("\"select\":\"REJECTED\"")
+            assertThat(line).contains("\"select\":\"REJECTED UNREADABLE\"")
                     .doesNotContain("POLICY_").doesNotContain("SELECT_FALLBACK");
             assertThat(line).contains("pod_s is not whole seconds");
         });

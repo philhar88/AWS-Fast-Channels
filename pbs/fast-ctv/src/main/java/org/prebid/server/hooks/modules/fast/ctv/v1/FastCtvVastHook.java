@@ -241,7 +241,8 @@ public class FastCtvVastHook implements ExitpointHook {
 
     /**
      * A rejected auction (the pod refused, {@code PodShape}): an empty VAST, so MediaTailor airs the slate without an
-     * error, and one {@code fast-ctv-pod} line saying why (not a fallback: the fallback alarms do not count it).
+     * error, and one {@code fast-ctv-pod} line saying why, {@code select} {@code REJECTED <code>} (not a fallback: the
+     * fallback alarms do not count it; the PDS stack's {@code PodsRejected} metrics do).
      */
     private InvocationResult<ExitpointPayload> rejected(ExitpointPayload payload, Signals signals, ModuleContext state,
                                                         PodCache.Ask ask, String requestId) {
@@ -250,7 +251,8 @@ public class FastCtvVastHook implements ExitpointHook {
                     .put("sid", signals.sid())
                     .put("evid", signals.evid())
                     .put("pc", signals.pc())
-                    .put("select", "REJECTED")
+                    .put("select", "REJECTED " + (state != null && state.shape() != null
+                            && state.shape().refusal() != null ? state.shape().refusal().name() : "UNKNOWN"))
                     .put("refused", state != null && state.shape() != null ? state.shape().refused() : null);
             line.putPOJO("winners", List.of());
             log.accept(line.toString());

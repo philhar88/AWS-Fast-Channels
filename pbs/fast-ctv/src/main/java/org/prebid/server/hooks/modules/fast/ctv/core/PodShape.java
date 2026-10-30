@@ -37,6 +37,16 @@ public final class PodShape {
     private final int minSeconds;
     private final int maxSeconds;
 
+    /** Why a pod was refused: the code on the module's {@code fast-ctv-pod} line, which a metric filter counts. */
+    public enum Refusal {
+        /** {@code pod_s} missing or not whole seconds. */
+        UNREADABLE,
+        /** {@code pod_s} outside the bounds or shorter than a slot: no ad of ours fits, or no break of ours is that long. */
+        OUT_OF_RANGE,
+        /** The stored request has no template slot. */
+        NO_TEMPLATE
+    }
+
     /**
      * What shaping did.
      *
@@ -45,8 +55,10 @@ public final class PodShape {
      * @param slots      the pod's slots, or 0 when not shaped
      * @param fast       the request's {@code ext.fast} before it was removed (the ad-server mode's ask), or null
      * @param refused    why the pod was refused, or null
+     * @param refusal    its code, or null
      */
-    public record Result(BidRequest request, Integer podSeconds, int slots, JsonNode fast, String refused) {
+    public record Result(BidRequest request, Integer podSeconds, int slots, JsonNode fast, String refused,
+                         Refusal refusal) {
 
         public boolean shaped() {
             return podSeconds != null;
@@ -66,22 +78,23 @@ public final class PodShape {
         final JsonNode fast = ext != null ? ext.getProperty(EXT) : null;
         final JsonNode slot = fast != null ? fast.get(SLOT_FIELD) : null;
         if (slot == null || !slot.canConvertToInt() || slot.asInt() < 1) {
-            return new Result(request, null, 0, fast, null);
+            return new Result(request, null, 0, fast, null, null);
         }
         final JsonNode pod = fast.get(POD_FIELD);
         final String text = pod != null && pod.isTextual() ? pod.textValue() : null;
         if (text == null || !WHOLE_SECONDS.matcher(text).matches()) {
-            return refused(request, fast, "pod_s is not whole seconds (length %d)".formatted(
+            return refused(request, fast, Refusal.UNREADABLE, "pod_s is not whole seconds (length %d)".formatted(
                     text != null ? text.length() : -1));
         }
         final int seconds = Integer.parseInt(text);
         final int slotSeconds = slot.asInt();
         if (seconds < minSeconds || seconds > maxSeconds || seconds < slotSeconds) {
-            return refused(request, fast, "pod_s %d outside %d-%d s".formatted(seconds, minSeconds, maxSeconds));
+            return refused(request, fast, Refusal.OUT_OF_RANGE,
+                    "pod_s %d outside %d-%d s".formatted(seconds, minSeconds, maxSeconds));
         }
         final List<Imp> imps = request.getImp();
         if (imps == null || imps.isEmpty() || imps.getFirst().getVideo() == null) {
-            return refused(request, fast, "no template slot");
+            return refused(request, fast, Refusal.NO_TEMPLATE, "no template slot");
         }
         final Imp template = imps.getFirst();
         final int count = seconds / slotSeconds;
@@ -89,7 +102,7 @@ public final class PodShape {
                 .mapToObj(index -> slot(template, index, count, seconds))
                 .toList();
         final BidRequest shaped = request.toBuilder().imp(slots).ext(withoutFast(ext)).build();
-        return new Result(shaped, seconds, count, fast, null);
+        return new Result(shaped, seconds, count, fast, null, null);
     }
 
     private static Imp slot(Imp template, int index, int count, int seconds) {
@@ -108,7 +121,7 @@ public final class PodShape {
         return copy;
     }
 
-    private static Result refused(BidRequest request, JsonNode fast, String why) {
-        return new Result(request, null, 0, fast, why);
+    private static Result refused(BidRequest request, JsonNode fast, Refusal code, String why) {
+        return new Result(request, null, 0, fast, why, code);
     }
 }

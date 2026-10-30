@@ -1027,6 +1027,51 @@
       },
       "Type": "AWS::Logs::MetricFilter"
     },
+    "ModuleAlarmsPodsRejected65E7BA6D": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"REJECTED\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "PodsRejected",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "ModuleAlarmsPodsRejectedOutOfRange7C312D96": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"REJECTED OUT_OF_RANGE\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "PodsRejectedOutOfRange",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "ModuleAlarmsPodsRejectedUnreadable414C5823": {
+      "Properties": {
+        "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"REJECTED UNREADABLE\"",
+        "LogGroupName": "fastm-pbs-PrebidContainerLogGroup",
+        "MetricTransformations": [
+          {
+            "MetricName": "PodsRejectedUnreadable",
+            "MetricNamespace": "FastChannels/PrebidServer/fastm",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
     "ModuleAlarmsPolicyFallbacksA464C68A": {
       "Properties": {
         "FilterPattern": "\"fast-ctv-pod\" -\"warmup\" \"POLICY_\"",

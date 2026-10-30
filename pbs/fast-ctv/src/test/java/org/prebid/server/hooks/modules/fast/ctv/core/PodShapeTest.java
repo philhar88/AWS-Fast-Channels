@@ -89,6 +89,7 @@ public class PodShapeTest {
             final PodShape.Result result = target.apply(request);
 
             assertThat(result.refused()).as(seconds).isEqualTo("pod_s %s outside 30-120 s".formatted(seconds));
+            assertThat(result.refusal()).isEqualTo(PodShape.Refusal.OUT_OF_RANGE);
             assertThat(result.shaped()).isFalse();
             assertThat(result.request()).isSameAs(request);
         }
@@ -101,6 +102,7 @@ public class PodShapeTest {
 
             assertThat(result.refused()).as(seconds)
                     .isEqualTo("pod_s is not whole seconds (length %d)".formatted(seconds.length()));
+            assertThat(result.refusal()).isEqualTo(PodShape.Refusal.UNREADABLE);
             assertThat(result.shaped()).isFalse();
         }
     }
