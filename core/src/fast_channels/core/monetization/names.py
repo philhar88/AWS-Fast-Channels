@@ -9,7 +9,6 @@ through a cross-stack reference: the Media stack also deploys without it (``make
 from enum import StrEnum
 from typing import Final
 
-from fast_channels.core.monetization.functions import function_prefix
 from fast_channels.core.tags import tag_key
 
 MODULE: Final = "release"
@@ -94,7 +93,7 @@ BUNDLE_CHAIN: Final = "release/bundle"
 
 def function_pattern(prefix: str) -> str:
     """Every FunctionId of the deployment: ``<p>_*`` (IAM resource pattern)."""
-    return f"{function_prefix(prefix)}_*"
+    return f"{prefix}_*"
 
 
 def sibling_pattern(channel: str) -> str:

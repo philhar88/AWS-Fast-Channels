@@ -32,7 +32,6 @@ def test_the_allow_list_has_the_documented_44_functions() -> None:
 
 
 def test_function_ids() -> None:
-    assert fn.function_prefix("fast-m") == "fast_m"
     assert fn.sibling_scope("fastm", "fastm-demo-p-a") == "demo_p_a"
     assert fn.function_stem("fastm", "ps_ctl") == "fastm_ps_ctl"
     assert fn.function_stem("fastm", "ps_redeem", sibling="fastm-demo-p-a") == "fastm_demo_p_a_ps_redeem"

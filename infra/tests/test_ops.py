@@ -292,9 +292,9 @@ def test_appconfig_application_and_environment(ops: Any) -> None:
         template.has_output(name, {})
 
 
-def test_lake_database_names_have_no_hyphens() -> None:
+def test_lake_database_names() -> None:
     assert lake_database_name("fast") == "fast_lake"
-    assert lake_database_name("fastci-pr7") == "fastci_pr7_lake"
+    assert lake_database_name("fastcipr7") == "fastcipr7_lake"
 
 
 def test_census_announces_changes_with_ops_on(ops: Any, default: Any) -> None:

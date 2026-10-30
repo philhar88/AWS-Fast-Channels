@@ -72,7 +72,6 @@ from fast_channels.core.monetization.functions import (
     FunctionType,
     Hook,
     HttpRequestConfiguration,
-    function_prefix,
     release_tag,
 )
 from fast_channels.core.monetization.jsonata_allowlist import ALLOWED_FUNCTIONS
@@ -308,8 +307,8 @@ def check_function(function: Function, *, prefix: str) -> list[Violation]:
         found.append(_violation(Rule.F1, at, "FunctionIds use [A-Za-z0-9_] only (a hyphen fails with HTTP 400)"))
     if RELEASE_SUFFIX.search(stem):
         found.append(_violation(Rule.F1, at, "bundle ids are stems; the release suffix _rNNNN is added at apply"))
-    if not stem.startswith(f"{function_prefix(prefix)}_"):
-        found.append(_violation(Rule.F1, at, f"FunctionIds start with {function_prefix(prefix)}_"))
+    if not stem.startswith(f"{prefix}_"):
+        found.append(_violation(Rule.F1, at, f"FunctionIds start with {prefix}_"))
     if function.tags:
         found.append(_violation(Rule.F3, at, "tags are set at apply, when the id is created"))
     if len(function.output) > OUTPUTS_PER_FUNCTION_MAX:

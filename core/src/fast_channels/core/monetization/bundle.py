@@ -27,7 +27,6 @@ from fast_channels.core.monetization.functions import (
     Function,
     FunctionRef,
     Hook,
-    function_prefix,
     function_stem,
     ps_ctl,
     reexport,
@@ -284,7 +283,7 @@ class _Functions:
 
 def _root(prefix: str, sibling: SiblingContext, hook: Hook, trees: Sequence[HookTree], functions: _Functions) -> str:
     steps = [step for tree in trees for step in tree.steps]
-    scope = f"{function_prefix(prefix)}_{sibling_scope(prefix, sibling.name)}_"
+    scope = f"{prefix}_{sibling_scope(prefix, sibling.name)}_"
     scoped = any(step.function.function_id.startswith(scope) for step in steps)
     outputs: dict[str, str] = {}
     for tree in trees:

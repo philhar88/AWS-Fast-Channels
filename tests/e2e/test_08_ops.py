@@ -75,7 +75,7 @@ def test_ops_stack_outputs(ops: Stage) -> None:
 
     assert not [key for key in MODULE_OUTPUT_KEYS[Module.OPS] if not outputs.get(key)], outputs
     assert ops.output(Plane.DATA, "LakeBucketName")
-    assert outputs["LakeDatabase"] == f"{ops.prefix.replace('-', '_')}_lake"
+    assert outputs["LakeDatabase"] == f"{ops.prefix}_lake"
 
 
 def _copies(ops: Stage, kind: str, since: datetime) -> list[dict[str, Any]]:

@@ -310,7 +310,7 @@ def test_no_budget_without_the_flag(deployment: GetDeployment) -> None:
 
 @pytest.mark.parametrize(
     ("prefix", "task", "name"),
-    [("fast", "scheduler.plan", "fast-scheduler-plan"), ("fastci-pr7", "ops_triage.x", "fastci-pr7-ops-triage-x")],
+    [("fast", "scheduler.plan", "fast-scheduler-plan"), ("fastcipr7", "ops_triage.x", "fastcipr7-ops-triage-x")],
 )
 def test_profile_names(prefix: str, task: str, name: str) -> None:
     assert profile_name(prefix, task) == name
