@@ -1,6 +1,6 @@
 """The PDS's private config bucket and the snapshot publisher.
 
-The bucket is never served by the CDN and never the ingest bucket: only the PDS's functions read it and only the
+The bucket is never served by the CDN and never the ingest bucket: only the PDS (its sidecar) reads it and only the
 publishers write it. The snapshot publisher (``fast_channels.functions.pds.publisher``) runs when the stack deploys
 (a CDK trigger, again whenever the function or its configuration changes) and every hour. It reads the default
 ladder's kit from the media bucket (only its VAST pod and demo index) and sets the own book's budget shards.

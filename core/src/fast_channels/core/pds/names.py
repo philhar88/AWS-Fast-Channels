@@ -81,8 +81,8 @@ class Parameter(StrEnum):
     LADDER_VERSION = "ladder-version"
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
     CATALOG_CONTEXT_BUCKET = "catalog-context-bucket"
-    """The crawl module's catalog-context bucket, whose objects the policy function copies (Media stack, with the
-    module on)."""
+    """The crawl module's catalog-context bucket, whose objects the PDS sidecar copies (Media stack, with the module
+    on)."""
 
 
 class Published(StrEnum):
