@@ -339,6 +339,13 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 
 ### Fixed
 
+- **Demand: a sub-second real-time herd is named and sized.** When MediaTailor asks for every session of a
+  prefetched sibling at the marker at once, about 50 auctions a task in half a second outrun the task's 2 vCPU and the
+  module serves those breaks SAFE (measured: 64-71 of 100 on 2 tasks; 0 at 25 auctions/s per task). The Release stack
+  counts the siblings' real-time ad requests (`RealTimeAdsRequests`), and the composite alarm
+  `<prefix>-pds-burst-real-time` fires when the PDS's policy fallbacks and a mostly real-time sibling coincide.
+  docs/demand.md sizes Prebid Server from a break's peak arrivals, and ADR-0036 records the evidence: the capacity
+  line, two sidecar processes tried and not adopted, and the reservation-hold measurements.
 - **Demand: a changed setting reaches an existing stage.** The guidance uploads its configuration directory only when
   its stack is created, so `deploy-demand` on an existing stage left Prebid Server on the old configuration (seen
   live: the module's timeouts stayed at their old values in S3). `deploy-demand` now syncs the rendered

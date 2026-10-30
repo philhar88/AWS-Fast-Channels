@@ -640,6 +640,7 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | Filler plays instead of programs | No program at that time, or a block started in the past | `schedule___get_schedule` shows the gaps; plan from now + 10 minutes |
 | SSAI 504 for a few minutes after a channel change | Channel policy propagation | Wait |
 | First ad break shows only slate | MediaTailor imports a new creative (`NEW_CREATIVE`) | Expected for the first break of each creative |
+| `<prefix>-pds-burst-real-time` fires; a break's pods were own book and house ads only (`POLICY_UNAVAILABLE` in the module's lines) | Every session of a prefetched sibling asked in real time at the marker at once, a sub-second herd: about 50 auctions a task in half a second outrun the task's CPU ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)) | Find the break (`evid` in the module's lines) and its schedule `pf-<evid>`: CloudTrail `CreatePrefetchSchedule`/`DeletePrefetchSchedule` show a schedule deleted after its retrievals; a break published less than the retrieval lead (150 s) ahead has none. The breaks were served, never empty. A large real-time audience is sized as in [demand.md](demand.md#sizing-prebid-server-for-a-break) |
 
 ### Agent and console
 

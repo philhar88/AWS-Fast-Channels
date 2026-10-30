@@ -18,7 +18,7 @@ from fast_channels.core.demand import Parameter as DemandParameter
 from fast_channels.core.demand import parameter_path
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.bundle import SIBLING_PLACEHOLDER, AdServerRoute
-from fast_channels.core.monetization.playback import SiblingRole
+from fast_channels.core.monetization.playback import SiblingRole, sibling_name
 from fast_channels.core.monetization.prefetch import PrefetchPolicy
 from fast_channels.core.pds import names as pds_names
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
@@ -28,6 +28,7 @@ from fast_channels.infra.constructs.ops import ConfigurationAlarms, ZeroAdsDetec
 from fast_channels.infra.constructs.ops.lake import LAKE_SUFFIX_PATH
 from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release import bundle as rendering
+from fast_channels.infra.constructs.release.burst import RealTimeBurst
 from fast_channels.infra.constructs.release.controller import PointerSettings, ReleaseController, SmokeSettings
 from fast_channels.infra.constructs.release.detectors import LogReconciler, MarkerDetector
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
@@ -203,6 +204,18 @@ class ReleaseStack(Stack):
                 removal_policy=removal,
             )
             if release.prefetch.enabled
+            else None
+        )
+        prefetched = [
+            name
+            for channel in release.channels  # the prefetcher's: not the lab channel
+            for letter in release.prefetch.siblings
+            if release.prefetch.enabled and (name := sibling_name(channel, letter)) in siblings
+        ]
+        # Beside the PDS's policy-fallback alarm (the Pds stack's, deployed first) when it exists (ADR-0036).
+        self.burst = (
+            RealTimeBurst(self, "Burst", prefix=prefix, log_group=self.logs.log_group, siblings=prefetched, topic=topic)
+            if prefetched and config.modules.pds.enabled and network.container_log_group
             else None
         )
         self.zero_ads = ZeroAdsDetector(

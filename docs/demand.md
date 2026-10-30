@@ -238,6 +238,35 @@ sends requests to tasks still starting, which refuse them (HTTP 502).
 `scripts/prebid_guidance.py herd --rate 400 --seconds 6` replays a break herd with the warm-up project and prints
 vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s on 2 tasks.
 
+## Sizing Prebid Server for a break
+
+A task (2 vCPU, the PDS sidecar beside Prebid Server) decides about **25 auctions/s at 0 fallbacks**; the first
+`/policy` fallbacks appear near 50/s, and in a sub-second burst `/select` is bound by its reservations' contention on
+the lines' budget shards ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)). Size the
+tasks from the auctions that arrive per second at a break's peak:
+
+- **Real time.** MediaTailor asks for each session when its player next reads the playlist after the marker, so a
+  break's requests spread over about one poll interval (3-6 s): `sessions ÷ spread` per second. 400 viewers of one
+  configuration over 4 s are 100 auctions/s: 4 tasks.
+- **Prefetched** ([ADR-0033](adr/0033-prefetch-single-schedules.md)). The sessions present in the retrieval window
+  are asked over the shaping window (90 s), which divided the peak by about 16 in the herds (14-17×). Late joiners
+  and mid-break joiners still ask in real time, and so does every session of a break published closer than the
+  retrieval lead (150 s).
+- **Tasks** = peak auctions/s ÷ 25, and at least the tier minimum.
+
+The census gate sizes by **channels, not viewers**: the first running channel raises the minimum to `tasks.min`, and
+the last one stopping takes it to 0 ([above](#scaling-the-census-gate-dayparts-and-warm-up)). Target tracking reacts
+in minutes, too late for a break. So set `tasks.min` and `modules.demand.dayparts` from the audience you expect in
+real time. Scaling from the viewers themselves (sessions per configuration before a break) is a documented follow-up,
+not built.
+
+A **sub-second herd** comes from a failure path: MediaTailor asks for every session at the marker at once when it
+cannot use a retrieval (a schedule deleted after its retrievals, fixed in M3-06's #82) or a break has none. About 50
+auctions a task in half a second outrun the task's CPU (64-71 of 100 fell back on 2 tasks); the module serves those
+breaks SAFE, the own book's and house ads, never an empty pod. `<prefix>-pds-burst-real-time` fires when the
+policy-fallback alarm and a prefetched sibling's mostly real-time requests coincide
+([release-controller.md](release-controller.md#alarms)).
+
 ## An ad server in front: Prebid results for its VAST
 
 > **Experimental in v4.0.0, and off by default.** Enable it only to try the ad-server flow. The tested route is the
