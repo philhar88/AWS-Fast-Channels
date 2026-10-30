@@ -14,6 +14,7 @@ import os
 import re
 from decimal import Decimal
 from enum import StrEnum
+from fnmatch import fnmatchcase
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
@@ -26,7 +27,8 @@ from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings, qualification
-from fast_channels.core.naming import PREFIX_PATTERN, check_prefix, is_agent_owned
+from fast_channels.core.monetization.names import sibling_pattern
+from fast_channels.core.naming import PREFIX_PATTERN, agent_namespace, check_prefix, is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
@@ -267,7 +269,10 @@ class ChannelAssemblyConfig(_Section):
 class ChannelConfig(_Section):
     name: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", max_length=40)
     """Channel Assembly channel name. Must start with ``<prefix>-``; ``<prefix>-agent-`` is reserved for channels
-    the agent creates. ``{prefix}`` is replaced with the deployment prefix (the default is ``{prefix}-demo``)."""
+    the agent creates. ``{prefix}`` is replaced with the deployment prefix (the default is ``{prefix}-demo``). Another
+    channel's name plus ``-p-...`` (or ``<prefix>-lab-p-...``) is refused, with the release module on or off: those are
+    the release module's sibling names, and its IAM grants cover ``<channel>-p-*``. So is ``<prefix>-agent``, whose
+    siblings would be agent-owned names."""
     ladder: str = "standard"
     """Built-in ladder of every program, slate and house ad on this channel (one of ``ladders.builtin``)."""
     outputs: tuple[str, ...] = DEFAULT_PACKAGE_PROFILES
@@ -823,11 +828,32 @@ class FastChannelsConfig(_Section):
         where = f"{CONTEXT_KEY}.channels.iac[{channel.name}]"
         if not channel.name.startswith(f"{self.prefix}-") or is_agent_owned(channel.name, self.prefix):
             return [f"{where}: name must start with {self.prefix!r}- but not {self.prefix!r}-agent- (agent-owned)"]
+        if problem := self._sibling_problem(channel.name):
+            return [f"{where}: {problem}"]
         if channel.ladder not in self.ladders.builtin:
             return [f"{where}: ladder {channel.ladder!r} is not in ladders.builtin {list(self.ladders.builtin)}"]
         if extra := [o for o in channel.outputs if o not in self.channel_assembly.package_profiles]:
             return [f"{where}: outputs {extra} are not in channel_assembly.package_profiles"]
         return []
+
+    def _sibling_problem(self, name: str) -> str | None:
+        """Why channel ``name`` would collide with the release module's siblings (``<channel>-p-<letter>``, granted as
+        ``<channel>-p-*``), whether or not the module is on: so that turning it on cannot."""
+        siblings = sibling_pattern(name)
+        if siblings.startswith(agent_namespace(self.prefix)):
+            return (
+                f"{name!r} cannot be an IaC channel: the release module would name its siblings {siblings!r}, inside "
+                f"the agent-owned {agent_namespace(self.prefix)}* names"
+            )
+        lab = f"{self.prefix}-lab"
+        channels = {*(c.name for c in self.channels.iac), lab} - {name}
+        if parent := next((c for c in sorted(channels) if fnmatchcase(name, sibling_pattern(c))), None):
+            of = f"the release lab channel {parent!r}" if parent == lab else f"channel {parent!r}"
+            return (
+                f"{name!r} is a sibling name of {of}: the release module names that channel's playback configurations "
+                f"{parent}-p-<letter> and its IAM grants cover {sibling_pattern(parent)!r}; rename the channel"
+            )
+        return None
 
     def _module_problems(self, region: str | None) -> list[str]:
         """Rules between a module and the rest of the configuration (rules among modules: :class:`ModulesConfig`).

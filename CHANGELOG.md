@@ -14,6 +14,13 @@ All notable changes to this project are documented here. The format follows
   why. A v3.0.0 deployment whose prefix has a hyphen must be redeployed under a new prefix, because resource names
   derive from it. The shipped prefixes (`fast` and the stages) comply. `stages/*.json`, `scripts/stage_args.py`
   `--prefix` and the e2e workflow's prefix input apply the same rule.
+- **IaC channel names cannot collide with the release module's siblings.** The release module names a monetized
+  channel's playback configurations `<channel>-p-a`, `-p-b` and `-p-z`, and the controller's IAM grants and the
+  release guard cover `<channel>-p-*`. An IaC channel called `fast-demo-p-a` beside `fast-demo` was accepted: its
+  playback configuration would have been a sibling's name, inside the controller's grants. Synth now refuses a
+  channel named another channel's name (or the lab channel `<prefix>-lab`'s) plus `-p-...`, whether or not the
+  release module is on, and an IaC channel named `<prefix>-agent`, whose siblings would fall in the agent-owned
+  `<prefix>-agent-*` names. The error says why. The shipped stages comply.
 
 ### Added
 

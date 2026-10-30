@@ -106,7 +106,7 @@ it costs.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `name` | str | required | Channel Assembly channel name. Must start with `<prefix>-`; `<prefix>-agent-` is reserved for channels the agent creates. `{prefix}` is replaced with the deployment prefix (the default is `{prefix}-demo`). |
+| `name` | str | required | Channel Assembly channel name. Must start with `<prefix>-`; `<prefix>-agent-` is reserved for channels the agent creates. `{prefix}` is replaced with the deployment prefix (the default is `{prefix}-demo`). Another channel's name plus `-p-...` (or `<prefix>-lab-p-...`) is refused, with the release module on or off: those are the release module's sibling names, and its IAM grants cover `<channel>-p-*`. So is `<prefix>-agent`, whose siblings would be agent-owned names. |
 | `ladder` | str | `"standard"` | Built-in ladder of every program, slate and house ad on this channel (one of `ladders.builtin`). |
 | `outputs` | list of str | `["hls"]` | Rendition profiles published as channel outputs (subset of `channel_assembly.package_profiles`). |
 | `tier` | `BASIC` or `STANDARD` | `"BASIC"` | Channel tier; billed per running hour, and channels are never started automatically. |
@@ -262,9 +262,11 @@ Notes:
   CloudWatch retention value.
 - Module rules: an enabled `demand` needs `ops`; `pds` needs `ops` and `demand`; `release` needs `ops`, `demand`
   and `pds`; `crawl` needs `pds` and `release`. `release.channels` ⊆ the IaC channel names (after `{prefix}` is
-  replaced). With `release` on and `lab_channel` true, no IaC channel may be called `<prefix>-lab`. With `ops` on,
-  `ledger_lock: compliance` needs `removal: retain`. With `models` on, every task's model is one of
-  `agent.allowed_models` and callable from the region, a task with `data_class: viewer` never names a `global.`
+  replaced). With `release` on and `lab_channel` true, no IaC channel may be called `<prefix>-lab`. Whatever the
+  modules, no IaC channel may be named like another channel's or `<prefix>-lab`'s siblings (`<channel>-p-...`),
+  or `<prefix>-agent`. With `ops` on, `ledger_lock: compliance` needs `removal: retain`. With `models` on, every
+  task's model is one of `agent.allowed_models` and callable from the region, a task with `data_class: viewer`
+  never names a `global.`
   profile (also when `{geo}` resolves to `global`), with `agent.enabled` the registry holds the scheduler agent's
   `scheduler.plan`, every task's `eval` names a passing eval record for its model and settings
   (`evals/records/<task>/<key>.json`, [agent.md](agent.md#model-registry)), and `budgets_action` needs
