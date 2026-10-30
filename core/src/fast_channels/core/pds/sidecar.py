@@ -30,6 +30,16 @@ SERVICE: Final = "pds"
 """``POWERTOOLS_SERVICE_NAME`` of the sidecar's logs and metrics."""
 TASK_CPU: Final = 2048
 """The task's CPU units with the sidecar: the guidance's 2 vCPU, which both containers share."""
+PDS_CPU: Final = 512
+"""The sidecar's CPU share, and Prebid Server's is :data:`PREBID_CPU`: ECS sets them as the containers' CPU weights,
+so under contention the sidecar keeps at least a quarter of the task's 2 vCPU. A new task's warm-up overlaps
+Prebid Server's JIT compilation (900-1,400 CPU units), and without the weights the sidecar's queue wait reached p99
+40-120 ms there (measured)."""
+PREBID_CPU: Final = TASK_CPU - PDS_CPU
+SLOW_START_SECONDS: Final = 180
+"""ALB slow start on Prebid Server's target groups: a new task's share of requests ramps up over this, the warm-up's
+150 s and its JIT. Slow start needs the round-robin algorithm (the guidance's), and ramps a task only while another
+healthy one serves: a scale-out, not a scale-from-zero."""
 TASK_MEMORY_MIB: Final = 6144
 """The task's memory with the sidecar: the guidance's 4 GiB plus 2 GiB. Prebid Server's JVM sizes its heap from the
 task's memory (a quarter by default), and the sidecar needs a few hundred MiB."""
@@ -59,6 +69,9 @@ class Sidecar(BaseModel):
     health_command: tuple[str, ...] = HEALTH_COMMAND
     task_cpu: int = TASK_CPU
     task_memory_mib: int = TASK_MEMORY_MIB
+    pds_cpu: int = PDS_CPU
+    prebid_cpu: int = PREBID_CPU
+    slow_start_seconds: int = Field(default=SLOW_START_SECONDS, ge=30, le=900)
     statements: tuple[dict[str, Any], ...] = Field(description="IAM statements added to the task role.")
     endpoint_statements: tuple[dict[str, Any], ...] = Field(
         description="Statements added to the policy of the guidance VPC's S3 gateway endpoint."

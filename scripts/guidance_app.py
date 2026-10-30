@@ -11,7 +11,10 @@ construct one does not own (:func:`augment`):
 
 - to each task definition of the guidance (``PrebidTaskDef``: one per entry deployment, of which CloudFormation
   conditions deploy one), the sidecar's container, which Prebid Server's container waits for (``HEALTHY``);
-- the task's CPU and memory (``Cpu`` and ``Memory`` overrides of the L1 task definition);
+- the task's CPU and memory (``Cpu`` and ``Memory`` overrides of the L1 task definition), and each container's CPU
+  weight (the sidecar's on its container, Prebid Server's as an override);
+- ALB slow start on the guidance's Prebid Server target groups (``ALBTargetGroup``), whose round-robin algorithm it
+  needs;
 - the sidecar's grants on the shared task role;
 - its S3 reads in the policy of the guidance VPC's S3 gateway endpoint, which lets through only the guidance's own
   buckets otherwise;
@@ -35,6 +38,7 @@ from typing import Any, Final
 from aws_cdk import Duration, RemovalPolicy, Size, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
+from aws_cdk import aws_elasticloadbalancingv2 as elbv2
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
 
@@ -42,6 +46,10 @@ CONTEXT: Final = "fastPds"
 """``core.pds.sidecar.CONTEXT``."""
 TASK_DEFINITION: Final = "PrebidTaskDef"
 """The guidance's task definitions' construct id (``prebid_server/ecs_task_construct.py``)."""
+TARGET_GROUP: Final = "ALBTargetGroup"
+"""The guidance's Prebid Server target groups' construct id (``prebid_server/ecs_service_construct.py``)."""
+NO_SLOW_START: Final = frozenset({"least_outstanding_requests", "weighted_random"})
+"""Routing algorithms ALB slow start does not work with."""
 PREBID_CONTAINER: Final = "Prebid-Container"
 """The guidance's Prebid Server container."""
 LOG_BUFFER: Final = Size.mebibytes(25)
@@ -57,17 +65,21 @@ class SidecarError(Exception):
 
 def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDefinition]:
     """Add ``sidecar`` (``core.pds.sidecar.Sidecar`` as data) to every Prebid Server task definition of ``stack``;
-    returns them.
+    returns them. Every construct it relies on is found before anything is added.
 
     Raises:
         SidecarError: no task definition, one with another id, one without Prebid Server's container, not exactly one
-            S3 gateway endpoint, or not exactly one VPC.
+            S3 gateway endpoint, not exactly one VPC, no Prebid Server target group, or one whose routing algorithm
+            slow start does not work with.
     """
     nodes = stack.node.find_all()
     tasks = [node for node in nodes if isinstance(node, ecs.FargateTaskDefinition)]
     if not tasks or any(task.node.id != TASK_DEFINITION for task in tasks):
         found = [task.node.path for task in tasks]
         raise SidecarError(f"expected the guidance's {TASK_DEFINITION} task definitions, found {found}")
+    prebids = [task.find_container(PREBID_CONTAINER) for task in tasks]
+    if missing := [task.node.path for task, prebid in zip(tasks, prebids, strict=True) if prebid is None]:
+        raise SidecarError(f"{missing} have no {PREBID_CONTAINER}")
     endpoints = [
         node
         for node in nodes
@@ -76,14 +88,25 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
     ]
     if len(endpoints) != 1:
         raise SidecarError(f"expected the guidance VPC's one S3 gateway endpoint, found {len(endpoints)}")
-    for statement in sidecar["endpoint_statements"]:
-        endpoints[0].add_to_policy(iam.PolicyStatement.from_json(statement))
     vpcs = [node for node in nodes if isinstance(node, ec2.Vpc)]
     if len(vpcs) != 1:
         raise SidecarError(f"expected the guidance's one VPC, found {[vpc.node.path for vpc in vpcs]}")
+    groups = [node for node in nodes if isinstance(node, elbv2.ApplicationTargetGroup) and node.node.id == TARGET_GROUP]
+    if not groups:
+        raise SidecarError(f"expected the guidance's {TARGET_GROUP} target groups, found none")
+
+    for statement in sidecar["endpoint_statements"]:
+        endpoints[0].add_to_policy(iam.PolicyStatement.from_json(statement))
     dynamodb = vpcs[0].add_gateway_endpoint("PdsDynamoDbEndpoint", service=ec2.GatewayVpcEndpointAwsService.DYNAMODB)
     for statement in sidecar["dynamodb_endpoint_statements"]:
         dynamodb.add_to_policy(iam.PolicyStatement.from_json(statement))
+    for group in groups:
+        group.set_attribute("slow_start.duration_seconds", str(sidecar["slow_start_seconds"]))
+        # Resolving caches the attributes (CDK's Lazy.any): only after they are all set.
+        attributes = stack.resolve(group.node.default_child.target_group_attributes) or []  # type: ignore[union-attr]
+        algorithm = next((a["value"] for a in attributes if a["key"] == "load_balancing.algorithm.type"), None)
+        if algorithm in NO_SLOW_START:
+            raise SidecarError(f"{group.node.path} routes by {algorithm}, which ALB slow start does not work with")
     log_group = logs.LogGroup(
         stack,
         "PdsSidecarLogs",
@@ -94,10 +117,8 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
     retention = log_group.node.default_child
     assert isinstance(retention, logs.CfnLogGroup)
     retention.add_property_override("RetentionInDays", int(sidecar["log_retention_days"]))
-    for task in tasks:
-        prebid = task.find_container(PREBID_CONTAINER)
-        if prebid is None:
-            raise SidecarError(f"{task.node.path} has no {PREBID_CONTAINER}")
+    for task, prebid in zip(tasks, prebids, strict=True):
+        assert prebid is not None
         pds = task.add_container(
             sidecar["container"],
             image=ecs.ContainerImage.from_registry(sidecar["image"]),
@@ -119,6 +140,7 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
             readonly_root_filesystem=True,
             enable_restart_policy=True,
             restart_attempt_period=RESTART_AFTER,
+            cpu=sidecar["pds_cpu"],
         )
         prebid.add_container_dependencies(
             ecs.ContainerDependency(container=pds, condition=ecs.ContainerDependencyCondition.HEALTHY)
@@ -127,6 +149,9 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
         assert isinstance(definition, ecs.CfnTaskDefinition)
         definition.add_property_override("Cpu", str(sidecar["task_cpu"]))
         definition.add_property_override("Memory", str(sidecar["task_memory_mib"]))
+        containers = [node.node.id for node in task.node.children if isinstance(node, ecs.ContainerDefinition)]
+        index = containers.index(PREBID_CONTAINER)  # rendered in the order they were added
+        definition.add_property_override(f"ContainerDefinitions.{index}.Cpu", sidecar["prebid_cpu"])
         for statement in sidecar["statements"]:
             task.add_to_task_role_policy(iam.PolicyStatement.from_json(statement))
     return tasks

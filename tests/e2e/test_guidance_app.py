@@ -18,6 +18,7 @@ import pytest
 from aws_cdk import App, CfnCondition, Fn, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
+from aws_cdk import aws_elasticloadbalancingv2 as elbv2
 from aws_cdk import aws_iam as iam
 from aws_cdk.assertions import Template
 from constructs import Construct
@@ -72,6 +73,17 @@ class _Entry(Construct):
         super().__init__(scope, id)
         task = ecs.FargateTaskDefinition(Construct(self, "ECSTask"), "PrebidTaskDef", cpu=2048, memory_limit_mib=4096)
         task.add_container("Prebid-Container", image=ecs.ContainerImage.from_registry("prebid"))
+        vpc = ec2.Vpc.from_vpc_attributes(
+            self, "Vpc", vpc_id="vpc-1", availability_zones=["us-east-1a"], private_subnet_ids=["subnet-1"]
+        )
+        elbv2.ApplicationTargetGroup(
+            Construct(self, "ECSService"),
+            "ALBTargetGroup",
+            port=80,
+            protocol=elbv2.ApplicationProtocol.HTTPS,
+            target_type=elbv2.TargetType.IP,
+            vpc=vpc,
+        )
         stack = Stack.of(self)
         cfn = stack.node.try_find_child(condition) or CfnCondition(
             stack, condition, expression=Fn.condition_equals("a", "a")
@@ -116,7 +128,8 @@ def test_every_task_definition_gets_the_sidecar_that_prebid_server_waits_for() -
     assert (pds["Essential"], pds["ReadonlyRootFilesystem"]) == (True, True)
     assert pds["RestartPolicy"] == {"Enabled": True, "RestartAttemptPeriod": 60}
     assert pds["HealthCheck"]["Command"] == list(SPEC.health_command)
-    assert {"PortMappings", "Cpu", "Memory"}.isdisjoint(pds), "loopback only, the task's CPU and memory shared"
+    assert {"PortMappings", "Memory"}.isdisjoint(pds), "loopback only, the task's memory shared"
+    assert (pds["Cpu"], by_name["Prebid-Container"][0]["Cpu"]) == (512, 1536), "CPU weights: a quarter for the sidecar"
     assert {e["Name"]: e["Value"] for e in pds["Environment"]} == SPEC.environment
     options = pds["LogConfiguration"]["Options"]
     assert (options["mode"], options["max-buffer-size"], options["awslogs-stream-prefix"]) == (
@@ -177,6 +190,26 @@ def test_reservations_reach_dynamodb_through_a_gateway_endpoint_for_the_sidecars
     assert "dynamodb:PutItem" in statement["Action"] and "dynamodb:Scan" not in statement["Action"]
 
 
+def test_prebid_servers_target_groups_ramp_a_new_task_up_over_slow_start() -> None:
+    stack = guidance_like()
+    wrapper.augment(stack, json.loads(SPEC.model_dump_json()))
+    groups = Template.from_stack(stack).find_resources("AWS::ElasticLoadBalancingV2::TargetGroup").values()
+
+    assert len(groups) == 2
+    for group in groups:
+        attributes = {a["Key"]: a["Value"] for a in group["Properties"]["TargetGroupAttributes"]}
+        assert attributes["slow_start.duration_seconds"] == "180"
+
+
+def test_slow_start_is_refused_with_a_routing_algorithm_it_does_not_work_with() -> None:
+    stack = guidance_like()
+    for node in stack.node.find_all():
+        if isinstance(node, elbv2.ApplicationTargetGroup):
+            node.set_attribute("load_balancing.algorithm.type", "least_outstanding_requests")
+    with pytest.raises(wrapper.SidecarError, match="least_outstanding_requests"):
+        wrapper.augment(stack, json.loads(SPEC.model_dump_json()))
+
+
 def test_a_stack_that_is_not_the_guidances_is_refused() -> None:
     with pytest.raises(wrapper.SidecarError, match="PrebidTaskDef"):
         wrapper.augment(guidance_like(task_id="Other"), json.loads(SPEC.model_dump_json()))
@@ -190,6 +223,7 @@ def test_a_stack_that_is_not_the_guidances_is_refused() -> None:
     _Entry(no_endpoint, "CloudFrontEntryDeployment", "CloudFront")
     with pytest.raises(wrapper.SidecarError, match="S3 gateway endpoint"):
         wrapper.augment(no_endpoint, json.loads(SPEC.model_dump_json()))
+    assert not Template.from_stack(no_endpoint).find_resources("AWS::Logs::LogGroup"), "nothing added on refusal"
 
 
 def test_the_deploy_command_names_the_wrapper_only_with_a_sidecar() -> None:
@@ -251,5 +285,14 @@ def test_the_real_guidance_synthesizes_with_the_sidecar(tmp_path: Path) -> None:
     assert sids[-1] == "PdsSnapshot" and len(sids) == 4, "the guidance's three statements, then the sidecar's read"
     [dynamodb] = [e for e in endpoints if "dynamodb" in json.dumps(e["Properties"]["ServiceName"])]
     assert [s["Sid"] for s in dynamodb["Properties"]["PolicyDocument"]["Statement"]] == ["PdsTables"]
+    groups = [
+        {a["Key"]: a["Value"] for a in r["Properties"].get("TargetGroupAttributes", [])}
+        for k, r in resources.items()
+        if r["Type"] == "AWS::ElasticLoadBalancingV2::TargetGroup" and "ALBTargetGroup" in k
+    ]
+    assert len(groups) == 2 and all(g["slow_start.duration_seconds"] == "180" for g in groups), groups
+    for definition in definitions.values():
+        cpus = {c["Name"]: c.get("Cpu") for c in definition["Properties"]["ContainerDefinitions"]}
+        assert cpus == {"Prebid-Container": 1536, "Pds-Container": 512}
     [group] = [r for k, r in resources.items() if r["Type"] == "AWS::Logs::LogGroup" and k.startswith("PdsSidecarLogs")]
     assert group["Properties"]["LogGroupName"] == "/aws/ecs/fastcid-pds" and "Condition" not in group
