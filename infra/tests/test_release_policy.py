@@ -17,7 +17,12 @@ type GetDeployment = Callable[..., Any]
 
 NEEDED_ON = {"modules.ops.enabled": True, "modules.demand.enabled": True, "modules.pds.enabled": True}
 """The modules release needs; the comparisons below start from them, so they show what release alone changes."""
-RELEASE_ON = {**NEEDED_ON, "modules.release.enabled": True, "modules.release.channels": ["{prefix}-demo"]}
+RELEASE_ON = {
+    **NEEDED_ON,
+    "modules.release.enabled": True,
+    "modules.release.channels": ["{prefix}-demo"],
+    "modules.release.lab_channel": False,  # a channel of its own (test_release_stack covers it)
+}
 NEWS = {"channels.iac": [{"name": "{prefix}-demo"}, {"name": "{prefix}-news"}]}
 ACCOUNT, REGION = "123456789012", "us-east-1"
 
@@ -100,7 +105,11 @@ def test_release_changes_only_the_policy_and_guard_of_monetized_channels(
         "AWS::MediaTailor::ChannelPolicy",
     }
     assert _changed(on, off, "data") == {}
-    [tools] = _changed(on, off, "operator").values()  # the channels tool: agent channels get the pattern too
+    operator = _changed(on, off, "operator")
+    [tools] = [r for r in operator.values() if r["Type"] == "AWS::Lambda::Function"]  # agent channels get the pattern
+    assert {r["Type"] for r in operator.values()} == {"AWS::Lambda::Function", "AWS::SSM::Parameter"}
+    [published] = [r["Properties"]["Name"] for r in operator.values() if r["Type"] == "AWS::SSM::Parameter"]
+    assert published == "/fast/release/tool-functions"  # the lab channel's smoke test uses the agent tools
     assert tools["Properties"]["Handler"] == "fast_channels.functions.tools.channels.handler"
     template = tools["Properties"]["Environment"]["Variables"]["PLAYBACK_CONFIG_TEMPLATE"]["Fn::Join"][1]
     assert template[-1].endswith(',"sibling_policy":true}')

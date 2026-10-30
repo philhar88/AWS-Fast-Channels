@@ -73,21 +73,24 @@ def render(
     channel_urls: Mapping[str, str],
     contributions: Sequence[BundleContribution] = (),
 ) -> RenderedBundle:
-    """The deployment's bundle: its monetized channels (``modules.release.channels``), the Prebid Server origin, and
+    """The deployment's bundle: its monetized channels (``modules.release.channels``, and the lab channel), the
+    Prebid Server origin, and
     the module's contributions.
 
     Raises:
         InvalidBundleError: the bundle breaks a validator.
     """
     placeholders = _Placeholders()
-    iac = {channel.name: channel for channel in config.channels.iac}
+    iac = {channel.name: channel for channel in config.iac_channels}
+    lab = config.lab_channel.name if config.lab_channel else None
     channels = [
         ChannelInput(
             name=name,
             video_content_source_url=placeholders.hide(channel_urls[name]),
             outputs=iac[name].outputs,
+            lab=name == lab,
         )
-        for name in config.modules.release.channels
+        for name in config.release_channels
     ]
     bundle = build_bundle(
         prefix=config.prefix,

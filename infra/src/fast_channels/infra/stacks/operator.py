@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack
+from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.model_registry import SCHEDULER_TASK
+from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import agent_namespace, agentcore_name
 from fast_channels.functions.tools.registry import confirm_tools
 from fast_channels.infra.config import TransactionSearchMode
@@ -204,6 +206,19 @@ class OperatorStack(Stack):
             )
         )
         self._outputs()
+        if config.modules.release.enabled:
+            ssm.StringParameter(
+                self,
+                "ReleaseToolFunctions",
+                parameter_name=release_names.parameter_name(config.prefix, release_names.Parameter.TOOL_FUNCTIONS),
+                string_value=self._tool_functions(),
+                description="Read by the release module's stack: the lab channel's smoke test uses the agent tools",
+            )
+
+    def _tool_functions(self) -> str:
+        return self.to_json_string(
+            {target: function.function.function_name for target, function in self.tools.functions.items()}
+        )
 
     def _outputs(self) -> None:
         """Values for operators and scripts (e2e, eval_model.py --gateway-url); ``AutopilotClientId`` only when the
@@ -218,9 +233,7 @@ class OperatorStack(Stack):
             "RuntimeArn": self.agent.runtime.agent_runtime_arn,
             "RuntimeInvokeUrl": self.agent.invoke_url,
             **({"ModelSpecParameter": self.agent.model_spec.parameter_name} if self.agent.model_spec else {}),
-            "ToolFunctions": self.to_json_string(
-                {target: function.function.function_name for target, function in self.tools.functions.items()}
-            ),
+            "ToolFunctions": self._tool_functions(),
         }
         if self.identity.autopilot_client is not None:
             outputs["AutopilotClientId"] = self.identity.autopilot_client.user_pool_client_id

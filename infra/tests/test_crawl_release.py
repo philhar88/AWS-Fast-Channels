@@ -46,7 +46,9 @@ def test_the_lookup_is_mapped_on_the_general_siblings(deployment: Callable[..., 
     rendered = bundle(deployment, enabled=True)
     assert validate_bundle(rendered) == []
     mapped = {s.name: (s.playback.function_mapping or {}).get(Hook.PRE_ADS) for s in rendered.siblings}
-    assert mapped == {"fastm-demo-p-a": "fastm_pa_root", "fastm-demo-p-b": "fastm_pa_root", "fastm-demo-p-z": None}
+    assert mapped == {  # the monetized channel's siblings and the lab channel's (M3-04)
+        f"fastm-{c}-p-{s}": "fastm_pa_root" if s != "z" else None for c in ("demo", "lab") for s in ("a", "b", "z")
+    }
     meta = rendered.function("fastm_pa_meta")
     assert meta is not None
     assert "/catalog/ctx/v1/' & $encodeUrlComponent($id)" in meta.http_request_configuration.url

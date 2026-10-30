@@ -874,6 +874,30 @@ class FastChannelsConfig(_Section):
             raise ValueError("\n".join(problems))
         return self
 
+    @property
+    def lab_channel(self) -> ChannelConfig | None:
+        """The release module's lab channel ``<prefix>-lab`` (``modules.release.lab_channel``): BASIC, created
+        stopped, with the first monetized channel's ladder and outputs. It is started only to smoke-test a release
+        while the monetized channels are stopped, and has siblings like them."""
+        release = self.modules.release
+        if not (release.enabled and release.lab_channel and release.channels):
+            return None
+        first = next(c for c in self.channels.iac if c.name == release.channels[0])
+        return ChannelConfig(name=f"{self.prefix}-lab", ladder=first.ladder, outputs=first.outputs)
+
+    @property
+    def iac_channels(self) -> tuple[ChannelConfig, ...]:
+        """``channels.iac`` and the lab channel."""
+        return (*self.channels.iac, *((self.lab_channel,) if self.lab_channel else ()))
+
+    @property
+    def release_channels(self) -> tuple[str, ...]:
+        """The channels with siblings: ``modules.release.channels`` and the lab channel (none with the module
+        off)."""
+        if not self.modules.release.enabled:
+            return ()
+        return (*self.modules.release.channels, *((self.lab_channel.name,) if self.lab_channel else ()))
+
     def _channel_problems(self, channel: ChannelConfig) -> list[str]:
         where = f"{CONTEXT_KEY}.channels.iac[{channel.name}]"
         if not channel.name.startswith(f"{self.prefix}-") or is_agent_owned(channel.name, self.prefix):

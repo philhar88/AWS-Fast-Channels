@@ -63,6 +63,8 @@ class FakeStore:
     slot: str = "a"
     holder: int | None = None
     """The release holding the lock."""
+    deployed: dict[str, str] = field(default_factory=dict)
+    """The release pointer's last deployed content."""
 
     def add(self, bundle: Bundle) -> str:
         key = f"release/{bundle.digest}/bundle.json"
@@ -110,6 +112,15 @@ class FakeStore:
         if self.holder == release:
             self.holder = None
 
+    def lock_holder(self) -> int | None:
+        return self.holder
+
+    def pointer(self) -> dict[str, str]:
+        return dict(self.deployed)
+
+    def put_pointer(self, content: dict[str, str]) -> None:
+        self.deployed = dict(content)
+
     def secret(self, slot: str) -> SecretStr:
         return SecretStr({"a": SECRET_A, "b": SECRET_B}[slot])
 
@@ -129,6 +140,13 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "LAKE_DELIVERIES": json.dumps(LAKE),
         "ORIGIN_SECRET_REGION": "us-east-1",
         "RELEASE_CHANNELS": CHANNEL,
+        "APPCONFIG_APPLICATION": "app1",
+        "APPCONFIG_ENVIRONMENT": "env1",
+        "RELEASE_PROFILE": "prof1",
+        "RELEASE_STRATEGY": "strat1",
+        "RELEASE_AT_ONCE_STRATEGY": "now1",
+        "RELEASE_LOCK_SECONDS": "9600",
+        "PDS_POLICY_LOG_GROUP": "/aws/lambda/pds-policy",
     }.items():
         monkeypatch.setenv(name, value)
     cached = store.bundle  # the state fixture replaces it before this teardown runs
@@ -156,8 +174,11 @@ def state(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
         "secret",
         "lock",
         "unlock",
+        "pointer",
+        "put_pointer",
     ):
         monkeypatch.setattr(store, name, getattr(fake, name))
+    monkeypatch.setattr(store, "holder", fake.lock_holder)
     return fake
 
 
@@ -176,11 +197,11 @@ class Ledger:
 @pytest.fixture
 def ledger(monkeypatch: pytest.MonkeyPatch) -> Ledger:
     fake = Ledger()
-    monkeypatch.setattr(apply, "append", fake.append)
+    monkeypatch.setattr(apply, "append", fake.append)  # promote ledgers through apply.ledger
     return fake
 
 
-SERVICES = ("dynamodb", "events", "logs", "mediatailor", "s3", "secretsmanager")
+SERVICES = ("appconfig", "cloudwatch", "dynamodb", "events", "lambda", "logs", "mediatailor", "s3", "secretsmanager")
 
 
 def _client(service: str) -> Any:

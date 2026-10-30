@@ -94,6 +94,9 @@ class Published(StrEnum):
     DELIVERY_FUNCTION = "delivery-function"
     """The delivery function's ARN (with the release module on): the Release stack subscribes it to the siblings' log
     group, so their impressions are counted too."""
+    POLICY_LOG_GROUP = "policy-log-group"
+    """The ``/policy`` function's log group (with the release module on): the release smoke test counts a session's
+    decision records there."""
 
 
 def stack_parameters(*, crawl: bool) -> tuple[Parameter, ...]:

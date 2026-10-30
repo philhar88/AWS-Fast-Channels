@@ -214,13 +214,17 @@ class FastChannelsStage(Stage):
         exempt = []
         if self.release is not None:
             controller = self.release.controller
-            # The controller's writers, and the readers of the siblings' logs (the zero-ad-sessions detector).
-            exempt = [controller.apply.node.path, controller.reaper.node.path, self.release.zero_ads.function.node.path]
+            # The controller's writers, and the readers of the siblings' logs (zero-ad sessions, the smoke test).
+            exempt = [
+                controller.apply.node.path,
+                controller.promote.node.path,
+                controller.reaper.node.path,
+                self.release.zero_ads.function.node.path,
+                controller.smoke.node.path,
+            ]
             if self.release.prefetcher is not None:  # it writes the siblings' prefetch schedules
                 exempt.append(self.release.prefetcher.function.node.path)
-        return ReleaseGuard(
-            prefix=config.prefix, channels=config.modules.release.channels, region=region, exempt=exempt
-        )
+        return ReleaseGuard(prefix=config.prefix, channels=config.release_channels, region=region, exempt=exempt)
 
     def _account_baseline(self, config: FastChannelsConfig, tags: dict[str, str]) -> AccountBaselineStack:
         """The account's Transaction Search baseline, which only ``transaction_search: enable`` asks for."""

@@ -3,13 +3,14 @@
 The Release Controller is the release module (`modules.release`, off by default; see
 [operations.md](operations.md#configuration-reference)). It is the only writer of what monetizes a channel: the
 MediaTailor Monetization Functions and the sibling playback configurations that run them. It is being built on the
-`feature/agentic-monetization` branch. This page covers the apply path, the drift check, the playback plan, the
-ownership guard and the siblings' logs. The smoke gate, promotion and unattended rollback follow, then the
-origin-secret rotation.
+`feature/agentic-monetization` branch. This page covers the apply path, the smoke gate, promotion and unattended
+rollback, the drift check, the playback plan, the ownership guard and the siblings' logs. The origin-secret rotation
+follows.
 
 - [Siblings](#siblings)
 - [The release bundle](#the-release-bundle)
 - [The apply path](#the-apply-path)
+- [Promotion and rollback](#promotion-and-rollback)
 - [The playback plan](#the-playback-plan)
 - [Prefetch](#prefetch)
 - [Drift](#drift)
@@ -84,6 +85,52 @@ To apply a bundle again (a failed release, or a lost event), start the state mac
 input: `{"bundle_key": "release/<digest>/bundle.json", "digest": "<digest>", "correlation_id": "<id>"}`. The
 `release.accept` record holds the bundle key, the digest and the `request`; the same id retries that release, a new
 id makes a new one. Redeploying an unchanged stack does nothing: CloudFormation does not call the custom resource.
+
+## Promotion and rollback
+
+A channel's first release has no candidate: it is live once applied, and the pointer is published at once (it
+moves no viewer). After a later release configured a channel's idle sibling, that sibling is the **candidate**.
+The release keeps the controller's lock until it is promoted or rolled back, so the next one waits:
+
+1. **Smoke test.** A probe session on the candidate for two breaks, judged on its MediaTailor logs three minutes
+   later (their delivery delay): every ad marker led to an ad request, every break was filled, no Function or hook
+   failed, the Pod Decision Service recorded a decision per break, and no PRE_ADS request
+   [timed out](#timed-out-requests). When no
+   monetized channel runs, the smoke runs on the lab channel `<prefix>-lab` (BASIC, created stopped): the controller
+   schedules a block with a break a minute through the agent tools, starts the channel and stops it after. Without a
+   running channel or the lab channel, the release stays applied and is not promoted (`release.hold`).
+2. **Soak.** A new probe session for three breaks, judged the same way.
+3. **Pointer.** A new version of the AppConfig profile `release` (application `<prefix>-fast`, environment
+   `<prefix>`), `{"<channel>": "<candidate>"}`, deployed with the stage's strategy (`modules.release.strategy`;
+   never all at once). The environment monitors `<prefix>-release-candidate`, a composite alarm over the pair
+   siblings' hook and marker alarms: in ALARM, the deployment rolls back. The controller polls the deployment every
+   minute and stops it when a candidate's PRE_ADS request [timed out](#timed-out-requests).
+4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, and the
+   Function trees no sibling keeps are deleted.
+
+A failed smoke or soak, or a rolled-back pointer, runs **R1**: the candidate is remapped to its last good tree
+(a remap reaches live sessions at their next break in about 3 s), the pointer goes back to the stable siblings at
+once, the plans name them, and `release.rollback` is ledgered. The same runbook runs when `<prefix>-release-candidate`
+goes to ALARM outside a promotion: each pair sibling whose hook, Function or marker alarm is in ALARM goes back to its last good tree. `GetManifest.Errors` stops a pointer deployment but remaps nothing: a stopped channel or its origin raises it, not the sibling's Functions.
+
+### Timed-out requests
+
+An `HTTP_REQUEST` step that reaches its `RequestTimeoutMilliseconds` inside an executor is neither a Function error
+nor a hook error: the step completes with a null response, the hook goes on, and no error event is logged (fastm
+2026-10-30: a 1,000 ms request to an endpoint that answers in 2,500 ms). So no error alarm sees a dependency that is
+down or slow. Only the step's `Function.Latency` shows it, at its timeout.
+
+The smoke judge and the pointer poll read `AWS/MediaTailor` `Function.Latency` (Maximum, per minute) of each
+`HTTP_REQUEST` step in the candidate's PRE_ADS tree. The dimensions are the sibling, the step's FunctionId in the
+release, `PRE_ADS_REQUEST` and `HTTP_REQUEST`. A step at or above its own request timeout (from the release's bundle)
+in two minutes or more has timed out: the smoke fails, or the pointer deployment is stopped and R1 runs.
+`release.rollback`'s reason names the requests (`timed_out`).
+
+The window starts with the probe session, or with the deployment. One slow minute is a cold call, not a broken
+release. On a healthy smoke, the crawl lookup reached its 250 ms once (266 ms), on the session's first break.
+
+This is a runtime check, not an alarm: the FunctionId changes with every release, and each release's bundle sets its
+own timeouts.
 
 ## The playback plan
 
@@ -212,6 +259,8 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-dead-letters` | A `Desired State Rendered` event that could not start the state machine |
 | `<sibling>-presessioninithook-errors`, `-preadsrequesthook-errors`, `-function-errors`, `-getmanifest-errors` | Any error of the sibling in five minutes |
 | `<prefix>-release-zero-ads-sessions` | Sessions on a sibling that saw three breaks without an ad request (hourly) |
+| `<sibling>-markers-without-ads-request` | In 2 of 10 minutes with at least 5 markers, more than half of the markers had no ad request: an invalid rendered body or an exhausted PRE_ADS budget makes no request and logs no error, and the break plays unfilled. A break's marker counts once (MediaTailor finds a Channel Assembly marker again when it gains its duration, without a request), and a ratio leaves out the viewers who join during a break. `<prefix>-lab-x` has this alarm too, for a harness to prove it (`tests/e2e`) |
+| `<prefix>-release-candidate` | Any of the above (but drift) on a pair sibling: rolls a pointer deployment back (AppConfig monitor) and runs R1 |
 | `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
 
 Every alarm treats missing data as not breaching. The alerts go to the stage's alert topic.
@@ -239,3 +288,5 @@ stay until the stack goes.
 | An execution waits at Accept | Another release is applying; its execution holds the lock until it ends |
 | `release.fail` in the ledger | Its `error`; an `ImmutableFunctionError` means a Function id exists with another definition (someone put it outside the controller) |
 | `<prefix>-release-drift` in alarm | The drift function's log (`release drift`): the paths that differ |
+| `release.hold` in the ledger | No monetized channel ran and there is no lab channel (or no agent to start it): start a channel and run the release again by hand |
+| `release.rollback` in the ledger | Its `reason` (a failed smoke verdict lists what failed; `ROLLED_BACK` names the alarm, or `timed_out` the PRE_ADS requests that reached their timeout) |

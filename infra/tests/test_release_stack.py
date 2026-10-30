@@ -63,6 +63,10 @@ def actions(statement: dict[str, Any]) -> set[str]:
     return {action} if isinstance(action, str) else set(action)
 
 
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else [value]
+
+
 def stacks(deployment: Any) -> list[Stack]:
     return [c for c in deployment.stage.node.children if isinstance(c, Stack)]
 
@@ -95,14 +99,19 @@ def test_it_reads_the_media_stack_by_parameter_not_by_weak_reference(deployment:
         "/fastm/release/cdn-base-url",
         "/fastm/release/media-bucket",
         "/fastm/release/channels/fastm-demo",
+        "/fastm/release/channels/fastm-lab",
+        "/fastm/release/appconfig-application",  # the Ops stack's
+        "/fastm/release/appconfig-environment",
         "/fastm/pds/delivery-function",  # the Pds stack's
+        "/fastm/pds/policy-log-group",
+        "/fastm/release/tool-functions",  # the Operator stack's
     }
     plain = deployment(RELEASE)
     for stack in ("data", "media", "ops"):
         assert plain.template(getattr(plain.stage, stack)).to_json() == d.template(getattr(d.stage, stack)).to_json()
     written = {
         p["Name"]
-        for stack in (d.stage.media, d.stage.pds)
+        for stack in (d.stage.media, d.stage.ops, d.stage.pds, d.stage.operator)
         for p in resources(d.template(stack), "AWS::SSM::Parameter").values()
     }
     assert ssm - {"/cdk-bootstrap/hnb659fds/version"} <= written
@@ -114,7 +123,12 @@ def test_the_bundle_is_rendered_at_synth_and_published_at_deploy(deployment: Get
     bundle = release.rendered.bundle
 
     assert validate_bundle(bundle) == []
-    assert [s.name for s in bundle.siblings] == ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"]
+    assert [s.name for s in bundle.siblings] == [
+        *("fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"),
+        *("fastm-lab-p-a", "fastm-lab-p-b", "fastm-lab-p-z"),  # the lab channel's, which publish the hook events
+    ]
+    hooks = [s.playback.log_configuration.manifest_service_interaction_log for s in bundle.siblings]
+    assert [bool(h and h.publish_opt_in_event_types) for h in hooks] == [False, False, True, True, True, True]
     assert [f.function_id for f in bundle.functions] == ["fastm_ps_ctl", "fastm_ps_root"]  # M3-03: ps_ctl only
     [properties] = resources(d.template(release), "Custom::DesiredState").values()
     assert {"Prefix": "fastm", "EventBus": "fastm-fast-channels"}.items() <= properties.items()
@@ -131,11 +145,12 @@ def test_only_the_controller_changes_monetization(deployment: GetDeployment) -> 
     template = d.template(d.stage.release)
     roles = resources(template, "AWS::IAM::Role")
     apply_role = next(name for name in roles if name.startswith("ControllerApplyRole"))
+    promote_role = next(name for name in roles if name.startswith("ControllerPromoteRole"))
     reaper_role = next(name for name in roles if name.startswith("ControllerReaperRole"))
 
     prefetch_role = next(name for name in roles if name.startswith("PrefetcherFunctionRole"))
     writers = {role for role, s in statements(template) if s["Effect"] == "Allow" and actions(s) & WRITES}
-    assert writers == {apply_role, reaper_role, prefetch_role}
+    assert writers == {apply_role, promote_role, reaper_role, prefetch_role}  # promote remaps (R1)
     prefetch_writes = {a for r, s in statements(template) if r == prefetch_role for a in actions(s) & WRITES}
     assert prefetch_writes == {"mediatailor:CreatePrefetchSchedule", "mediatailor:DeletePrefetchSchedule"}
     [policy] = [
@@ -143,7 +158,7 @@ def test_only_the_controller_changes_monetization(deployment: GetDeployment) -> 
         for role, s in statements(template)
         if role == apply_role and "mediatailor:PutPlaybackConfiguration" in actions(s)
     ]
-    assert policy[1]["Resource"] == f"{BASE}:playbackConfiguration/fastm-demo-p-*"
+    assert policy[1]["Resource"] == [f"{BASE}:playbackConfiguration/fastm-{c}-p-*" for c in ("demo", "lab")]
     assert not any("mediatailor:PutChannelPolicy" in actions(s) for _, s in statements(template))
     assert not any("mediatailor:DeleteFunction" in actions(s) for r, s in statements(template) if r == apply_role)
 
@@ -166,25 +181,21 @@ def test_every_other_role_of_the_stage_is_denied_the_controllers_writes(deployme
             assert logs_deny["Resource"] == [group, f"{group}:*"]
             assert deny["Effect"] == "Deny" and set(deny["Action"]) == set(DENIED_ACTIONS)
             assert set(deny["Resource"]) == {
-                f"{BASE}:playbackConfiguration/fastm-demo-p-*",
-                f"{BASE}:prefetchSchedule/fastm-demo-p-*/*",
+                *(f"{BASE}:playbackConfiguration/fastm-{c}-p-*" for c in ("demo", "lab")),
+                *(f"{BASE}:prefetchSchedule/fastm-{c}-p-*/*" for c in ("demo", "lab")),
                 f"{BASE}:channel/fastm-demo",
+                f"{BASE}:channel/fastm-lab",
                 f"{BASE}:function/fastm_*",
             }
-    controller = {
-        n
-        for n in unguarded
-        if any(
-            r in n
-            for r in (
-                "/ControllerApplyRole",
-                "/ControllerReaperRole",
-                "/PrefetcherFunctionRole",
-                "/ZeroAdsDetectorRole",
-            )
-        )
-    }
-    assert len(controller) == 4  # the controller's writers, and the reader of the siblings' logs
+    exempt = (
+        "/ControllerApplyRole",
+        "/ControllerPromoteRole",
+        "/ControllerReaperRole",
+        "/PrefetcherFunctionRole",
+        "/ZeroAdsDetectorRole",
+    )
+    controller = {n for n in unguarded if any(r in n for r in (*exempt, "/ControllerSmokeRole"))}
+    assert len(controller) == 6  # the controller's writers, and the readers of the siblings' logs
     # The roles of CDK's core custom-resource providers are CfnResources, not iam.Role (the guard's Aspect cannot
     # attach to them): they empty buckets or run a trigger, and none of them may call MediaTailor.
     providers = set(unguarded) - controller
@@ -225,9 +236,11 @@ def test_the_siblings_logs_are_encrypted_with_a_key_that_delegates_nothing(deplo
         }
     }
     readers = [s for s in policy if "Fn::GetAtt" in json.dumps(s["Principal"])]
-    assert [r["Principal"]["AWS"]["Fn::GetAtt"][0] for r in readers] == [
-        next(n for n in resources(template, "AWS::IAM::Role") if n.startswith("ZeroAdsDetectorRole"))
-    ]
+    principals = [p for r in readers for p in _list(r["Principal"]["AWS"])]
+    roles = resources(template, "AWS::IAM::Role")
+    assert sorted(p["Fn::GetAtt"][0] for p in principals) == sorted(
+        next(n for n in roles if n.startswith(start)) for start in ("ZeroAdsDetectorRole", "ControllerSmokeRole")
+    )
     assert all(r["Condition"] == {"StringEquals": {"kms:ViaService": "logs.us-east-1.amazonaws.com"}} for r in readers)
     groups = resources(template, "AWS::Logs::LogGroup")
     [group] = [g for g in groups.values() if g.get("LogGroupName") == "/aws/vendedlogs/mediatailor/fastm-release"]
@@ -301,7 +314,7 @@ def test_the_siblings_impressions_reach_the_pds_delivery_function(deployment: Ge
     parameter = "/fastm/pds/delivery-function"
     assert parameter in {p["Default"] for p in template["Parameters"].values()}
     pds = resources(d.template(d.stage.pds), "AWS::SSM::Parameter")
-    assert [p["Name"] for p in pds.values()] == [parameter]
+    assert sorted(p["Name"] for p in pds.values()) == [parameter, "/fastm/pds/policy-log-group"]
     off = deployment({**RELEASE, "modules.release.enabled": False}, extra=EXTRA)
     assert not resources(off.template(off.stage.pds), "AWS::SSM::Parameter")
 
@@ -321,8 +334,10 @@ def test_the_apply_path_applies_one_release_at_a_time(deployment: GetDeployment)
     assert [c["ErrorEquals"] for c in states["Prepare"]["Catch"]] == [["InvalidBundleError"], ["States.ALL"]]
     assert states["Prepare"]["Catch"][0]["Next"] == "BundleRejected"
     assert states["AlreadyReleased?"]["Default"] == "Accept"
+    for step in ("Point", "Rollback", "Finish"):
+        assert ["PointerBusyError"] in [r["ErrorEquals"] for r in states[step]["Retry"]], step
     [busy] = [r for r in states["Accept"]["Retry"] if r["ErrorEquals"] == ["ReleaseBusyError"]]
-    assert (busy["IntervalSeconds"], busy["MaxAttempts"], busy["BackoffRate"]) == (30, 40, 1)
+    assert (busy["IntervalSeconds"], busy["MaxAttempts"], busy["BackoffRate"]) == (60, 160, 1)  # demo: 40 + 120 min
     for step in ("Accept", "Functions", "Configure", "Publish"):
         assert states[step]["Catch"][-1] == {
             "ErrorEquals": ["States.ALL"],
@@ -330,10 +345,12 @@ def test_the_apply_path_applies_one_release_at_a_time(deployment: GetDeployment)
             "Output": "{% $states.errorOutput %}",
         }
     assert states["Configure"]["MaxConcurrency"] == 1
-    assert states["Publish"]["Next"] == "CheckDrift"
+    assert states["Publish"]["Next"] == "CheckDrift" and states["CheckDrift"]["Next"] == "Candidates"
     resources_ = template.to_json()["Resources"]
     [bundle] = [k for k, r in resources_.items() if r["Type"] == "Custom::DesiredState"]
-    [rule] = [k for k, r in resources_.items() if r["Type"] == "AWS::Events::Rule" and k.startswith("Controller")]
+    [rule] = [
+        k for k, r in resources_.items() if r["Type"] == "AWS::Events::Rule" and k.startswith("ControllerOnDesired")
+    ]
     assert rule in resources_[bundle]["DependsOn"], "the rule exists before the first event"
     [target] = resources(template, "AWS::Events::Rule")[rule]["Targets"]
     assert set(target["InputTransformer"]["InputPathsMap"].values()) == {
@@ -341,6 +358,141 @@ def test_the_apply_path_applies_one_release_at_a_time(deployment: GetDeployment)
         "$.detail.digest",
         "$.detail.correlation_id",
     }
+
+
+def test_the_lab_channel_is_a_stopped_basic_channel_with_siblings(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    media = d.template(d.stage.media)
+    channels = {c["ChannelName"]: c for c in resources(media, "AWS::MediaTailor::Channel").values()}
+    assert channels["fastm-lab"]["Tier"] == "BASIC"
+    release = d.template(d.stage.release)
+    [promote] = [
+        f
+        for f in resources(release, "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.release.promote.handler"
+    ]
+    assert "TOOL_FUNCTIONS" in promote["Environment"]["Variables"], "it chooses the lab only with the agent tools"
+    policies = {p["ChannelName"]: p for p in resources(media, "AWS::MediaTailor::ChannelPolicy").values()}
+    assert '"-p-?"' in json.dumps(policies["fastm-lab"]["Policy"]), "the lab channel admits its siblings"
+    assert d.stage.release.rendered.bundle.channels[1].lab
+    off = deployment({**RELEASE, "modules.release.lab_channel": False}, extra=EXTRA)
+    assert "fastm-lab" not in {
+        c["ChannelName"] for c in resources(off.template(off.stage.media), "AWS::MediaTailor::Channel").values()
+    }
+
+
+def test_the_appconfig_environment_monitors_the_candidate_alarm(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    ops = d.template(d.stage.ops)
+    [environment] = resources(ops, "AWS::AppConfig::Environment").values()
+    [monitor] = environment["Monitors"]
+    assert monitor["AlarmArn"] == "arn:aws:cloudwatch:us-east-1:123456789012:alarm:fastm-release-candidate"
+    role_id = monitor["AlarmRoleArn"]["Fn::GetAtt"][0]
+    role = resources(ops, "AWS::IAM::Role")[role_id]
+    assert role["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] == {"Service": "appconfig.amazonaws.com"}
+    # AppConfig finds a composite alarm only with an unfiltered DescribeAlarms (fastm 2026-10-29)
+    [describe] = [s for r, s in statements(ops) if r == role_id]
+    assert (describe["Action"], describe["Resource"]) == ("cloudwatch:DescribeAlarms", "*")
+    plain = deployment({**RELEASE, "modules.release.enabled": False}, extra=EXTRA)
+    [unmonitored] = resources(plain.template(plain.stage.ops), "AWS::AppConfig::Environment").values()
+    assert "Monitors" not in unmonitored
+    # the monitors watch AllAtOnce's 10-minute bake: monitored, the flags deploy with no bake
+    [flags] = resources(ops, "AWS::AppConfig::Deployment").values()
+    [at_once] = resources(ops, "AWS::AppConfig::DeploymentStrategy").values()
+    assert (at_once["Name"], at_once["FinalBakeTimeInMinutes"], at_once["DeploymentDurationInMinutes"]) == (
+        "fastm-flags-at-once",
+        0,
+        0,
+    )
+    assert "Ref" in flags["DeploymentStrategyId"]
+    [plain_flags] = resources(plain.template(plain.stage.ops), "AWS::AppConfig::Deployment").values()
+    assert plain_flags["DeploymentStrategyId"] == "AppConfig.AllAtOnce"
+    release = d.template(d.stage.release)
+    [candidate] = resources(release, "AWS::CloudWatch::CompositeAlarm").values()
+    assert candidate["AlarmName"] == "fastm-release-candidate"
+    rule = json.dumps(candidate["AlarmRule"])
+    for sibling in ("FastmDemoPA", "FastmDemoPB", "FastmLabPA", "FastmLabPB"):  # the children's logical ids
+        assert sibling in rule
+    assert "FastmDemoPZ" not in rule and "FastmLabPZ" not in rule  # the probes are never candidates
+    strategies = {s["Name"]: s for s in resources(release, "AWS::AppConfig::DeploymentStrategy").values()}
+    at_once = strategies.pop("fastm-release-at-once")
+    assert (at_once["DeploymentDurationInMinutes"], at_once["FinalBakeTimeInMinutes"]) == (0, 0), "no bake to wait out"
+    [strategy] = strategies.values()
+    assert (strategy["GrowthType"], strategy["GrowthFactor"], strategy["DeploymentDurationInMinutes"]) == (
+        "LINEAR",
+        10,
+        30,
+    )
+
+
+def test_a_probe_opens_its_own_session_and_waits_for_its_logs_before_its_verdict(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    states = _definition(d.template(d.stage.release))["States"]
+    processor = states["SmokeAndSoak"]["ItemProcessor"]
+    inner = processor["States"]
+    assert processor["StartAt"] == "Candidate" and inner["Candidate"]["Next"] == "SmokeOpen"
+    for probe, then in (("Smoke", "SoakOpen"), ("Soak", "Soaked")):
+        assert inner[f"{probe}Open"]["Next"] == f"{probe}Watch"
+        seen = inner[f"{probe}Seen?"]
+        assert seen["Choices"][0]["Next"] == f"{probe}LogDelay" and seen["Default"] == f"{probe}Watch"
+        delay = inner[f"{probe}LogDelay"]
+        assert (delay["Type"], delay["Seconds"], delay["Next"]) == ("Wait", 180, f"{probe}Judge")
+        assert inner[f"{probe}Passed?"]["Choices"][0]["Next"] == then
+        assert inner[f"{probe}Passed?"]["Default"] == f"{probe}Failed"
+    breaks = {probe: inner[f"{probe}Judge"]["Arguments"]["Payload"]["breaks"] for probe in ("Smoke", "Soak")}
+    assert breaks == {"Smoke": 2, "Soak": 3}
+
+
+def test_the_judge_and_the_pointer_poll_read_the_request_timeouts_and_latency(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    states = _definition(template)["States"]
+    inner = states["SmokeAndSoak"]["ItemProcessor"]["States"]
+    for probe in ("Smoke", "Soak"):
+        payload = inner[f"{probe}Judge"]["Arguments"]["Payload"]
+        assert (payload["bundle_key"], payload["release"]) == ("{% $bundle_key %}", "{% $release %}")
+        assert "$states.input.failures" in inner[f"{probe}Failed"]["Cause"]  # the ledgered reason says what failed
+    poll = states["Pointer"]["Arguments"]["Payload"]
+    assert {"bundle_key", "release", "candidates"} <= set(poll), poll
+    for role in ("ControllerSmokeRole", "ControllerPromoteRole"):
+        granted = [s for r, s in statements(template) if r.startswith(role)]
+        assert any("cloudwatch:GetMetricStatistics" in actions(s) and s["Resource"] == "*" for s in granted), role
+        assert any("s3:GetObject" in actions(s) and "release/*" in json.dumps(s["Resource"]) for s in granted), role
+
+
+def test_a_failed_smoke_rolls_back_and_stops_the_lab_only_if_it_started_it(deployment: GetDeployment) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    states = _definition(d.template(d.stage.release))["States"]
+    [caught] = states["SmokeAndSoak"]["Catch"]
+    assert caught["Next"] == "LabToStop?"
+    choice = states["LabToStop?"]
+    assert choice["Choices"][0]["Next"] == "LabStopAfterFailure" and choice["Default"] == "Rollback"
+    assert states["LabStopAfterFailure"]["Next"] == "Rollback"
+    assert states["Rollback"]["Next"] == "RolledBack"
+
+
+def test_the_marker_detector_counts_a_breaks_first_marker_and_alarms_on_two_lossy_minutes(
+    deployment: GetDeployment,
+) -> None:
+    d = deployment(RELEASE, extra=EXTRA)
+    template = d.template(d.stage.release)
+    filters = {f["FilterName"]: f for f in resources(template, "AWS::Logs::MetricFilter").values()}
+    assert filters["AdMarkersFound"]["FilterPattern"] == (
+        '{ ($.eventType = "AD_MARKER_FOUND") && ($.adMarkers != "*,DURATION=*") }'
+    )
+    assert filters["AdsRequests"]["FilterPattern"] == '{ $.eventType = "MAKING_ADS_REQUEST" }'
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    for name in ("fastm-demo-p-a", "fastm-demo-p-b", "fastm-lab-p-b", "fastm-lab-x"):
+        alarm = alarms[f"{name}-markers-without-ads-request"]
+        assert (alarm["EvaluationPeriods"], alarm["DatapointsToAlarm"], alarm["Threshold"]) == (10, 2, 0.5)
+        assert alarm["TreatMissingData"] == "notBreaching"
+        [expression] = [m for m in alarm["Metrics"] if "Expression" in m]
+        assert expression["Expression"].startswith("IF(FILL(markers, 0) >= 5, ")
+    [candidate] = resources(template, "AWS::CloudWatch::CompositeAlarm").values()
+    assert "FastmLabXMarkers" not in json.dumps(candidate["AlarmRule"]), "lab-x is never a candidate"
+    off = deployment({**RELEASE, "modules.release.lab_channel": False}, extra=EXTRA)
+    names_ = {a["AlarmName"] for a in resources(off.template(off.stage.release), "AWS::CloudWatch::Alarm").values()}
+    assert "fastm-lab-x-markers-without-ads-request" not in names_
 
 
 def test_template_snapshot(

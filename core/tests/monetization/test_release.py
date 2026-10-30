@@ -14,8 +14,13 @@ from fast_channels.core.monetization.release import (
     SiblingRecord,
     applied,
     differences,
+    kept_releases,
+    last_good,
     mapped_functions,
     playback_plan,
+    pointer,
+    promoted,
+    rolled_back,
     targets,
 )
 
@@ -169,3 +174,25 @@ def test_playback_plan() -> None:
     assert plan.release == "r0007" and plan.v == 1
     with pytest.raises(ValueError, match="release must be 1-9999"):
         playback_plan(channel="c", configuration="c-p-a", release=0, playback={}, at=AT)
+
+
+def test_promotion_swaps_the_pair_and_rollback_returns_to_the_last_good_tree() -> None:
+    names_ = ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"]
+    state = applied(None, channel="fastm-demo", siblings=names_, release=1, digest=DIGEST, change_id="c1", at=AT)
+    with pytest.raises(ValueError, match="never released"):
+        promoted(ChannelState(channel="fastm-news"))
+    state = applied(
+        state, channel="fastm-demo", siblings=["fastm-demo-p-b"], release=2, digest=DIGEST, change_id="c2", at=AT
+    )
+    assert last_good(state, "fastm-demo-p-b") == 1 and last_good(state, "fastm-demo-p-x") is None
+    swapped = promoted(state)
+    assert (swapped.stable, swapped.idle) == ("fastm-demo-p-b", "fastm-demo-p-a")
+    assert pointer({"fastm-demo": swapped, "fastm-news": ChannelState(channel="fastm-news")}) == {
+        "fastm-demo": "fastm-demo-p-b"
+    }
+    good = SiblingRecord(release=1, digest=DIGEST, change_id="c1", at=AT)
+    back = rolled_back(state, "fastm-demo-p-b", record=good)
+    assert back.siblings["fastm-demo-p-b"] == good and back.history["fastm-demo-p-b"] == (1,)
+    with pytest.raises(ValueError, match="rolls back to None"):
+        rolled_back(back, "fastm-demo-p-b", record=good)
+    assert kept_releases({"fastm-demo": state}) == {1, 2}

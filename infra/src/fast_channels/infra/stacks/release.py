@@ -13,6 +13,7 @@ from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.monetization import names
+from fast_channels.core.monetization.playback import SiblingRole
 from fast_channels.core.monetization.prefetch import PrefetchPolicy
 from fast_channels.core.pds import names as pds_names
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
@@ -22,8 +23,10 @@ from fast_channels.infra.constructs.ops import ConfigurationAlarms, ZeroAdsDetec
 from fast_channels.infra.constructs.ops.lake import LAKE_SUFFIX_PATH
 from fast_channels.infra.constructs.pds.delivery import IMPRESSIONS
 from fast_channels.infra.constructs.release import bundle as rendering
-from fast_channels.infra.constructs.release.controller import ReleaseController
+from fast_channels.infra.constructs.release.controller import PointerSettings, ReleaseController, SmokeSettings
+from fast_channels.infra.constructs.release.detectors import MarkerDetector
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
+from fast_channels.infra.constructs.release.pointer import ReleasePointer
 from fast_channels.infra.constructs.release.prefetch import Prefetcher
 from fast_channels.infra.stacks.edge import EDGE_REGION
 
@@ -78,6 +81,7 @@ class ReleaseStack(Stack):
         super().__init__(scope, id, description=f"FAST Channels ({config.prefix}): Release Controller", **kwargs)
         Tags.of(self).add(names.MODULE_TAG, names.MODULE)
         prefix, release = config.prefix, config.modules.release
+        stage_id = self.stack_name.removesuffix("-Release")  # FastChannels-<prefix>
         retention, removal = config.observability.log_retention, RemovalPolicy.DESTROY
 
         def parameter(name: str) -> str:
@@ -87,7 +91,7 @@ class ReleaseStack(Stack):
             config,
             pbs_origin=f"https://{network.cloudfront_domain}",
             content_base_url=parameter(names.parameter_name(prefix, names.Parameter.CONTENT_BASE_URL)),
-            channel_urls={c: parameter(names.channel_parameter_name(prefix, c)) for c in release.channels},
+            channel_urls={c: parameter(names.channel_parameter_name(prefix, c)) for c in config.release_channels},
             contributions=contributions(config),
         )
         topic = sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, prefix))
@@ -99,11 +103,29 @@ class ReleaseStack(Stack):
             for log_type, name in (("AD_DECISION_SERVER_LOGS", lake_ads), ("MANIFEST_SERVICE_LOGS", lake_manifest))
         }
         bus = events.EventBus.from_event_bus_name(self, "Bus", f"{prefix}-fast-channels")
+        siblings = [sibling.name for sibling in self.rendered.bundle.siblings]
+        pair = [s.name for s in self.rendered.bundle.siblings if s.role is SiblingRole.GENERAL]
+        self.sibling_alarms = ConfigurationAlarms(self, "SiblingAlarms", configurations=siblings, topic=topic)
+        watched = [*siblings, *([names.lab_check(prefix)] if config.lab_channel else [])]
+        self.markers = MarkerDetector(self, "Markers", log_group=self.logs.log_group, siblings=watched, topic=topic)
+        application = parameter(names.parameter_name(prefix, names.Parameter.APPCONFIG_APPLICATION))
+        self.pointer = ReleasePointer(
+            self,
+            "Pointer",
+            prefix=prefix,
+            application_id=application,
+            rollout=self.rendered.bundle.rollout,
+            alarms=[
+                *(a for name, a in self.sibling_alarms.alarms.items() if name.startswith(tuple(pair))),
+                *(self.markers.alarms[name] for name in pair),
+            ],
+            topic=topic,
+        )
         self.controller = ReleaseController(
             self,
             "Controller",
             prefix=prefix,
-            channels=release.channels,
+            channels=config.release_channels,
             bundle=self.rendered.document,
             event_bus=bus,
             topic=topic,
@@ -113,6 +135,22 @@ class ReleaseStack(Stack):
             log_destination_arn=self.logs.destination_arn,
             lake_deliveries=self.to_json_string(lake),
             origin_secret_region=EDGE_REGION,
+            pointer=PointerSettings(
+                application=application,
+                environment=parameter(names.parameter_name(prefix, names.Parameter.APPCONFIG_ENVIRONMENT)),
+                profile=self.pointer.profile.ref,
+                strategy=self.pointer.strategy.ref,
+                at_once=self.pointer.at_once.ref,
+            ),
+            smoke=SmokeSettings(
+                decision_log_group=parameter(pds_names.parameter_name(prefix, pds_names.Published.POLICY_LOG_GROUP)),
+                tool_functions=parameter(names.parameter_name(prefix, names.Parameter.TOOL_FUNCTIONS))
+                if config.agent.enabled
+                else "",
+                tool_function_prefix=f"{stage_id}-Operator-" if config.agent.enabled else "",
+            ),
+            rollout_minutes=self.rendered.bundle.rollout.deployment_duration_in_minutes
+            + self.rendered.bundle.rollout.final_bake_time_in_minutes,
             log_retention=retention,
             removal_policy=removal,
         )
@@ -134,12 +172,6 @@ class ReleaseStack(Stack):
             if release.prefetch.enabled
             else None
         )
-        self.sibling_alarms = ConfigurationAlarms(
-            self,
-            "SiblingAlarms",
-            configurations=[sibling.name for sibling in self.rendered.bundle.siblings],
-            topic=topic,
-        )
         self.zero_ads = ZeroAdsDetector(
             self,
             "ZeroAds",
@@ -152,9 +184,11 @@ class ReleaseStack(Stack):
         )
         self.logs.grant_read(self.zero_ads.function.function.role)  # type: ignore[arg-type]
         self.impressions = self._impressions(prefix)
+        self.logs.grant_read(self.controller.smoke.function.role)  # type: ignore[arg-type]
         outputs = {
             "StateMachineArn": (self.controller.state_machine.state_machine_arn, "The apply path"),
             "BundleBucketName": (self.controller.bucket.bucket_name, "Release bundles (release/<digest>/bundle.json)"),
+            "BundleKey": (self.controller.desired.get_att_string("BundleKey"), "The bundle this deployment rendered"),
             "StateTableName": (self.controller.table.table_name, "The Release Controller's state"),
             "DriftFunction": (self.controller.drift.function.function_name, "The drift check (hourly)"),
             "SiblingLogGroup": (self.logs.log_group.log_group_name, "The siblings' MediaTailor logs (KMS)"),

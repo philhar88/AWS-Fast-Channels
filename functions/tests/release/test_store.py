@@ -145,7 +145,7 @@ def test_one_release_holds_the_lock_at_a_time(stub: Stub, monkeypatch: pytest.Mo
         {},
         {
             "TableName": TABLE,
-            "Item": {"pk": "LOCK", "release": 3, "expires": 1_000 + store.LOCK_SECONDS},
+            "Item": {"pk": "LOCK", "release": 3, "expires": 1_000 + 9_600},  # RELEASE_LOCK_SECONDS
             "ConditionExpression": "attribute_not_exists(pk) OR #release = :release OR #expires < :now",
             "ExpressionAttributeNames": {"#release": "release", "#expires": "expires"},
             "ExpressionAttributeValues": {":release": 3, ":now": 1_000},
@@ -187,3 +187,22 @@ def test_the_origin_slot_and_its_secret(stub: Stub) -> None:
         "get_secret_value", {"SecretString": "value-b"}, {"SecretId": "fastm/demand/origin-b"}
     )
     assert store.secret("b").get_secret_value() == "value-b"
+
+
+def test_the_pointer_and_the_lock_holder(stub: Stub, monkeypatch: pytest.MonkeyPatch) -> None:
+    dynamodb = stub("dynamodb")
+    dynamodb.add_response("get_item", {}, get("POINTER"))
+    assert store.pointer() == {}
+    dynamodb.add_response(
+        "put_item", {}, {"TableName": TABLE, "Item": {"pk": "POINTER", "doc": '{"fastm-demo": "fastm-demo-p-b"}'}}
+    )
+    store.put_pointer({"fastm-demo": "fastm-demo-p-b"})
+    dynamodb.add_response("get_item", {"Item": {"doc": {"S": '{"fastm-demo": "fastm-demo-p-b"}'}}}, get("POINTER"))
+    assert store.pointer() == {"fastm-demo": "fastm-demo-p-b"}
+    monkeypatch.setattr(store.time, "time", lambda: 1_000.0)
+    dynamodb.add_response("get_item", {}, get("LOCK"))
+    assert store.holder() is None
+    dynamodb.add_response("get_item", {"Item": {"release": {"N": "4"}, "expires": {"N": "999"}}}, get("LOCK"))
+    assert store.holder() is None  # expired
+    dynamodb.add_response("get_item", {"Item": {"release": {"N": "4"}, "expires": {"N": "2000"}}}, get("LOCK"))
+    assert store.holder() == 4

@@ -10,7 +10,8 @@ conversion:
 - ``RELEASE#rNNNN``: :class:`~fast_channels.core.monetization.release.ReleaseStatus`;
 - ``CHANNEL#<channel>``: :class:`~fast_channels.core.monetization.release.ChannelState`, written with a version check;
 - ``ORIGIN``: the slot (``a`` or ``b``) of the origin secret the siblings send (rotated by M3-05);
-- ``LOCK``: the release applying now, until ``expires`` (epoch seconds): releases apply one at a time.
+- ``LOCK``: the release applying now, until ``expires`` (epoch seconds): releases apply one at a time;
+- ``POINTER``: the release pointer's last deployed content (JSON in ``doc``).
 """
 
 import json
@@ -36,8 +37,10 @@ if TYPE_CHECKING:
 COUNTER: Final = "COUNTER"
 ORIGIN: Final = "ORIGIN"
 LOCK: Final = "LOCK"
+POINTER: Final = "POINTER"
 LOCK_SECONDS: Final = 5400
-"""How long a lock outlives an execution that died holding it: the state machine's timeout (90 minutes)."""
+"""How long a lock outlives an execution that died holding it, unless ``RELEASE_LOCK_SECONDS`` (the state machine's
+timeout) says otherwise."""
 
 
 class StaleStateError(RuntimeError):
@@ -163,7 +166,7 @@ def lock(release: int) -> None:
     now = int(time.time())
     try:
         _table().put_item(
-            Item={"pk": LOCK, "release": release, "expires": now + LOCK_SECONDS},
+            Item={"pk": LOCK, "release": release, "expires": now + (settings().release_lock_seconds or LOCK_SECONDS)},
             ConditionExpression="attribute_not_exists(pk) OR #release = :release OR #expires < :now",
             ExpressionAttributeNames={"#release": "release", "#expires": "expires"},
             ExpressionAttributeValues={":release": release, ":now": now},
@@ -172,6 +175,14 @@ def lock(release: int) -> None:
         if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise ReleaseBusyError(f"another release is applying; {release_tag(release)} waits") from None
         raise
+
+
+def holder() -> int | None:
+    """The release that holds the lock now (an expired lock holds nothing)."""
+    item = _get(LOCK)
+    if item is None or int(item["expires"]) < int(time.time()):
+        return None
+    return int(item["release"])
 
 
 def unlock(release: int) -> None:
@@ -203,3 +214,13 @@ def secret(slot: str) -> SecretStr:
     config.require("prefix", "origin_secret_region")
     client = aws.regional_client("secretsmanager", config.origin_secret_region)
     return SecretStr(client.get_secret_value(SecretId=origin_secret(config.prefix, slot))["SecretString"])
+
+
+def pointer() -> dict[str, str]:
+    """The release pointer's last deployed content (empty before the first)."""
+    item = _get(POINTER)
+    return dict(json.loads(item["doc"])) if item else {}
+
+
+def put_pointer(content: dict[str, str]) -> None:
+    _table().put_item(Item={"pk": POINTER, "doc": json.dumps(content, sort_keys=True)})

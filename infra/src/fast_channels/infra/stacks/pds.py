@@ -254,14 +254,7 @@ class PdsStack(Stack):
             removal_policy=removal,
         )
         if config.modules.release.enabled:
-            # The siblings log to the release module's own log group: its stack subscribes this function to it.
-            ssm.StringParameter(
-                self,
-                "DeliveryFunctionParameter",
-                parameter_name=names.parameter_name(prefix, names.Published.DELIVERY_FUNCTION),
-                string_value=self.delivery.function.function.function_arn,
-                description="Read by the release module's stack: the impressions of the sibling configurations",
-            )
+            self._publish_for_release(prefix)
         self.select_records = DecisionLog(
             self,
             "SelectRecords",
@@ -352,3 +345,21 @@ class PdsStack(Stack):
         }
         for name, (value, description) in outputs.items():
             CfnOutput(self, name, value=value, description=description)
+
+    def _publish_for_release(self, prefix: str) -> None:
+        """The parameters the release module's stack reads."""
+        # The siblings log to the release module's own log group: its stack subscribes this function to it.
+        ssm.StringParameter(
+            self,
+            "DeliveryFunctionParameter",
+            parameter_name=names.parameter_name(prefix, names.Published.DELIVERY_FUNCTION),
+            string_value=self.delivery.function.function.function_arn,
+            description="Read by the release module's stack: the impressions of the sibling configurations",
+        )
+        ssm.StringParameter(
+            self,
+            "PolicyLogGroupParameter",
+            parameter_name=names.parameter_name(prefix, names.Published.POLICY_LOG_GROUP),
+            string_value=self.policy.function.log_group.log_group_name,
+            description="Read by the release module's stack: its smoke test counts the decision records",
+        )

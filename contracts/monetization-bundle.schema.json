@@ -761,6 +761,12 @@
           "title": "Child Directed",
           "type": "boolean"
         },
+        "lab": {
+          "default": false,
+          "description": "The stage's lab channel (``<prefix>-lab``): smoke tests run on it while the monetized channels are stopped.",
+          "title": "Lab",
+          "type": "boolean"
+        },
         "outputs": {
           "default": [
             "hls"
