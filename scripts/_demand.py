@@ -34,6 +34,7 @@ import stage_args
 from botocore.exceptions import ClientError
 
 from fast_channels.core import demand as names
+from fast_channels.core.ad_server import AdServer
 from fast_channels.core.demand import NETWORK_CONTEXT, SIMULATOR_CODE_PREFIX, DemandNetwork, Parameter, Subnet
 from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, simulator_creatives
 from fast_channels.core.ladder import Ladder
@@ -843,7 +844,9 @@ class DemandStage:
         return key
 
     def network(self, simulator_code_key: str | None = None) -> DemandNetwork:
-        """The guidance's network from the SSM contract and EC2: private subnets with their zones and route tables."""
+        """The guidance's network from the SSM contract and EC2: private subnets with their zones and route tables,
+        and with an ad server (``modules.demand.ad_server``) the internal load balancer that takes the cache's
+        writes."""
         parameters = self.parameters()
         ids = parameters[Parameter.PRIVATE_SUBNET_IDS].split(",")
         ec2 = self.client("ec2")
@@ -860,7 +863,11 @@ class DemandStage:
                     tables[subnet] = table["RouteTableId"]
         groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
         [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
-        internal = self.internal_balancer(parameters[Parameter.VPC_ID])
+        internal = (
+            self.internal_balancer(parameters[Parameter.VPC_ID])
+            if self.config.modules.demand.ad_server is not AdServer.NONE
+            else None
+        )
         return DemandNetwork(
             container_log_group=self.container_log_group(
                 parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]

@@ -846,6 +846,92 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
     assert network.container_log_group == "fastcix-pbs-PrebidContainerLogs"
 
 
+def test_the_internal_balancer_is_the_guidances_own_in_its_vpc(stage: _demand.DemandStage, stub: Any) -> None:
+    """Prebid Cache's write path (ad-server mode): the internal application load balancer in the guidance's VPC that
+    the guidance's own stacks created; another VPC's, an internet-facing one and another stack's are not it."""
+    elb = stub("elbv2")
+    arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{}/0123456789abcdef"
+
+    def balancer(name: str, vpc: str = "vpc-1", scheme: str = "internal") -> dict[str, Any]:
+        return {
+            "LoadBalancerArn": arn.format(name),
+            "DNSName": f"internal-{name}.us-east-1.elb.amazonaws.com",
+            "CanonicalHostedZoneId": "Z35SXDOTRQ7X7K",
+            "VpcId": vpc,
+            "Scheme": scheme,
+            "Type": "application",
+        }
+
+    def tagged(name: str, stack: str) -> dict[str, Any]:
+        return {"ResourceArn": arn.format(name), "Tags": [{"Key": "aws:cloudformation:stack-name", "Value": stack}]}
+
+    listed = [balancer("own"), balancer("pds"), balancer("public", scheme="internet-facing"), balancer("x", "vpc-2")]
+    elb.add_response("describe_load_balancers", {"LoadBalancers": listed}, {})
+    elb.add_response(
+        "describe_tags",
+        {"TagDescriptions": [tagged("own", "fastcix-pbs-Internal"), tagged("pds", "FastChannels-fastcix-Pds")]},
+        {"ResourceArns": [arn.format("own"), arn.format("pds")]},
+    )
+    assert stage.internal_balancer("vpc-1") == ("internal-own.us-east-1.elb.amazonaws.com", "Z35SXDOTRQ7X7K")
+
+    elb.add_response("describe_load_balancers", {"LoadBalancers": [balancer("own"), balancer("own2")]}, {})
+    elb.add_response(
+        "describe_tags",
+        {"TagDescriptions": [tagged("own", "fastcix-pbs"), tagged("own2", "fastcix-pbs-Internal")]},
+        {"ResourceArns": [arn.format("own"), arn.format("own2")]},
+    )
+    with pytest.raises(_demand.DemandError, match="2 internal load balancers"):
+        stage.internal_balancer("vpc-1")
+
+    elb.add_response("describe_load_balancers", {"LoadBalancers": []}, {})
+    assert stage.internal_balancer("vpc-1") is None
+
+
+def test_only_an_ad_server_stage_looks_for_the_internal_balancer(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked: list[str] = []
+
+    def internal_balancer(vpc: str) -> tuple[str, str]:
+        looked.append(vpc)
+        return _INTERNAL, "Z35SXDOTRQ7X7K"
+
+    for name, expected in (("fastci", []), ("fastci-ads", ["vpc-1"])):
+        demand = _demand.DemandStage(prebid_guidance.stage_config(name, "fastcix", REGION), name, session())
+        monkeypatch.setattr(demand, "parameters", lambda: _NETWORK_PARAMETERS)
+        monkeypatch.setattr(demand, "container_log_group", lambda *_args: None)
+        monkeypatch.setattr(demand, "client", lambda service, region=None: _NetworkClient())
+        monkeypatch.setattr(demand, "internal_balancer", internal_balancer)
+        looked.clear()
+        network = demand.network()
+        assert looked == expected, name
+        assert network.internal_alb_dns == (_INTERNAL if expected else None)
+
+
+_INTERNAL = "internal-fastcix-pbs-Internal-1234567890.us-east-1.elb.amazonaws.com"
+_NETWORK_PARAMETERS = {
+    Parameter.VPC_ID: "vpc-1",
+    Parameter.ALB_ARN: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fastcix-alb/0123",
+    Parameter.PRIVATE_SUBNET_IDS: "subnet-a,subnet-b",
+    Parameter.TASK_SECURITY_GROUP: "sg-1",
+    Parameter.CLUSTER_ARN: "arn:aws:ecs:us-east-1:123456789012:cluster/c",
+    Parameter.SERVICE_ARN: "arn:aws:ecs:us-east-1:123456789012:service/c/s",
+    Parameter.CLOUDFRONT_DOMAIN: "d1.cloudfront.net",
+}
+
+
+class _NetworkClient:
+    """EC2 and ELB answers of a two-subnet guidance VPC."""
+
+    def describe_subnets(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"Subnets": [{"SubnetId": f"subnet-{z}", "AvailabilityZone": f"us-east-1{z}"} for z in "ab"]}
+
+    def describe_route_tables(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"RouteTables": [{"RouteTableId": "rtb-0a", "Associations": [{"Main": True}]}]}
+
+    def describe_target_groups(self, **_kwargs: Any) -> dict[str, Any]:
+        arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-pbs/0123456789abcdef"
+        return {"TargetGroups": [{"TargetGroupArn": arn, "TargetType": "ip"}]}
+
+
 def test_a_task_without_one_log_group_or_a_missing_service_gives_none(stage: _demand.DemandStage, stub: Any) -> None:
     ecs = stub("ecs")
 

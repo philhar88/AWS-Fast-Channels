@@ -31,7 +31,8 @@ All notable changes to this project are documented here. The format follows
   shipped configuration. Enabling a module changes nothing until its code is merged.
 - **Stages**: `stages/<name>.json` holds a named deployment's overrides (a partial `fast-channels` block), and
   `STAGE=<name>` applies it to `make synth`, `diff`, `deploy`, `destroy`, `seed` and `trace`
-  (`scripts/stage_args.py`). Two stages ship, `fastm` and `fastci`, each with every module on.
+  (`scripts/stage_args.py`). Three stages ship, each with every module on: `fastm`, `fastci` and `fastci-ads` (the
+  ad-server leg).
 - **Model registry** (`modules.models`): the `FastChannels-<prefix>-Models` stack renders one validated SSM entry per
   LLM task, `/<prefix>/models/tasks/<task>` (schema `contracts/model-registry.schema.json`), from
   `modules.models.tasks`, with models only from `agent.allowed_models` and viewer-data tasks never on a `global.`
@@ -290,6 +291,19 @@ All notable changes to this project are documented here. The format follows
   that does not name exactly its scope's identifiers (a `break` key also names its channel) and a TTL that outlives
   the scope. R-F4 now admits `session.uuid` in session-scoped keys. The crawl lookup is `title`. Scope and reason
   stay in the bundle and are not sent to `PutFunction`.
+- **Prebid results for an ad server's VAST** (`modules.demand.ad_server`, ADR 0034,
+  [docs/demand.md](docs/demand.md#an-ad-server-in-front-prebid-results-for-its-vast)): with `mock`, `gam` or
+  `freewheel`, the pair siblings ask an ad server for the break instead of Prebid Server.
+  - A PRE_ADS Function runs the break's auction once per session and break (scope `session_break`), through the
+    origin rule. The Release Controller adds the origin secret when it creates the Function.
+  - The fast-ctv module stores the composed pod in the guidance's Prebid Cache, through Prebid Server's own cache
+    client. It answers the pod's `hb_pb` (CTV price buckets), `hb_uuid` and `hb_bidder`.
+  - The ad server's Prebid line answers a VAST Wrapper to `/cache?uuid=<hb_uuid>`, and MediaTailor stitches the pod.
+  - Prebid Server writes to the cache inside the VPC (`cache.<prefix>.fast.internal`). From the internet, the origin
+    rule group lets only `GET` and `HEAD /cache?uuid=<uuid4>` through.
+  - `mock` deploys a GAM-like ad server that answers only requests with the origin secret. `gam` and `freewheel` are
+    configuration and setup instructions; they are not tested live.
+  - The `fastci-ads` stage runs the end-to-end leg. With `none`, the default, nothing changes.
 
 ### Fixed
 
