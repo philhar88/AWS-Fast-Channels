@@ -22,6 +22,11 @@ construct one does not own (:func:`augment`):
   so reservations do not go out through a NAT gateway;
 - the sidecar's log group, at the stack's root (so no condition applies to it).
 
+In the ad-server mode (M8-09) the context ``fastPodCache`` (``core.ad_server.PodCacheFunction``) adds, to the
+guidance's Prebid Cache function (:func:`augment_pod_cache`): its memory, and an alias with provisioned concurrency
+that the guidance's Lambda target groups invoke instead of the function. The composed pod's write is on an auction's
+deadline, and a herd's new instances took 1.4 s to start (fastcih, 2026-10-30).
+
 The sidecar comes as the CDK context ``fastPds`` (``core.pds.sidecar.Sidecar`` as JSON): its image, environment,
 grants and sizes. This file runs in the guidance's Python (3.11, its pinned aws-cdk-lib) without this repository's
 packages, so it reads that JSON as plain data. ``vendor/prebid-guidance/PIN.toml [relied_on]`` hashes every upstream
@@ -40,6 +45,7 @@ from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_elasticloadbalancingv2 as elbv2
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 
 CONTEXT: Final = "fastPds"
@@ -59,8 +65,59 @@ RESTART_AFTER: Final = Duration.seconds(60)
 """ECS restarts a sidecar that exits, in place, once it ran this long (a crash loop is not restarted)."""
 
 
+POD_CACHE_CONTEXT: Final = "fastPodCache"
+"""``core.ad_server.POD_CACHE_CONTEXT``."""
+CACHE_FUNCTION: Final = "CacheHandler"
+"""The guidance's Prebid Cache function's construct id (``prebid_server/cache_construct.py``)."""
+ELB: Final = "elasticloadbalancing.amazonaws.com"
+
+
 class SidecarError(Exception):
     """The guidance's stack is not what this app relies on."""
+
+
+def augment_pod_cache(stack: Stack, spec: Mapping[str, Any]) -> lambda_.Alias | None:
+    """Set the memory of the guidance's Prebid Cache function to ``spec["memory_mib"]`` and, with
+    ``spec["provisioned"]`` instances, put every Lambda target group of the guidance on an alias with that provisioned
+    concurrency (ELB may invoke the alias, as the guidance lets it invoke the function); returns the alias.
+
+    Raises:
+        SidecarError: not exactly one Prebid Cache function, or no Lambda target group that invokes it.
+    """
+    nodes = stack.node.find_all()
+    functions = [node for node in nodes if isinstance(node, lambda_.Function) and node.node.id == CACHE_FUNCTION]
+    if len(functions) != 1:
+        raise SidecarError(f"expected the guidance's one {CACHE_FUNCTION}, found {[f.node.path for f in functions]}")
+    [function] = functions
+    groups = [
+        node
+        for node in nodes
+        if isinstance(node, elbv2.ApplicationTargetGroup)
+        and stack.resolve(node.node.default_child.target_type) == "lambda"  # type: ignore[union-attr]
+    ]
+    if not groups:
+        raise SidecarError(f"expected the guidance's Lambda target groups of {CACHE_FUNCTION}, found none")
+    resource = function.node.default_child
+    assert isinstance(resource, lambda_.CfnFunction)
+    resource.add_property_override("MemorySize", int(spec["memory_mib"]))
+    if not int(spec["provisioned"]):
+        return None
+    alias = lambda_.Alias(
+        stack,
+        "PodCacheAlias",
+        alias_name=str(spec["alias"]),
+        version=function.current_version,
+        provisioned_concurrent_executions=int(spec["provisioned"]),
+    )
+    permission = lambda_.CfnPermission(
+        stack, "PodCacheAliasInvoke", action="lambda:InvokeFunction", function_name=alias.function_arn, principal=ELB
+    )
+    for group in groups:
+        target = group.node.default_child
+        assert isinstance(target, elbv2.CfnTargetGroup)
+        target.add_property_override("Targets", [{"Id": alias.function_arn}])
+        target.add_dependency(permission)  # ELB checks the permission when it registers the target
+    return alias
 
 
 def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDefinition]:
@@ -168,6 +225,8 @@ def main() -> None:
             if not raw:
                 raise SidecarError(f"no {CONTEXT} context: deploy with the guidance's app.py instead")
             augment(self, json.loads(raw) if isinstance(raw, str) else raw)
+            if cache := self.node.try_get_context(POD_CACHE_CONTEXT):
+                augment_pod_cache(self, json.loads(cache) if isinstance(cache, str) else cache)
 
     guidance.PrebidServerStack = PrebidServerWithPds
     guidance.build_app()

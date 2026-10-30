@@ -19,7 +19,9 @@ from aws_cdk import App, CfnCondition, Fn, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_elasticloadbalancingv2 as elbv2
+from aws_cdk import aws_elasticloadbalancingv2_targets as targets
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_lambda as lambda_
 from aws_cdk.assertions import Template
 from constructs import Construct
 
@@ -295,3 +297,120 @@ def test_the_real_guidance_synthesizes_with_the_sidecar(tmp_path: Path) -> None:
         assert not [c["Name"] for c in definition["Properties"]["ContainerDefinitions"] if "Cpu" in c]
     [group] = [r for k, r in resources.items() if r["Type"] == "AWS::Logs::LogGroup" and k.startswith("PdsSidecarLogs")]
     assert group["Properties"]["LogGroupName"] == "/aws/ecs/fastcid-pds" and "Condition" not in group
+
+
+# --- the ad-server mode's Prebid Cache function (M8-09) ---------------------------------------------------------
+
+
+def cache_like() -> Stack:
+    """The guidance's Prebid Cache: a function ``CacheConstruct/CacheHandler`` behind four Lambda target groups, and a
+    Prebid Server target group (IP) that is not its."""
+    stack = Stack(App(), "fastcih-pbs")
+    cache = Construct(stack, "CacheConstruct")
+    function = lambda_.Function(
+        cache,
+        "CacheHandler",
+        runtime=lambda_.Runtime.PYTHON_3_11,
+        handler="cache_access.handler",
+        code=lambda_.Code.from_inline("def handler(event, context): pass"),
+        memory_size=256,
+    )
+    for name in ("ExternalCf", "ExternalAlb", "InternalCf", "InternalAlb"):
+        elbv2.ApplicationTargetGroup(
+            cache,
+            f"CacheLambdaTarget{name}",
+            target_type=elbv2.TargetType.LAMBDA,
+            targets=[targets.LambdaTarget(function)],
+        )
+    _Entry(stack, "CloudFrontEntryDeployment", "CloudFront")
+    return stack
+
+
+def test_the_cache_function_gets_its_memory_and_an_alias_with_provisioned_concurrency() -> None:
+    stack = cache_like()
+    alias = wrapper.augment_pod_cache(stack, {"memory_mib": 1024, "provisioned": 4, "alias": "live"})
+    template = Template.from_stack(stack)
+
+    assert alias is not None
+    [function] = template.find_resources("AWS::Lambda::Function").values()
+    assert function["Properties"]["MemorySize"] == 1024
+    [found] = template.find_resources("AWS::Lambda::Alias").values()
+    assert (found["Properties"]["Name"], found["Properties"]["ProvisionedConcurrencyConfig"]) == (
+        "live",
+        {"ProvisionedConcurrentExecutions": 4},
+    )
+    [alias_id] = template.find_resources("AWS::Lambda::Alias")
+    groups = template.find_resources("AWS::ElasticLoadBalancingV2::TargetGroup")
+    lambdas = {name: g for name, g in groups.items() if g["Properties"].get("TargetType") == "lambda"}
+    assert len(lambdas) == 4 and len(groups) == 5, "Prebid Server's own target group is left alone"
+    permissions = template.find_resources("AWS::Lambda::Permission")
+    [invoke] = [n for n, p in permissions.items() if p["Properties"]["FunctionName"] == {"Ref": alias_id}]
+    assert permissions[invoke]["Properties"]["Principal"] == "elasticloadbalancing.amazonaws.com"
+    for group in lambdas.values():
+        assert group["Properties"]["Targets"] == [{"Id": {"Ref": alias_id}}]
+        assert invoke in group["DependsOn"], "the permission exists before ELB registers the target"
+
+
+def test_without_provisioned_concurrency_only_the_memory_changes() -> None:
+    stack = cache_like()
+    assert wrapper.augment_pod_cache(stack, {"memory_mib": 512, "provisioned": 0, "alias": "live"}) is None
+    template = Template.from_stack(stack)
+    assert not template.find_resources("AWS::Lambda::Alias")
+    [function] = template.find_resources("AWS::Lambda::Function").values()
+    assert function["Properties"]["MemorySize"] == 512
+
+
+def test_a_guidance_without_its_cache_function_is_refused() -> None:
+    with pytest.raises(wrapper.SidecarError, match="CacheHandler"):
+        wrapper.augment_pod_cache(guidance_like(), {"memory_mib": 256, "provisioned": 4, "alias": "live"})
+
+
+@pytest.mark.skipif(
+    not (CHECKOUT / guidance.APPLIED_MARKER).is_file(),
+    reason="needs `uv run python scripts/prebid_guidance.py apply` (network) to fill build/prebid-guidance/checkout",
+)
+def test_the_real_guidance_puts_its_cache_target_groups_on_the_provisioned_alias(tmp_path: Path) -> None:
+    """The pinned guidance through the wrapper with ``fastPodCache`` (M8-09): the Prebid Cache function's memory, its
+    alias with provisioned concurrency, and each of its four Lambda target groups invoking the alias."""
+    venv = demand.guidance_toolchain(CHECKOUT)
+    context = {
+        "stackPrefix": "fastcih",
+        "bootstrapQualifier": "fastcih",
+        "fileAssetsBucketName": "fastcih-cdk-assets-123456789012-us-east-1",
+        "imageAssetsRepositoryName": "fastcih-cdk-images-123456789012-us-east-1",
+        "deployBiddingSimulator": "false",
+        CONTEXT: SPEC.model_dump_json(),
+        wrapper.POD_CACHE_CONTEXT: json.dumps({"memory_mib": 1024, "provisioned": 4, "alias": "live"}),
+    }
+    environment = {
+        **os.environ,
+        "CDK_OUTDIR": str(tmp_path),
+        "CDK_CONTEXT_JSON": json.dumps(context),
+        "OVERRIDE_ECR_REGISTRY": "123456789012.dkr.ecr.us-east-1.amazonaws.com/fastcih-pbs:4.4.0-0123",
+        "JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION": "1",
+        "VIRTUAL_ENV": str(venv),
+        "PATH": f"{venv / 'bin'}:{os.environ['PATH']}",
+    }
+    subprocess.run(
+        [str(venv / "bin" / "python"), str(SCRIPTS / "guidance_app.py")],
+        cwd=CHECKOUT / "source" / "infrastructure",
+        env=environment,
+        check=True,
+        capture_output=True,
+        timeout=600,
+    )
+    resources = json.loads((tmp_path / "prebid-server-deployment-on-aws.template.json").read_text())["Resources"]
+    [(function_id, function)] = [
+        (k, r) for k, r in resources.items() if r["Type"] == "AWS::Lambda::Function" and "CacheHandler" in k
+    ]
+    assert function["Properties"]["MemorySize"] == 1024
+    [(alias_id, alias)] = [(k, r) for k, r in resources.items() if r["Type"] == "AWS::Lambda::Alias"]
+    assert alias["Properties"]["ProvisionedConcurrencyConfig"] == {"ProvisionedConcurrentExecutions": 4}
+    groups = [
+        r
+        for r in resources.values()
+        if r["Type"] == "AWS::ElasticLoadBalancingV2::TargetGroup" and r["Properties"].get("TargetType") == "lambda"
+    ]
+    assert len(groups) == 4, "the guidance's external and internal, CloudFront and ALB cache target groups"
+    assert all(g["Properties"]["Targets"] == [{"Id": {"Ref": alias_id}}] for g in groups)
+    assert function_id in json.dumps(alias)

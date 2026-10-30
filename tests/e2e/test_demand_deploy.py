@@ -16,6 +16,7 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from fast_channels.core.ad_server import POD_CACHE_CONTEXT, PodCacheFunction
 from fast_channels.core.demand import Parameter
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.ladder import Ladder
@@ -396,6 +397,38 @@ def test_with_the_pds_the_guidance_deploys_through_the_wrapper_with_the_sidecar(
     assert command[command.index("--app") + 1] == f"/venv/bin/python {_demand.GUIDANCE_APP}"
     assert Sidecar.model_validate_json(command[command.index(f"{CONTEXT}={spec.model_dump_json()}")].split("=", 1)[1])
     assert not [arg for arg in plain if arg.startswith(f"{CONTEXT}=")]
+
+
+def test_with_an_ad_server_the_guidance_gets_the_cache_functions_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M8-09: the Prebid Cache function's provisioned concurrency and memory go to the wrapper as context, only in the
+    ad-server mode and only through the wrapper."""
+    spec = sidecar(
+        prefix="fastcix",
+        image="i",
+        partition="aws",
+        region="us-east-1",
+        account="123456789012",
+        config_bucket="b",
+        content_base_url="https://cdn",
+        log_retention_days=7,
+    )
+    found: dict[str, list[str]] = {}
+    for name in ("fastci", "fastciads"):
+        demand = _demand.DemandStage(prebid_guidance.stage_config(name, "fastcix", REGION), name, session())
+        monkeypatch.setattr(type(demand), "toolchain", lambda self: Path("/venv"))
+        demand.__dict__["account"] = "123456789012"  # cached_property: no STS call
+        found[name] = [
+            str(arg)
+            for arg in demand.guidance_command("prebid-server-deployment-on-aws", simulator=False, with_sidecar=spec)
+        ]
+        plain = [str(arg) for arg in demand.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
+        assert not [arg for arg in plain if arg.startswith(f"{POD_CACHE_CONTEXT}=")], "the guidance's own app.py"
+
+    assert not [arg for arg in found["fastci"] if arg.startswith(f"{POD_CACHE_CONTEXT}=")]
+    [context] = [arg for arg in found["fastciads"] if arg.startswith(f"{POD_CACHE_CONTEXT}=")]
+    assert PodCacheFunction.model_validate_json(context.split("=", 1)[1]) == PodCacheFunction(
+        memory_mib=256, provisioned=4
+    )
 
 
 def test_the_sidecar_reads_its_buckets_and_follows_the_crawl_module(stage: _demand.DemandStage, stub: Any) -> None:

@@ -34,7 +34,7 @@ import stage_args
 from botocore.exceptions import ClientError
 
 from fast_channels.core import demand as names
-from fast_channels.core.ad_server import AdServer
+from fast_channels.core.ad_server import POD_CACHE_CONTEXT, AdServer, PodCacheFunction
 from fast_channels.core.demand import NETWORK_CONTEXT, SIMULATOR_CODE_PREFIX, DemandNetwork, Parameter, Subnet
 from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, simulator_creatives
 from fast_channels.core.ladder import Ladder
@@ -624,14 +624,24 @@ class DemandStage:
         """``--parameters <stack name>:<key>=<value>``: CDK keys stack parameters by the stack's name."""
         return [arg for key, value in values.items() for arg in ("--parameters", f"{stack}:{key}={value}")]
 
+    def pod_cache_function(self) -> PodCacheFunction | None:
+        """The Prebid Cache function's settings in the ad-server mode (``modules.demand.ad_server``), else None."""
+        demand = self.config.modules.demand
+        if demand.ad_server is AdServer.NONE:
+            return None
+        return PodCacheFunction(memory_mib=demand.pod_cache_memory_mb, provisioned=demand.pod_cache_concurrency)
+
     def guidance_command(
         self, *stacks: str, simulator: bool, extra: Sequence[str] = (), with_sidecar: Sidecar | None = None
     ) -> list[str | Path]:
         """``cdk deploy`` of the guidance's ``stacks``: its own ``app.py``, or with ``with_sidecar`` our wrapper of it
-        (:data:`GUIDANCE_APP`) with the sidecar as context."""
+        (:data:`GUIDANCE_APP`) with the sidecar as context, and in the ad-server mode the Prebid Cache function's
+        settings (:meth:`pod_cache_function`)."""
         venv = self.toolchain()
         app = GUIDANCE_APP if with_sidecar is not None else "app.py"
         sidecar_context = ["-c", f"{SIDECAR_CONTEXT}={with_sidecar.model_dump_json()}"] if with_sidecar else []
+        if with_sidecar is not None and (cache := self.pod_cache_function()) is not None:
+            sidecar_context += ["-c", f"{POD_CACHE_CONTEXT}={cache.model_dump_json()}"]
         return [
             CDK,
             "deploy",

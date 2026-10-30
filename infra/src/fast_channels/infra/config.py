@@ -610,6 +610,11 @@ class DemandModule(_Module):
     go (inside ``cust_params`` for GAM, in the key-value section for FreeWheel); empty otherwise."""
     pod_cache_seconds: int = Field(default=300, ge=30, le=3600)
     """How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break."""
+    pod_cache_concurrency: int = Field(default=4, ge=0, le=1000)
+    """With an ad server: provisioned concurrency of the guidance's Prebid Cache function, whose writes are on an
+    auction's deadline (a new instance takes about 1.4 s to start; ADR 0035 has the measured herds). 0: none."""
+    pod_cache_memory_mb: int = Field(default=256, ge=128, le=10240)
+    """With an ad server: the Prebid Cache function's memory (the guidance's own is 256 MB)."""
 
     @model_validator(mode="after")
     def _ad_server_tag(self) -> Self:

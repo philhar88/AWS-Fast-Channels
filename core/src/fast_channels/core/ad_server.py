@@ -26,6 +26,8 @@ from typing import Final
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from fast_channels.core.monetization.bundle import HookTree, SiblingContext, Step
 from fast_channels.core.monetization.functions import (
     Cache,
@@ -298,3 +300,23 @@ def mock_answer(query: Mapping[str, str], *, cache_url: str, house_url: str, imp
     separator = "&" if "?" in impression_url else "?"
     impression = f"{impression_url}{separator}line={quote(line)}"
     return line, wrapper(ad_id=f"mock-{line}", target=target, impression=impression)
+
+
+# --- the guidance's Prebid Cache function --------------------------------------------------------------------------
+
+POD_CACHE_CONTEXT: Final = "fastPodCache"
+"""CDK context of ``scripts/guidance_app.py``: the Prebid Cache function's settings (:class:`PodCacheFunction` as
+JSON), with an ad server only."""
+
+
+class PodCacheFunction(BaseModel):
+    """The guidance's Prebid Cache function in the ad-server mode: the composed pod's write is on an auction's deadline,
+    so a herd must not wait for new instances. ``scripts/guidance_app.py`` sets its memory and puts the guidance's
+    Lambda target groups on an alias with ``provisioned`` instances."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    memory_mib: int = Field(ge=128, le=10240)
+    provisioned: int = Field(ge=0, le=1000)
+    """Provisioned concurrency of the alias; 0: the target groups invoke the function as the guidance has it."""
+    alias: str = "live"
