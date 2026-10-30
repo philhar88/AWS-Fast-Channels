@@ -1,6 +1,12 @@
 {
   "Description": "FAST Channels (fastm): demand beside the guidance",
   "Outputs": {
+    "AdServerLogGroup": {
+      "Description": "The mock ad server's decisions",
+      "Value": {
+        "Ref": "AdServerFunctionLogs27285A4D"
+      }
+    },
     "AdServerUrlAE6631A2": {
       "Description": "The mock ad server's base URL (GET /ads)",
       "Value": {

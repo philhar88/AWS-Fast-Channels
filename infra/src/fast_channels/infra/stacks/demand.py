@@ -122,6 +122,19 @@ class DemandStack(Stack):
                 string_value=self.ad_server.url,
                 description="FAST Channels: the mock ad server's base URL (the ad-server siblings' ADS)",
             )
+            CfnOutput(
+                self,
+                "AdServerLogGroup",
+                value=self.ad_server.handler.log_group.log_group_name,
+                description="The mock ad server's decisions",
+            )
+        if demand.ad_server is not AdServer.NONE and network.container_log_group:
+            CfnOutput(
+                self,
+                "ContainerLogGroup",
+                value=network.container_log_group,
+                description="Prebid Server's container log, where the fast-ctv module logs each pod",
+            )
         self.dead_letters = dead_letter_queue(self, "DeadLetters")
         dead_letter_alarm(
             self,
