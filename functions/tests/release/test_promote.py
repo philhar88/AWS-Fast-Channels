@@ -30,9 +30,10 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(promote, "_now", lambda: AT)
 
 
-def released_twice(kit: SimpleNamespace, state: Any) -> str:
-    """Release 1 on every sibling, release 2 on the idle one; both bundles stored and recorded."""
-    bundle = kit.make_bundle()
+def released_twice(kit: SimpleNamespace, state: Any, **options: Any) -> str:
+    """Release 1 on every sibling, release 2 on the idle one; both bundles stored and recorded. ``options`` go to
+    ``kit.make_bundle``."""
+    bundle = kit.make_bundle(**options)
     key = state.add(bundle)
     first = applied(
         None, channel="fastm-demo", siblings=SIBLINGS, release=1, digest=bundle.digest, change_id="c1", at=AT
@@ -379,3 +380,91 @@ def test_a_request_that_timed_out_once_leaves_the_pointer_running(kit: SimpleNam
     expect_latency(stub("cloudwatch"), "fastm_pa_meta_r0002", [266.0, 77.0])  # a cold first call
     found = promote.pointer_state(7, key, 2, [CANDIDATE])
     assert (found["state"], found["done"], "timed_out" in found) == ("DEPLOYING", False, False)
+
+
+def rotated(kit: SimpleNamespace, state: Any, **options: Any) -> str:
+    """:func:`released_twice`, then a rotation created release 2's tree again as release 3 (``recreated_from``),
+    as ``rotate.recreate`` does on the ad-server route: the candidate records 3, and the execution still carries 2."""
+    key = released_twice(kit, state, **options)
+    channel, version = state.states["fastm-demo"]
+    record = channel.siblings["fastm-demo-p-b"].model_copy(update={"release": 3, "change_id": "rot"})
+    moved = channel.model_copy(
+        update={
+            "siblings": {**channel.siblings, "fastm-demo-p-b": record},
+            "history": {**channel.history, "fastm-demo-p-b": (3, 1)},
+        }
+    )
+    state.states["fastm-demo"] = (moved, version + 1)
+    state.statuses[3] = state.statuses[2].model_copy(update={"release": 3, "change_id": "rot", "recreated_from": 2})
+    return key
+
+
+def test_the_recorded_release_follows_a_rotation_back_to_the_execution(kit: SimpleNamespace, state: Any) -> None:
+    rotated(kit, state)
+    channel, _ = state.states["fastm-demo"]
+    assert promote.recorded(channel, "fastm-demo-p-b", 2) == 3, "re-created by the rotation"
+    assert promote.recorded(channel, "fastm-demo-p-a", 1) == 1, "never re-created"
+    assert promote.recorded(channel, "fastm-demo-p-a", 2) == 2, "records another release: the execution's"
+    assert promote.recorded(None, "fastm-demo-p-b", 2) == 2, "no state"
+    state.statuses[4] = state.statuses[3].model_copy(update={"release": 4, "recreated_from": 3})
+    twice = channel.model_copy(
+        update={
+            "siblings": {
+                **channel.siblings,
+                "fastm-demo-p-b": channel.siblings["fastm-demo-p-b"].model_copy(update={"release": 4}),
+            }
+        }
+    )
+    assert promote.recorded(twice, "fastm-demo-p-b", 2) == 4, "two rotations"
+
+
+def test_a_rotated_candidates_request_at_its_timeout_stops_the_pointer(
+    kit: SimpleNamespace, state: Any, stub: Stub
+) -> None:
+    """A re-run of a held release after a rotation: the candidate runs release 3's Functions, not 2's."""
+    key = rotated(kit, state, contributions=[CrawlContribution()])
+    appconfig, cloudwatch = stub("appconfig"), stub("cloudwatch")
+    where = {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7}
+    appconfig.add_response("get_deployment", {"State": "DEPLOYING", "PercentageComplete": 20.0, "StartedAt": AT}, where)
+    expect_latency(cloudwatch, "fastm_pa_meta_r0003", [266.0, 255.0])
+    appconfig.add_response("stop_deployment", {}, where)
+    found = promote.pointer_state(7, key, 2, [CANDIDATE])
+    assert found["timed_out"] == {"fastm-demo-p-b": {"fastm_pa_meta_r0003": {"timeout_ms": 250, "minutes": 2}}}
+
+
+def test_a_rotated_candidate_is_promoted_under_its_new_number(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    key = rotated(kit, state)
+    stub("mediatailor").add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    assert promote.promote(key, 2, "c2", [CANDIDATE]) == {"release": 2, "stable": {"fastm-demo": "fastm-demo-p-b"}}
+    assert state.statuses[3].status == "PROMOTED", "the release the candidate runs"
+    assert state.statuses[2].status == "APPLIED", "its trees were created again as 3"
+    assert state.holder is None
+
+
+def test_a_rotated_candidate_is_rolled_back_under_its_new_number(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    key = rotated(kit, state)
+    sibling = state.bundle(key).siblings[1]
+    put, _ = render(
+        sibling.playback, prefix="fastm", release=1, change_id="c1", origin_secret=SecretStr("secret-value-a")
+    )
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("put_playback_configuration", {}, put)  # back on fastm_ps_root_r0001
+    mediatailor.add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-a"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    stub("appconfig").add_response("list_deployments", {"Items": []}, None)
+    expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-a"}, strategy="now1", number=8)
+    result = promote.rollback(key, 2, "c2", [CANDIDATE], {"Error": "SmokeFailed"})
+    assert result["remapped"] == {"fastm-demo-p-b": 1}, "a re-created candidate is remapped too"
+    channel, _ = state.states["fastm-demo"]
+    assert channel.siblings["fastm-demo-p-b"].release == 1 and channel.history["fastm-demo-p-b"] == (1,)
+    assert state.statuses[3].status == "ROLLED_BACK" and state.statuses[2].status == "APPLIED"
+    assert state.holder is None

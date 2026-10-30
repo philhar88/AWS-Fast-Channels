@@ -275,6 +275,8 @@ class ReleaseController(Construct):
             # the candidates' PRE_ADS request latency (Function.Latency) against their timeouts in the release's bundle
             reader.allow(["cloudwatch:GetMetricStatistics"], ["*"])
         self.smoke.allow(["s3:GetObject"], [self.bucket.arn_for_objects("release/*")], why="the bundles")
+        # the release a candidate records (channel state, and recreated_from back to the execution's release)
+        self.smoke.allow(["dynamodb:GetItem"], [self.table.table_arn])
         self._drift_schedule(topic)
         self.desired_state = self._function(
             "DesiredState", "desired_state", "Release Controller: publish the rendered bundle", {}

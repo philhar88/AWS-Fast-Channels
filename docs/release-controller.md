@@ -124,9 +124,12 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
    later (their delivery delay): every ad marker led to an ad request, every break was filled, no Function or hook
    failed, the Pod Decision Service recorded a decision per break, and no PRE_ADS request
    [timed out](#timed-out-requests). When no
-   monetized channel runs, the smoke runs on the lab channel `<prefix>-lab` (BASIC, created stopped): the controller
-   schedules a block with a break a minute through the agent tools, starts the channel and stops it after. Without a
-   running channel or the lab channel, the release stays applied and is not promoted (`release.hold`).
+   monetized channel runs, the smoke runs on the lab channel `<prefix>-lab` (BASIC, created stopped). The controller
+   schedules a block through the agent tools, starts the channel and stops it after. The block has programs enough
+   for at least seven breaks: the smoke test's two and the soak's three, a break the smoke's session joins, and one
+   that airs while its logs are delivered. A program breaks every minute, or at its editorial cue points if it has
+   them. Without a running channel or the lab channel, the release stays applied and is not promoted
+   (`release.hold`).
 2. **Soak.** A new probe session for three breaks, judged the same way.
 3. **Pointer.** A new version of the AppConfig profile `release` (application `<prefix>-fast`, environment
    `<prefix>`), `{"<channel>": "<candidate>"}`, deployed with the stage's strategy (`modules.release.strategy`;
@@ -200,8 +203,10 @@ A failure is ledgered (`rotation.fail` on the chain `release/rotation`), gives t
 sibling, leaves the state naming the new releases while those siblings still map the old trees and send the old
 value. That value is still admitted, so nothing is refused, but the drift check reports those siblings until the
 rotation runs again. The new run re-creates the trees once more, under new numbers. A re-created release's record
-names the release it came from (`recreated_from`). Every value a sibling may send is still admitted at that point, so the rotation
-can simply run again. No secret value is logged or ledgered. The rotation assumes that everyone who could read the
+names the release it came from (`recreated_from`). Every value a sibling may send is still admitted at that point,
+so the rotation can simply run again. A held release that is run again by hand after a rotation still carries its
+old number. The controller checks, promotes or rolls back the release its candidate records, followed back through
+`recreated_from`. No secret value is logged or ledgered. The rotation assumes that everyone who could read the
 ADS logs before the switch knows the old value (MediaTailor logs the request headers; the module's log group leaves
 them out).
 

@@ -3250,6 +3250,16 @@
               }
             },
             {
+              "Action": "dynamodb:GetItem",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerState81621A42",
+                  "Arn"
+                ]
+              }
+            },
+            {
               "Action": [
                 "logs:FilterLogEvents",
                 "logs:GetLogEvents",

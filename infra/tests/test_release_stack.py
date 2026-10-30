@@ -465,6 +465,10 @@ def test_the_judge_and_the_pointer_poll_read_the_request_timeouts_and_latency(de
         granted = [s for r, s in statements(template) if r.startswith(role)]
         assert any("cloudwatch:GetMetricStatistics" in actions(s) and s["Resource"] == "*" for s in granted), role
         assert any("s3:GetObject" in actions(s) and "release/*" in json.dumps(s["Resource"]) for s in granted), role
+        # the release the candidate records: a rotation may have created its tree again under a new number
+        assert any(
+            "dynamodb:GetItem" in actions(s) and "ControllerState" in json.dumps(s["Resource"]) for s in granted
+        ), role
 
 
 def test_a_failed_smoke_rolls_back_and_stops_the_lab_only_if_it_started_it(deployment: GetDeployment) -> None:

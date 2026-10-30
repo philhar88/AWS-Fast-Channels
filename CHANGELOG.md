@@ -377,6 +377,14 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 - **Demand: a redeploy with a new Prebid Server image now runs it.** The guidance takes the image as the default of its
   `ContainerImage` parameter, and `cdk deploy` kept the parameter's previous value, so a changed image (a module change
   or a release switch) left the old one running. The guidance deploy no longer reuses previous parameter values.
+- **Release Controller: the lab channel's block has enough breaks for the smoke test and the soak.** It had two
+  programs, and assets with editorial cue points break only at them: on fastm, a block of four breaks left the soak
+  with one of its three, and the release rolled back. The block now takes programs until it has at least seven
+  breaks (the smoke's two and the soak's three, a break the smoke's session joins and one during its log delay).
+- **Release Controller: a held release run again after an origin-secret rotation** is judged, promoted and rolled
+  back as the release its candidate runs. A rotation can create a tree again under a new number (`recreated_from`).
+  The timed-out check used to read the old number's Functions, the promotion marked the old number, and the
+  rollback left the candidate where it was.
 
 ## [3.0.0] - 2026-10-16
 
