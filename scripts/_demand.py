@@ -729,6 +729,8 @@ class DemandStage:
             config_bucket=values[pds_names.Parameter.CONFIG_BUCKET.value],
             content_base_url=content_base_url,
             log_retention_days=self.config.observability.log_retention_days,
+            policy_timeout_ms=self.config.modules.pds.policy_timeout_ms,
+            select_timeout_ms=self.config.modules.pds.select_timeout_ms,
             crawl=crawl_environment(self.config),
             catalog_context_bucket=values.get(pds_names.Parameter.CATALOG_CONTEXT_BUCKET.value),
         )

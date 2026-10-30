@@ -24,6 +24,9 @@ NO_SNAPSHOT: Final = Answer(503, '{"error":"no snapshot"}')
 ``/policy`` and ``/select`` answer this at once, so the module serves the break SAFE and, with the own book silent
 too, renders the kit's house ads from its configuration (``HOUSE_CONFIG``)."""
 NO_BID: Final = Answer(204)
+SHED: Final = Answer(503, '{"error":"overloaded"}')
+"""A request that waited for a worker until its caller stopped waiting (``server.deadlines``): computing it would
+only lengthen the queue, so it is answered at once and counted (``Shed``)."""
 
 
 def refused_fields(error: ValidationError) -> list[str]:

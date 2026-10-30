@@ -9,6 +9,11 @@
 - **Requests**: the event loop reads the body and hands the endpoint to a bounded pool of :data:`state.WORKERS`
   threads. The endpoints are the synchronous code the Lambda functions ran (pydantic, the pod rules, boto3 on the
   locked SDK), so the loop only parses HTTP and never waits on a reservation or a pod rule.
+- **Shedding**: a request whose wait for a worker outlasted its caller's timeout (:func:`deadlines`: the module's
+  ``/policy`` and ``/select`` timeouts, the auction's ``tmax`` for the own book) is answered 503 when a worker takes
+  it, without computing it. An overloaded sidecar then drains its queue in microseconds a request, instead of
+  computing answers nobody waits for (seen live: a new task's warm-up overlapping Prebid Server's JIT queued requests
+  for 2 s).
 - **Refreshes**: every :data:`state.REFRESH_TICK_S` the loop starts the refreshes that are due (``state.refresh``),
   so the snapshot stays current and the reservations' DynamoDB connection stays open between breaks.
 - **Telemetry**: each minute the loop emits the counts as metrics and logs one ``pds stats`` line: per-endpoint
@@ -18,6 +23,7 @@
 
 import asyncio
 import contextlib
+import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
@@ -26,9 +32,10 @@ from typing import Any, Final
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.metrics import MetricUnit
 
+from fast_channels.core.pbs_config import TMAX_MS
 from fast_channels.core.pds.names import Endpoint
 from fast_channels.pds import ownbook, policy, select, state
-from fast_channels.pds.http import Answer
+from fast_channels.pds.http import SHED, Answer
 from fast_channels.pds.telemetry import REPORT_SECONDS, counters, window
 
 type Scope = MutableMapping[str, Any]
@@ -48,6 +55,20 @@ ENDPOINTS: Final[Endpoints] = {
     Endpoint.OWN_BOOK.value: ownbook.answer,
 }
 _JSON: Final = [(b"content-type", b"application/json")]
+POLICY_TIMEOUT_MS: Final = "PDS_POLICY_TIMEOUT_MS"
+SELECT_TIMEOUT_MS: Final = "PDS_SELECT_TIMEOUT_MS"
+"""The module's timeouts (``modules.pds``), in the sidecar's environment."""
+
+
+def deadlines(environment: Mapping[str, str] = os.environ) -> dict[str, float]:
+    """Path -> how long (s) its caller waits: the module's ``/policy`` and ``/select`` timeouts (80 and 200 ms
+    without the settings), the auction's ``tmax`` for the own book."""
+    return {
+        Endpoint.POLICY.value: int(environment.get(POLICY_TIMEOUT_MS) or 80) / 1000,
+        Endpoint.SELECT.value: int(environment.get(SELECT_TIMEOUT_MS) or 200) / 1000,
+        Endpoint.OWN_BOOK.value: TMAX_MS / 1000,
+    }
+
 
 logger = Logger()
 
@@ -61,6 +82,7 @@ class Sidecar:
         refresh: what the loop runs every ``refresh_seconds`` (it must not block).
         workers: the pool's threads.
         report_seconds: how often telemetry is emitted.
+        waits: path -> how long its caller waits (s), past which a queued request is shed (default :func:`deadlines`).
     """
 
     def __init__(
@@ -72,8 +94,10 @@ class Sidecar:
         workers: int = state.WORKERS,
         report_seconds: float = REPORT_SECONDS,
         refresh_seconds: float = state.REFRESH_TICK_S,
+        waits: Mapping[str, float] | None = None,
     ) -> None:
         self._endpoints = endpoints
+        self._waits = dict(deadlines() if waits is None else waits)
         self._load = load
         self._refresh = refresh
         self._refresh_seconds = refresh_seconds
@@ -148,8 +172,14 @@ class Sidecar:
             return
         assert self._pool is not None, "requests arrive after startup"
 
+        wait = self._waits.get(path)
+
         def run() -> Answer:
-            window.add("pool_wait_ms", (time.perf_counter() - started) * 1000)
+            waited = time.perf_counter() - started
+            window.add("pool_wait_ms", waited * 1000)
+            if wait is not None and waited >= wait:
+                counters.add("Shed", dimension=("endpoint", path.strip("/").replace("/", "_")))
+                return SHED
             return endpoint(body, started)
 
         answer = await asyncio.get_running_loop().run_in_executor(self._pool, run)

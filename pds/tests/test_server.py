@@ -194,6 +194,41 @@ def test_the_stats_line_and_the_metrics(caplog: pytest.LogCaptureFixture, capsys
     assert (by_mode["mode"], by_mode["PolicyDecisions"]) == ("CONTEXTUAL", [1.0])
 
 
+def test_a_request_its_caller_stopped_waiting_for_is_shed_not_computed() -> None:
+    """One worker, busy for 200 ms: a request queued behind it outlasts its 50 ms wait and is answered 503 without
+    being computed, so an overloaded sidecar drains its queue."""
+    computed: list[str] = []
+    release = threading.Event()
+
+    def slow(body: bytes, started: float) -> Answer:
+        release.wait(0.2)
+        return Answer(200, "{}")
+
+    def counted(body: bytes, started: float) -> Answer:
+        computed.append(body.decode())
+        return Answer(200, "{}")
+
+    app = sidecar({"/select": slow, "/policy": counted}, workers=1, waits={"/policy": 0.05})
+
+    async def use(client: httpx.AsyncClient) -> tuple[int, list[str]]:
+        busy = asyncio.create_task(client.post("/select", content=b"{}"))
+        await asyncio.sleep(0.02)
+        shed = await client.post("/policy", content=b"late")
+        await busy
+        return shed.status_code, [name for name, _, _ in counters.take()]  # before shutdown flushes them
+
+    counters.take()
+    status, counted = run(serve(app, use))
+    assert (status, computed) == (503, [])
+    assert "Shed" in counted
+
+
+def test_the_deadlines_are_the_modules_timeouts() -> None:
+    assert server.deadlines({}) == {"/policy": 0.08, "/select": 0.2, "/ownbook/openrtb": 0.5}
+    waits = server.deadlines({"PDS_POLICY_TIMEOUT_MS": "50", "PDS_SELECT_TIMEOUT_MS": "150"})
+    assert (waits["/policy"], waits["/select"]) == (0.05, 0.15)
+
+
 def test_the_loop_starts_the_due_refreshes_between_requests() -> None:
     """Values only requests read would go stale between breaks, and DynamoDB would drop the idle connection."""
     ticks: list[float] = []

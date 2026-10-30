@@ -129,6 +129,8 @@ def test_the_environment_names_the_stages_state_and_cdn() -> None:
         "PDS_TABLE": "fastm-pds",
         "LEDGER_TABLE": "fastm-ledger",
         "CONTENT_BASE_URL": "https://d111111abcdef8.cloudfront.net",
+        "PDS_POLICY_TIMEOUT_MS": "80",
+        "PDS_SELECT_TIMEOUT_MS": "200",
     }
     assert (spec.log_group, spec.log_retention_days) == (sidecar_log_group("fastm"), 30)
     assert (spec.container, spec.port, spec.task_cpu, spec.task_memory_mib) == (

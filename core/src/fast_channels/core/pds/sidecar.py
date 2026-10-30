@@ -234,6 +234,8 @@ def sidecar(
     config_bucket: str,
     content_base_url: str,
     log_retention_days: int,
+    policy_timeout_ms: int = 80,
+    select_timeout_ms: int = 200,
     crawl: dict[str, str] | None = None,
     catalog_context_bucket: str | None = None,
 ) -> Sidecar:
@@ -246,6 +248,8 @@ def sidecar(
         config_bucket: the PDS config bucket (the snapshot).
         content_base_url: the CDN's content base URL, our tracker's host.
         log_retention_days: the sidecar's log retention (``observability.log_retention_days``).
+        policy_timeout_ms, select_timeout_ms: the module's timeouts (``modules.pds``): the sidecar sheds a request
+            that waited that long for a worker.
         crawl: with the crawl module on, its environment (``CRAWL_HOLDOUT_PERCENT``, ``PBS_VERSION``, and
             ``PUBLISHER_DOMAIN`` when set).
         catalog_context_bucket: with the crawl module on, its catalog-context bucket.
@@ -259,6 +263,8 @@ def sidecar(
         "PDS_TABLE": table_name(prefix),
         "LEDGER_TABLE": ledger_table(prefix),
         "CONTENT_BASE_URL": content_base_url,
+        "PDS_POLICY_TIMEOUT_MS": str(policy_timeout_ms),
+        "PDS_SELECT_TIMEOUT_MS": str(select_timeout_ms),
         **(crawl or {}),
         **({"CATALOG_CONTEXT_BUCKET": catalog_context_bucket} if catalog_context_bucket else {}),
     }
