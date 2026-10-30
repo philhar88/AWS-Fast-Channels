@@ -9,6 +9,8 @@ FAST Channels v3.0.0 airs channels with preconditioned house ads. The optional m
 - a per-task model registry;
 - the operations they need: a lake, a hash-chained ledger, detectors, runbooks and a probe.
 
+![The optional modules around one monetized channel; the experimental ad-server chain is dashed](images/architecture-modules.png)
+
 Every module is off by default, behind `modules.<name>.enabled` in [`cdk.json`](../cdk.json). With every module off
 a deployment is v3.0.0's, which snapshot tests of every shipped template check (`infra/tests/test_snapshots.py`).
 
