@@ -2,7 +2,8 @@
 
 Runs only when the stage has the Release stack (``deploy-demand`` deploys it beside the guidance); skipped
 otherwise. The first tests read the siblings, their Functions and vended-log deliveries, the playback plan through
-the CDN and the ledger, and invoke the drift check once; they change nothing.
+the CDN and the ledger, and invoke the drift check and the log reconciliation once; they change nothing (the
+reconciliation puts one more ``UnloggedAdsRequests`` datapoint).
 
 With ``--releases`` the rest make releases (``harness_release``; about 50 minutes):
 
@@ -138,6 +139,20 @@ def test_nothing_drifted(release: Stage, siblings: dict[str, Any]) -> None:
     )
     result = json.loads(response["Payload"].read())
     assert result == {"siblings": len(siblings), "drift": []}, result
+
+
+def test_the_log_reconciler_counts_every_siblings_requests(release: Stage, siblings: dict[str, Any]) -> None:
+    """One run of the hourly reconciliation, over the hour that ended 20 minutes ago. A shortfall is a MediaTailor
+    log gap, which the run reports and ``<prefix>-release-log-loss`` alarms on: the test prints it and does not fail
+    on it."""
+    client = release.session.client("lambda", region_name=release.region)
+    response = client.invoke(FunctionName=release.output(Module.RELEASE, "LogReconcilerFunction"), Payload=b"{}")
+    assert "FunctionError" not in response, response["Payload"].read()
+    result = json.loads(response["Payload"].read())
+    counts = {name: (s["counted"]["requests"], s["logged"]["requests"]) for name, s in result["siblings"].items()}
+    print(f"\n{result['start']} to {result['end']}: (counted, logged) requests {counts}")
+    assert set(result["siblings"]) == set(siblings), result
+    assert result["unlogged_requests"] == sum(s["unlogged_requests"] for s in result["siblings"].values()), result
 
 
 def test_the_ledger_records_the_release(release: Stage, siblings: dict[str, Any]) -> None:

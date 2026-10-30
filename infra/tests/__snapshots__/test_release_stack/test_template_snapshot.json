@@ -22,6 +22,12 @@
         "Ref": "ControllerDrift2C829B47"
       }
     },
+    "LogReconcilerFunction": {
+      "Description": "The siblings' ADS log against MediaTailor's counts (hourly)",
+      "Value": {
+        "Ref": "LogReconcilerFunction44B752C5"
+      }
+    },
     "PrefetchFunction": {
       "Description": "The prefetcher (every 5 minutes, after a re-plan or a channel start)",
       "Value": {

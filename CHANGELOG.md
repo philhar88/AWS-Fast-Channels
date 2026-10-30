@@ -109,8 +109,10 @@ All notable changes to this project are documented here. The format follows
   runs R1: the sibling is remapped to its last good tree and the plan names the stable sibling. Per-sibling metric
   filters on the siblings' log group count each break's first ad marker, ad requests and empty responses, and
   `<sibling>-markers-without-ads-request` fires when more than half of the markers had no request in 2 of 10 minutes
-  (an invalid rendered body sends no request and logs no error). Each sibling keeps three Function trees; older ones
-  are deleted.
+  (an invalid rendered body sends no request and logs no error). A PRE_ADS request that times out inside an executor
+  is no Function or hook error, so the smoke judge and the pointer poll read each request's `Function.Latency`
+  against its own timeout from the release's bundle: at the timeout in two minutes, the smoke fails or the pointer
+  deployment is stopped, and R1 runs. Each sibling keeps three Function trees; older ones are deleted.
 - **Monetization desired state** (`fast_channels.core.monetization`, for the release module):
   MediaTailor Monetization Functions as `PutFunction` documents with immutable `<p>_<name>_rNNNN` ids, the
   PRE_SESSION session controls (mid-break joins see slate, server-side beacons, no debug log, no pre-roll), the

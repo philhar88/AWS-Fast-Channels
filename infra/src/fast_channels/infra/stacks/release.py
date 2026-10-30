@@ -201,6 +201,10 @@ class ReleaseStack(Stack):
             "BundleKey": (self.controller.desired.get_att_string("BundleKey"), "The bundle this deployment rendered"),
             "StateTableName": (self.controller.table.table_name, "The Release Controller's state"),
             "DriftFunction": (self.controller.drift.function.function_name, "The drift check (hourly)"),
+            "LogReconcilerFunction": (
+                self.reconciler.function.function.function_name,
+                "The siblings' ADS log against MediaTailor's counts (hourly)",
+            ),
             "SiblingLogGroup": (self.logs.log_group.log_group_name, "The siblings' MediaTailor logs (KMS)"),
             "Siblings": (json.dumps([s.name for s in self.rendered.bundle.siblings]), "Sibling configurations"),
         }
