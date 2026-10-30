@@ -97,7 +97,10 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
   programs Channel Assembly can still hold (its schedule and the library programs from a day ago on). A delete that
   runs out of time fails with the number of programs left; deleting the stack again resumes.
 
-Names must start with `<prefix>-`; `<prefix>-agent-` is reserved for the agent.
+Names must start with `<prefix>-`; `<prefix>-agent-` is reserved for the agent. Names of the form
+`<channel>-p-...` are reserved for the release module's siblings of every IaC channel and of the lab channel
+`<prefix>-lab`, with the module on or off, and `<prefix>-agent` is refused because its siblings would fall in the
+agent's names ([release-controller.md](release-controller.md#siblings)).
 
 ### Agent channels
 

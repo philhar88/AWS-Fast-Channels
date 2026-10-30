@@ -160,6 +160,41 @@ def test_prefix_override_needs_matching_channel_names(load_config: Load) -> None
     assert (config.prefix, config.channels.iac[0].name) == ("acme", "acme-news")
 
 
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (
+            ["fast-demo", "fast-demo-p-a"],
+            "fast-channels.channels.iac[fast-demo-p-a]: 'fast-demo-p-a' is a sibling name of channel 'fast-demo': the "
+            "release module names that channel's playback configurations fast-demo-p-<letter> and its IAM grants "
+            "cover 'fast-demo-p-*'; rename the channel",
+        ),
+        (["fast-news-p-kids", "fast-news"], "'fast-news-p-kids' is a sibling name of channel 'fast-news'"),
+        (["fast-demo", "fast-lab-p-z"], "'fast-lab-p-z' is a sibling name of the release lab channel 'fast-lab'"),
+        (
+            ["fast-demo", "fast-agent"],
+            "fast-channels.channels.iac[fast-agent]: 'fast-agent' cannot be an IaC channel: the release module would "
+            "name its siblings 'fast-agent-p-*', inside the agent-owned fast-agent-* names",
+        ),
+    ],
+)
+def test_a_channel_named_like_another_channels_sibling_is_refused_with_release_off(
+    load_config: Load, names: list[str], expected: str
+) -> None:
+    """Siblings are ``<channel>-p-<letter>`` and the controller's grants ``<channel>-p-*``; the rule holds with the
+    release module off, so that turning it on cannot collide."""
+    message = config_error(load_config, with_shipped(**{"channels.iac": [{"name": name} for name in names]}))
+
+    assert expected in message
+
+
+@pytest.mark.parametrize("names", [["fast-demo", "fast-demo-p"], ["fast-demo", "fast-demo-pa"], ["fast-demo2-p-a"]])
+def test_names_outside_every_sibling_pattern_are_accepted(load_config: Load, names: list[str]) -> None:
+    config = load_config(with_shipped(**{"channels.iac": [{"name": name} for name in names]}))
+
+    assert [channel.name for channel in config.channels.iac] == names
+
+
 def test_a_prefix_with_a_hyphen_is_refused_with_the_reason(load_config: Load) -> None:
     message = config_error(load_config, with_shipped(**{"prefix": "fast-x", "channels.iac.0.name": "fast-x-demo"}))
 

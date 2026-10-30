@@ -28,6 +28,10 @@ send their ad requests as a templated OpenRTB POST to Prebid Server:
 | `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it) |
 | `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs |
 
+These names, and the controller's IAM grants on `<channel>-p-*`, belong to the channel: the configuration refuses
+an IaC channel named `<channel>-p-...` (with the module on or off, so turning it on cannot collide) and one named
+`<prefix>-agent`, whose siblings would be agent-owned names.
+
 The channel's policy admits the siblings by the static pattern `<channel>-p-?`, set when the channel is created
 ([channel-assembly.md](channel-assembly.md)). The Release Controller never changes a channel policy: a policy change
 on a running channel is not session-safe.

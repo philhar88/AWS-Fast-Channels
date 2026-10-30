@@ -326,6 +326,15 @@ def test_shipped_prefixes_are_hyphen_free_so_none_falls_inside_anothers_grants()
     assert [(a, b) for a in prefixes for b in prefixes if a != b and b.startswith(f"{a}-")] == []
 
 
+def test_an_iac_channel_named_like_a_monetized_channels_sibling_is_refused() -> None:
+    """fastm monetizes fastm-demo, whose siblings are fastm-demo-p-a, -p-b and -p-z: an IaC channel fastm-demo-p-a
+    would be the sibling's playback configuration (lane G's repro, 2026-10-30)."""
+    channels = json.dumps([{"name": "{prefix}-demo"}, {"name": "{prefix}-demo-p-a"}])
+
+    with pytest.raises(ConfigError, match="'fastm-demo-p-a' is a sibling name of channel 'fastm-demo'"):
+        shipped_with(stage_overrides("fastm") | {"channels.iac": channels})
+
+
 def test_stage_prefix_resolution(capsys: pytest.CaptureFixture[str]) -> None:
     assert stage_args.main(["prefix", "fastm"]) == 0
     assert stage_args.main(["prefix", "fastm", "--prefix", "fastx"]) == 0
