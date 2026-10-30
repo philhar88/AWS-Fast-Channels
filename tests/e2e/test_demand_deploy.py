@@ -894,7 +894,7 @@ def test_only_an_ad_server_stage_looks_for_the_internal_balancer(monkeypatch: py
         looked.append(vpc)
         return _INTERNAL, "Z35SXDOTRQ7X7K"
 
-    for name, expected in (("fastci", []), ("fastci-ads", ["vpc-1"])):
+    for name, expected in (("fastci", []), ("fastciads", ["vpc-1"])):
         demand = _demand.DemandStage(prebid_guidance.stage_config(name, "fastcix", REGION), name, session())
         monkeypatch.setattr(demand, "parameters", lambda: _NETWORK_PARAMETERS)
         monkeypatch.setattr(demand, "container_log_group", lambda *_args: None)

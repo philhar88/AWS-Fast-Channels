@@ -31,7 +31,7 @@ All notable changes to this project are documented here. The format follows
   shipped configuration. Enabling a module changes nothing until its code is merged.
 - **Stages**: `stages/<name>.json` holds a named deployment's overrides (a partial `fast-channels` block), and
   `STAGE=<name>` applies it to `make synth`, `diff`, `deploy`, `destroy`, `seed` and `trace`
-  (`scripts/stage_args.py`). Three stages ship, each with every module on: `fastm`, `fastci` and `fastci-ads` (the
+  (`scripts/stage_args.py`). Three stages ship, each with every module on: `fastm`, `fastci` and `fastciads` (the
   ad-server leg).
 - **Model registry** (`modules.models`): the `FastChannels-<prefix>-Models` stack renders one validated SSM entry per
   LLM task, `/<prefix>/models/tasks/<task>` (schema `contracts/model-registry.schema.json`), from
@@ -303,7 +303,7 @@ All notable changes to this project are documented here. The format follows
     rule group lets only `GET` and `HEAD /cache?uuid=<uuid4>` through.
   - `mock` deploys a GAM-like ad server that answers only requests with the origin secret. `gam` and `freewheel` are
     configuration and setup instructions; they are not tested live.
-  - The `fastci-ads` stage runs the end-to-end leg. With `none`, the default, nothing changes.
+  - The `fastciads` stage runs the end-to-end leg. With `none`, the default, nothing changes.
 
 ### Fixed
 

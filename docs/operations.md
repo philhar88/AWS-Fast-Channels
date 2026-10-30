@@ -332,7 +332,7 @@ uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage 
 
 A missing or malformed stage file stops `make` before any command runs. The repository ships three stages for the
 modules' development, each with every module on: `fastm`, `fastci` (the end-to-end tests' default prefix), and
-`fastci-ads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
+`fastciads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
 ([docs/demand.md](demand.md#deploy-and-destroy)).
 
 Each deployment subscribes to the account's as-run log, which allows five subscriptions, so an account and region

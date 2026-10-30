@@ -11,7 +11,7 @@ airs. For each break the test then joins:
 It also reads the cached pods back through the edge, and checks that the edge lets only ``GET /cache?uuid=<uuid4>``
 through. It changes nothing.
 
-The stage ``fastci-ads`` (``make deploy STAGE=fastci-ads PREFIX=<throwaway>``, then ``make deploy-demand`` with the
+The stage ``fastciads`` (``make deploy STAGE=fastciads PREFIX=<throwaway>``, then ``make deploy-demand`` with the
 same) has the mock, and sets ``modules.demand.pod_cache_seconds`` long enough (900 s) that every pod of the run can
 still be read once the ADS log has been delivered, a few minutes after the break.
 """

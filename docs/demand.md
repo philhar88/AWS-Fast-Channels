@@ -405,7 +405,7 @@ ledger archive, and fails on any residue but KMS keys pending deletion. A run ta
 costs a few US dollars. The tests take a few minutes and must start within the census gate's 15 minutes: the leg runs
 no channel, so the gate then scales Prebid Server to zero.
 
-**The ad-server leg** (`tests/e2e/test_15_ad_server.py`) needs the stage `fastci-ads`: `fastci` with
+**The ad-server leg** (`tests/e2e/test_15_ad_server.py`) needs the stage `fastciads`: `fastci` with
 `ad_server: mock` and a 900 s pod cache, so that every pod of the run can still be read back once the ADS log arrives.
 Deploy it with every module on, run `make deploy-demand` with the same stage, then the test. Viewers play the stable
 sibling through three breaks. The test checks:
@@ -417,10 +417,10 @@ sibling through three breaks. The test checks:
 - that the edge lets only `GET` and `HEAD /cache?uuid=<uuid4>` through.
 
 ```bash
-make deploy STAGE=fastci-ads PREFIX=<throwaway>
-make deploy-demand STAGE=fastci-ads PREFIX=<throwaway>
+make deploy STAGE=fastciads PREFIX=<throwaway>
+make deploy-demand STAGE=fastciads PREFIX=<throwaway>
 uv run pytest tests/e2e/test_15_ad_server.py -m e2e --prefix <throwaway> -v
-make destroy-demand STAGE=fastci-ads PREFIX=<throwaway> && make destroy STAGE=fastci-ads PREFIX=<throwaway>
+make destroy-demand STAGE=fastciads PREFIX=<throwaway> && make destroy STAGE=fastciads PREFIX=<throwaway>
 ```
 
 A stage with Prebid Server deployed costs about $120–150 a month while idle (two NAT gateways, the load balancers, the

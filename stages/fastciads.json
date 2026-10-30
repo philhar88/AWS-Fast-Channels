@@ -1,5 +1,5 @@
 {
-  "prefix": "fastci-ads",
+  "prefix": "fastciads",
   "observability": {
     "mediatailor_log_percent": 100,
     "log_retention_days": 7,
