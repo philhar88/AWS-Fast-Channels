@@ -118,8 +118,9 @@ def decisions(messages: Iterable[str]) -> list[Decision]:
 
 @dataclass
 class Break:
-    """What MediaTailor logged for one session's ad request: the events of the session with the break's
-    ``adBreakCorrelationId`` (which every session of the break shares)."""
+    """What MediaTailor logged for one session's break (by session and the event id of the ad server's request):
+    every ad request of it (with prefetch, the retrieval and maybe one in real time), the last Wrapper it followed and
+    what it filled."""
 
     sid: str
     evid: str = ""
@@ -137,23 +138,33 @@ class Break:
         return values[0] if UUID4.fullmatch(values[0]) else ""
 
 
+def _evid(url: object) -> str:
+    return parse_qs(urlsplit(str(url or "")).query).get("evid", [""])[0]
+
+
 def breaks(events: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], Break]:
-    """MediaTailor's ADS log as one break per session and ``adBreakCorrelationId``: the event id of the ad server's
-    request, the Wrapper it followed and what it filled. Following the Wrapper is a second ``MAKING_ADS_REQUEST``
-    (to the Wrapper's target, without ``evid``); a correlation id without an ad request (``AD_MARKER_FOUND`` alone) is
-    not a break."""
+    """MediaTailor's ADS log as one break per session and event id (``evid`` of the ad server's request).
+
+    An event belongs to the request (``requestId``) of an ad request whose URL names the break: following the Wrapper
+    is a second ``MAKING_ADS_REQUEST`` of that request, without ``evid``. With prefetch (M3-06) the retrieval is its
+    own request, without ``adBreakCorrelationId``, and the fill at the break is another one, whose URL names the break
+    again. Every session of a break shares its ``adBreakCorrelationId``, so that id joins nothing here."""
+    listed = list(events)
+    requests: dict[str, tuple[str, str]] = {}
+    for event in listed:
+        if (sid := event.get("sessionId")) and (evid := _evid(event.get("adsRequestUrl"))) and event.get("requestId"):
+            requests.setdefault(str(event["requestId"]), (str(sid), evid))
     found: dict[tuple[str, str], Break] = {}
-    for event in events:
-        correlation, sid = str(event.get("adBreakCorrelationId", "")), str(event.get("sessionId", ""))
-        if not correlation or not sid:
-            continue
-        entry = found.setdefault((sid, correlation), Break(sid=sid))
+    for event in listed:
+        key = requests.get(str(event.get("requestId") or ""))
+        if key is None:
+            if not (event.get("sessionId") and (evid := _evid(event.get("adsRequestUrl")))):
+                continue
+            key = (str(event["sessionId"]), evid)
+        entry = found.setdefault(key, Break(sid=key[0], evid=key[1]))
         kind = str(event.get("eventType", ""))
         entry.events.add(kind)
         match kind:
-            case "MAKING_ADS_REQUEST":
-                query = parse_qs(urlsplit(str(event.get("adsRequestUrl", ""))).query)
-                entry.evid = entry.evid or query.get("evid", [""])[0]
             case "VAST_REDIRECT":
                 entry.redirect = str((event.get("vastAd") or {}).get("vastAdTagUri", ""))
             case "FILLED_AVAIL":
@@ -161,7 +172,7 @@ def breaks(events: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], Break]:
                 entry.filled_seconds = float(avail.get("filledDuration") or 0)
                 entry.creatives = tuple(str(a.get("uri", "")) for a in avail.get("creativeAds") or [])
                 entry.skipped = tuple(str(s.get("skippedReason", "")) for s in avail.get("skippedAds") or [])
-    return {key: entry for key, entry in found.items() if "MAKING_ADS_REQUEST" in entry.events}
+    return found
 
 
 def pod_media(vast: str) -> list[str]:

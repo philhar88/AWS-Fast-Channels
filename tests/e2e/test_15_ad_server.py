@@ -18,6 +18,7 @@ still be read once the ADS log has been delivered, a few minutes after the break
 
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -51,6 +52,8 @@ from fast_channels.core.monetization import names
 pytestmark = pytest.mark.e2e
 
 VIEWERS: Final = 3
+MAX_REQUESTS_PER_BREAK: Final = 2
+"""With prefetch, the retrieval and, when MediaTailor could not use what it retrieved, one request in real time."""
 READY_TIMEOUT_S: Final = 900
 """Census lag, Prebid Server's scale-out from zero and its warm-up, with room."""
 TAIL: Final = timedelta(seconds=90)
@@ -219,12 +222,20 @@ def report(run: Run) -> str:
     return "\n".join([head, *rows])
 
 
-def test_each_break_ran_one_auction(run: Run) -> None:
-    """The auction is cached per session and break (``session_break``): exactly one per (session, break)."""
-    requested = {(b.sid, b.evid) for b in run.breaks if "MAKING_ADS_REQUEST" in b.events and b.evid}
-    assert requested, "no ad request logged"
+def test_each_ad_request_ran_one_auction(run: Run) -> None:
+    """The auction runs once for each request to the ad server, never twice, for every break the viewers met.
+
+    With prefetch (M3-06) a break is usually asked for once, at retrieval. MediaTailor asks again in real time when
+    it could not use what it retrieved: a first-sight creative, as on a stage's first break. The 30 s
+    ``session_break`` cache (the shortest break, validator R-F8) does not span the retrieval's lead, so that second
+    request runs a second auction (fastcih, 2026-10-30)."""
+    met = {(b.sid, b.evid) for b in run.breaks if "MAKING_ADS_REQUEST" in b.events and b.evid}
+    assert met, "no ad request logged"
+    asked = Counter((d.sid, d.evid) for d in run.decisions)
     counts = per_break(run.auctions)
-    assert {pair: counts.get(pair, 0) for pair in requested} == dict.fromkeys(requested, 1)
+    assert {pair: counts.get(pair, 0) for pair in asked} == dict(asked), "one auction per ad server request"
+    assert met <= set(asked), "every break the viewers met went to the ad server"
+    assert all(n <= MAX_REQUESTS_PER_BREAK for n in asked.values()), asked
 
 
 def test_the_ad_server_redirected_to_each_cached_pod(run: Run) -> None:
@@ -260,8 +271,15 @@ def test_the_stitched_ads_are_the_cached_pods(run: Run) -> None:
 
 
 def test_the_cache_is_only_read_from_the_internet(ad_server: AdServerStage, run: Run) -> None:
-    known = next(iter(run.pods))
-    assert httpx.get(ad_server.cache_url, params={"uuid": known}, timeout=10).status_code == 200
+    """The newest pod still in the cache (the first ones expire while the ADS log arrives) reads back through the edge;
+    nothing else gets through."""
+    readable = [
+        uuid_
+        for uuid_ in reversed(run.pods)
+        if httpx.get(ad_server.cache_url, params={"uuid": uuid_}, timeout=10).status_code == 200
+    ]
+    assert readable, "no pod of the run is still in the cache"
+    known = readable[0]
     assert httpx.head(ad_server.cache_url, params={"uuid": known}, timeout=10).status_code == 200
     blocked = [
         httpx.post(ad_server.cache_url, json={"puts": [{"type": "xml", "value": "<VAST/>"}]}, timeout=10),
