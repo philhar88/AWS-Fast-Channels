@@ -81,6 +81,10 @@ class MockAdServer(Construct):
             },
             timeout=Duration.seconds(5),
             memory_size=256,
+            # MediaTailor waits 2,000 ms for the ad server. Without bytecode a new instance took 1.8 s to initialise
+            # (at 256 MB and at 1,024 MB alike) and MediaTailor logged ERROR_ADS_TIMEOUT for its first break (e2e,
+            # 2026-10-30). The Demand stack's one code asset.
+            compiled=True,
             log_retention=log_retention,
         )
         self.handler.allow(

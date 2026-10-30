@@ -187,7 +187,11 @@ def test_the_bundle_routes_the_pair_to_the_ad_server(deployment: GetDeployment, 
     auction, and the probe stays on Prebid Server."""
     bundle = deployment(overrides, extra=EXTRA).stage.release.rendered.bundle
     routes = {s.name: s.route.value for s in bundle.siblings}
-    assert routes == {"fastm-demo-p-a": "ad_server", "fastm-demo-p-b": "ad_server", "fastm-demo-p-z": "pbs"}
+    assert routes == {  # the stage's lab channel has a pair too
+        f"fastm-{channel}-p-{letter}": route
+        for channel in ("demo", "lab")
+        for letter, route in (("a", "ad_server"), ("b", "ad_server"), ("z", "pbs"))
+    }
     assert {f.function_id for f in bundle.functions} >= {
         "fastm_demo_p_a_pa_auction",
         "fastm_demo_p_b_pa_auction",
