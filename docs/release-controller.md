@@ -43,7 +43,8 @@ on a running channel is not session-safe.
 The bundle is the desired state: every Function and every sibling of the deployment
 (`fast_channels.core.monetization`, schema `contracts/monetization-bundle.schema.json`). CDK renders it at synth and
 validates it with every rule (R-F1 to R-S1, R-A1 and R-A2): Functions limits, the JSONata allow-list, the body
-template, the cache keys, the channel-policy pattern and the rollout strategy. The deploy-time values (the channels'
+template, the cache keys and scopes ([Function caches](#function-caches)), the channel-policy pattern and the rollout
+strategy. The deploy-time values (the channels'
 Channel Assembly URLs, the content base URL) are CloudFormation tokens there. The bundle never holds the origin
 secret or its name.
 
@@ -54,6 +55,33 @@ the deployment before anything is applied.
 
 Function ids are `<p>_[<scope>_]<name>_rNNNN`. The bundle holds the stems; the release number is allocated when the
 bundle is applied. An id is created once and never updated, so a release that changes a Function creates new ids.
+
+## Function caches
+
+Every `HTTP_REQUEST` in the bundle declares a cache scope (`CacheScope`) and the reason for it
+([ADR 0034](adr/0034-every-function-request-cached-by-scope.md)). Anything cacheable is cached, and its key names
+exactly what makes an answer unique: too few values serve one session's or break's answer to another, too many only
+spend upstream calls. Validator R-F8 holds the `Cache`, its key and its TTL to the scope:
+
+| Scope | One answer per | The key names | `TtlMaximumSeconds` at most |
+|---|---|---|---|
+| `title` | title | `scte.segmentation_upid` (the content id) | 300 s |
+| `break` | break of a channel | the channel as a `\|<channel>\|` segment, and `scte.event_id` or `scte.segmentation_event_id` | the shortest grid break (30 s) |
+| `session` | session | `session.uuid` | 300 s |
+| `session_break` | session and break | `session.uuid` and the break's event id | the shortest grid break (30 s) |
+| `global` | playback configuration | nothing but the key's `'<name>\|v<N>\|'` prefix | 300 s |
+| `none` | call: never cached (a single-use call such as a ticket redeem) | no `Cache` | — |
+
+- A key reads its scope's identifiers and no other input, and never `player_params.*` or `avail.random` (R-F4).
+- A `break` key names its channel because SCTE-35 event ids are unique per channel only. A break-scoped Function is
+  therefore per sibling (`<p>_<sibling>_<name>`), not deployment-wide.
+- Every TTL is 1 s at least. The cache cannot be invalidated: a change of meaning ships as a new `v<N>` in the key.
+- The scope and the reason stay in the bundle. `PutFunction` never receives them, and drift compares only what it
+  sends.
+
+Cached answers are shared per playback configuration and split into 4–5 partitions, so the upstream of a `title`
+key sees about 4–5 calls per title per configuration per TTL, and a `session_break` key one call per session and
+break.
 
 ## The apply path
 

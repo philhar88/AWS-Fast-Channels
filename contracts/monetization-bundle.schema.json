@@ -306,6 +306,19 @@
       "title": "Cache",
       "type": "object"
     },
+    "CacheScope": {
+      "description": "What one answer of an ``HTTP_REQUEST`` is valid for, and so what its cache ``Key`` names (validator R-F8,\nADR-0034). Anything cacheable is cached; ``none`` is for a call that must happen every time.",
+      "enum": [
+        "title",
+        "break",
+        "session",
+        "session_break",
+        "global",
+        "none"
+      ],
+      "title": "CacheScope",
+      "type": "string"
+    },
     "CdnConfiguration": {
       "additionalProperties": false,
       "properties": {
@@ -574,7 +587,7 @@
     },
     "HttpRequestConfiguration": {
       "additionalProperties": false,
-      "description": "``HttpRequestConfiguration``: one HTTP call; its ``Output`` may read ``response``.",
+      "description": "``HttpRequestConfiguration``: one HTTP call; its ``Output`` may read ``response``.\n\n``cache_scope`` and ``cache_reason`` are the desired state's own: the validators read them, :meth:`ApiShape.api`\nleaves them out of the request.",
       "properties": {
         "Runtime": {
           "const": "JSONATA",
@@ -650,6 +663,29 @@
             }
           ],
           "default": null
+        },
+        "CacheScope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CacheScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "CacheReason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cachereason"
         }
       },
       "required": [

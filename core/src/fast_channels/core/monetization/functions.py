@@ -3,7 +3,9 @@
 The models mirror botocore's ``PutFunctionRequest`` (field names in PascalCase on the wire, ``extra`` forbidden),
 for the three function types the bundle uses: ``CUSTOM_OUTPUT``, ``HTTP_REQUEST`` (with ``Cache``, which only the API
 accepts) and ``SEQUENTIAL_EXECUTOR``. They check the shape only; the service limits and the design rules are the
-validators' job (:mod:`fast_channels.core.monetization.validators`), which report every problem at once.
+validators' job (:mod:`fast_channels.core.monetization.validators`), which report every problem at once. An
+``HTTP_REQUEST`` also declares its :class:`CacheScope` and the reason for it, which the bundle keeps and requests leave
+out.
 
 **FunctionIds are immutable.** An id is ``<p>_[<sibling>_]<name>_rNNNN``: ``<p>`` is the deployment prefix with
 ``-`` replaced by ``_`` (hyphens fail with HTTP 400), the sibling scope appears only in functions that embed a
@@ -19,7 +21,15 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Final, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 from pydantic.alias_generators import to_pascal
 
 RUNTIME: Final = "JSONATA"
@@ -56,6 +66,10 @@ class FunctionType(StrEnum):
     SEQUENTIAL_EXECUTOR = "SEQUENTIAL_EXECUTOR"
 
 
+API_CONTEXT: Final = "fast-api"
+"""Serialization context flag of :meth:`ApiShape.api`: members that only the bundle holds are left out."""
+
+
 class ApiShape(BaseModel):
     """An AWS API structure: snake_case in Python, PascalCase on the wire, unknown members refused."""
 
@@ -69,8 +83,26 @@ class ApiShape(BaseModel):
     )
 
     def api(self) -> dict[str, Any]:
-        """The structure as API keyword arguments (unset optional members omitted)."""
-        return self.model_dump(mode="json", exclude_none=True)
+        """The structure as API keyword arguments (unset optional members and bundle-only members omitted)."""
+        return self.model_dump(mode="json", exclude_none=True, context={API_CONTEXT: True})
+
+
+class CacheScope(StrEnum):
+    """What one answer of an ``HTTP_REQUEST`` is valid for, and so what its cache ``Key`` names (validator R-F8,
+    ADR-0034). Anything cacheable is cached; ``none`` is for a call that must happen every time."""
+
+    TITLE = "title"
+    """One answer per title for every session and break: the key names the break's UPID (the content id)."""
+    BREAK = "break"
+    """One answer per break of a channel: the key names the channel and the break's SCTE-35 event id."""
+    SESSION = "session"
+    """One answer per viewing session: the key names ``session.uuid``."""
+    SESSION_BREAK = "session_break"
+    """One answer per session and break (an auction): the key names ``session.uuid`` and the break's event id."""
+    GLOBAL = "global"
+    """One answer for the whole playback configuration: a constant key."""
+    NONE = "none"
+    """Never cached: a single-use call (a ticket redeem), which sets no ``Cache``."""
 
 
 class Cache(ApiShape):
@@ -81,8 +113,16 @@ class Cache(ApiShape):
     key: str | None = None
 
 
+BUNDLE_ONLY_REQUEST_MEMBERS: Final = ("CacheScope", "CacheReason")
+"""``HttpRequestConfiguration`` members the bundle holds for the validators and ``PutFunction`` never receives."""
+
+
 class HttpRequestConfiguration(ApiShape):
-    """``HttpRequestConfiguration``: one HTTP call; its ``Output`` may read ``response``."""
+    """``HttpRequestConfiguration``: one HTTP call; its ``Output`` may read ``response``.
+
+    ``cache_scope`` and ``cache_reason`` are the desired state's own: the validators read them, :meth:`ApiShape.api`
+    leaves them out of the request.
+    """
 
     runtime: Literal["JSONATA"] = RUNTIME
     method_type: Literal["GET", "POST"]
@@ -92,6 +132,18 @@ class HttpRequestConfiguration(ApiShape):
     headers: dict[str, str] | None = None
     output: dict[str, str] | None = None
     cache: Cache | None = None
+    cache_scope: CacheScope | None = None
+    """What one answer is valid for: ``cache`` and its key follow from it, ``none`` sets no ``cache`` (R-F8)."""
+    cache_reason: str | None = None
+    """Why that scope is the right one, in words (R-F8)."""
+
+    @model_serializer(mode="wrap")
+    def _request(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if info.context and info.context.get(API_CONTEXT):
+            for member in BUNDLE_ONLY_REQUEST_MEMBERS:
+                data.pop(member, None)
+        return data
 
 
 class CustomOutputConfiguration(ApiShape):

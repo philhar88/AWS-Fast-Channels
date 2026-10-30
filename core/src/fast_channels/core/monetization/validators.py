@@ -13,14 +13,20 @@ Rules (:class:`Rule`):
 - **R-F2** Only the 44 allow-listed JSONata functions.
 - **R-F3** Shapes (botocore ``PutFunction``/``PutPlaybackConfiguration``), references, keys writable at the hook,
   and expressions the validators can read.
-- **R-F4** Cache keys are expressions starting ``'<name>|v<N>|'`` that never read ``session.*``,
-  ``player_params.*`` or ``avail.random`` (the cache is per configuration and partitioned about 4 ways, P0-10).
+- **R-F4** Cache keys are expressions starting ``'<name>|v<N>|'`` that never read ``player_params.*`` or
+  ``avail.random``, and read a session only as ``session.uuid`` (the cache is per configuration and partitioned about
+  4 ways, P0-10).
 - **R-F5** A PRE_ADS lookup's ``Url``, ``Headers``, ``Body`` and ``Key`` read only ``scte.segmentation_upid``,
   ``scte.event_id`` and constants.
 - **R-F6** PRE_SESSION writes literals only, never ``player_params.t`` or ``manifest.*``; its root executor
   re-exports every committed key; the session controls (suppression mode and value together) are committed as
   DESIGN §5.3 sets them.
 - **R-F7** Executor timeout ≤ the hook's remaining budget; each request's timeout (and their sum) < the executor's.
+- **R-F8** Every ``HTTP_REQUEST`` declares a :class:`~.functions.CacheScope` and the reason for it in words
+  (ADR-0034). Anything cacheable is cached: a scope other than ``none`` sets ``Cache``, whose key names exactly the
+  scope's identifiers (``title``: the UPID; ``break``: the channel and the event id; ``session``: ``session.uuid``;
+  ``session_break``: both; ``global``: nothing) and whose ``TtlMaximumSeconds`` stays within what one answer is valid
+  for (a break scope: the shortest break; 1 s at least). ``none``, for a single-use call, sets no ``Cache``.
 - **R-P1** The POST body is valid JSON when every variable renders as ``""`` and uses only ``session.uuid``,
   ``session.avail_duration_secs`` and ``scte.event_id``, each inside a JSON string; no PRE_ADS function rewrites
   the body, the URL or the variables they read.
@@ -68,6 +74,8 @@ from fast_channels.core.monetization.functions import (
     RELEASE_SUFFIX,
     REQUEST_PATH_HOOKS,
     SESSION_CONTROLS,
+    Cache,
+    CacheScope,
     Function,
     FunctionType,
     Hook,
@@ -106,6 +114,7 @@ class Rule(StrEnum):
     F5 = "R-F5"
     F6 = "R-F6"
     F7 = "R-F7"
+    F8 = "R-F8"
     P1 = "R-P1"
     P2 = "R-P2"
     P3 = "R-P3"
@@ -202,7 +211,34 @@ WRITABLE: Final = {
 # --- design rules --------------------------------------------------------------------------------------------------
 
 CACHE_KEY_PREFIX: Final = re.compile(r"^[a-z0-9_]+\|v[0-9]+\|")
-CACHE_KEY_FORBIDDEN: Final = ("session", "player_params", "avail.random")
+CACHE_KEY_FORBIDDEN: Final = ("player_params", "avail.random")
+"""Never in a key: values the player sets (a viewer could pick another viewer's entry) and one that never repeats."""
+SESSION_ID: Final = "session.uuid"
+"""The only session value a key may read: MediaTailor generates it, unique per session."""
+UPID: Final = "scte.segmentation_upid"
+BREAK_IDS: Final = ("scte.event_id", "scte.segmentation_event_id")
+"""A break's SCTE-35 ids. Unique per channel only, so a ``break`` key also names the channel."""
+SCOPE_KEYS: Final[Mapping[CacheScope, tuple[tuple[str, ...], ...]]] = {
+    CacheScope.TITLE: ((UPID,),),
+    CacheScope.BREAK: (BREAK_IDS,),
+    CacheScope.SESSION: ((SESSION_ID,),),
+    CacheScope.SESSION_BREAK: ((SESSION_ID,), BREAK_IDS),
+    CacheScope.GLOBAL: (),
+}
+"""R-F8: the identifiers each scope's key names, as groups; the key reads one path of every group (``scte.
+segmentation_upid`` covers its sub-fields) and no other input."""
+BREAK_SECONDS_MIN: Final = 30
+"""The shortest break the planner airs (one 30.03 s slot), what a break-scoped answer is valid for at most."""
+SCOPE_VALIDITY_SECONDS: Final[Mapping[CacheScope, int]] = {
+    CacheScope.TITLE: 300,
+    CacheScope.SESSION: 300,
+    CacheScope.GLOBAL: 300,
+}
+"""R-F8: how long one answer of a scope stays right, capped by the 300 s the cache allows; the break scopes use the
+shortest break (:data:`BREAK_SECONDS_MIN`, or the bundle's shortest grid duration)."""
+CACHE_TTL_FLOOR_SECONDS: Final = 1
+CACHE_REASON_MIN: Final = 20
+"""A scope's reason is a sentence, not a token."""
 CONTENT_LOOKUP_PATHS: Final = frozenset({"scte.segmentation_upid", "scte.event_id"})
 PRE_ADS_FORBIDDEN_WRITES: Final = re.compile(r"(?:session|scte|avail|asset)\..+|adsRequest\.(?:url|method|body)")
 """PRE_ADS outputs that would change the ADS URL, the body, or the variables they substitute (R-P1)."""
@@ -298,8 +334,12 @@ def _values(function: Function) -> list[_Value]:
 # --- one function --------------------------------------------------------------------------------------------------
 
 
-def check_function(function: Function, *, prefix: str) -> list[Violation]:
-    """Rules about one bundle document on its own: id, values, limits and cache (R-F1-R-F4)."""
+def check_function(function: Function, *, prefix: str, break_seconds: int = BREAK_SECONDS_MIN) -> list[Violation]:
+    """Rules about one bundle document on its own: id, values, limits and cache (R-F1-R-F4, R-F8).
+
+    ``break_seconds`` is the shortest break the stage airs: no break-scoped answer is cached for longer. Whether a
+    ``break`` key names its sibling's channel is checked with the bundle (:func:`validate_bundle`).
+    """
     at = f"function {function.function_id}"
     found: list[Violation] = []
     stem = function.function_id
@@ -316,7 +356,7 @@ def check_function(function: Function, *, prefix: str) -> list[Violation]:
     for value in _values(function):
         found += _check_value(value)
     if (http := function.http_request_configuration) is not None:
-        found += _check_http(at, http)
+        found += _check_http(at, http, break_seconds=break_seconds)
     if (executor := function.sequential_executor_configuration) is not None:
         if len(executor.function_list) not in STEPS_PER_EXECUTOR:
             found.append(_violation(Rule.F1, at, f"{len(executor.function_list)} steps; an executor runs 1-10"))
@@ -338,7 +378,7 @@ def _check_value(value: _Value) -> Iterator[Violation]:
         yield _violation(Rule.F2, value.where, f"{names} not on the allow-list (it fails at run time, P0-20)")
 
 
-def _check_http(at: str, http: HttpRequestConfiguration) -> Iterator[Violation]:
+def _check_http(at: str, http: HttpRequestConfiguration, *, break_seconds: int) -> Iterator[Violation]:
     if http.request_timeout_milliseconds not in TIMEOUT_MS:
         yield _violation(Rule.F1, at, "RequestTimeoutMilliseconds must be 100-2,000")
     if expression_body(http.url) is None and (not re.match(r"https?://", http.url) or len(http.url) > URL_MAX):
@@ -353,12 +393,35 @@ def _check_http(at: str, http: HttpRequestConfiguration) -> Iterator[Violation]:
             yield _violation(Rule.F1, f"{at} Headers[{name}]", "header names ≤256 and values ≤8,192 characters")
         if name.lower() in RESTRICTED_HEADERS:
             yield _violation(Rule.F1, f"{at} Headers[{name}]", "a restricted header is dropped at run time")
-    if (cache := http.cache) is not None:
-        if {cache.ttl_minimum_seconds, cache.ttl_maximum_seconds} - set(CACHE_TTL_SECONDS):
-            yield _violation(Rule.F1, f"{at} Cache", "TTLs are 1-300 seconds")
-        if cache.ttl_maximum_seconds < cache.ttl_minimum_seconds:
-            yield _violation(Rule.F1, f"{at} Cache", "TtlMaximumSeconds must be at least TtlMinimumSeconds")
-        yield from _check_cache_key(f"{at} Cache.Key", cache.key)
+    yield from _check_cache_declaration(at, http)
+    if (cache := http.cache) is None:
+        return
+    if {cache.ttl_minimum_seconds, cache.ttl_maximum_seconds} - set(CACHE_TTL_SECONDS):
+        yield _violation(Rule.F1, f"{at} Cache", "TTLs are 1-300 seconds")
+    if cache.ttl_maximum_seconds < cache.ttl_minimum_seconds:
+        yield _violation(Rule.F1, f"{at} Cache", "TtlMaximumSeconds must be at least TtlMinimumSeconds")
+    yield from _check_cache_key(f"{at} Cache.Key", cache.key)
+    if http.cache_scope not in (None, CacheScope.NONE):
+        yield from _check_cache_scope(f"{at} Cache", cache, http.cache_scope, break_seconds=break_seconds)
+
+
+def _check_cache_declaration(at: str, http: HttpRequestConfiguration) -> Iterator[Violation]:
+    """R-F8: the request declares a scope with a reason; anything but ``none`` is cached, ``none`` is not."""
+    scope = http.cache_scope
+    if scope is None:
+        yield _violation(
+            Rule.F8,
+            at,
+            f"declares its CacheScope, one of {[s.value for s in CacheScope]}: anything cacheable is cached, with a "
+            "key that names what makes an answer unique; none only for a single-use call",
+        )
+        return
+    if len((http.cache_reason or "").strip()) < CACHE_REASON_MIN:
+        yield _violation(Rule.F8, at, f"gives the reason for CacheScope {scope} in words (a sentence, not a token)")
+    if scope is CacheScope.NONE and http.cache is not None:
+        yield _violation(Rule.F8, f"{at} Cache", "a CacheScope none request sets no Cache")
+    if scope is not CacheScope.NONE and http.cache is None:
+        yield _violation(Rule.F8, at, f"a CacheScope {scope} request sets Cache: anything cacheable is cached")
 
 
 def _leftmost(node: Node) -> Node:
@@ -380,6 +443,84 @@ def _check_cache_key(where: str, key: str | None) -> Iterator[Violation]:
         yield _violation(Rule.F4, where, "starts with the literal '<name>|v<N>|': cache entries cannot be invalidated")
     if per_viewer := sorted(value.analysis.reads(*CACHE_KEY_FORBIDDEN)):
         yield _violation(Rule.F4, where, f"reads {per_viewer}; every session of the configuration shares the cache")
+    if other := sorted(value.analysis.reads("session") - {SESSION_ID}):
+        yield _violation(Rule.F4, where, f"reads {other}; a key names a session by {SESSION_ID} only")
+
+
+def scope_validity(scope: CacheScope, *, break_seconds: int = BREAK_SECONDS_MIN) -> int:
+    """How long one answer of ``scope`` stays right, in seconds (R-F8): at least 1, at most the cache's 300.
+
+    Raises:
+        ValueError: ``scope`` is ``none``, which is never cached.
+    """
+    match scope:
+        case CacheScope.NONE:
+            raise ValueError("a CacheScope none request is never cached")
+        case CacheScope.BREAK | CacheScope.SESSION_BREAK:
+            seconds = break_seconds
+        case _:
+            seconds = SCOPE_VALIDITY_SECONDS[scope]
+    return min(max(CACHE_TTL_FLOOR_SECONDS, seconds), CACHE_TTL_SECONDS.stop - 1)
+
+
+def _names(paths: Iterable[str], identifiers: Iterable[str]) -> bool:
+    """Whether one of ``paths`` is one of ``identifiers`` or a field under one."""
+    return any(p == i or p.startswith(f"{i}.") for p in paths for i in identifiers)
+
+
+def _check_cache_scope(where: str, cache: Cache, scope: CacheScope, *, break_seconds: int) -> Iterator[Violation]:
+    """R-F8 on one cached document: the identifiers its key reads, and the TTL, against its scope."""
+    if cache.ttl_maximum_seconds > (validity := scope_validity(scope, break_seconds=break_seconds)):
+        yield _violation(
+            Rule.F8,
+            where,
+            f"TtlMaximumSeconds {cache.ttl_maximum_seconds} outlives a {scope} answer: at most {validity} s",
+        )
+    value = _value(f"{where}.Key", cache.key or "")
+    if value.analysis is None:
+        return  # no key (R-F4) or an unreadable one (R-F3)
+    groups = SCOPE_KEYS[scope]
+    paths = value.analysis.paths
+    for group in groups:
+        if not _names(paths, group):
+            names = group[0] if len(group) == 1 else f"one of {list(group)}"
+            yield _violation(Rule.F8, f"{where}.Key", f"a {scope} key names {names}")
+    allowed = [identifier for group in groups for identifier in group]
+    if beyond := sorted(p for p in paths if not _names([p], allowed)):
+        yield _violation(
+            Rule.F8,
+            f"{where}.Key",
+            f"reads {beyond}, which a {scope} answer does not vary by: declare the scope those values make it",
+        )
+
+
+def _key_segments(key: str | None) -> set[str]:
+    """The ``|``-separated segments of the string literals in a cache key."""
+    analysis = _value("key", key or "").analysis
+    if analysis is None:
+        return set()
+    segments: set[str] = set()
+    pending = [analysis.tree]
+    while pending:
+        node = pending.pop()
+        if node.kind == "literal" and isinstance(node.value, str):
+            segments.update(node.value.split("|"))
+        pending.extend(node.children)
+    return segments
+
+
+def _check_break_keys(sibling: Sibling, trees: Iterable[_Tree]) -> Iterator[Violation]:
+    """R-F8 for one sibling: a ``break`` key names the sibling's channel, because SCTE-35 event ids are unique per
+    channel only (the cache is per configuration, and a key must not rely on that to be unique)."""
+    for function in {f.function_id: f for tree in trees for f in tree.functions}.values():
+        if (http := function.http_request_configuration) is None or http.cache_scope is not CacheScope.BREAK:
+            continue
+        if sibling.channel not in _key_segments(http.cache.key if http.cache else None):
+            yield _violation(
+                Rule.F8,
+                f"function {function.function_id} Cache.Key",
+                f"a break key of {sibling.name} names its channel as a '|{sibling.channel}|' segment",
+            )
 
 
 # --- one hook's tree -----------------------------------------------------------------------------------------------
@@ -863,8 +1004,9 @@ def check_monitors(treat_missing_data: Mapping[str, str | None]) -> list[Violati
 def validate_bundle(bundle: Bundle) -> list[Violation]:
     """Every rule over a bundle: each function, each mapped tree once, each sibling, each channel, the rollout."""
     found: list[Violation] = []
+    break_seconds = min(bundle.grid_seconds, default=BREAK_SECONDS_MIN)
     for function in bundle.functions:
-        found += check_function(function, prefix=bundle.prefix)
+        found += check_function(function, prefix=bundle.prefix, break_seconds=break_seconds)
     trees: dict[tuple[Hook, str], _Tree] = {}
     routes: dict[tuple[Hook, str], set[AdsRoute]] = {}
     mapped: set[str] = set()
@@ -884,6 +1026,7 @@ def validate_bundle(bundle: Bundle) -> list[Violation]:
             routes.setdefault(key, set()).add(sibling.route)
             mapped |= {f.function_id for f in trees[key].functions}
         found += _check_playback(sibling, bundle, sibling_trees)
+        found += _check_break_keys(sibling, sibling_trees.values())
     for key, tree in trees.items():
         found += _check_tree(tree, routes=routes[key])
     found += [
