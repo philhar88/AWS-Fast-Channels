@@ -364,6 +364,11 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 
 ### Fixed
 
+- **Demand: the deploy smoke on a stage with nothing on air.** With no channel running, the census gate holds Prebid
+  Server at 0 tasks, so `deploy-demand`'s synthetic POSTs met a 503 and the deploy reported a failed smoke. The smoke
+  now checks the service first: at a desired count of 0 it sends nothing, prints `smoke skipped: 0 running Prebid
+  Server tasks (no channel on air; census gate)` and records `skipped` (never `passed`); tasks that are desired but
+  not running still fail it.
 - **Demand: a sub-second real-time herd is named and sized.** When MediaTailor asks for every session of a
   prefetched sibling at the marker at once, about 50 auctions a task in half a second outrun the task's 2 vCPU and the
   module serves those breaks SAFE (measured: 64-71 of 100 on 2 tasks; 0 at 25 auctions/s per task). The Release stack

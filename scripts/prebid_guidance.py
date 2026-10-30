@@ -389,8 +389,12 @@ def stage_command(args: argparse.Namespace, pin: Pin) -> int:
 
 
 def report_smoke(stage: DemandStage) -> int:
+    """Print the smoke's results; 0 when it passed or was skipped (``smoke skipped: …`` says why), else 1."""
     results = stage.smoke()
     print(json.dumps(results, indent=2))
+    if results.get("skipped"):
+        print(f"smoke skipped: {results['skipped']}")
+        return 0
     return 0 if results["passed"] else 1
 
 
