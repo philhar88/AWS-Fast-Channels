@@ -5,8 +5,8 @@ CloudFormation does not know the sibling configurations, their vended-log delive
 Functions or the playback plans: the controller created them. Everything here is owner-checked by the tags
 ``fast:app=<prefix>`` and ``fast:owner=release-controller``.
 
-- Delete (the module turned off, or a stage destroyed): the siblings (deliveries, then sources, then the
-  configuration), then the Functions, executors before the functions they run (a referenced Function cannot be
+- Delete (the module turned off, or a stage destroyed): the siblings (prefetch schedules, deliveries, then sources,
+  then the configuration), then the Functions, executors before the functions they run (a referenced Function cannot be
   deleted), then each channel's ``plan/playback/<channel>.json``.
 - Update that takes channels out of ``modules.release.channels``: their siblings and plans. The Functions stay until
   the stack goes (the other channels' siblings may run them).
@@ -49,11 +49,30 @@ def siblings(prefix: str, channels: list[str]) -> dict[str, str]:
     }
 
 
+def delete_prefetch_schedules(configuration: str) -> int:
+    """Every prefetch schedule of a sibling (the prefetcher's, ``ScheduleType=ALL``): the sibling is the
+    controller's, so is everything on it."""
+    mediatailor = aws.client("mediatailor")
+    names = [
+        item["Name"]
+        for page in mediatailor.get_paginator("list_prefetch_schedules").paginate(
+            PlaybackConfigurationName=configuration, ScheduleType="ALL"
+        )
+        for item in page.get("Items", [])
+    ]
+    for name in names:
+        ignore_missing(mediatailor.delete_prefetch_schedule, Name=name, PlaybackConfigurationName=configuration)
+    return len(names)
+
+
 def delete_siblings(prefix: str, channels: list[str], media_bucket: str) -> int:
-    """The siblings of ``channels`` with their deliveries and delivery sources, then the channels' plans."""
+    """The siblings of ``channels`` with their prefetch schedules, deliveries and delivery sources, then the channels'
+    plans."""
     found = siblings(prefix, channels)
     mediatailor = aws.client("mediatailor")
     for name, arn in sorted(found.items()):
+        if schedules := delete_prefetch_schedules(name):
+            logger.info("prefetch schedules deleted", extra={"sibling": name, "schedules": schedules})
         delete_deliveries(arn)
         ignore_missing(mediatailor.delete_playback_configuration, Name=name)
         logger.info("sibling deleted", extra={"sibling": name})

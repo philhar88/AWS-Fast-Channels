@@ -708,6 +708,40 @@ class ReleaseStrategy(StrEnum):
     LARGE = "large"
 
 
+class ReleasePrefetch(_Section):
+    """Ad prefetch on the monetized siblings (``modules.release.prefetch``; DESIGN §10)."""
+
+    enabled: bool = True
+    """Create a SINGLE prefetch schedule for each of the next breaks of a running monetized channel, so MediaTailor
+    asks the ad decision server minutes ahead, spread over a window, and transcodes new creatives before they air.
+    Retrieval transcodes bill whether or not the break airs; the horizon stays short and re-planned breaks lose their
+    schedules."""
+    siblings: tuple[str, ...] = ("a", "b", "k", "l")
+    """Sibling letters that get schedules: the general pair and the kids pair (the probe ``z`` never does)."""
+    horizon_breaks: int = Field(default=20, ge=1, le=24)
+    """Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration)."""
+    retrieval_lead_seconds: int = Field(default=150, ge=60, le=3600)
+    """Retrieval opens this long before the break."""
+    retrieval_end_seconds: int = Field(default=30, ge=10)
+    """Retrieval closes this long before the break (transcodes take about 20 s)."""
+    shaping_window_seconds: int = Field(default=90, ge=0)
+    """MediaTailor spreads the sessions' prefetch requests over this many seconds (``RETRIEVAL_WINDOW`` traffic
+    shaping); 0 sends them as the sessions arrive."""
+
+    @field_validator("siblings")
+    @classmethod
+    def _letters(cls, letters: tuple[str, ...]) -> tuple[str, ...]:
+        if invalid := [s for s in letters if s not in {"a", "b", "k", "l"}]:
+            raise ValueError(f"sibling letters are a, b (general) and k, l (kids); got {invalid}")
+        return _unique(letters)
+
+    @model_validator(mode="after")
+    def _window(self) -> Self:
+        if self.retrieval_end_seconds >= self.retrieval_lead_seconds:
+            raise ValueError("retrieval_end_seconds must be less than retrieval_lead_seconds")
+        return self
+
+
 class ReleaseModule(_Module):
     """The release module (``modules.release``)."""
 
@@ -729,6 +763,7 @@ class ReleaseModule(_Module):
     """Create a house-only probe playback configuration per channel, for canaries and smoke tests."""
     secret_rotation_days: int = Field(default=90, ge=1)
     """Days between rotations of the origin secret that MediaTailor sends to the demand origin."""
+    prefetch: ReleasePrefetch = ReleasePrefetch()
 
     @field_validator("channels")
     @classmethod

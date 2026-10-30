@@ -133,8 +133,11 @@ def test_only_the_controller_changes_monetization(deployment: GetDeployment) -> 
     apply_role = next(name for name in roles if name.startswith("ControllerApplyRole"))
     reaper_role = next(name for name in roles if name.startswith("ControllerReaperRole"))
 
+    prefetch_role = next(name for name in roles if name.startswith("PrefetcherFunctionRole"))
     writers = {role for role, s in statements(template) if s["Effect"] == "Allow" and actions(s) & WRITES}
-    assert writers == {apply_role, reaper_role}
+    assert writers == {apply_role, reaper_role, prefetch_role}
+    prefetch_writes = {a for r, s in statements(template) if r == prefetch_role for a in actions(s) & WRITES}
+    assert prefetch_writes == {"mediatailor:CreatePrefetchSchedule", "mediatailor:DeletePrefetchSchedule"}
     [policy] = [
         (role, s)
         for role, s in statements(template)
@@ -171,9 +174,17 @@ def test_every_other_role_of_the_stage_is_denied_the_controllers_writes(deployme
     controller = {
         n
         for n in unguarded
-        if any(r in n for r in ("/ControllerApplyRole", "/ControllerReaperRole", "/ZeroAdsDetectorRole"))
+        if any(
+            r in n
+            for r in (
+                "/ControllerApplyRole",
+                "/ControllerReaperRole",
+                "/PrefetcherFunctionRole",
+                "/ZeroAdsDetectorRole",
+            )
+        )
     }
-    assert len(controller) == 3  # the controller's writers, and the reader of the siblings' logs
+    assert len(controller) == 4  # the controller's writers, and the reader of the siblings' logs
     # The roles of CDK's core custom-resource providers are CfnResources, not iam.Role (the guard's Aspect cannot
     # attach to them): they empty buckets or run a trigger, and none of them may call MediaTailor.
     providers = set(unguarded) - controller
@@ -279,7 +290,11 @@ def test_the_siblings_impressions_reach_the_pds_delivery_function(deployment: Ge
     assert subscription["FilterName"] == "fastm-pds-delivery-release"
     assert subscription["LogGroupName"] == {"Ref": log_group}
     assert subscription["FilterPattern"] == IMPRESSIONS.log_pattern_string
-    [permission] = [r["Properties"] for r in resources_.values() if r["Type"] == "AWS::Lambda::Permission"]
+    [permission] = [
+        r["Properties"]
+        for r in resources_.values()
+        if r["Type"] == "AWS::Lambda::Permission" and r["Properties"]["Principal"] == "logs.amazonaws.com"
+    ]
     assert permission["Principal"] == "logs.amazonaws.com"
     assert permission["SourceArn"] == {"Fn::GetAtt": [log_group, "Arn"]}
     assert permission["FunctionName"] == subscription["DestinationArn"]
@@ -318,7 +333,7 @@ def test_the_apply_path_applies_one_release_at_a_time(deployment: GetDeployment)
     assert states["Publish"]["Next"] == "CheckDrift"
     resources_ = template.to_json()["Resources"]
     [bundle] = [k for k, r in resources_.items() if r["Type"] == "Custom::DesiredState"]
-    [rule] = [k for k, r in resources_.items() if r["Type"] == "AWS::Events::Rule"]
+    [rule] = [k for k, r in resources_.items() if r["Type"] == "AWS::Events::Rule" and k.startswith("Controller")]
     assert rule in resources_[bundle]["DependsOn"], "the rule exists before the first event"
     [target] = resources(template, "AWS::Events::Rule")[rule]["Targets"]
     assert set(target["InputTransformer"]["InputPathsMap"].values()) == {

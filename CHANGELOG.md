@@ -73,6 +73,14 @@ All notable changes to this project are documented here. The format follows
   `pds.select` decision record into the lake (`pds_select`). Alarms on Prebid Server's log: more than 1% of breaks
   without the `/policy` patch, more than 0.5% of pods from the module's house fallback. The shared `/select` examples'
   house bids carry no `adomain`, as the own book's.
+- **Ad prefetch** (`modules.release.prefetch`, on with the release module; ADR 0033,
+  [docs/release-controller.md](docs/release-controller.md#prefetch)): the Release Controller's prefetcher keeps one
+  SINGLE prefetch schedule per upcoming break (the next 20) on each general and kids sibling of every running monetized
+  channel, built from `GetChannelSchedule` and `DescribeProgram`, matched on `scte.event_id`, with rule R-S1's dynamic
+  variables and `session.avail_duration_secs`. Retrieval runs 150 s to 30 s before the break with `RETRIEVAL_WINDOW`
+  traffic shaping over 90 s, so the ad request herd leaves the marker and new creatives are prepared before they air.
+  Schedules are create-only: those of moved or re-planned breaks are deleted, a sibling with a RECURRING schedule is
+  refused (alarm `<prefix>-release-prefetch`), and the reaper deletes them with the siblings.
 - **Release Controller: the apply path** (`modules.release`, `FastChannels-<prefix>-Release`,
   [docs/release-controller.md](docs/release-controller.md)). CDK renders and validates the release bundle;
   `Custom::DesiredState` stores it by digest and puts `Desired State Rendered` on the bus; the state machine

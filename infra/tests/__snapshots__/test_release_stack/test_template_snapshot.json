@@ -13,6 +13,12 @@
         "Ref": "ControllerDrift2C829B47"
       }
     },
+    "PrefetchFunction": {
+      "Description": "The prefetcher (every 5 minutes, after a re-plan or a channel start)",
+      "Value": {
+        "Ref": "PrefetcherFunction12BB8015"
+      }
+    },
     "SiblingLogGroup": {
       "Description": "The siblings' MediaTailor logs (KMS)",
       "Value": {
@@ -1938,6 +1944,16 @@
               "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/*-p-?"
             },
             {
+              "Action": "mediatailor:ListPrefetchSchedules",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/*"
+            },
+            {
+              "Action": "mediatailor:DeletePrefetchSchedule",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/*-p-?/*"
+            },
+            {
               "Action": "mediatailor:DeleteFunction",
               "Effect": "Allow",
               "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
@@ -2640,6 +2656,460 @@
         "PolicyName": "FastChannelsfastmReleaseLogsPolicy428D082D"
       },
       "Type": "AWS::Logs::ResourcePolicy"
+    },
+    "PrefetcherAlarm87601509": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "The Release Controller could not create or delete prefetch schedules, or found a RECURRING one on a sibling (see the prefetcher's log)",
+        "AlarmName": "fastm-release-prefetch",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "FILL(errors, 0) + FILL(refused, 0)",
+            "Id": "expr_1",
+            "Label": "prefetch failures and refusals",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "release.prefetch"
+                  }
+                ],
+                "MetricName": "PrefetchErrors",
+                "Namespace": "FastChannels"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "refused",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "service",
+                    "Value": "release.prefetch"
+                  }
+                ],
+                "MetricName": "PrefetchRefused",
+                "Namespace": "FastChannels"
+              },
+              "Period": 900,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "PrefetcherFunction12BB8015": {
+      "DependsOn": [
+        "PrefetcherFunctionRoleDefaultPolicy7D8BE790",
+        "PrefetcherFunctionRole69C8F742"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: SINGLE prefetch schedules for the monetized channels' next breaks",
+        "Environment": {
+          "Variables": {
+            "BREAK_LENGTHS_MS": "30030,60060,90090,120120",
+            "FAST_PREFIX": "fastm",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.prefetch",
+            "PREFETCH_POLICY": "{\"horizon_breaks\":20,\"retrieval_lead_s\":150,\"retrieval_end_s\":30,\"shaping_window_s\":90,\"consumption_lead_s\":20,\"consumption_tail_s\":10,\"min_retrieval_s\":30}",
+            "PREFETCH_SIBLINGS": "a,b,k,l",
+            "RELEASE_CHANNELS": "fastm-demo",
+            "RELEASE_TABLE": {
+              "Ref": "ControllerState81621A42"
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.release.prefetch.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "PrefetcherFunctionLogs8F755CB1"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "PrefetcherFunctionRole69C8F742",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 120,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "PrefetcherFunctionLogs8F755CB1": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "PrefetcherFunctionRole69C8F742": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "PrefetcherFunctionRoleDefaultPolicy7D8BE790": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "PrefetcherFunctionLogs8F755CB1",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "mediatailor:DescribeChannel",
+                "mediatailor:GetChannelSchedule"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo"
+            },
+            {
+              "Action": "mediatailor:DescribeProgram",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:program/fastm-demo/*"
+            },
+            {
+              "Action": "mediatailor:ListPrefetchSchedules",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/*"
+            },
+            {
+              "Action": [
+                "mediatailor:CreatePrefetchSchedule",
+                "mediatailor:DeletePrefetchSchedule",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*"
+            },
+            {
+              "Action": "dynamodb:Scan",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:dynamodb:us-east-1:123456789012:table/",
+                    {
+                      "Ref": "ControllerState81621A42"
+                    }
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "PrefetcherFunctionRoleDefaultPolicy7D8BE790",
+        "Roles": [
+          {
+            "Ref": "PrefetcherFunctionRole69C8F742"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "PrefetcherSchedule0BB60E63": {
+      "Properties": {
+        "Description": "Release prefetch schedules of fastm every 5 minutes",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(5 minutes)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "PrefetcherFunction12BB8015",
+              "Arn"
+            ]
+          },
+          "Input": "{\"scheduled_time\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 0
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "PrefetcherScheduleRoleCAEDDCD1",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "PrefetcherScheduleRoleCAEDDCD1": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: run the Release Controller's prefetcher",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "PrefetcherScheduleRoleDefaultPolicy5C4E5D4C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "PrefetcherFunction12BB8015",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "PrefetcherFunction12BB8015",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "PrefetcherScheduleRoleDefaultPolicy5C4E5D4C",
+        "Roles": [
+          {
+            "Ref": "PrefetcherScheduleRoleCAEDDCD1"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "PrefetcherTriggersAllowEventRuleFastChannelsfastmReleasePrefetcherFunction0F1FF9C72B8981B4": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "PrefetcherFunction12BB8015",
+            "Arn"
+          ]
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "PrefetcherTriggersCE8CFEAD",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "PrefetcherTriggersCE8CFEAD": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): prefetch schedules after a re-plan or a channel start",
+        "EventBusName": "fastm-fast-channels",
+        "EventPattern": {
+          "detail-type": [
+            "Schedule Published",
+            "Census Changed"
+          ],
+          "source": [
+            "fast-channels.fastm"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "PrefetcherFunction12BB8015",
+                "Arn"
+              ]
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumEventAgeInSeconds": 600,
+              "MaximumRetryAttempts": 2
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
     },
     "ReleaseGuard3432AE9F": {
       "Properties": {

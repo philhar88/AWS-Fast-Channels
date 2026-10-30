@@ -306,6 +306,17 @@ class ReleaseController(Construct):
             "controller's",
         )
         reaper.allow(
+            ["mediatailor:ListPrefetchSchedules"],
+            [self._mt("prefetchSchedule", "*")],
+            why="the siblings' prefetch schedules, deleted before the siblings; ListPrefetchSchedules authorizes on "
+            "prefetchSchedule/* whatever configuration it names (seen live)",
+        )
+        reaper.allow(
+            ["mediatailor:DeletePrefetchSchedule"],
+            [self._mt("prefetchSchedule", "*-p-?/*")],
+            why="every prefetch schedule of a sibling the reaper deletes",
+        )
+        reaper.allow(
             ["mediatailor:DeleteFunction"],
             [self._mt("function", names.function_pattern(self._prefix))],
             why="the deployment's Functions",

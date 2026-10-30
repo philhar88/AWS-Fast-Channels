@@ -11,6 +11,7 @@ origin-secret rotation.
 - [The release bundle](#the-release-bundle)
 - [The apply path](#the-apply-path)
 - [The playback plan](#the-playback-plan)
+- [Prefetch](#prefetch)
 - [Drift](#drift)
 - [The ownership guard](#the-ownership-guard)
 - [The siblings' logs](#the-siblings-logs)
@@ -102,6 +103,68 @@ stable sibling and its playback URL per output:
 
 Players that want the monetized stream read it; the v3.0.0 URLs keep working.
 
+## Prefetch
+
+With `modules.release.prefetch.enabled` (on by default with the module), MediaTailor asks for each break's ads before
+the break, for every session that requests a playlist in the break's retrieval window, and spreads those requests
+over a window ([ADR 0033](adr/0033-prefetch-single-schedules.md)). Two things change at the break: the ad request
+herd moves off the marker, and creatives MediaTailor has never seen are prepared before they air instead of being
+skipped at first sight.
+
+The prefetcher (`<prefix>`'s `PrefetchFunction` output) runs every 5 minutes, after every `Schedule Published` and on
+every `Census Changed`. For each monetized channel that is running:
+
+1. It reads the schedule of record: `GetChannelSchedule` for the next 6 hours, and `DescribeProgram` for each program
+   with breaks, whose TIME_SIGNALs carry the break's SCTE-35 event id and MPU UPID. A break's length is snapped to the
+   stage's break lengths (the default ladder's slate grid).
+2. For each sibling the controller recorded whose letter is in `modules.release.prefetch.siblings` (the pairs `a`/`b`
+   and `k`/`l`; never the probe `z`), it lists the sibling's prefetch schedules (`ScheduleType=ALL`).
+3. It deletes the schedules of breaks that left the schedule or moved, then creates one SINGLE schedule for each of
+   the next `horizon_breaks` breaks that has none.
+
+Each schedule, `pf-<event id>`, tagged `fast:owner=release-controller`:
+
+| Part | Setting |
+|---|---|
+| Retrieval | From `retrieval_lead_seconds` (150) to `retrieval_end_seconds` (30) before the break, spread over `shaping_window_seconds` (90) with `RETRIEVAL_WINDOW` traffic shaping |
+| Dynamic variables | `scte.event_id`, `scte.segmentation_upid` (the content id), `session.avail_duration_ms` (rule R-S1) and `session.avail_duration_secs` (the POST body's stored request) |
+| Consumption | From 20 s before the break to 10 s after it, only into the break with that `scte.event_id` |
+
+- **Create-only.** A schedule is never changed: a moved break's schedule is deleted and created again, and a re-planned
+  break's is deleted, because retrieval transcodes bill whether or not the break airs. MediaTailor removes expired
+  schedules after at least 7 days; they do not count against its quota of 25 active schedules per configuration.
+- **Never beside RECURRING.** A sibling with a RECURRING schedule gets no SINGLE one; `<prefix>-release-prefetch`
+  fires.
+- **Left to real-time insertion:** a break without an MPU UPID, a break whose length is not a break length of the
+  stage, a break too close to retrieve (its retrieval would stay open less than 30 s), and a channel that is not
+  running.
+- **On retrieval** the sibling's Functions run as at a break (PRE_ADS's content lookup included), and Prebid Server and
+  the Pod Decision Service answer minutes ahead. MediaTailor rounds the duration to whole seconds (`60000`); the PDS
+  checks the pod against the break of record ([pds.md](pds.md)). Reservations are taken at retrieval and delivered by
+  our tracker's impression; one whose break the session never watched is released by the sweeper after 2 hours.
+- **Joins** use our tracker (`d=<sid>.<evid>`): prefetch events carry no `adBreakCorrelationId`, and a
+  prefetch-consumed `FILLED_AVAIL` names the session's previous request URL.
+- A session that joins after a break's retrieval window gets real-time insertion for that break.
+- Siblings never carry YO (`YieldOptimizationConfiguration`), which MediaTailor does not support with prefetch.
+- The reaper deletes every schedule of a sibling before the sibling.
+
+Measured on a throwaway stage on 2026-10-30. It aired 8 breaks of 60.06 s with 40 SSAI sessions on each general
+sibling, on Prebid Server 4.4.0 (`tests/e2e/test_16_prefetch.py`):
+
+| | When the ad requests arrived, relative to the break | p05–p95 width |
+|---|---|---|
+| Real time (no schedule) | +13 s to +18 s (the sessions' playlist polls) | 4.1 s |
+| Prefetch without traffic shaping | 150 s to 146 s ahead | 3.4–3.9 s |
+| Prefetch, 90 s `RETRIEVAL_WINDOW` | 150 s to 67 s ahead | 59–72 s (14 breaks) |
+
+- Every prefetched avail was filled (600 of 600, 60.06 s each), with no creative skipped at first sight.
+- At the first break, MediaTailor saw the demand's creatives for the first time, through a retrieval, and filled the
+  break fully.
+- On the same stage, a real-time first sight of the house ads, on the channel's v3.0.0 configuration, skipped both
+  (`NEW_CREATIVE`) and filled 0 of 60.06 s.
+- The PDS answered every retrieval with the session id, event id and UPID. Our tracker credited the line ads reserved
+  at retrieval when they aired.
+
 ## Drift
 
 Every hour, and after every release, the drift check renders each recorded sibling again from its release's bundle and
@@ -116,9 +179,9 @@ With the module on, every IAM role of the stage gets an explicit Deny (the manag
 of `PutPlaybackConfiguration`, `DeletePlaybackConfiguration`, `PutFunction`, `DeleteFunction`,
 `CreatePrefetchSchedule`, `DeletePrefetchSchedule` and `PutChannelPolicy` on the siblings (`<channel>-p-*`), their
 prefetch schedules, the monetized channels and the deployment's Functions (`<p>_*`), and the reading of the
-siblings' log group ([below](#the-siblings-logs)). Only the controller's apply and reaper functions, and the readers of
-that group, are exempt. The agent tools can still create and delete their own channels' configurations, but not
-a monetized one. A break-glass operator acts outside the stage.
+siblings' log group ([below](#the-siblings-logs)). Only the controller's apply, reaper and prefetcher functions, and
+the readers of that group, are exempt. The agent tools can still create and delete their own channels' configurations,
+but not a monetized one. A break-glass operator acts outside the stage.
 
 ## The siblings' logs
 
@@ -149,6 +212,7 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-dead-letters` | A `Desired State Rendered` event that could not start the state machine |
 | `<sibling>-presessioninithook-errors`, `-preadsrequesthook-errors`, `-function-errors`, `-getmanifest-errors` | Any error of the sibling in five minutes |
 | `<prefix>-release-zero-ads-sessions` | Sessions on a sibling that saw three breaks without an ad request (hourly) |
+| `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
 
 Every alarm treats missing data as not breaching. The alerts go to the stage's alert topic.
 
@@ -160,7 +224,8 @@ the Media stack's content base URL, CDN, media bucket and channel URLs from the 
 `/<prefix>/release/*`, which the Media stack writes when the module is on, so run `make deploy` first.
 
 Deleting the stack (`make destroy-demand`, or `deploy-demand` with the module turned off) runs `Custom::ReleaseReaper`
-first: it deletes the siblings with their deliveries and delivery sources, the Functions (executors first) and the
+first: it deletes the siblings with their prefetch schedules, deliveries and delivery sources, the Functions
+(executors first) and the
 playback plans, each owner-checked by tag. A deployment that takes a channel out of `modules.release.channels`
 deletes that channel's siblings and plan the same way (stop the channel first: its policy narrows); the Functions
 stay until the stack goes.
