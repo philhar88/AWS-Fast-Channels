@@ -12,10 +12,11 @@ one alarm per configuration fires when, in :data:`LOSSY_MINUTES` of :data:`WINDO
   session: when the ``EXT-X-DATERANGE`` appears, then again (a new ``adBreakCorrelationId``, no request) when it gains
   its ``DURATION`` at the break's end (fastm, 2026-10-29). Only the first is counted: :data:`BREAK_START` leaves out
   markers that carry ``,DURATION=``. A VOD ``EXT-X-CUE-OUT`` is counted.
-- **A ratio, not a difference, over enough markers.** A session that joins during a break sees its marker but
-  gets no request (avail suppression ``BEHIND_LIVE_EDGE``); with a large audience such joiners are in every break, so
-  a count would alarm, and a minute of a few joiners alone (a probe session, a tester) is not a loss. A sibling with
-  fewer sessions is covered by the smoke test and the hourly zero-ad-sessions detector.
+- **A ratio, not a difference, over enough markers.** A session that joins during a break asks for what is left of
+  it (avail suppression ``AFTER_LIVE_EDGE`` with ``PARTIAL_AVAIL``, ADR-0021: measured 30 s and 76 s into a 120 s
+  break); whether one that joins in a break's last segments asks at all was not measured. With a large audience such
+  joiners are in every break, so a count could alarm, and a minute of a few markers alone (a probe session, a tester)
+  is not a loss. A sibling with fewer sessions is covered by the smoke test and the hourly zero-ad-sessions detector.
 - **Two lossy minutes.** A session's marker and its request are logged milliseconds apart (P0-20 evidence); one that
   straddles a minute makes that minute lossy and the next one not, so it never alarms alone. Breaks minutes apart
   still alarm at the second lossy break.

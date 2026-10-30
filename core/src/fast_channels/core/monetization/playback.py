@@ -11,7 +11,8 @@ the v3.0.0 configuration of the channel, which stays untouched, in:
   (P0-07, P0-20 §4.11);
 - ``FOLLOW_AD_SEQUENCE``, so the module's standalone ads replace a failed sequenced ad in its slot (ad buffet,
   P0-09, P0-20 §4.2);
-- ``AvailSuppression`` ``BEHIND_LIVE_EDGE`` ``00:00:00`` as defence in depth (the PRE_SESSION constant is the control);
+- ``AvailSuppression`` ``AFTER_LIVE_EDGE`` ``00:00:00`` ``PARTIAL_AVAIL`` as defence in depth (the PRE_SESSION constant
+  is the control): a viewer who joins mid-break gets ads for the rest of it, each from its first segment (ADR-0021);
 - the Function mapping.
 
 The bundle holds each sibling's configuration without what only the apply knows: the origin secret (Secrets
@@ -336,7 +337,7 @@ def sibling_playback_configuration(
         "HttpRequest": request,
         "VastResponse": {"AdSequencingMode": SEQUENCING[route]},
     }
-    base["AvailSuppression"] = {"Mode": "BEHIND_LIVE_EDGE", "Value": "00:00:00"}
+    base["AvailSuppression"] = {"Mode": "AFTER_LIVE_EDGE", "Value": "00:00:00", "FillPolicy": "PARTIAL_AVAIL"}
     base["FunctionMapping"] = dict(function_mapping)
     if lab:
         base["LogConfiguration"]["ManifestServiceInteractionLog"]["PublishOptInEventTypes"] = [

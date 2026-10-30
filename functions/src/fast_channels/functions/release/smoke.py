@@ -4,8 +4,9 @@ DESIGN §8.3, steps 3 and 4.
 One session is opened on the sibling (an implicit HLS session through MediaTailor) and its media playlist polled
 like a player's until it has seen ``breaks`` new ad markers or the invocation's time runs out; the state machine then
 calls ``watch`` again with the same session (a session left unpolled for a few segments would expire). The markers
-already in the session's first playlist are left out: a viewer who joins during a break gets no ads for it (avail
-suppression ``BEHIND_LIVE_EDGE``). When the session has seen its breaks, ``judge`` reads the session's MediaTailor
+already in the session's first playlist are left out: a viewer who joins during a break gets ads only for its
+remainder (avail suppression ``AFTER_LIVE_EDGE`` with ``PARTIAL_AVAIL``, ADR-0021), which the verdict does not
+judge. When the session has seen its breaks, ``judge`` reads the session's MediaTailor
 log events from the module's log group (Logs Insights, after the vended logs' delivery delay) and returns
 :class:`~fast_channels.core.monetization.smoke.SmokeVerdict`.
 """

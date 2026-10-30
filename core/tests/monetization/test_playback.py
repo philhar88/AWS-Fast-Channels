@@ -59,7 +59,7 @@ def test_a_sibling_differs_from_v3_in_the_ads_settings_only(kit: SimpleNamespace
     assert request["HttpRequest"]["Method"] == "POST"
     assert request["HttpRequest"]["CompressRequest"] == "NONE"
     assert request["VastResponse"] == {"AdSequencingMode": "FOLLOW_AD_SEQUENCE"}
-    assert api["AvailSuppression"] == {"Mode": "BEHIND_LIVE_EDGE", "Value": "00:00:00"}
+    assert api["AvailSuppression"] == {"Mode": "AFTER_LIVE_EDGE", "Value": "00:00:00", "FillPolicy": "PARTIAL_AVAIL"}
     assert api["FunctionMapping"] == {"PRE_SESSION_INITIALIZATION": "fastm_ps_root"}
     assert "SlateAdUrl" not in api  # the Channel Assembly break slate plays the unfilled time
     # The rest is the v3.0.0 configuration's.

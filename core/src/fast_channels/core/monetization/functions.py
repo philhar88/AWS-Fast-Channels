@@ -279,15 +279,17 @@ def released_id(stem: str, release: int) -> str:
 
 SESSION_CONTROLS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "aws.availSuppressionMode": "BEHIND_LIVE_EDGE",
+        "aws.availSuppressionMode": "AFTER_LIVE_EDGE",
         "aws.availSuppressionValue": "00:00:00",
+        "aws.availSuppressionFillPolicy": "PARTIAL_AVAIL",
         "aws.reportingMode": "server",
         "aws.logMode": "DISABLED",
         "aws.preroll": "disabled",
     }
 )
-"""What PRE_SESSION writes for every monetized session (DESIGN §5.3, ADR-0021). Mid-break joiners get no ads for that
-break (suppression mode and value together, P0-25); beacons are server-side; no DEBUG logging; no pre-roll."""
+"""What PRE_SESSION writes for every monetized session (DESIGN §5.3, ADR-0021). A mid-break joiner gets ads for what
+is left of the break after the live edge, each from its first segment (suppression mode, value and fill policy
+together, M3-07); beacons are server-side; no DEBUG logging; no pre-roll."""
 
 
 def literal(text: str) -> str:

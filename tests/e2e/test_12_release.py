@@ -22,7 +22,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -59,6 +59,7 @@ from fast_channels.core.monetization.playback import (
     SiblingRole,
 )
 from fast_channels.core.monetization.release import ChannelState
+from fast_channels.core.pbs_config import POD_SECONDS
 
 pytestmark = pytest.mark.e2e
 
@@ -112,7 +113,11 @@ def test_every_sibling_calls_its_ad_server_with_the_monetized_settings(
         assert "X-Fast-Origin" in request["Headers"], name  # the value is never read here
         assert server["VastResponse"]["AdSequencingMode"] == "FOLLOW_AD_SEQUENCE", name
         assert configuration["PersonalizationThresholdSeconds"] == PERSONALIZATION_THRESHOLD_SECONDS, name
-        assert configuration["AvailSuppression"]["Mode"] == "BEHIND_LIVE_EDGE", name
+        assert configuration["AvailSuppression"] == {
+            "Mode": "AFTER_LIVE_EDGE",
+            "Value": "00:00:00",
+            "FillPolicy": "PARTIAL_AVAIL",
+        }, name
         assert configuration["Tags"]["fast:owner"] == RELEASE_OWNER, name
         roots = configuration["FunctionMapping"]  # one root per hook (PRE_SESSION, and PRE_ADS with the crawl)
         assert roots and all(r.endswith(configuration["Tags"]["fast:release"]) for r in roots.values()), (name, roots)
@@ -597,3 +602,62 @@ def test_a_rotation_during_live_sessions_blocks_no_ad_request(
         Statistics=["Sum"],
     )["Datapoints"]
     assert sum(p["Sum"] for p in blocked) == 0, blocked
+
+
+def logged_at(timestamp: str) -> float:
+    """A Logs Insights ``@timestamp`` (``2026-10-30 14:12:21.123``, UTC) in epoch seconds."""
+    return datetime.fromisoformat(timestamp.replace(" ", "T")).replace(tzinfo=UTC).timestamp()
+
+
+def upcoming_break(stage: Stage, channel: str, after: float) -> tuple[float, float]:
+    """The start (epoch seconds) and length (s) of ``channel``'s first ad break that starts after ``after``."""
+    mediatailor = stage.session.client("mediatailor", region_name=stage.region)
+    starts = sorted(
+        (b["ApproximateStartTime"].timestamp(), float(b.get("ApproximateDurationSeconds", 0)))
+        for page in mediatailor.get_paginator("get_channel_schedule").paginate(
+            ChannelName=channel, DurationMinutes="60"
+        )
+        for item in page["Items"]
+        for b in item.get("ScheduleAdBreaks", [])
+    )
+    later = [s for s in starts if s[0] > after]
+    assert later, f"{channel} airs no break after {datetime.fromtimestamp(after, UTC):%H:%M:%S}"
+    return later[0]
+
+
+def test_a_mid_break_joiner_asks_for_what_is_left_of_the_break(
+    releases: Stage, on_air: dict[str, Any], channel: Channel
+) -> None:
+    """ADR-0021 (M3-07): with AFTER_LIVE_EDGE 00:00:00 and PARTIAL_AVAIL, a viewer who joins 20 s into a 60.06 s break
+    asks for what is left of it (about 42 s, at segment granularity); with BEHIND_LIVE_EDGE it asked for nothing. The
+    remainder is not a grid duration, so it names no stored request (R-P5): Prebid Server answers 400 and the slate
+    plays. The sibling is the pair sibling of the newest release (the one under test)."""
+    stage = releases
+    state = channel_state(stage, channel.name)
+    sibling = max((s for s in (state.stable, state.idle) if s), key=lambda s: state.siblings[s].release)
+    start, length = upcoming_break(stage, channel.name, time.time() + 15)
+    until(datetime.fromtimestamp(start + 20, UTC))
+    viewer = Viewer(sibling, stage).start()
+    try:
+        until(datetime.fromtimestamp(start + length + 30, UTC))
+    finally:
+        viewer.stop()
+    time.sleep(LOG_DELAY_S)
+    rows = insights(
+        stage,
+        names.log_group(stage.prefix),
+        f"filter sessionId = '{viewer.session}' and eventType in ['MAKING_ADS_REQUEST', 'FILLED_AVAIL']\n"
+        "| fields @timestamp, eventType, adsRequestUrl, avail.numAds, avail.filledDuration, avail.originAvailDuration",
+        start - 60,
+        time.time(),
+    )
+    requests = [
+        r for r in rows if r["eventType"] == "MAKING_ADS_REQUEST" and logged_at(r["@timestamp"]) < start + length
+    ]
+    filled = [r for r in rows if r["eventType"] == "FILLED_AVAIL" and logged_at(r["@timestamp"]) < start + length + 5]
+    print(f"\nmid-break join on {sibling} at +20 s: {requests} {filled}")
+    assert requests, f"no ad request for the joined break: {rows}"
+    dur_ms = int(parse_qs(urlsplit(requests[0]["adsRequestUrl"]).query)["dur"][0])
+    seconds = (dur_ms + 500) // 1000
+    assert 0 < dur_ms < length * 1000 and seconds not in POD_SECONDS, f"not an off-grid remainder: {dur_ms} ms"
+    assert not [r for r in filled if int(r.get("avail.numAds") or 0)], f"the {seconds} s remainder was filled: {filled}"

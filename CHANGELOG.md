@@ -111,6 +111,11 @@ All notable changes to this project are documented here. The format follows
   `FILLED_AVAIL` durations); `<prefix>-release-log-loss` fires when MediaTailor filled ad time the log does not
   have. MediaTailor was seen leaving a requested, filled break out of its log; delivery, which reads that
   log's beacons, would under-count it.
+- **Mid-break joiners ask for ads** (ADR-0021, amended): the session controls and the siblings' `AvailSuppression`
+  are `AFTER_LIVE_EDGE` `00:00:00` with `PARTIAL_AVAIL`, so a viewer who joins during a break gets a request for
+  what is left of it, and each ad inserted plays from its first segment; before, the slate played for the whole
+  break. MediaTailor asks for the remainder at segment granularity. On the Prebid Server route a remainder that is
+  not a grid duration (30, 60, 90 or 120 s) names no stored request, so it fails safe to the slate.
 - **Origin-secret rotation** (`modules.release.secret_rotation_days`,
   [docs/release-controller.md](docs/release-controller.md#origin-secret-rotation)). The state machine
   `<prefix>-release-rotation` rotates the demand gate's origin secret with two values admitted at once: a new value
