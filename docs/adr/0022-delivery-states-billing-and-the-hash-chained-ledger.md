@@ -75,7 +75,12 @@ hour) or more than once. The buyer's own count, not ours, is what an insertion o
 - A line can under-deliver near the end of its budget: a break reserves from one shard, so a break can be refused
   while another shard still has budget, and each shard can keep less than one impression's price unspent (under
   4 impressions' worth per line). An undelivered reservation holds its price for two hours, and a session's cap
-  count is never given back.
+  count is never given back. Recommended follow-up (measured in
+  [ADR-0036](0036-pds-sidecar-in-the-prebid-server-task.md#reservation-holds)): an impression's `BEACON_FIRED` reaches
+  delivery p99 13 s after it fires, and none arrived late in 14 days, so a release 10 minutes after the reservation
+  (its retrieval lead, the break and the log's delay, doubled) with the sweeper every 5 minutes would return an unaired
+  reservation's budget within 15 minutes instead of 2 hours 15, keeping the late credit for MediaTailor's beacon
+  retries.
 - Delivery costs a few DynamoDB writes per impression and one Lambda invocation per log batch; reservations one
   transaction per break with line ads.
 - Evidence (delivery): against DynamoDB Local, 300 breaks racing for a $1 line at $6 CPM held exactly 164
