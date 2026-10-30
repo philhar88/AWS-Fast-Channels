@@ -451,7 +451,10 @@ order:
    absent the module renders the kit's from its configuration and logs `POLICY_UNAVAILABLE`); a missing duration
    (300 s) must answer an empty VAST 4.2 document; the same POST
    without the secret, and a request to another path, are blocked at the edge (403). In demo mode the simulator and
-   the demo creatives are checked too.
+   the demo creatives are checked too. With no channel on air the census gate holds Prebid Server's service at a
+   desired count of 0, so nothing is behind the edge: the smoke then sends nothing, prints `smoke skipped: 0 running
+   Prebid Server tasks (no channel on air; census gate)`, and its results say `skipped` with `passed` null; the
+   deploy does not fail. Desired tasks that are not running are no reason to skip: the smoke runs and fails.
 
 `upload-config` runs step 6 alone: it uploads what changed in the rendered configuration, verifies every object in
 S3, lists what is stale, and rolls the tasks only if something changed, which overlay O7 runs at full capacity.

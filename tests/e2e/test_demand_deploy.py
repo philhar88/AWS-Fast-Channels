@@ -1023,6 +1023,39 @@ def test_the_simulator_smoke_wants_one_demo_bid_per_slot(stage: _demand.DemandSt
     assert not stage.simulator_smoke(demo())["passed"], "a slot without a bid"
 
 
+SERVICE_PARAMETERS: Final = {
+    "cluster-arn": "arn:aws:ecs:us-east-1:123456789012:cluster/fastcix-pbs-PrebidCluster",
+    "service-arn": "arn:aws:ecs:us-east-1:123456789012:service/fastcix-pbs-PrebidCluster/fastcix-pbs-Service",
+}
+
+
+def service_with(stage: _demand.DemandStage, stub: Any, desired: int, running: int) -> None:
+    stage.__dict__["parameters"] = lambda: dict(SERVICE_PARAMETERS)
+    stub("ecs").add_response(
+        "describe_services",
+        {"services": [{"serviceName": "fastcix-pbs-Service", "desiredCount": desired, "runningCount": running}]},
+        {"cluster": SERVICE_PARAMETERS["cluster-arn"], "services": [SERVICE_PARAMETERS["service-arn"]]},
+    )
+
+
+def test_the_smoke_is_skipped_loudly_when_the_census_gate_holds_prebid_server_at_zero(
+    stage: _demand.DemandStage, stub: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    service_with(stage, stub, desired=0, running=0)
+
+    assert prebid_guidance.report_smoke(stage) == 0
+    out = capsys.readouterr().out
+    assert "smoke skipped: 0 running Prebid Server tasks (no channel on air; census gate)" in out
+    results = json.loads(out[out.index("{\n") : out.rindex("}") + 1])
+    assert results == {"skipped": _demand.SMOKE_SKIPPED, "passed": None}, "a skipped smoke never passes"
+
+
+def test_desired_tasks_that_do_not_run_are_no_reason_to_skip(stage: _demand.DemandStage, stub: Any) -> None:
+    service_with(stage, stub, desired=2, running=0)
+
+    assert stage.smoke_skip_reason() is None, "the smoke runs, and its 503s fail it"
+
+
 def test_the_smoke_counts_the_simulator_and_the_creatives() -> None:
     results: dict[str, Any] = {
         **{f"{s}s": {"status": 200, "content_type": "application/xml", "ads": 1} for s in (30, 48, 60, 90, 120)},

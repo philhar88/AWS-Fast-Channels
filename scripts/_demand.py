@@ -353,6 +353,10 @@ SMOKE_OUT_OF_RANGE: Final = 300
 """What MediaTailor sends for a missing duration: the module answers it with an empty pod."""
 
 
+SMOKE_SKIPPED: Final = "0 running Prebid Server tasks (no channel on air; census gate)"
+"""Why ``deploy-demand``'s smoke did not run (:meth:`DemandStage.smoke_skip_reason`)."""
+
+
 def vast_ads(text: str) -> int | None:
     """The number of ``Ad`` elements of a VAST 4.2 document, or ``None`` for anything else."""
     try:
@@ -1500,10 +1504,27 @@ class DemandStage:
         value: str = secrets.get_secret_value(SecretId=names.origin_secret(self.prefix, slot))["SecretString"]
         return value
 
+    def smoke_skip_reason(self) -> str | None:
+        """Why the smoke cannot run, or None: the census gate holds Prebid Server's service at a desired count of 0
+        while no channel is on air, so the edge has no task behind it. Desired tasks that are not running are no
+        reason: the smoke runs and fails."""
+        values = self.parameters()
+        ecs = self.client("ecs")
+        [service] = ecs.describe_services(
+            cluster=values[Parameter.CLUSTER_ARN], services=[values[Parameter.SERVICE_ARN]]
+        )["services"]
+        if int(service.get("desiredCount", 0)) == 0:
+            return SMOKE_SKIPPED
+        return None
+
     def smoke(self) -> dict[str, Any]:
         """A synthetic MediaTailor POST per smoke length (a VAST 4.2 pod, ``application/xml``), one for a missing
         duration (an empty pod), one without the origin secret (blocked at the edge) and one for another path
-        (blocked)."""
+        (blocked). With Prebid Server held at 0 tasks (:meth:`smoke_skip_reason`) nothing is sent: the results say
+        ``skipped`` and why, and ``passed`` is None, never True."""
+        if (reason := self.smoke_skip_reason()) is not None:
+            log(f"smoke skipped: {reason}")
+            return {"skipped": reason, "passed": None}
         domain = self.parameters()[Parameter.CLOUDFRONT_DOMAIN]
         secret = self.origin_secret()
         results: dict[str, Any] = {}
