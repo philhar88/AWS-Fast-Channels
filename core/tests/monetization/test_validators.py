@@ -605,7 +605,8 @@ def test_pre_session_commits_the_controls(bundle: Bundle, kit: SimpleNamespace) 
         "PRE_SESSION_INITIALIZATION tree fastm_ps_root: aws.availSuppressionValue is written but not re-exported, so "
         "it is discarded",
         "function fastm_ps_root Output[aws.preroll]: the root commits re-exports of its steps or literals only",
-        "PRE_SESSION_INITIALIZATION tree fastm_ps_root: suppression mode and value are written together (P0-25)",
+        "PRE_SESSION_INITIALIZATION tree fastm_ps_root: suppression mode, value and fill policy are written together "
+        "(P0-25)",
         "PRE_SESSION_INITIALIZATION tree fastm_ps_root: must commit aws.availSuppressionValue=00:00:00 (DESIGN §5.3, "
         "ADR-0021)",
         "PRE_SESSION_INITIALIZATION tree fastm_ps_root: must commit aws.logMode=DISABLED (DESIGN §5.3, ADR-0021)",
@@ -783,9 +784,9 @@ def test_ad_behaviour(bundle: Bundle, kit: SimpleNamespace) -> None:
         "sibling fastm-demo-p-a: PersonalizationThresholdSeconds is 121 (slate plays unwanted slots)",
         "sibling fastm-demo-p-a: a pbs sibling uses FOLLOW_AD_SEQUENCE",
         "sibling fastm-demo-p-a: X-Fast-Buffet turns off the standalone ads FOLLOW relies on",
-        "sibling fastm-demo-p-a: AvailSuppression is BEHIND_LIVE_EDGE 00:00:00 (defence in depth)",
+        "sibling fastm-demo-p-a: AvailSuppression is AFTER_LIVE_EDGE 00:00:00 PARTIAL_AVAIL (defence in depth)",
         "sibling fastm-demo-p-a: no PRE_MANIFEST function: injection is a transcode path (P0-07)",
-        "sibling fastm-demo-p-b: AvailSuppression is BEHIND_LIVE_EDGE 00:00:00 (defence in depth)",
+        "sibling fastm-demo-p-b: AvailSuppression is AFTER_LIVE_EDGE 00:00:00 PARTIAL_AVAIL (defence in depth)",
     ]
 
 

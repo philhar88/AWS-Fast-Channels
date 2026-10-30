@@ -36,7 +36,8 @@ Rules (:class:`Rule`):
 - **R-P3** Live and VOD maximum ≥ PRE_ADS executor timeout + ``AdsRequestTimeoutMilliseconds`` (P0-03: a wall clock
   that includes the hook).
 - **R-P4** Threshold 121; ``FOLLOW_AD_SEQUENCE`` on PBS siblings, ``IGNORE_AD_SEQUENCE`` on opaque ones;
-  ``AvailSuppression`` ``BEHIND_LIVE_EDGE`` ``00:00:00``; no PRE_MANIFEST function (ADR-0021, P0-07).
+  ``AvailSuppression`` ``AFTER_LIVE_EDGE`` ``00:00:00`` ``PARTIAL_AVAIL``; no PRE_MANIFEST function (ADR-0021,
+  P0-07).
 - **R-P5** Every grid duration has a stored request; zero, missing (300 s) and off-grid durations have none, so
   they fail safe to the slate.
 - **R-P6** Sibling names ``<prefix>-<ch>-p-[a-z0-9]`` of a monetized channel.
@@ -254,8 +255,8 @@ SESSION_REQUEST_HEADER_PATHS: Final = frozenset({"session.user_agent"})
 PRE_ADS_FORBIDDEN_WRITES: Final = re.compile(r"(?:session|scte|avail|asset)\..+|adsRequest\.(?:url|method|body)")
 """PRE_ADS outputs that would change the ADS URL, the body, or the variables they substitute (R-P1)."""
 TICKET_KEY: Final = "player_params.t"
-SUPPRESSION_KEYS: Final = ("aws.availSuppressionMode", "aws.availSuppressionValue")
-AVAIL_SUPPRESSION: Final = {"Mode": "BEHIND_LIVE_EDGE", "Value": "00:00:00"}
+SUPPRESSION_KEYS: Final = ("aws.availSuppressionMode", "aws.availSuppressionValue", "aws.availSuppressionFillPolicy")
+AVAIL_SUPPRESSION: Final = {"Mode": "AFTER_LIVE_EDGE", "Value": "00:00:00", "FillPolicy": "PARTIAL_AVAIL"}
 PRESET_STRATEGY_PREFIX: Final = "AppConfig."
 """AppConfig's predefined strategies (``AppConfig.AllAtOnce`` and the rest) are never used."""
 ALARM_STEP_MINUTES: Final = 2
@@ -701,8 +702,8 @@ def _pre_session_commits(tree: _Tree) -> Iterator[Violation]:
             committed[key] = value.literal
         else:
             yield _violation(Rule.F6, value.where, "the root commits re-exports of its steps or literals only")
-    if sum(key in committed for key in SUPPRESSION_KEYS) == 1:
-        yield _violation(Rule.F6, tree.where, "suppression mode and value are written together (P0-25)")
+    if 0 < sum(key in committed for key in SUPPRESSION_KEYS) < len(SUPPRESSION_KEYS):
+        yield _violation(Rule.F6, tree.where, "suppression mode, value and fill policy are written together (P0-25)")
     for key, expected in SESSION_CONTROLS.items():
         if committed.get(key) != expected:
             yield _violation(Rule.F6, tree.where, f"must commit {key}={expected} (DESIGN §5.3, ADR-0021)")
@@ -968,7 +969,9 @@ def check_ad_behaviour(sibling: Sibling) -> list[Violation]:
         found.append(_violation(Rule.P4, where, f"{HEADER_BUFFET} turns off the standalone ads FOLLOW relies on"))
     suppression = playback.avail_suppression.api() if playback.avail_suppression else {}
     if suppression != AVAIL_SUPPRESSION:
-        found.append(_violation(Rule.P4, where, "AvailSuppression is BEHIND_LIVE_EDGE 00:00:00 (defence in depth)"))
+        found.append(
+            _violation(Rule.P4, where, "AvailSuppression is AFTER_LIVE_EDGE 00:00:00 PARTIAL_AVAIL (defence in depth)")
+        )
     if Hook.PRE_MANIFEST in (playback.function_mapping or {}):
         found.append(_violation(Rule.P4, where, "no PRE_MANIFEST function: injection is a transcode path (P0-07)"))
     return found

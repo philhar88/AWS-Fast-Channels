@@ -51,13 +51,14 @@ def test_session_controls_are_literals_that_read_nothing() -> None:
     assert ctl.function_id == "fastm_ps_ctl"
     assert ctl.function_type is FunctionType.CUSTOM_OUTPUT
     assert ctl.output == {
-        "aws.availSuppressionMode": "{% 'BEHIND_LIVE_EDGE' %}",
+        "aws.availSuppressionMode": "{% 'AFTER_LIVE_EDGE' %}",
         "aws.availSuppressionValue": "{% '00:00:00' %}",
+        "aws.availSuppressionFillPolicy": "{% 'PARTIAL_AVAIL' %}",
         "aws.reportingMode": "{% 'server' %}",
         "aws.logMode": "{% 'DISABLED' %}",
         "aws.preroll": "{% 'disabled' %}",
     }
-    assert dict(SESSION_CONTROLS)["aws.availSuppressionMode"] == "BEHIND_LIVE_EDGE"
+    assert dict(SESSION_CONTROLS)["aws.availSuppressionMode"] == "AFTER_LIVE_EDGE", "mid-break joiners get ads"
     assert ctl.steps == ()
     for text in ("it's", "back\\slash"):
         with pytest.raises(ValueError, match="quote or a backslash"):
