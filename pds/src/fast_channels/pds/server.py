@@ -9,9 +9,11 @@
 - **Requests**: the event loop reads the body and hands the endpoint to a bounded pool of :data:`state.WORKERS`
   threads. The endpoints are the synchronous code the Lambda functions ran (pydantic, the pod rules, boto3 on the
   locked SDK), so the loop only parses HTTP and never waits on a reservation or a pod rule.
+- **Refreshes**: every :data:`state.REFRESH_TICK_S` the loop starts the refreshes that are due (``state.refresh``),
+  so the snapshot stays current and the reservations' DynamoDB connection stays open between breaks.
 - **Telemetry**: each minute the loop emits the counts as metrics and logs one ``pds stats`` line: per-endpoint
-  latency, the pool's queue wait, the event loop's lag (sampled every :data:`LAG_SAMPLE_S`), the process's CPU share
-  and peak memory.
+  latency, the pool's queue wait, the reservations' and the budget reads' DynamoDB round trips, the event loop's lag
+  (sampled every :data:`LAG_SAMPLE_S`), the process's CPU share and peak memory.
 """
 
 import asyncio
@@ -56,6 +58,7 @@ class Sidecar:
     Args:
         endpoints: path -> the endpoint's answer for a body and the request's arrival (``time.perf_counter``).
         load: what startup runs before the server listens.
+        refresh: what the loop runs every ``refresh_seconds`` (it must not block).
         workers: the pool's threads.
         report_seconds: how often telemetry is emitted.
     """
@@ -65,11 +68,15 @@ class Sidecar:
         endpoints: Endpoints = ENDPOINTS,
         *,
         load: Callable[[], Mapping[str, Any]] = state.load,
+        refresh: Callable[[], None] = state.refresh,
         workers: int = state.WORKERS,
         report_seconds: float = REPORT_SECONDS,
+        refresh_seconds: float = state.REFRESH_TICK_S,
     ) -> None:
         self._endpoints = endpoints
         self._load = load
+        self._refresh = refresh
+        self._refresh_seconds = refresh_seconds
         self._workers = workers
         self._report_seconds = report_seconds
         self._pool: ThreadPoolExecutor | None = None
@@ -154,11 +161,18 @@ class Sidecar:
     async def _report(self) -> None:
         loop = asyncio.get_running_loop()
         due = loop.time() + self._report_seconds
+        refresh_due = loop.time() + self._refresh_seconds
         while True:
             before = loop.time()
             await asyncio.sleep(LAG_SAMPLE_S)
             now = loop.time()
             window.add("loop_lag_ms", max(0.0, (now - before - LAG_SAMPLE_S) * 1000))
+            if now >= refresh_due:
+                refresh_due = now + self._refresh_seconds
+                try:
+                    self._refresh()
+                except Exception:  # a refresh logs its own failures; this keeps the telemetry alive
+                    logger.exception("refresh tick failed")
             if now >= due:
                 due = now + self._report_seconds
                 self._emit()

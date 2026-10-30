@@ -149,7 +149,8 @@ def test_the_s3_endpoint_lets_the_sidecars_reads_through() -> None:
     reads joined it (fastcid, 2026-10-30)."""
     stack = guidance_like()
     wrapper.augment(stack, json.loads(SPEC.model_dump_json()))
-    [endpoint] = Template.from_stack(stack).find_resources("AWS::EC2::VPCEndpoint").values()
+    endpoints = Template.from_stack(stack).find_resources("AWS::EC2::VPCEndpoint").values()
+    [endpoint] = [e for e in endpoints if ".s3" in json.dumps(e["Properties"]["ServiceName"])]
     statements = endpoint["Properties"]["PolicyDocument"]["Statement"]
 
     assert statements[0]["Resource"] == "arn:aws:s3:::guidance/*", "the guidance's own statement stays first"
@@ -157,6 +158,23 @@ def test_the_s3_endpoint_lets_the_sidecars_reads_through() -> None:
     assert snapshot["Resource"] == "arn:aws:s3:::fastcid-pds-config-0123/snapshot/current.json"
     assert (snapshot["Action"], snapshot["Principal"]) == ("s3:GetObject", {"AWS": "*"})
     assert snapshot["Condition"] == {"StringEquals": {"aws:ResourceAccount": "123456789012"}}
+
+
+def test_reservations_reach_dynamodb_through_a_gateway_endpoint_for_the_sidecars_tables_only() -> None:
+    """The guidance's VPC had no DynamoDB endpoint: each reservation went out through a NAT gateway."""
+    stack = guidance_like()
+    wrapper.augment(stack, json.loads(SPEC.model_dump_json()))
+    endpoints = Template.from_stack(stack).find_resources("AWS::EC2::VPCEndpoint").values()
+    [dynamodb] = [e for e in endpoints if "dynamodb" in json.dumps(e["Properties"]["ServiceName"])]
+
+    assert dynamodb["Properties"]["VpcEndpointType"] == "Gateway"
+    assert len(dynamodb["Properties"]["RouteTableIds"]) >= 2, "every subnet's route table"
+    [statement] = dynamodb["Properties"]["PolicyDocument"]["Statement"]
+    assert statement["Resource"] == [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/fastcid-pds",
+        "arn:aws:dynamodb:us-east-1:123456789012:table/fastcid-ledger",
+    ]
+    assert "dynamodb:PutItem" in statement["Action"] and "dynamodb:Scan" not in statement["Action"]
 
 
 def test_a_stack_that_is_not_the_guidances_is_refused() -> None:
@@ -227,8 +245,11 @@ def test_the_real_guidance_synthesizes_with_the_sidecar(tmp_path: Path) -> None:
         assert set(names) == {"Prebid-Container", "Pds-Container"}
         assert names["Prebid-Container"]["DependsOn"] == [{"Condition": "HEALTHY", "ContainerName": "Pds-Container"}]
         assert names["Pds-Container"]["Image"] == SPEC.image
-    [endpoint] = [r for r in resources.values() if r["Type"] == "AWS::EC2::VPCEndpoint"]
-    sids = [s.get("Sid") for s in endpoint["Properties"]["PolicyDocument"]["Statement"]]
+    endpoints = [r for r in resources.values() if r["Type"] == "AWS::EC2::VPCEndpoint"]
+    [s3] = [e for e in endpoints if ".s3" in json.dumps(e["Properties"]["ServiceName"])]
+    sids = [s.get("Sid") for s in s3["Properties"]["PolicyDocument"]["Statement"]]
     assert sids[-1] == "PdsSnapshot" and len(sids) == 4, "the guidance's three statements, then the sidecar's read"
+    [dynamodb] = [e for e in endpoints if "dynamodb" in json.dumps(e["Properties"]["ServiceName"])]
+    assert [s["Sid"] for s in dynamodb["Properties"]["PolicyDocument"]["Statement"]] == ["PdsTables"]
     [group] = [r for k, r in resources.items() if r["Type"] == "AWS::Logs::LogGroup" and k.startswith("PdsSidecarLogs")]
     assert group["Properties"]["LogGroupName"] == "/aws/ecs/fastcid-pds" and "Condition" not in group

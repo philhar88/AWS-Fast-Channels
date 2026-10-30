@@ -49,7 +49,7 @@ def echo(threads: list[str]) -> Callable[[bytes, float], Answer]:
 
 
 def sidecar(endpoints: Mapping[str, Callable[[bytes, float], Answer]], **kwargs: Any) -> Sidecar:
-    return Sidecar(endpoints, load=kwargs.pop("load", dict), **kwargs)
+    return Sidecar(endpoints, load=kwargs.pop("load", dict), refresh=kwargs.pop("refresh", lambda: None), **kwargs)
 
 
 def test_each_path_is_its_endpoint_on_a_worker_thread() -> None:
@@ -192,6 +192,19 @@ def test_the_stats_line_and_the_metrics(caplog: pytest.LogCaptureFixture, capsys
     assert {"PolicyDecisions", "PolicyNoViewerIp", "LoopLagMaxMs"} <= names
     [by_mode] = [blob for blob in emf if "PolicyDecisions" in blob]
     assert (by_mode["mode"], by_mode["PolicyDecisions"]) == ("CONTEXTUAL", [1.0])
+
+
+def test_the_loop_starts_the_due_refreshes_between_requests() -> None:
+    """Values only requests read would go stale between breaks, and DynamoDB would drop the idle connection."""
+    ticks: list[float] = []
+    app = sidecar({"/policy": echo([])}, refresh=lambda: ticks.append(time.monotonic()), refresh_seconds=0.2)
+
+    async def use(client: httpx.AsyncClient) -> None:
+        await asyncio.sleep(1.1)
+
+    run(serve(app, use))
+
+    assert 4 <= len(ticks) <= 6
 
 
 def test_counters_from_many_threads_add_up() -> None:

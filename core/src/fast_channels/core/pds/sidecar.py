@@ -10,7 +10,9 @@ calls too (ADR-0036 weighs that).
 The sidecar runs in the guidance's VPC, whose S3 gateway endpoint lets requests through only to the guidance's own
 buckets (its endpoint policy): S3 answers anything else ``AccessDenied``, whatever the role allows (seen live). So
 the same S3 reads also join that endpoint's policy (:func:`endpoint_statements`), for any principal of the account
-and those objects only.
+and those objects only. The VPC has no DynamoDB endpoint, so the reservations went out through a NAT gateway; the
+wrapper adds a DynamoDB gateway endpoint whose policy admits only the sidecar's item calls on its two tables
+(:func:`dynamodb_endpoint_statements`): the guidance itself calls no DynamoDB.
 """
 
 from typing import Any, Final
@@ -34,10 +36,13 @@ task's memory (a quarter by default), and the sidecar needs a few hundred MiB.""
 HEALTH_COMMAND: Final = (
     "CMD",
     "python",
+    "-S",
     "-c",
-    f"import urllib.request as u; u.urlopen('http://127.0.0.1:{PORT}/health', timeout=2)",
+    f"import socket; socket.create_connection(('127.0.0.1', {PORT}), 2).close()",
 )
-"""The container's health check: the image has Python and no curl."""
+"""The container's health check: the server listens once its startup loads are done, so a connection is the check.
+The image has Python and no curl; without ``site`` and ``urllib`` an interpreter costs a few milliseconds of CPU
+every 5 s (``urllib.request`` cost about 5% of a vCPU, measured)."""
 
 
 class Sidecar(BaseModel):
@@ -57,6 +62,9 @@ class Sidecar(BaseModel):
     statements: tuple[dict[str, Any], ...] = Field(description="IAM statements added to the task role.")
     endpoint_statements: tuple[dict[str, Any], ...] = Field(
         description="Statements added to the policy of the guidance VPC's S3 gateway endpoint."
+    )
+    dynamodb_endpoint_statements: tuple[dict[str, Any], ...] = Field(
+        description="The policy of the DynamoDB gateway endpoint the wrapper adds to the guidance's VPC."
     )
 
 
@@ -172,6 +180,37 @@ def endpoint_statements(
     return tuple(reads)
 
 
+DYNAMODB_ITEM_ACTIONS: Final = (
+    "dynamodb:BatchGetItem",
+    "dynamodb:ConditionCheckItem",
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+)
+"""What the sidecar's calls are authorized as: the budget view's ``BatchGetItem`` and the items of a reservation's
+``TransactWriteItems``, which DynamoDB authorizes item by item."""
+
+
+def dynamodb_endpoint_statements(
+    *, prefix: str, partition: str, region: str, account: str
+) -> tuple[dict[str, Any], ...]:
+    """The DynamoDB gateway endpoint's policy: item calls on the PDS table and the ledger, nothing else (module
+    docstring). The task role still decides which items."""
+    return (
+        {
+            "Sid": "PdsTables",
+            "Effect": "Allow",
+            "Principal": {"AWS": "*"},
+            "Action": list(DYNAMODB_ITEM_ACTIONS),
+            "Resource": [
+                _table(partition, region, account, table_name(prefix)),
+                _table(partition, region, account, ledger_table(prefix)),
+            ],
+            "Condition": {"StringEquals": {"aws:ResourceAccount": account}},
+        },
+    )
+
+
 def sidecar(
     *,
     prefix: str,
@@ -228,5 +267,8 @@ def sidecar(
             partition=partition,
             config_bucket=config_bucket,
             catalog_context_bucket=catalog_context_bucket,
+        ),
+        dynamodb_endpoint_statements=dynamodb_endpoint_statements(
+            prefix=prefix, partition=partition, region=region, account=account
         ),
     )

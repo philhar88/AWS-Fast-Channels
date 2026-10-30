@@ -89,6 +89,20 @@ def test_the_s3_reads_join_the_guidance_vpcs_endpoint_policy() -> None:
     assert (contexts["Action"], contexts["Condition"]) == (["s3:ListBucket", "s3:GetObject"], own)
 
 
+def test_the_dynamodb_endpoint_admits_only_item_calls_on_the_sidecars_tables() -> None:
+    [statement] = sidecar(**ARGS).dynamodb_endpoint_statements
+
+    assert statement["Resource"] == [TABLE, "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"]
+    assert statement["Action"] == [
+        "dynamodb:BatchGetItem",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+    ]
+    assert statement["Condition"] == {"StringEquals": {"aws:ResourceAccount": "123456789012"}}
+
+
 def test_with_the_crawl_module_it_lists_and_reads_only_the_context_objects() -> None:
     spec = sidecar(
         **ARGS,
@@ -127,5 +141,6 @@ def test_the_environment_names_the_stages_state_and_cdn() -> None:
 
 def test_prebid_server_and_the_health_check_reach_the_same_port_on_the_loopback() -> None:
     assert f"http://127.0.0.1:{PORT}" == PDS_BASE_URL
-    assert f"http://127.0.0.1:{PORT}/health" in HEALTH_COMMAND[-1]
+    assert f"('127.0.0.1', {PORT})" in HEALTH_COMMAND[-1]
+    assert HEALTH_COMMAND[:3] == ("CMD", "python", "-S"), "no site: a cheap interpreter every 5 s"
     assert Sidecar.model_validate_json(sidecar(**ARGS).model_dump_json()) == sidecar(**ARGS)

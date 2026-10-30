@@ -15,6 +15,8 @@ construct one does not own (:func:`augment`):
 - the sidecar's grants on the shared task role;
 - its S3 reads in the policy of the guidance VPC's S3 gateway endpoint, which lets through only the guidance's own
   buckets otherwise;
+- a DynamoDB gateway endpoint in the guidance's VPC, for the sidecar's tables only (the guidance calls no DynamoDB),
+  so reservations do not go out through a NAT gateway;
 - the sidecar's log group, at the stack's root (so no condition applies to it).
 
 The sidecar comes as the CDK context ``fastPds`` (``core.pds.sidecar.Sidecar`` as JSON): its image, environment,
@@ -58,8 +60,8 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
     returns them.
 
     Raises:
-        SidecarError: no task definition, one with another id, one without Prebid Server's container, or not exactly
-            one S3 gateway endpoint.
+        SidecarError: no task definition, one with another id, one without Prebid Server's container, not exactly one
+            S3 gateway endpoint, or not exactly one VPC.
     """
     nodes = stack.node.find_all()
     tasks = [node for node in nodes if isinstance(node, ecs.FargateTaskDefinition)]
@@ -76,6 +78,12 @@ def augment(stack: Stack, sidecar: Mapping[str, Any]) -> list[ecs.FargateTaskDef
         raise SidecarError(f"expected the guidance VPC's one S3 gateway endpoint, found {len(endpoints)}")
     for statement in sidecar["endpoint_statements"]:
         endpoints[0].add_to_policy(iam.PolicyStatement.from_json(statement))
+    vpcs = [node for node in nodes if isinstance(node, ec2.Vpc)]
+    if len(vpcs) != 1:
+        raise SidecarError(f"expected the guidance's one VPC, found {[vpc.node.path for vpc in vpcs]}")
+    dynamodb = vpcs[0].add_gateway_endpoint("PdsDynamoDbEndpoint", service=ec2.GatewayVpcEndpointAwsService.DYNAMODB)
+    for statement in sidecar["dynamodb_endpoint_statements"]:
+        dynamodb.add_to_policy(iam.PolicyStatement.from_json(statement))
     log_group = logs.LogGroup(
         stack,
         "PdsSidecarLogs",

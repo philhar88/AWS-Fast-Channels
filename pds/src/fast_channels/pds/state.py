@@ -2,10 +2,12 @@
 before the server listens (:func:`load`) and refreshed in background threads off the request path
 (``functions.pds.store``: the snapshot every 30 s, the budgets every 5 s).
 
-The process never freezes between requests, as a Lambda execution environment does, so the refreshes run on time and
-the budget view's reads every 5 s keep the reservations' connection to DynamoDB open while breaks follow each other.
-The own book and ``/select`` share that one view, whose reads are timed into the minute's stats (``budget_read_ms``):
-a DynamoDB round trip from the task every 5 s, busy or idle.
+A refresh starts when a value is read and due, so values read only by requests go stale, and DynamoDB drops the
+reservations' idle connection, between breaks. The process never freezes, as a Lambda execution environment does, so
+the server reads them every :data:`REFRESH_TICK_S` as well (:func:`refresh`): the snapshot stays current, and the
+budget view's reads every 5 s keep the reservations' connection open between breaks. The own book and ``/select``
+share that one view, whose reads are timed into the minute's stats (``budget_read_ms``): a DynamoDB round trip from
+the task every 5 s.
 
 Every client is created here, on one thread, before the worker threads use it: boto3 makes clients from a session that
 is not thread-safe, and the clients themselves are.
@@ -32,6 +34,8 @@ from fast_channels.pds.telemetry import window
 WORKERS: Final = 16
 """The server's worker threads, and the reservations' connections: every endpoint runs on one, so neither the pod
 rules' CPU nor a reservation's round trip holds the event loop."""
+REFRESH_TICK_S: Final = 1.0
+"""How often the server starts the refreshes that are due (:func:`refresh`)."""
 REQUEST_CONFIG: Final = Config(
     connect_timeout=0.1, read_timeout=0.1, retries={"total_max_attempts": 1}, max_pool_connections=WORKERS
 )
@@ -66,6 +70,15 @@ def budgets() -> Budgets:
     """The lines' budgets, read on the reservations' client: its reads every 5 s keep that connection open."""
     settings().require("pds_table")
     return TimedBudgets(settings().pds_table, lines=lambda: store().current.lines, client=dynamodb())
+
+
+def refresh() -> None:
+    """Start every refresh that is due, each in a thread of its own (it never waits): the snapshot, the budget view
+    and, with the crawl module, the catalog contexts."""
+    store().get()
+    budgets().get()
+    if contributor() is not None:
+        catalog_contexts().get()
 
 
 def has_snapshot() -> bool:
