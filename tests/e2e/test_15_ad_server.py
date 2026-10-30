@@ -53,7 +53,7 @@ pytestmark = pytest.mark.e2e
 
 VIEWERS: Final = 3
 MAX_REQUESTS_PER_BREAK: Final = 2
-"""With prefetch, the retrieval and, when MediaTailor could not use what it retrieved, one request in real time."""
+"""With prefetch, the retrieval and, when it was not consumed, one request in real time at the break."""
 READY_TIMEOUT_S: Final = 900
 """Census lag, Prebid Server's scale-out from zero and its warm-up, with room."""
 TAIL: Final = timedelta(seconds=90)
@@ -225,10 +225,12 @@ def report(run: Run) -> str:
 def test_each_ad_request_ran_one_auction(run: Run) -> None:
     """The auction runs once for each request to the ad server, never twice, for every break the viewers met.
 
-    With prefetch (M3-06) a break is usually asked for once, at retrieval. MediaTailor asks again in real time when
-    it could not use what it retrieved: a first-sight creative, as on a stage's first break. The 30 s
+    With prefetch (M3-06) a break is asked for once, at retrieval, when the retrieval is consumed. When it is not,
+    MediaTailor asks again in real time at the break. On fastcih (2026-10-30) the first break went that way. On
+    lane D's fastcij run, the prefetcher re-created the break's schedule after the sessions had retrieved: the
+    channel's start had moved about 1.2 s, against a 2 s tolerance compared at 1 s resolution. The 30 s
     ``session_break`` cache (the shortest break, validator R-F8) does not span the retrieval's lead, so that second
-    request runs a second auction (fastcih, 2026-10-30)."""
+    request runs a second auction."""
     met = {(b.sid, b.evid) for b in run.breaks if "MAKING_ADS_REQUEST" in b.events and b.evid}
     assert met, "no ad request logged"
     asked = Counter((d.sid, d.evid) for d in run.decisions)
