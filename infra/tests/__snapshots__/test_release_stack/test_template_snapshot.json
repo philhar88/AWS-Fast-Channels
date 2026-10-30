@@ -7,6 +7,15 @@
         "Ref": "ControllerBundlesC4F66A3B"
       }
     },
+    "BundleKey": {
+      "Description": "The bundle this deployment rendered",
+      "Value": {
+        "Fn::GetAtt": [
+          "ControllerBundle3AB631F3",
+          "BundleKey"
+        ]
+      }
+    },
     "DriftFunction": {
       "Description": "The drift check (hourly)",
       "Value": {
@@ -27,7 +36,7 @@
     },
     "Siblings": {
       "Description": "Sibling configurations",
-      "Value": "[\"fastm-demo-p-a\", \"fastm-demo-p-b\", \"fastm-demo-p-z\"]"
+      "Value": "[\"fastm-demo-p-a\", \"fastm-demo-p-b\", \"fastm-demo-p-z\", \"fastm-lab-p-a\", \"fastm-lab-p-b\", \"fastm-lab-p-z\"]"
     },
     "StateMachineArn": {
       "Description": "The apply path",
@@ -52,6 +61,18 @@
       "Default": "/fastm/pds/delivery-function",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
+    "SsmParameterValuefastmpdspolicyloggroupC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/policy-log-group",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/appconfig-application",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/appconfig-environment",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
     "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter": {
       "Default": "/fastm/release/cdn-base-url",
       "Type": "AWS::SSM::Parameter::Value<String>"
@@ -60,12 +81,20 @@
       "Default": "/fastm/release/channels/fastm-demo",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
+    "SsmParameterValuefastmreleasechannelsfastmlabC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/channels/fastm-lab",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
     "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter": {
       "Default": "/fastm/release/content-base-url",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
     "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
       "Default": "/fastm/release/media-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleasetoolfunctionsC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/tool-functions",
       "Type": "AWS::SSM::Parameter::Value<String>"
     }
   },
@@ -86,6 +115,12 @@
         "Description": "Release Controller: one step of the apply path",
         "Environment": {
           "Variables": {
+            "APPCONFIG_APPLICATION": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "APPCONFIG_ENVIRONMENT": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
             "CDN_BASE_URL": {
               "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
@@ -98,15 +133,25 @@
             "ORIGIN_SECRET_REGION": "us-east-1",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "release.apply",
+            "RELEASE_AT_ONCE_STRATEGY": {
+              "Ref": "PointerAtOnce8675D08F"
+            },
             "RELEASE_BUCKET": {
               "Ref": "ControllerBundlesC4F66A3B"
             },
-            "RELEASE_CHANNELS": "fastm-demo",
+            "RELEASE_CHANNELS": "fastm-demo,fastm-lab",
+            "RELEASE_LOCK_SECONDS": "9600",
             "RELEASE_LOG_DESTINATION": {
               "Fn::GetAtt": [
                 "LogsDestination64C85DDD",
                 "Arn"
               ]
+            },
+            "RELEASE_PROFILE": {
+              "Ref": "PointerProfile39EB4B7B"
+            },
+            "RELEASE_STRATEGY": {
+              "Ref": "PointerStrategyA0D6C5E6"
             },
             "RELEASE_TABLE": {
               "Ref": "ControllerState81621A42"
@@ -280,7 +325,10 @@
                 "mediatailor:TagResource"
               ],
               "Effect": "Allow",
-              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*"
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*"
+              ]
             },
             {
               "Action": [
@@ -390,7 +438,7 @@
           "Fn::Join": [
             "",
             [
-              "{\"channels\":[{\"child_directed\":false,\"name\":\"fastm-demo\",\"outputs\":[\"hls\"],\"policy_source_arns\":[\"fastm-demo\",\"fastm-demo-p-?\"]}],\"functions\":[{\"CustomOutputConfiguration\":{\"Output\":{\"aws.availSuppressionMode\":\"{% 'BEHIND_LIVE_EDGE' %}\",\"aws.availSuppressionValue\":\"{% '00:00:00' %}\",\"aws.logMode\":\"{% 'DISABLED' %}\",\"aws.preroll\":\"{% 'disabled' %}\",\"aws.reportingMode\":\"{% 'server' %}\"},\"Runtime\":\"JSONATA\"},\"Description\":\"Session controls: mid-break joins see slate, server-side beacons, no debug log, no pre-roll.\",\"FunctionId\":\"fastm_ps_ctl\",\"FunctionType\":\"CUSTOM_OUTPUT\"},{\"Description\":\"PRE_SESSION_INITIALIZATION root: runs 1 step(s) in order and commits only its Output.\",\"FunctionId\":\"fastm_ps_root\",\"FunctionType\":\"SEQUENTIAL_EXECUTOR\",\"SequentialExecutorConfiguration\":{\"FunctionList\":[{\"FunctionId\":\"fastm_ps_ctl\"}],\"Output\":{\"aws.availSuppressionMode\":\"{% aws.availSuppressionMode %}\",\"aws.availSuppressionValue\":\"{% aws.availSuppressionValue %}\",\"aws.logMode\":\"{% aws.logMode %}\",\"aws.preroll\":\"{% aws.preroll %}\",\"aws.reportingMode\":\"{% aws.reportingMode %}\"},\"Runtime\":\"JSONATA\",\"TimeoutMilliseconds\":400}}],\"grid_seconds\":[30,60,90,120],\"prefix\":\"fastm\",\"rollout\":{\"deployment_duration_in_minutes\":30,\"description\":\"Simulated gate: a simulated audience, 10% steps over 30 minutes.\",\"final_bake_time_in_minutes\":10,\"growth_factor\":10.0,\"growth_type\":\"LINEAR\",\"name\":\"demo\"},\"siblings\":[{\"channel\":\"fastm-demo\",\"letter\":\"a\",\"name\":\"fastm-demo-p-a\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-demo-p-a\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              "{\"channels\":[{\"child_directed\":false,\"lab\":false,\"name\":\"fastm-demo\",\"outputs\":[\"hls\"],\"policy_source_arns\":[\"fastm-demo\",\"fastm-demo-p-?\"]},{\"child_directed\":false,\"lab\":true,\"name\":\"fastm-lab\",\"outputs\":[\"hls\"],\"policy_source_arns\":[\"fastm-lab\",\"fastm-lab-p-?\"]}],\"functions\":[{\"CustomOutputConfiguration\":{\"Output\":{\"aws.availSuppressionMode\":\"{% 'BEHIND_LIVE_EDGE' %}\",\"aws.availSuppressionValue\":\"{% '00:00:00' %}\",\"aws.logMode\":\"{% 'DISABLED' %}\",\"aws.preroll\":\"{% 'disabled' %}\",\"aws.reportingMode\":\"{% 'server' %}\"},\"Runtime\":\"JSONATA\"},\"Description\":\"Session controls: mid-break joins see slate, server-side beacons, no debug log, no pre-roll.\",\"FunctionId\":\"fastm_ps_ctl\",\"FunctionType\":\"CUSTOM_OUTPUT\"},{\"Description\":\"PRE_SESSION_INITIALIZATION root: runs 1 step(s) in order and commits only its Output.\",\"FunctionId\":\"fastm_ps_root\",\"FunctionType\":\"SEQUENTIAL_EXECUTOR\",\"SequentialExecutorConfiguration\":{\"FunctionList\":[{\"FunctionId\":\"fastm_ps_ctl\"}],\"Output\":{\"aws.availSuppressionMode\":\"{% aws.availSuppressionMode %}\",\"aws.availSuppressionValue\":\"{% aws.availSuppressionValue %}\",\"aws.logMode\":\"{% aws.logMode %}\",\"aws.preroll\":\"{% aws.preroll %}\",\"aws.reportingMode\":\"{% aws.reportingMode %}\"},\"Runtime\":\"JSONATA\",\"TimeoutMilliseconds\":400}}],\"grid_seconds\":[30,60,90,120],\"prefix\":\"fastm\",\"rollout\":{\"deployment_duration_in_minutes\":30,\"description\":\"Simulated gate: a simulated audience, 10% steps over 30 minutes.\",\"final_bake_time_in_minutes\":10,\"growth_factor\":10.0,\"growth_type\":\"LINEAR\",\"name\":\"demo\"},\"siblings\":[{\"channel\":\"fastm-demo\",\"letter\":\"a\",\"name\":\"fastm-demo-p-a\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-demo-p-a\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
               {
                 "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
               },
@@ -425,6 +473,42 @@
               "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"],\"PublishOptInEventTypes\":[\"PRE_SESSION_INIT_HOOK_SUMMARY\",\"PRE_SESSION_INIT_FUNCTION_COMPLETED\"]},\"PercentEnabled\":100},\"Name\":\"fastm-demo-p-z\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
               {
                 "Ref": "SsmParameterValuefastmreleasechannelsfastmdemoC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"role\":\"probe\",\"route\":\"pbs\"},{\"channel\":\"fastm-lab\",\"letter\":\"a\",\"name\":\"fastm-lab-p-a\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-lab-p-a\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\",\"ContentSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"],\"PublishOptInEventTypes\":[\"PRE_SESSION_INIT_HOOK_SUMMARY\",\"PRE_SESSION_INIT_FUNCTION_COMPLETED\"]},\"PercentEnabled\":100},\"Name\":\"fastm-lab-p-a\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasechannelsfastmlabC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"role\":\"general\",\"route\":\"pbs\"},{\"channel\":\"fastm-lab\",\"letter\":\"b\",\"name\":\"fastm-lab-p-b\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-lab-p-b\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\",\"ContentSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"],\"PublishOptInEventTypes\":[\"PRE_SESSION_INIT_HOOK_SUMMARY\",\"PRE_SESSION_INIT_FUNCTION_COMPLETED\"]},\"PercentEnabled\":100},\"Name\":\"fastm-lab-p-b\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasechannelsfastmlabC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"role\":\"general\",\"route\":\"pbs\"},{\"channel\":\"fastm-lab\",\"letter\":\"z\",\"name\":\"fastm-lab-p-z\",\"playback\":{\"AdConditioningConfiguration\":{\"StreamingMediaFileConditioning\":\"NONE\"},\"AdDecisionServerConfiguration\":{\"HttpRequest\":{\"Body\":\"{\\\"ext\\\":{\\\"prebid\\\":{\\\"storedrequest\\\":{\\\"id\\\":\\\"fast-pod-{{session.avail_duration_secs}}s\\\"}}}}\",\"CompressRequest\":\"NONE\",\"Headers\":{\"Content-Type\":\"application/json\",\"X-Fast-Pc\":\"fastm-lab-p-z\",\"X-Fast-Probe\":\"1\",\"X-Fast-Sid\":\"{{session.uuid}}\"},\"Method\":\"POST\"},\"VastResponse\":{\"AdSequencingMode\":\"FOLLOW_AD_SEQUENCE\"}},\"AdDecisionServerUrl\":\"https://d111111abcdef8.cloudfront.net/openrtb2/auction?evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]\",\"AdsPersonalizationTimeouts\":{\"AdsRequestTimeoutMilliseconds\":2000,\"LiveMaximumAdsPersonalizationTimeMilliseconds\":6000,\"VodMaximumAdsPersonalizationTimeMilliseconds\":6000},\"AvailSuppression\":{\"Mode\":\"BEHIND_LIVE_EDGE\",\"Value\":\"00:00:00\"},\"CdnConfiguration\":{\"AdSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\",\"ContentSegmentUrlPrefix\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasecontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+              },
+              "\"},\"FunctionMapping\":{\"PRE_SESSION_INITIALIZATION\":\"fastm_ps_root\"},\"InsertionMode\":\"STITCHED_ONLY\",\"LogConfiguration\":{\"AdsInteractionLog\":{\"PublishOptInEventTypes\":[\"RAW_ADS_RESPONSE\"]},\"EnabledLoggingStrategies\":[\"VENDED_LOGS\"],\"ManifestServiceInteractionLog\":{\"ExcludeEventTypes\":[\"GENERATED_MANIFEST\"],\"PublishOptInEventTypes\":[\"PRE_SESSION_INIT_HOOK_SUMMARY\",\"PRE_SESSION_INIT_FUNCTION_COMPLETED\"]},\"PercentEnabled\":100},\"Name\":\"fastm-lab-p-z\",\"PersonalizationThresholdSeconds\":121,\"VideoContentSourceUrl\":\"",
+              {
+                "Ref": "SsmParameterValuefastmreleasechannelsfastmlabC96584B6F00A464EAD1953AFF4B05118Parameter"
               },
               "\"},\"role\":\"probe\",\"route\":\"pbs\"}],\"stored_requests\":[\"fast-pod-120s\",\"fast-pod-30s\",\"fast-pod-60s\",\"fast-pod-90s\",\"fast-pod-kids-120s\",\"fast-pod-kids-30s\",\"fast-pod-kids-60s\",\"fast-pod-kids-90s\"],\"v\":1}"
             ]
@@ -745,6 +829,30 @@
                 ]
               },
               "Sid": "AllowEventRuleFastChannelsfastmReleaseControllerOnDesiredStateBD68ACAE"
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "ControllerOnCandidateAlarm81FA2E3F",
+                      "Arn"
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerDeadLetters9A8CFC51",
+                  "Arn"
+                ]
+              },
+              "Sid": "AllowEventRuleFastChannelsfastmReleaseControllerOnCandidateAlarmA908620D"
             }
           ],
           "Version": "2012-10-17"
@@ -1144,6 +1252,12 @@
         "Description": "Release Controller: drift of siblings, Functions, policies",
         "Environment": {
           "Variables": {
+            "APPCONFIG_APPLICATION": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "APPCONFIG_ENVIRONMENT": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
             "CDN_BASE_URL": {
               "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
@@ -1156,15 +1270,25 @@
             "ORIGIN_SECRET_REGION": "us-east-1",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "release.drift",
+            "RELEASE_AT_ONCE_STRATEGY": {
+              "Ref": "PointerAtOnce8675D08F"
+            },
             "RELEASE_BUCKET": {
               "Ref": "ControllerBundlesC4F66A3B"
             },
-            "RELEASE_CHANNELS": "fastm-demo",
+            "RELEASE_CHANNELS": "fastm-demo,fastm-lab",
+            "RELEASE_LOCK_SECONDS": "9600",
             "RELEASE_LOG_DESTINATION": {
               "Fn::GetAtt": [
                 "LogsDestination64C85DDD",
                 "Arn"
               ]
+            },
+            "RELEASE_PROFILE": {
+              "Ref": "PointerProfile39EB4B7B"
+            },
+            "RELEASE_STRATEGY": {
+              "Ref": "PointerStrategyA0D6C5E6"
             },
             "RELEASE_TABLE": {
               "Ref": "ControllerState81621A42"
@@ -1373,7 +1497,10 @@
             {
               "Action": "mediatailor:GetPlaybackConfiguration",
               "Effect": "Allow",
-              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*"
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*"
+              ]
             },
             {
               "Action": "mediatailor:GetFunction",
@@ -1383,7 +1510,10 @@
             {
               "Action": "mediatailor:GetChannelPolicy",
               "Effect": "Allow",
-              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo"
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab"
+              ]
             }
           ],
           "Version": "2012-10-17"
@@ -1512,6 +1642,86 @@
       },
       "Type": "AWS::IAM::Policy"
     },
+    "ControllerOnCandidateAlarm81FA2E3F": {
+      "Properties": {
+        "Description": "Runbook R1: a pair sibling in ALARM goes back to its last good tree",
+        "EventPattern": {
+          "detail": {
+            "alarmName": [
+              "fastm-release-candidate"
+            ],
+            "state": {
+              "value": [
+                "ALARM"
+              ]
+            }
+          },
+          "detail-type": [
+            "CloudWatch Alarm State Change"
+          ],
+          "source": [
+            "aws.cloudwatch"
+          ]
+        },
+        "State": "ENABLED",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "ControllerPromote115724CE",
+                "Arn"
+              ]
+            },
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "ControllerDeadLetters9A8CFC51",
+                  "Arn"
+                ]
+              }
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 2
+            }
+          }
+        ]
+      },
+      "Type": "AWS::Events::Rule"
+    },
+    "ControllerOnCandidateAlarmAllowEventRuleFastChannelsfastmReleaseControllerPromoteE881F6A581945B04": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ControllerPromote115724CE",
+            "Arn"
+          ]
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "ControllerOnCandidateAlarm81FA2E3F",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
     "ControllerOnDesiredState63791D37": {
       "Properties": {
         "Description": "Apply each new release bundle",
@@ -1574,6 +1784,476 @@
         ]
       },
       "Type": "AWS::Events::Rule"
+    },
+    "ControllerPromote115724CE": {
+      "DependsOn": [
+        "ControllerPromoteRoleDefaultPolicy0A23742F",
+        "ControllerPromoteRole91CBD523"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: promotion, rollback (R1) and old Function trees",
+        "Environment": {
+          "Variables": {
+            "APPCONFIG_APPLICATION": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "APPCONFIG_ENVIRONMENT": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "CDN_BASE_URL": {
+              "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LAKE_DELIVERIES": "{\"AD_DECISION_SERVER_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-ads\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}},\"MANIFEST_SERVICE_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-manifest\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}}}",
+            "LEDGER_TABLE": "fastm-ledger",
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "ORIGIN_SECRET_REGION": "us-east-1",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.promote",
+            "RELEASE_AT_ONCE_STRATEGY": {
+              "Ref": "PointerAtOnce8675D08F"
+            },
+            "RELEASE_BUCKET": {
+              "Ref": "ControllerBundlesC4F66A3B"
+            },
+            "RELEASE_CHANNELS": "fastm-demo,fastm-lab",
+            "RELEASE_LOCK_SECONDS": "9600",
+            "RELEASE_LOG_DESTINATION": {
+              "Fn::GetAtt": [
+                "LogsDestination64C85DDD",
+                "Arn"
+              ]
+            },
+            "RELEASE_PROFILE": {
+              "Ref": "PointerProfile39EB4B7B"
+            },
+            "RELEASE_STRATEGY": {
+              "Ref": "PointerStrategyA0D6C5E6"
+            },
+            "RELEASE_TABLE": {
+              "Ref": "ControllerState81621A42"
+            },
+            "TOOL_FUNCTIONS": {
+              "Ref": "SsmParameterValuefastmreleasetoolfunctionsC96584B6F00A464EAD1953AFF4B05118Parameter"
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.release.promote.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerPromoteLogs41919B1C"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerPromoteRole91CBD523",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerPromoteLogs41919B1C": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerPromoteRole91CBD523": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerPromoteRoleDefaultPolicy0A23742F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerPromoteLogs41919B1C",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "cloudwatch:DescribeAlarms",
+                "cloudwatch:GetMetricStatistics",
+                "mediatailor:ListFunctions",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "appconfig:CreateHostedConfigurationVersion",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/configurationprofile/",
+                      {
+                        "Ref": "PointerProfile39EB4B7B"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "appconfig:StartDeployment",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/configurationprofile/",
+                      {
+                        "Ref": "PointerProfile39EB4B7B"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/environment/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:deploymentstrategy/",
+                      {
+                        "Ref": "PointerAtOnce8675D08F"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:deploymentstrategy/",
+                      {
+                        "Ref": "PointerStrategyA0D6C5E6"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "appconfig:ListDeployments",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/environment/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "appconfig:GetDeployment",
+                "appconfig:StopDeployment",
+                "appconfig:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/environment/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/deployment/*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/environment/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:appconfig:us-east-1:123456789012:application/",
+                      {
+                        "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:Scan"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerState81621A42",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ControllerBundlesC4F66A3B",
+                        "Arn"
+                      ]
+                    },
+                    "/release/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "secretsmanager:GetSecretValue",
+              "Effect": "Allow",
+              "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:fastm/demand/origin-*"
+            },
+            {
+              "Action": [
+                "mediatailor:GetPlaybackConfiguration",
+                "mediatailor:PutPlaybackConfiguration",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*"
+              ]
+            },
+            {
+              "Action": "mediatailor:DescribeChannel",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab"
+              ]
+            },
+            {
+              "Action": "mediatailor:DeleteFunction",
+              "Effect": "Allow",
+              "Resource": "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*"
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "release/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/plan/playback/*"
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerPromoteRoleDefaultPolicy0A23742F",
+        "Roles": [
+          {
+            "Ref": "ControllerPromoteRole91CBD523"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
     },
     "ControllerReaperE3BE5DD4": {
       "DependsOn": [
@@ -1862,7 +2542,8 @@
       ],
       "Properties": {
         "Channels": [
-          "fastm-demo"
+          "fastm-demo",
+          "fastm-lab"
         ],
         "MediaBucket": {
           "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
@@ -1997,6 +2678,276 @@
       },
       "Type": "AWS::IAM::Policy"
     },
+    "ControllerSmoke27A30CA9": {
+      "DependsOn": [
+        "ControllerSmokeRoleDefaultPolicyCC5BEADE",
+        "ControllerSmokeRole9BCF356E"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: probe sessions on a candidate sibling (smoke test and soak)",
+        "Environment": {
+          "Variables": {
+            "APPCONFIG_APPLICATION": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "APPCONFIG_ENVIRONMENT": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "CDN_BASE_URL": {
+              "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LAKE_DELIVERIES": "{\"AD_DECISION_SERVER_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-ads\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}},\"MANIFEST_SERVICE_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-manifest\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}}}",
+            "LEDGER_TABLE": "fastm-ledger",
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "ORIGIN_SECRET_REGION": "us-east-1",
+            "PDS_POLICY_LOG_GROUP": {
+              "Ref": "SsmParameterValuefastmpdspolicyloggroupC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.smoke",
+            "RELEASE_AT_ONCE_STRATEGY": {
+              "Ref": "PointerAtOnce8675D08F"
+            },
+            "RELEASE_BUCKET": {
+              "Ref": "ControllerBundlesC4F66A3B"
+            },
+            "RELEASE_CHANNELS": "fastm-demo,fastm-lab",
+            "RELEASE_LOCK_SECONDS": "9600",
+            "RELEASE_LOG_DESTINATION": {
+              "Fn::GetAtt": [
+                "LogsDestination64C85DDD",
+                "Arn"
+              ]
+            },
+            "RELEASE_PROFILE": {
+              "Ref": "PointerProfile39EB4B7B"
+            },
+            "RELEASE_STRATEGY": {
+              "Ref": "PointerStrategyA0D6C5E6"
+            },
+            "RELEASE_TABLE": {
+              "Ref": "ControllerState81621A42"
+            },
+            "TOOL_FUNCTIONS": {
+              "Ref": "SsmParameterValuefastmreleasetoolfunctionsC96584B6F00A464EAD1953AFF4B05118Parameter"
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.release.smoke.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerSmokeLogs2EB400A1"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerSmokeRole9BCF356E",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 900,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerSmokeLogs2EB400A1": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerSmokeRole9BCF356E": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerSmokeRoleDefaultPolicyCC5BEADE": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerSmokeLogs2EB400A1",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "cloudwatch:GetMetricStatistics",
+                "logs:GetQueryResults",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "logs:StartQuery",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:logs:us-east-1:123456789012:log-group:",
+                      {
+                        "Ref": "SsmParameterValuefastmpdspolicyloggroupC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      ":*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:logs:us-east-1:123456789012:log-group:",
+                      {
+                        "Ref": "SsmParameterValuefastmpdspolicyloggroupC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": "arn:aws:lambda:us-east-1:123456789012:function:FastChannels-fastm-Operator-*"
+            },
+            {
+              "Action": "mediatailor:GetPlaybackConfiguration",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*"
+              ]
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ControllerBundlesC4F66A3B",
+                        "Arn"
+                      ]
+                    },
+                    "/release/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:StartQuery"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Logs71AC9AA5",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerSmokeRoleDefaultPolicyCC5BEADE",
+        "Roles": [
+          {
+            "Ref": "ControllerSmokeRole9BCF356E"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
     "ControllerState81621A42": {
       "DeletionPolicy": "Delete",
       "Properties": {
@@ -2062,7 +3013,7 @@
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"AlreadyReleased?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $plan.skip %}\",\"Next\":\"NothingToDo\"}],\"Default\":\"Accept\"},\"Accept\":{\"Next\":\"Functions\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":30,\"MaxAttempts\":40,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              ":states:::lambda:invoke\"},\"AlreadyReleased?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $plan.skip %}\",\"Next\":\"NothingToDo\"}],\"Default\":\"Accept\"},\"Accept\":{\"Next\":\"Functions\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":160,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerApply033D6DE8",
@@ -2106,7 +3057,7 @@
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"CheckDrift\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              ":states:::lambda:invoke\"},\"CheckDrift\":{\"Next\":\"Candidates\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerDrift2C829B47",
@@ -2114,6 +3065,160 @@
                 ]
               },
               "\",\"Payload\":{\"change_id\":\"{% $plan.change_id %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Candidates\":{\"Next\":\"Candidates?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerPromote115724CE",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"candidates\",\"siblings\":\"{% $plan.siblings %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"plan\":\"{% $merge([$plan, $states.result.Payload]) %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Candidates?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $count($plan.candidates) = 0 or $count($plan.smoke) = 0 %}\",\"Next\":\"Finish\"}],\"Default\":\"SmokeOnLab?\"},\"SmokeOnLab?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $exists($plan.lab) and $plan.lab != null %}\",\"Next\":\"LabStart\"}],\"Default\":\"SmokeAndSoak\"},\"SmokeAndSoak\":{\"Type\":\"Map\",\"Next\":\"OnLab?\",\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"LabToStop?\"}],\"Items\":\"{% $plan.smoke %}\",\"ItemSelector\":{\"sibling\":\"{% $states.context.Map.Item.Value.sibling %}\",\"channel\":\"{% $states.context.Map.Item.Value.channel %}\",\"probe\":false,\"bundle_key\":\"{% $plan.bundle_key %}\",\"release\":\"{% $plan.release %}\"},\"ItemProcessor\":{\"ProcessorConfig\":{\"Mode\":\"INLINE\"},\"StartAt\":\"Candidate\",\"States\":{\"Candidate\":{\"Type\":\"Pass\",\"QueryLanguage\":\"JSONata\",\"Next\":\"SmokeOpen\",\"Assign\":{\"sibling\":\"{% $states.input.sibling %}\",\"probe\":\"{% $states.input.probe %}\",\"bundle_key\":\"{% $states.input.bundle_key %}\",\"release\":\"{% $states.input.release %}\"}},\"SmokeOpen\":{\"QueryLanguage\":\"JSONata\",\"Next\":\"SmokeWatch\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"open\",\"sibling\":\"{% $sibling %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"session\":\"{% $states.result.Payload %}\",\"watches\":0},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"SmokeWatch\":{\"QueryLanguage\":\"JSONata\",\"Next\":\"SmokeSeen?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"watch\",\"session\":\"{% $session %}\",\"breaks\":2}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"session\":\"{% $states.result.Payload %}\",\"watches\":\"{% $watches + 1 %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"SmokeSeen?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $session.done or $watches >= 3 %}\",\"Next\":\"SmokeLogDelay\"}],\"Default\":\"SmokeWatch\"},\"SmokeLogDelay\":{\"Type\":\"Wait\",\"QueryLanguage\":\"JSONata\",\"Seconds\":180,\"Next\":\"SmokeJudge\"},\"SmokeJudge\":{\"QueryLanguage\":\"JSONata\",\"Next\":\"SmokePassed?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"judge\",\"session\":\"{% $session %}\",\"breaks\":2,\"probe\":\"{% $probe %}\",\"bundle_key\":\"{% $bundle_key %}\",\"release\":\"{% $release %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"SmokePassed?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.passed %}\",\"Next\":\"SoakOpen\"}],\"Default\":\"SmokeFailed\"},\"SmokeFailed\":{\"Type\":\"Fail\",\"QueryLanguage\":\"JSONata\",\"Error\":\"SmokeFailed\",\"Cause\":\"{% 'The smoke failed: ' & $join($states.input.failures, '; ') %}\"},\"SoakOpen\":{\"QueryLanguage\":\"JSONata\",\"Next\":\"SoakWatch\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"open\",\"sibling\":\"{% $sibling %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"session\":\"{% $states.result.Payload %}\",\"watches\":0},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"SoakWatch\":{\"QueryLanguage\":\"JSONata\",\"Next\":\"SoakSeen?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"watch\",\"session\":\"{% $session %}\",\"breaks\":3}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"session\":\"{% $states.result.Payload %}\",\"watches\":\"{% $watches + 1 %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"SoakSeen?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $session.done or $watches >= 3 %}\",\"Next\":\"SoakLogDelay\"}],\"Default\":\"SoakWatch\"},\"SoakLogDelay\":{\"Type\":\"Wait\",\"QueryLanguage\":\"JSONata\",\"Seconds\":180,\"Next\":\"SoakJudge\"},\"SoakJudge\":{\"QueryLanguage\":\"JSONata\",\"Next\":\"SoakPassed?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"judge\",\"session\":\"{% $session %}\",\"breaks\":3,\"probe\":\"{% $probe %}\",\"bundle_key\":\"{% $bundle_key %}\",\"release\":\"{% $release %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"SoakPassed?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.passed %}\",\"Next\":\"Soaked\"}],\"Default\":\"SoakFailed\"},\"SoakFailed\":{\"Type\":\"Fail\",\"QueryLanguage\":\"JSONata\",\"Error\":\"SmokeFailed\",\"Cause\":\"{% 'The soak failed: ' & $join($states.input.failures, '; ') %}\"},\"Soaked\":{\"Type\":\"Succeed\"}}},\"MaxConcurrency\":1},\"LabLead\":{\"Type\":\"Wait\",\"Seconds\":240,\"Next\":\"SmokeAndSoak\"},\"LabStart\":{\"Next\":\"LabLead\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"LabStopAfterFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"lab-start\",\"lab\":\"{% $plan.lab %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"LabStopAfterFailure\":{\"Next\":\"Rollback\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.input %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"Rollback\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"lab-stop\",\"lab\":\"{% $plan.lab %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.input %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"LabToStop?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $exists($plan.lab) and $plan.lab != null %}\",\"Next\":\"LabStopAfterFailure\"}],\"Default\":\"Rollback\"},\"Rollback\":{\"Next\":\"RolledBack\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"PointerBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":20,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerPromote115724CE",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"rollback\",\"candidates\":\"{% $plan.candidates %}\",\"reason\":\"{% $states.input %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"PointerLanded?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.state = 'COMPLETE' %}\",\"Next\":\"PromoteCandidates\"},{\"Condition\":\"{% $states.input.state = 'ROLLED_BACK' %}\",\"Next\":\"Rollback\"}],\"Default\":\"PointerWait\"},\"Pointer\":{\"Next\":\"PointerLanded?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"Rollback\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerPromote115724CE",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"pointer\",\"deployment\":\"{% $deployment %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"release\":\"{% $plan.release %}\",\"candidates\":\"{% $plan.candidates %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"PointerWait\":{\"Type\":\"Wait\",\"Seconds\":60,\"Next\":\"Pointer\"},\"Point\":{\"Next\":\"PointerWait\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"PointerBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":20,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"Rollback\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerPromote115724CE",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"point\",\"candidates\":\"{% $plan.candidates %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"deployment\":\"{% $states.result.Payload.deployment %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"LabStop\":{\"Next\":\"Point\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerSmoke27A30CA9",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"lab-stop\",\"lab\":\"{% $plan.lab %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"OnLab?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $exists($plan.lab) and $plan.lab != null %}\",\"Next\":\"LabStop\"}],\"Default\":\"Point\"},\"PromoteCandidates\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerPromote115724CE",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"promote\",\"candidates\":\"{% $plan.candidates %}\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
               {
                 "Ref": "AWS::Partition"
               },
@@ -2128,7 +3233,18 @@
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"ReleaseFailed\":{\"Type\":\"Fail\",\"Error\":\"ReleaseFailed\",\"Cause\":\"See the ledger's release.fail record\"},\"NothingToDo\":{\"Type\":\"Succeed\"},\"BundleRejected\":{\"Type\":\"Fail\",\"Error\":\"BundleRejected\",\"Cause\":\"See the ledger's release.reject record\"}},\"TimeoutSeconds\":5400,\"Comment\":\"Release Controller: validate the bundle, take the lock, create its Functions, configure the idle siblings, publish the plans and ledger the release (DESIGN §8.3)\",\"QueryLanguage\":\"JSONata\"}"
+              ":states:::lambda:invoke\"},\"Finish\":{\"End\":true,\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"PointerBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":20,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerPromote115724CE",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"finish\",\"bundle_key\":\"{% $plan.bundle_key %}\",\"digest\":\"{% $plan.digest %}\",\"release\":\"{% $plan.release %}\",\"change_id\":\"{% $plan.change_id %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"ReleaseFailed\":{\"Type\":\"Fail\",\"Error\":\"ReleaseFailed\",\"Cause\":\"See the ledger's release.fail record\"},\"RolledBack\":{\"Type\":\"Fail\",\"Error\":\"RolledBack\",\"Cause\":\"See the ledger's release.rollback record\"},\"NothingToDo\":{\"Type\":\"Succeed\"},\"BundleRejected\":{\"Type\":\"Fail\",\"Error\":\"BundleRejected\",\"Cause\":\"See the ledger's release.reject record\"}},\"TimeoutSeconds\":9600,\"Comment\":\"Release Controller: validate the bundle, take the lock, create its Functions, configure the idle siblings, publish the plans and ledger the release (DESIGN §8.3)\",\"QueryLanguage\":\"JSONata\"}"
             ]
           ]
         },
@@ -2279,6 +3395,18 @@
                   ]
                 },
                 {
+                  "Fn::GetAtt": [
+                    "ControllerPromote115724CE",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::GetAtt": [
+                    "ControllerSmoke27A30CA9",
+                    "Arn"
+                  ]
+                },
+                {
                   "Fn::Join": [
                     "",
                     [
@@ -2299,6 +3427,34 @@
                       {
                         "Fn::GetAtt": [
                           "ControllerDrift2C829B47",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerPromote115724CE",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerSmoke27A30CA9",
                           "Arn"
                         ]
                       },
@@ -2620,12 +3776,20 @@
               },
               "Effect": "Allow",
               "Principal": {
-                "AWS": {
-                  "Fn::GetAtt": [
-                    "ZeroAdsDetectorRole98E1C3DF",
-                    "Arn"
-                  ]
-                }
+                "AWS": [
+                  {
+                    "Fn::GetAtt": [
+                      "ControllerSmokeRole9BCF356E",
+                      "Arn"
+                    ]
+                  },
+                  {
+                    "Fn::GetAtt": [
+                      "ZeroAdsDetectorRole98E1C3DF",
+                      "Arn"
+                    ]
+                  }
+                ]
               },
               "Resource": "*"
             }
@@ -2656,6 +3820,861 @@
         "PolicyName": "FastChannelsfastmReleaseLogsPolicy428D082D"
       },
       "Type": "AWS::Logs::ResourcePolicy"
+    },
+    "MarkersAdMarkersFound182CC09B": {
+      "Properties": {
+        "FilterName": "AdMarkersFound",
+        "FilterPattern": "{ ($.eventType = \"AD_MARKER_FOUND\") && ($.adMarkers != \"*,DURATION=*\") }",
+        "LogGroupName": {
+          "Ref": "Logs71AC9AA5"
+        },
+        "MetricTransformations": [
+          {
+            "Dimensions": [
+              {
+                "Key": "ConfigurationName",
+                "Value": "$.originId"
+              }
+            ],
+            "MetricName": "AdMarkersFound",
+            "MetricNamespace": "FastChannels",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "MarkersAdsRequestsF4A49F88": {
+      "Properties": {
+        "FilterName": "AdsRequests",
+        "FilterPattern": "{ $.eventType = \"MAKING_ADS_REQUEST\" }",
+        "LogGroupName": {
+          "Ref": "Logs71AC9AA5"
+        },
+        "MetricTransformations": [
+          {
+            "Dimensions": [
+              {
+                "Key": "ConfigurationName",
+                "Value": "$.originId"
+              }
+            ],
+            "MetricName": "AdsRequests",
+            "MetricNamespace": "FastChannels",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "MarkersFastmDemoPAMarkers36BAACB9": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-a: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-demo-p-a-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-demo-p-a: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-a"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-a"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersFastmDemoPBMarkersF5A39398": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-b: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-demo-p-b-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-demo-p-b: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-b"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-b"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersFastmDemoPZMarkers8D19396C": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-demo-p-z: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-demo-p-z-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-demo-p-z: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-z"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-demo-p-z"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersFastmLabPAMarkersE08C7456": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-a: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-lab-p-a-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-p-a: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-a"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-a"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersFastmLabPBMarkersB4810E1E": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-b: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-lab-p-b-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-p-b: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-b"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-b"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersFastmLabPZMarkers64F5BE97": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-z: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-lab-p-z-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-p-z: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-z"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-p-z"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersFastmLabXMarkers1768F329": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-x: breaks saw ad markers but MediaTailor made no ad request (an invalid rendered body or an exhausted PRE_ADS budget): the breaks play unfilled",
+        "AlarmName": "fastm-lab-x-markers-without-ads-request",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "EvaluationPeriods": 10,
+        "Metrics": [
+          {
+            "Expression": "IF(FILL(markers, 0) >= 5, (FILL(markers, 0) - FILL(requests, 0)) / FILL(markers, 0), 0)",
+            "Id": "expr_1",
+            "Label": "fastm-lab-x: share of ad markers without an ad request",
+            "ReturnData": true
+          },
+          {
+            "Id": "markers",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-x"
+                  }
+                ],
+                "MetricName": "AdMarkersFound",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "requests",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "ConfigurationName",
+                    "Value": "fastm-lab-x"
+                  }
+                ],
+                "MetricName": "AdsRequests",
+                "Namespace": "FastChannels"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 0.5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "MarkersNoAdvertisements4DB3E7EF": {
+      "Properties": {
+        "FilterName": "NoAdvertisements",
+        "FilterPattern": "{ $.eventType = \"WARNING_NO_ADVERTISEMENTS\" }",
+        "LogGroupName": {
+          "Ref": "Logs71AC9AA5"
+        },
+        "MetricTransformations": [
+          {
+            "Dimensions": [
+              {
+                "Key": "ConfigurationName",
+                "Value": "$.originId"
+              }
+            ],
+            "MetricName": "NoAdvertisements",
+            "MetricNamespace": "FastChannels",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
+    "PointerAtOnce8675D08F": {
+      "Properties": {
+        "DeploymentDurationInMinutes": 0,
+        "Description": "A pointer that moves no viewer (a first release) or goes back (a rollback): at once, with no bake (AppConfig.AllAtOnce bakes 10 minutes, during which no other deployment can start)",
+        "FinalBakeTimeInMinutes": 0,
+        "GrowthFactor": 100,
+        "GrowthType": "LINEAR",
+        "Name": "fastm-release-at-once",
+        "ReplicateTo": "NONE",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::AppConfig::DeploymentStrategy"
+    },
+    "PointerCandidate5410BBEC": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A pair sibling of a monetized channel is in ALARM: a release pointer deployment in progress rolls back (AppConfig monitor), and runbook R1 rolls the sibling back",
+        "AlarmName": "fastm-release-candidate",
+        "AlarmRule": {
+          "Fn::Join": [
+            "",
+            [
+              "(ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPAPresessioninithookErrors7851C027",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPAPreadsrequesthookErrors08C70279",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPAFunctionErrors105097B6",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPAGetmanifestErrors56EF51A9",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPBPresessioninithookErrors15D10683",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPBPreadsrequesthookErrors9E7781B5",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPBFunctionErrors9EFCFC41",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmDemoPBGetmanifestErrorsD910FCE6",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPAPresessioninithookErrorsDAC42820",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPAPreadsrequesthookErrors8CA2FA51",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPAFunctionErrors592A91BB",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPAGetmanifestErrors823A36A5",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPBPresessioninithookErrors51B5F958",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPBPreadsrequesthookErrorsE7802314",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPBFunctionErrors951E40AE",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "SiblingAlarmsFastmLabPBGetmanifestErrors0EF0B3A6",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "MarkersFastmDemoPAMarkers36BAACB9",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "MarkersFastmDemoPBMarkersF5A39398",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "MarkersFastmLabPAMarkersE08C7456",
+                  "Arn"
+                ]
+              },
+              "\") OR ALARM(\"",
+              {
+                "Fn::GetAtt": [
+                  "MarkersFastmLabPBMarkersB4810E1E",
+                  "Arn"
+                ]
+              },
+              "\"))"
+            ]
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::CloudWatch::CompositeAlarm"
+    },
+    "PointerProfile39EB4B7B": {
+      "Properties": {
+        "ApplicationId": {
+          "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+        },
+        "DeletionProtectionCheck": "BYPASS",
+        "Description": "Each monetized channel's stable sibling playback configuration (the Release Controller's)",
+        "LocationUri": "hosted",
+        "Name": "release",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Type": "AWS.Freeform"
+      },
+      "Type": "AWS::AppConfig::ConfigurationProfile"
+    },
+    "PointerStrategyA0D6C5E6": {
+      "Properties": {
+        "DeploymentDurationInMinutes": 30,
+        "Description": "Simulated gate: a simulated audience, 10% steps over 30 minutes.",
+        "FinalBakeTimeInMinutes": 10,
+        "GrowthFactor": 10,
+        "GrowthType": "LINEAR",
+        "Name": "fastm-release-demo",
+        "ReplicateTo": "NONE",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::AppConfig::DeploymentStrategy"
     },
     "PrefetcherAlarm87601509": {
       "Properties": {
@@ -3130,9 +5149,12 @@
               "Effect": "Deny",
               "Resource": [
                 "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab",
                 "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*",
                 "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
-                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*"
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-lab-p-*/*"
               ],
               "Sid": "OnlyTheReleaseControllerChangesMonetization"
             },
@@ -3622,6 +5644,498 @@
           {
             "Name": "ConfigurationName",
             "Value": "fastm-demo-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPAFunctionErrors592A91BB": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-a: Function.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-a-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPAGetmanifestErrors823A36A5": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-a: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-a-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPAPreadsrequesthookErrors8CA2FA51": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-a: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-a-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPAPresessioninithookErrorsDAC42820": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-a: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-a-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-a"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPBFunctionErrors951E40AE": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-b: Function.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-b-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPBGetmanifestErrors0EF0B3A6": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-b: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-b-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPBPreadsrequesthookErrorsE7802314": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-b: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-b-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPBPresessioninithookErrors51B5F958": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-b: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-b-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-b"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreSessionInitHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPZFunctionErrors621039FD": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-z: Function.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-z-function-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Function.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPZGetmanifestErrorsE3239C78": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-z: GetManifest.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-z-getmanifest-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "GetManifest.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPZPreadsrequesthookErrors79142426": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-z: PreAdsRequestHook.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-z-preadsrequesthook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-z"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "PreAdsRequestHook.Errors",
+        "Namespace": "AWS/MediaTailor",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "SiblingAlarmsFastmLabPZPresessioninithookErrorsEBBCB88D": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "fastm-lab-p-z: PreSessionInitHook.Errors in the last five minutes",
+        "AlarmName": "fastm-lab-p-z-presessioninithook-errors",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "ConfigurationName",
+            "Value": "fastm-lab-p-z"
           }
         ],
         "EvaluationPeriods": 1,
