@@ -245,6 +245,15 @@ def test_the_ad_server_redirected_to_each_cached_pod(run: Run) -> None:
     assert redirected and all(b.uuid[:8] in {a.uuid8 for a in cached} for b in redirected)
 
 
+def test_a_break_without_a_cached_pod_got_the_house_line(run: Run) -> None:
+    """A break whose auction cached no pod (no bid cleared, or the auction failed) reached the ad server without
+    Prebid's keys and got the house line. A run often has none, so
+    ``test_without_a_bid_the_ad_server_serves_its_house_pod`` checks the mock directly."""
+    cached = {(a.sid, a.evid) for a in run.auctions if a.cached}
+    uncached = [d for d in run.decisions if (d.sid, d.evid) not in cached]
+    assert all(d.line == "house" and not d.uuid8 for d in uncached), uncached
+
+
 def test_the_stitched_ads_are_the_cached_pods(run: Run) -> None:
     """What MediaTailor filled from a Wrapper is the cached pod's ads (the first break of a new creative plays its
     slate while MediaTailor imports it)."""
