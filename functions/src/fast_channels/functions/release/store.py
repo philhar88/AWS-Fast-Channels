@@ -10,7 +10,8 @@ conversion:
 - ``RELEASE#rNNNN``: :class:`~fast_channels.core.monetization.release.ReleaseStatus`;
 - ``CHANNEL#<channel>``: :class:`~fast_channels.core.monetization.release.ChannelState`, written with a version check;
 - ``ORIGIN``: the slot (``a`` or ``b``) of the origin secret the siblings send (rotated by M3-05);
-- ``LOCK``: the release applying now, until ``expires`` (epoch seconds): releases apply one at a time;
+- ``LOCK``: the release applying now (or :data:`ROTATION`, an origin-secret rotation), until ``expires`` (epoch
+  seconds): releases and rotations run one at a time;
 - ``POINTER``: the release pointer's last deployed content (JSON in ``doc``).
 """
 
@@ -38,6 +39,8 @@ COUNTER: Final = "COUNTER"
 ORIGIN: Final = "ORIGIN"
 LOCK: Final = "LOCK"
 POINTER: Final = "POINTER"
+ROTATION: Final = 0
+"""The lock's holder while the origin secret rotates (releases are numbered from 1)."""
 LOCK_SECONDS: Final = 5400
 """How long a lock outlives an execution that died holding it, unless ``RELEASE_LOCK_SECONDS`` (the state machine's
 timeout) says otherwise."""
@@ -173,7 +176,8 @@ def lock(release: int) -> None:
         )
     except ClientError as error:
         if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise ReleaseBusyError(f"another release is applying; {release_tag(release)} waits") from None
+            waiting = release_tag(release) if release != ROTATION else "the rotation"
+            raise ReleaseBusyError(f"another release or rotation holds the lock; {waiting} waits") from None
         raise
 
 
@@ -206,6 +210,13 @@ def origin_slot() -> str:
     if slot not in ORIGIN_SECRET_SLOTS:
         raise ValueError(f"unknown origin secret slot {slot!r}")
     return slot
+
+
+def put_origin_slot(slot: str) -> None:
+    """Record the origin secret the siblings send from now on (the rotation's switch)."""
+    if slot not in ORIGIN_SECRET_SLOTS:
+        raise ValueError(f"unknown origin secret slot {slot!r}")
+    _table().put_item(Item={"pk": ORIGIN, "slot": slot})
 
 
 def secret(slot: str) -> SecretStr:

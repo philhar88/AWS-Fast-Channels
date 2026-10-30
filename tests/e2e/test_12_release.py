@@ -16,6 +16,7 @@ With ``--releases`` the rest make releases (``harness_release``; about 50 minute
 - the smoke test stops a release whose lookup is slow from the start, before any viewer meets it.
 """
 
+import hashlib
 import json
 import time
 from collections.abc import Iterator
@@ -46,6 +47,7 @@ from harness_release import (
     with_lookup,
 )
 
+from fast_channels.core.demand import ORIGIN_SECRET_SLOTS, origin_rule_group, origin_secret
 from fast_channels.core.ledger import entry_from_item
 from fast_channels.core.mediatailor_logs import EXCLUDED_ADS_LOG_FIELDS, EXCLUDED_MANIFEST_LOG_FIELDS
 from fast_channels.core.monetization import names
@@ -463,3 +465,98 @@ def test_the_smoke_test_stops_a_slow_release_before_any_viewer_meets_it(
     print(f"\nsmoke rollback reason: {json.dumps(rollback.detail['reason'])[:600]}")
     cause = rollback.detail["reason"].get("Cause", "")
     assert "_pa_e2e_lookup_" in cause and "timeout" in cause, rollback.detail
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def origin_slot(stage: Stage) -> str:
+    """The slot of the origin secret the siblings send (the Release Controller's state)."""
+    table = stage.session.resource("dynamodb", region_name=stage.region).Table(
+        stage.output(Module.RELEASE, "StateTableName")
+    )
+    return str(table.get_item(Key={"pk": "ORIGIN"}, ConsistentRead=True)["Item"]["slot"])
+
+
+def admitted(stage: Stage) -> set[str]:
+    """Digests of the values ``fast-origin-required`` admits (never the values)."""
+    waf = stage.session.client("wafv2", region_name="us-east-1")
+    name = origin_rule_group(stage.prefix)
+    [group] = [g for g in waf.list_rule_groups(Scope="CLOUDFRONT")["RuleGroups"] if g["Name"] == name]
+    rules = waf.get_rule_group(Name=name, Scope="CLOUDFRONT", Id=group["Id"])["RuleGroup"]["Rules"]
+    [rule] = [r for r in rules if r["Name"] == "fast-origin-required"]
+    matches = rule["Statement"]["AndStatement"]["Statements"][1]["NotStatement"]["Statement"]["OrStatement"][
+        "Statements"
+    ]
+    return {_digest(m["ByteMatchStatement"]["SearchString"].decode()) for m in matches}
+
+
+def secrets(stage: Stage) -> dict[str, str]:
+    """Digests of origin secrets A and B."""
+    client = stage.session.client("secretsmanager", region_name="us-east-1")
+    return {
+        slot: _digest(client.get_secret_value(SecretId=origin_secret(stage.prefix, slot))["SecretString"])
+        for slot in ORIGIN_SECRET_SLOTS
+    }
+
+
+def test_a_rotation_during_live_sessions_blocks_no_ad_request(
+    releases: Stage, on_air: dict[str, Any], channel: Channel, run_id: str
+) -> None:
+    stage, began = releases, time.time()
+    stable = channel_state(stage, channel.name).stable
+    assert stable
+    before = secrets(stage)
+    assert admitted(stage) == set(before.values()), "the WAF admits both values before"
+    viewers = [Viewer(stable, stage).start() for _ in range(CANDIDATE_VIEWERS)]
+    sfn = stage.session.client("stepfunctions", region_name=stage.region)
+    try:
+        execution = sfn.start_execution(
+            stateMachineArn=stage.output(Module.RELEASE, "RotationStateMachineArn"),
+            name=f"{run_id}-rotation",
+            input=json.dumps({"reason": "e2e"}),
+        )["executionArn"]
+        wait_for(lambda: "" in entered(stage, execution) or None, timeout=1800, interval=30, what=f"{execution}")
+        time.sleep(270)  # two more breaks
+    finally:
+        for viewer in viewers:
+            viewer.stop()
+    assert outcome(stage, execution)["status"] == "SUCCEEDED", outcome(stage, execution)
+    after = secrets(stage)
+    slot = origin_slot(stage)
+    assert all(after[s] != before[s] for s in ORIGIN_SECRET_SLOTS), "both values are new: one admitted, one retired"
+    assert admitted(stage) == set(after.values()), "the WAF admits both current values after"
+    mediatailor = stage.session.client("mediatailor", region_name=stage.region)
+    for name in stage.json_output(Module.RELEASE, "Siblings"):
+        headers = mediatailor.get_playback_configuration(Name=name)["AdDecisionServerConfiguration"]["HttpRequest"][
+            "Headers"
+        ]
+        assert _digest(headers["X-Fast-Origin"]) == after[slot], name
+    time.sleep(LOG_DELAY_S)
+    rows = insights(
+        stage,
+        names.log_group(stage.prefix),
+        "filter sessionId in [{}] | stats count(*) as n by eventType".format(
+            ", ".join(f"'{v.session}'" for v in viewers)
+        ),
+        began,
+        time.time(),
+    )
+    counts = {r["eventType"]: int(r["n"]) for r in rows}
+    print(f"\nviewers' events during the rotation: {counts}")
+    assert not any(k.startswith("ERROR_") for k in counts), counts
+    assert counts.get("FILLED_AVAIL", 0) >= counts.get("MAKING_ADS_REQUEST", 0) > 0, counts
+    blocked = stage.session.client("cloudwatch", region_name="us-east-1").get_metric_statistics(
+        Namespace="AWS/WAFV2",
+        MetricName="BlockedRequests",
+        Dimensions=[
+            {"Name": "Rule", "Value": "fast-origin-required"},
+            {"Name": "RuleGroup", "Value": origin_rule_group(stage.prefix)},
+        ],
+        StartTime=datetime.fromtimestamp(began, UTC),
+        EndTime=datetime.now(UTC),
+        Period=60,
+        Statistics=["Sum"],
+    )["Datapoints"]
+    assert sum(p["Sum"] for p in blocked) == 0, blocked

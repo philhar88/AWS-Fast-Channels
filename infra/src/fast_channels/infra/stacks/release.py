@@ -28,6 +28,7 @@ from fast_channels.infra.constructs.release.detectors import LogReconciler, Mark
 from fast_channels.infra.constructs.release.logs import ReleaseLogs
 from fast_channels.infra.constructs.release.pointer import ReleasePointer
 from fast_channels.infra.constructs.release.prefetch import Prefetcher
+from fast_channels.infra.constructs.release.rotation import ReleaseRotation
 from fast_channels.infra.stacks.edge import EDGE_REGION
 
 if TYPE_CHECKING:
@@ -135,6 +136,7 @@ class ReleaseStack(Stack):
             log_destination_arn=self.logs.destination_arn,
             lake_deliveries=self.to_json_string(lake),
             origin_secret_region=EDGE_REGION,
+            pbs_origin=f"https://{network.cloudfront_domain}",
             pointer=PointerSettings(
                 application=application,
                 environment=parameter(names.parameter_name(prefix, names.Parameter.APPCONFIG_ENVIRONMENT)),
@@ -193,10 +195,21 @@ class ReleaseStack(Stack):
             log_retention=retention,
         )
         self.logs.grant_read(self.reconciler.function.function.role)  # type: ignore[arg-type]
+        self.rotation = ReleaseRotation(
+            self,
+            "Rotation",
+            prefix=prefix,
+            function=self.controller.rotate,
+            origin_secret_region=EDGE_REGION,
+            rotation_days=config.modules.release.secret_rotation_days,
+            topic=topic,
+        )
+        self.logs.grant_read(self.controller.rotate.function.role)  # type: ignore[arg-type]
         self.impressions = self._impressions(prefix)
         self.logs.grant_read(self.controller.smoke.function.role)  # type: ignore[arg-type]
         outputs = {
             "StateMachineArn": (self.controller.state_machine.state_machine_arn, "The apply path"),
+            "RotationStateMachineArn": (self.rotation.state_machine.state_machine_arn, "The origin-secret rotation"),
             "BundleBucketName": (self.controller.bucket.bucket_name, "Release bundles (release/<digest>/bundle.json)"),
             "BundleKey": (self.controller.desired.get_att_string("BundleKey"), "The bundle this deployment rendered"),
             "StateTableName": (self.controller.table.table_name, "The Release Controller's state"),

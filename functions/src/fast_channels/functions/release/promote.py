@@ -82,7 +82,8 @@ def candidates(bundle_key: str, release: int, siblings: list[str]) -> list[dict[
     return found
 
 
-def _running(channel: str) -> bool:
+def on_air(channel: str) -> bool:
+    """Whether ``channel`` runs (a channel that does not exist does not)."""
     try:
         state = aws.client("mediatailor").describe_channel(ChannelName=channel)["ChannelState"]
     except ClientError as error:
@@ -96,7 +97,7 @@ def smoke_plan(bundle_key: str, chosen: list[dict[str, str]]) -> dict[str, Any]:
     """Where the candidates are smoke-tested: on their own channels if any of them runs, else on the lab channel
     (started for it, through the agent tools), else nowhere (the release is applied but not promoted)."""
     lab = next((c.name for c in store.bundle(bundle_key).channels if c.lab), None)
-    running = [c for c in chosen if c["channel"] != lab and _running(c["channel"])]
+    running = [c for c in chosen if c["channel"] != lab and on_air(c["channel"])]
     if running:
         return {"smoke": running, "lab": None}
     lab_candidates = [c for c in chosen if c["channel"] == lab]
@@ -400,7 +401,10 @@ def runbook(alarm: str, correlation_id: str) -> dict[str, Any]:
     states = store.channels(list(config.release_channels))
     pair = [n for state in states.values() for n in (state.stable, state.idle) if n]
     if (holder := store.holder()) is not None:
-        logger.info("a release holds the lock; its steps roll back", extra={"release": holder, "alarm": alarm})
+        logger.info(
+            "a release or rotation holds the lock; R1 leaves the siblings to it",
+            extra={"holder": holder, "alarm": alarm},
+        )
         return {"remapped": {}, "deferred_to": holder}
     remapped: dict[str, int] = {}
     for sibling in sorted(alarming_siblings(pair)):

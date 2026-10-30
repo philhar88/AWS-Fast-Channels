@@ -97,6 +97,7 @@ class ReleaseController(Construct):
         log_destination_arn: the siblings' log destination (:class:`ReleaseLogs`).
         lake_deliveries: JSON of the lake's deliveries by log type (``Settings.lake_deliveries``).
         origin_secret_region: region of the demand gate's secrets.
+        pbs_origin: the demand gate's CloudFront (``https://<domain>``), where the rotation probes.
         pointer: the release pointer's AppConfig application, environment, profile and strategy.
         smoke: the smoke test's decision records and agent tools.
         rollout_minutes: the strategy's deployment and final bake time: an execution (and its lock) lasts up to
@@ -105,7 +106,8 @@ class ReleaseController(Construct):
         removal_policy: of the state table and the bucket.
 
     Attributes:
-        apply, drift, desired_state, reaper: the functions. state_machine: the apply path. table: the state.
+        apply, drift, promote, smoke, rotate, desired_state, reaper: the functions. state_machine: the apply path.
+        table: the state.
         bucket: the bundles. desired: the ``Custom::DesiredState`` resource (``BundleKey``, ``Digest``).
     """
 
@@ -125,6 +127,7 @@ class ReleaseController(Construct):
         log_destination_arn: str,
         lake_deliveries: str,
         origin_secret_region: str,
+        pbs_origin: str,
         pointer: PointerSettings,
         smoke: SmokeSettings,
         rollout_minutes: int,
@@ -198,6 +201,12 @@ class ReleaseController(Construct):
             | {"PDS_POLICY_LOG_GROUP": smoke.decision_log_group}
             | ({"TOOL_FUNCTIONS": smoke.tool_functions} if smoke.tool_functions else {}),
             timeout=Duration.minutes(15),
+        )
+        self.rotate = self._function(
+            "Rotate",
+            "rotate",
+            "Release Controller: one step of the origin-secret rotation",
+            environment | {"PBS_ORIGIN": pbs_origin},
         )
         decisions = arn(self, "logs", "log-group", smoke.decision_log_group, colon=True)
         self.smoke.allow(
@@ -444,6 +453,25 @@ class ReleaseController(Construct):
             ["s3:PutObject"], [f"arn:{Stack.of(self).partition}:s3:::{media_bucket}/plan/playback/*"], why="the plans"
         )
         smoke.allow(["mediatailor:GetPlaybackConfiguration"], siblings, why="the candidate siblings")
+        rotate = self.rotate
+        rotate.allow(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"], [self.table.table_arn])
+        rotate.allow(["s3:GetObject"], [self.bucket.arn_for_objects("release/*")], why="the bundles")
+        rotate.allow(
+            ["mediatailor:PutPlaybackConfiguration", "mediatailor:TagResource"],
+            siblings,
+            why="every sibling sends the new origin secret (its own release, re-put)",
+        )
+        rotate.allow(
+            ["mediatailor:DescribeChannel"],
+            [self._mt("channel", c) for c in self._channels] or ["*"],
+            why="whether a monetized channel is on air (the verification)",
+        )
+        rotate.allow(["logs:GetQueryResults"], ["*"])
+        rotate.allow(
+            ["dynamodb:PutItem"],
+            [arn(self, "dynamodb", "table", ledger_table)],
+            conditions={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["release/*"]}},
+        )
         smoke.allow(["logs:GetQueryResults"], ["*"])
 
     def _grant_pointer(self, pointer: PointerSettings) -> None:

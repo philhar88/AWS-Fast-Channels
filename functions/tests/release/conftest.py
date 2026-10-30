@@ -103,6 +103,9 @@ class FakeStore:
     def origin_slot(self) -> str:
         return self.slot
 
+    def put_origin_slot(self, slot: str) -> None:
+        self.slot = slot
+
     def lock(self, release: int) -> None:
         if self.holder not in (None, release):
             raise store.ReleaseBusyError(f"r{self.holder:04d} applies")
@@ -171,6 +174,7 @@ def state(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
         "channels",
         "put_channel",
         "origin_slot",
+        "put_origin_slot",
         "secret",
         "lock",
         "unlock",
@@ -201,13 +205,24 @@ def ledger(monkeypatch: pytest.MonkeyPatch) -> Ledger:
     return fake
 
 
-SERVICES = ("appconfig", "cloudwatch", "dynamodb", "events", "lambda", "logs", "mediatailor", "s3", "secretsmanager")
+SERVICES = (
+    "appconfig",
+    "cloudwatch",
+    "dynamodb",
+    "events",
+    "lambda",
+    "logs",
+    "mediatailor",
+    "s3",
+    "secretsmanager",
+    "wafv2",
+)
 
 
 def _client(service: str) -> Any:
     match service:
-        case "secretsmanager":
-            return aws.regional_client("secretsmanager", "us-east-1")
+        case "secretsmanager" | "wafv2":
+            return aws.regional_client(service, "us-east-1")
         case "dynamodb":
             return aws.table("fastm-release").meta.client
         case _:

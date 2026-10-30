@@ -34,6 +34,12 @@
         "Ref": "PrefetcherFunction12BB8015"
       }
     },
+    "RotationStateMachineArn": {
+      "Description": "The origin-secret rotation",
+      "Value": {
+        "Ref": "RotationStateMachine9EDA2FC4"
+      }
+    },
     "SiblingLogGroup": {
       "Description": "The siblings' MediaTailor logs (KMS)",
       "Value": {
@@ -2684,6 +2690,291 @@
       },
       "Type": "AWS::IAM::Policy"
     },
+    "ControllerRotateA277309F": {
+      "DependsOn": [
+        "ControllerRotateRoleDefaultPolicy6DC492B4",
+        "ControllerRotateRole488AD542"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Release Controller: one step of the origin-secret rotation",
+        "Environment": {
+          "Variables": {
+            "APPCONFIG_APPLICATION": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigapplicationC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "APPCONFIG_ENVIRONMENT": {
+              "Ref": "SsmParameterValuefastmreleaseappconfigenvironmentC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "CDN_BASE_URL": {
+              "Ref": "SsmParameterValuefastmreleasecdnbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "FAST_PREFIX": "fastm",
+            "LAKE_DELIVERIES": "{\"AD_DECISION_SERVER_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-ads\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}},\"MANIFEST_SERVICE_LOGS\":{\"destination\":\"arn:aws:logs:us-east-1:123456789012:delivery-destination:fastm-lake-manifest\",\"s3\":{\"suffixPath\":\"{yyyy}/{MM}/{dd}/{HH}\",\"enableHiveCompatiblePath\":false}}}",
+            "LEDGER_TABLE": "fastm-ledger",
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "ORIGIN_SECRET_REGION": "us-east-1",
+            "PBS_ORIGIN": "https://d111111abcdef8.cloudfront.net",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "release.rotate",
+            "RELEASE_AT_ONCE_STRATEGY": {
+              "Ref": "PointerAtOnce8675D08F"
+            },
+            "RELEASE_BUCKET": {
+              "Ref": "ControllerBundlesC4F66A3B"
+            },
+            "RELEASE_CHANNELS": "fastm-demo,fastm-lab",
+            "RELEASE_LOCK_SECONDS": "9600",
+            "RELEASE_LOG_DESTINATION": {
+              "Fn::GetAtt": [
+                "LogsDestination64C85DDD",
+                "Arn"
+              ]
+            },
+            "RELEASE_PROFILE": {
+              "Ref": "PointerProfile39EB4B7B"
+            },
+            "RELEASE_STRATEGY": {
+              "Ref": "PointerStrategyA0D6C5E6"
+            },
+            "RELEASE_TABLE": {
+              "Ref": "ControllerState81621A42"
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.release.rotate.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ControllerRotateLogs40799A0E"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerRotateRole488AD542",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ControllerRotateLogs40799A0E": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 30,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ControllerRotateRole488AD542": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ControllerRotateRoleDefaultPolicy6DC492B4": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerRotateLogs40799A0E",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "logs:GetQueryResults",
+                "secretsmanager:GetRandomPassword",
+                "wafv2:ListRuleGroups",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "dynamodb:DeleteItem",
+                "dynamodb:GetItem",
+                "dynamodb:PutItem"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControllerState81621A42",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ControllerBundlesC4F66A3B",
+                        "Arn"
+                      ]
+                    },
+                    "/release/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": [
+                "mediatailor:PutPlaybackConfiguration",
+                "mediatailor:TagResource"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*"
+              ]
+            },
+            {
+              "Action": "mediatailor:DescribeChannel",
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab"
+              ]
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "release/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            },
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:fastm/demand/origin-*"
+            },
+            {
+              "Action": [
+                "wafv2:GetRuleGroup",
+                "wafv2:UpdateRuleGroup"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:wafv2:us-east-1:123456789012:global/rulegroup/fastm-demand-origin/*"
+            },
+            {
+              "Action": [
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:StartQuery"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Logs71AC9AA5",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ControllerRotateRoleDefaultPolicy6DC492B4",
+        "Roles": [
+          {
+            "Ref": "ControllerRotateRole488AD542"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
     "ControllerSmoke27A30CA9": {
       "DependsOn": [
         "ControllerSmokeRoleDefaultPolicyCC5BEADE",
@@ -4108,6 +4399,12 @@
                 "AWS": [
                   {
                     "Fn::GetAtt": [
+                      "ControllerRotateRole488AD542",
+                      "Arn"
+                    ]
+                  },
+                  {
+                    "Fn::GetAtt": [
                       "ControllerSmokeRole9BCF356E",
                       "Arn"
                     ]
@@ -5515,6 +5812,405 @@
         }
       },
       "Type": "AWS::IAM::ManagedPolicy"
+    },
+    "RotationFailedED2DA008": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "An origin-secret rotation failed (the ledger's rotation.fail record); both values a sibling may send are still admitted, and the rotation can run again",
+        "AlarmName": "fastm-release-rotation-failed",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "StateMachineArn",
+            "Value": {
+              "Ref": "RotationStateMachine9EDA2FC4"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "ExecutionsFailed",
+        "Namespace": "AWS/States",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "RotationSchedule588AFE73": {
+      "Properties": {
+        "Description": "Origin-secret rotation of fastm every 90 days",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "ScheduleExpression": "rate(90 days)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Ref": "RotationStateMachine9EDA2FC4"
+          },
+          "Input": "{\"reason\":\"scheduled\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 86400,
+            "MaximumRetryAttempts": 1
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "RotationScheduleRole2BE506CD",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
+    "RotationScheduleRole2BE506CD": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: start the origin-secret rotation",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RotationScheduleRoleDefaultPolicyE630219F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "RotationStateMachine9EDA2FC4"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RotationScheduleRoleDefaultPolicyE630219F",
+        "Roles": [
+          {
+            "Ref": "RotationScheduleRole2BE506CD"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "RotationStateMachine9EDA2FC4": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "RotationStateMachineRoleDefaultPolicy91404905",
+        "RotationStateMachineRole007B78C2"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Begin\",\"States\":{\"Begin\":{\"Next\":\"Admit\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":100,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"begin\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"slots\":\"{% $states.result.Payload %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Admit\":{\"Next\":\"Propagation\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"WAFOptimisticLockException\"],\"IntervalSeconds\":5,\"MaxAttempts\":5}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"admit\",\"target\":\"{% $slots.target %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Propagation\":{\"Type\":\"Wait\",\"Seconds\":60,\"Next\":\"Probe\"},\"Probe\":{\"Next\":\"Switch\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"NotAdmittedError\"],\"IntervalSeconds\":30,\"MaxAttempts\":20,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"probe\",\"target\":\"{% $slots.target %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Switch\":{\"Next\":\"OneBreak\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"switch\",\"target\":\"{% $slots.target %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"switched\":\"{% $states.result.Payload %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"OneBreak\":{\"Type\":\"Wait\",\"Seconds\":120,\"Next\":\"Verify\"},\"Verify\":{\"Next\":\"Retire\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"NotVerifiedError\"],\"IntervalSeconds\":60,\"MaxAttempts\":15,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"verify\",\"siblings\":\"{% $switched.switched %}\",\"since\":\"{% $switched.at %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Retire\":{\"Next\":\"Rotated\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"WAFOptimisticLockException\"],\"IntervalSeconds\":5,\"MaxAttempts\":5}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"retire\",\"current\":\"{% $slots.current %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Rotated\":{\"Type\":\"Succeed\"},\"RecordFailure\":{\"Next\":\"RotationFailed\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ControllerRotateA277309F",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"fail\",\"error\":\"{% $states.input %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"RotationFailed\":{\"Type\":\"Fail\",\"Error\":\"RotationFailed\",\"Cause\":\"See the ledger's rotation.fail record\"}},\"TimeoutSeconds\":7200,\"Comment\":\"Origin-secret rotation with two-value overlap (DESIGN §8.6)\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "RotationStateMachineLogs33BD3EA5",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "RotationStateMachineRole007B78C2",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fastm-release-rotation",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RotationStateMachineLogs33BD3EA5": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/FastChannelsfastmRelease-Rotation-DB5006A7-StateMachine",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "RotationStateMachineRole007B78C2": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RotationStateMachineRoleDefaultPolicy91404905": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ControllerRotateA277309F",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ControllerRotateA277309F",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "RotationStateMachineRoleDefaultPolicy91404905",
+        "Roles": [
+          {
+            "Ref": "RotationStateMachineRole007B78C2"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
     },
     "SiblingAlarmsFastmDemoPAFunctionErrors105097B6": {
       "Properties": {
