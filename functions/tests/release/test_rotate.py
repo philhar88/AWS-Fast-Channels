@@ -236,20 +236,34 @@ def test_switch_sends_the_new_value_in_each_sibling_of_its_own_release(
         ({"MAKING_ADS_REQUEST": 3, "FILLED_AVAIL": 3}, "verified"),
         ({"MAKING_ADS_REQUEST": 3}, rotate.NotVerifiedError),
         ({}, rotate.NotVerifiedError),
-        ({"MAKING_ADS_REQUEST": 3, "FILLED_AVAIL": 2, "ERROR_ADS_INVALID_RESPONSE": 1}, rotate.RefusedError),
+        ({"MAKING_ADS_REQUEST": 3, "FILLED_AVAIL": 2, "ERROR_ADS_INVALID_RESPONSE": (1, 1)}, rotate.RefusedError),
+        # a Prebid Server 500 is not the gate's refusal
+        ({"MAKING_ADS_REQUEST": 3, "FILLED_AVAIL": 2, "ERROR_ADS_INVALID_RESPONSE": (1, 0)}, "verified"),
     ],
 )
 def test_verify_needs_an_answered_break_while_a_channel_is_on_air(
-    monkeypatch: pytest.MonkeyPatch, counts: dict[str, int], outcome: Any
+    monkeypatch: pytest.MonkeyPatch, counts: dict[str, Any], outcome: Any
 ) -> None:
     monkeypatch.setattr(rotate.promote, "on_air", lambda channel: True)
-    rows = [{"eventType": k, "n": str(v)} for k, v in counts.items()]
-    monkeypatch.setattr(rotate.smoke, "insights", lambda group, query, start, end: rows)
+    rows = [
+        {"eventType": k, "n": str(v[0]), "refused": str(v[1])}
+        if isinstance(v, tuple)
+        else {"eventType": k, "n": str(v)}
+        for k, v in counts.items()
+    ]
+    queries: list[str] = []
+
+    def insights(group: str, query: str, start: float, end: float) -> list[dict[str, str]]:
+        queries.append(query)
+        return rows
+
+    monkeypatch.setattr(rotate.smoke, "insights", insights)
     if outcome == "verified":
-        assert rotate.verify(SIBLINGS, 0.0)["verified"]
+        assert rotate.verify(SIBLINGS, 1_793_347_770.95)["verified"]
     else:
         with pytest.raises(outcome):
-            rotate.verify(SIBLINGS, 0.0)
+            rotate.verify(SIBLINGS, 1_793_347_770.95)
+    assert "toMillis(@timestamp) >= 1793347770950" in queries[0], "only what follows the switch"
 
 
 def test_verify_without_a_channel_on_air_rests_on_the_probe(monkeypatch: pytest.MonkeyPatch) -> None:

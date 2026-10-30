@@ -537,15 +537,17 @@ def test_a_rotation_during_live_sessions_blocks_no_ad_request(
     rows = insights(
         stage,
         names.log_group(stage.prefix),
-        "filter sessionId in [{}] | stats count(*) as n by eventType".format(
+        "filter sessionId in [{}] | fields strcontains(additionalInfo, 'Code:403') as is_refused "
+        "| stats count(*) as n, sum(is_refused) as refused by eventType".format(
             ", ".join(f"'{v.session}'" for v in viewers)
         ),
         began,
         time.time(),
     )
     counts = {r["eventType"]: int(r["n"]) for r in rows}
-    print(f"\nviewers' events during the rotation: {counts}")
-    assert not any(k.startswith("ERROR_") for k in counts), counts
+    refused = sum(int(float(r.get("refused") or 0)) for r in rows)
+    print(f"\nviewers' events during the rotation: {counts}; refused by the origin gate: {refused}")
+    assert refused == 0, rows  # another ADS failure (a Prebid Server 500) is no rotation's
     # A prefetched break is requested minutes before it airs: the last request may have no fill in the window.
     assert counts.get("MAKING_ADS_REQUEST", 0) > 0 and counts.get("FILLED_AVAIL", 0) > 0, counts
     blocked = stage.session.client("cloudwatch", region_name="us-east-1").get_metric_statistics(

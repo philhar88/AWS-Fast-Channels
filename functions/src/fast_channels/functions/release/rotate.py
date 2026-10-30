@@ -45,8 +45,12 @@ DUE_SLACK: Final = timedelta(hours=12)
 """A daily check a few minutes short of the period still rotates on its day (a rotation takes minutes)."""
 VERIFY_QUERY: Final = (
     "filter originId in [{siblings}] and eventType in ['MAKING_ADS_REQUEST', 'FILLED_AVAIL', "
-    "'ERROR_ADS_INVALID_RESPONSE']\n| stats count(*) as n by eventType"
+    "'ERROR_ADS_INVALID_RESPONSE'] and toMillis(@timestamp) >= {since_ms}\n"
+    "| fields strcontains(additionalInfo, 'Code:403') as is_refused\n"
+    "| stats count(*) as n, sum(is_refused) as refused by eventType"
 )
+"""Since the switch only (the query helper widens its window by a minute), and the origin gate's refusals (403)
+apart from the ADS's other failures: a Prebid Server 500 is no rotation's fault (fastm, 2026-10-30)."""
 
 
 class NotAdmittedError(RuntimeError):
@@ -227,12 +231,11 @@ def verify(siblings: list[str], since: float) -> dict[str, Any]:
     if not running:
         return {"verified": False, "reason": "no monetized channel on air: the probe proved the value admitted"}
     quoted = ", ".join(f"'{s}'" for s in siblings)
-    rows = smoke.insights(
-        names.log_group(config.prefix), VERIFY_QUERY.format(siblings=quoted), since, _now().timestamp()
-    )
+    query = VERIFY_QUERY.format(siblings=quoted, since_ms=int(since * 1000))
+    rows = smoke.insights(names.log_group(config.prefix), query, since, _now().timestamp())
     counts = {row["eventType"]: int(row["n"]) for row in rows}
-    if counts.get("ERROR_ADS_INVALID_RESPONSE"):
-        raise RefusedError(f"{counts['ERROR_ADS_INVALID_RESPONSE']} ad responses refused since the switch")
+    if refused := sum(int(float(row.get("refused") or 0)) for row in rows):
+        raise RefusedError(f"{refused} ad requests refused by the origin gate (403) since the switch")
     if not counts.get("MAKING_ADS_REQUEST") or not counts.get("FILLED_AVAIL"):
         raise NotVerifiedError(f"no filled break since the switch yet ({counts})")
     return {"verified": True, "on_air": running, "counts": counts}
