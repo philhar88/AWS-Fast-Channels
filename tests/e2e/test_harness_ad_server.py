@@ -1,9 +1,20 @@
 """The ad-server leg's log readers (``harness_ad_server``), offline."""
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
-from harness_ad_server import Auction, auctions, breaks, decisions, json_line, per_break, pod_media
+from harness_ad_server import (
+    Auction,
+    auctions,
+    breaks,
+    cache_function,
+    decisions,
+    json_line,
+    per_break,
+    pod_media,
+    provisioned_status,
+)
 
 UUID = "0b9a7c3e-1111-4222-8333-444455556666"
 
@@ -107,3 +118,29 @@ def test_a_pods_media_files() -> None:
         + "</Linear></Creative></Creatives></InLine></Ad></VAST>"
     )
     assert pod_media(vast) == ["https://cdn.example/sim1/m.m3u8", "https://cdn.example/house1/m.m3u8"]
+
+
+def test_the_cache_functions_provisioning_is_read_from_its_alias() -> None:
+    class NotFoundError(Exception):
+        pass
+
+    class Client:
+        exceptions = SimpleNamespace(ProvisionedConcurrencyConfigNotFoundException=NotFoundError)
+
+        def __init__(self, status: str | None) -> None:
+            self.status = status
+
+        def get_paginator(self, name: str) -> Any:
+            names = ["fastcih-pbs-CacheConstructCacheHandlerBD70291E-x", "fastcih-pbs-Other"]
+            return SimpleNamespace(paginate=lambda: [{"Functions": [{"FunctionName": n} for n in names]}])
+
+        def get_provisioned_concurrency_config(self, **kwargs: Any) -> dict[str, Any]:
+            if self.status is None:
+                raise NotFoundError
+            assert kwargs == {"FunctionName": "fn", "Qualifier": "live"}
+            return {"Status": self.status}
+
+    assert cache_function(Client("READY"), "fastcih") == "fastcih-pbs-CacheConstructCacheHandlerBD70291E-x"
+    assert cache_function(Client("READY"), "fastcix") is None
+    assert provisioned_status(Client("IN_PROGRESS"), "fn", "live") == "IN_PROGRESS"
+    assert provisioned_status(Client(None), "fn", "live") == "NONE"

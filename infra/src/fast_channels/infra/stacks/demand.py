@@ -8,7 +8,7 @@ from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core import specs
-from fast_channels.core.ad_server import AdServer
+from fast_channels.core.ad_server import POD_CACHE_ALIAS, AdServer
 from fast_channels.core.demand import MODULE, MODULE_TAG, DemandNetwork, Parameter, parameter_path
 from fast_channels.core.monetization import names as release_names
 from fast_channels.core.pbs_config import CACHE_PATH, TRACKER_PATH
@@ -16,7 +16,7 @@ from fast_channels.infra.config import DemandMode, Simulator
 from fast_channels.infra.constructs.alerts import alert_topic_arn, dead_letter_alarm
 from fast_channels.infra.constructs.demand.ad_server import CacheRecord, MockAdServer
 from fast_channels.infra.constructs.demand.private_dns import PrivateDns
-from fast_channels.infra.constructs.demand.scaling import CensusGate, Dayparts
+from fast_channels.infra.constructs.demand.scaling import CensusGate, Dayparts, PodCacheConcurrency
 from fast_channels.infra.constructs.demand.simulator import LambdaSimulator
 from fast_channels.infra.constructs.demand.warmup import WarmUp
 from fast_channels.infra.constructs.observability import census_parameter_name
@@ -155,6 +155,7 @@ class DemandStack(Stack):
             tasks=demand.tasks,
             log_retention=config.observability.log_retention,
             dead_letters=self.dead_letters,
+            pod_cache=self._pod_cache(config, network),
         )
         self.dayparts = Dayparts(
             self,
@@ -187,4 +188,21 @@ class DemandStack(Stack):
             "WarmUpProjectName",
             value=self.warmup.project.project_name,
             description="Warms every new Prebid Server task",
+        )
+
+    @staticmethod
+    def _pod_cache(config: FastChannelsConfig, network: DemandNetwork) -> PodCacheConcurrency | None:
+        """The ad-server mode's Prebid Cache function for the census gate (its alias's provisioned concurrency while a
+        channel is on air), or None.
+
+        Raises:
+            ValueError: the mode provisions the function, but the guidance has none.
+        """
+        demand = config.modules.demand
+        if demand.ad_server is AdServer.NONE or not demand.pod_cache_concurrency:
+            return None
+        if network.cache_function is None:
+            raise ValueError(f"ad_server {demand.ad_server} needs the guidance's Prebid Cache function in {network!r}")
+        return PodCacheConcurrency(
+            function=network.cache_function, alias=POD_CACHE_ALIAS, instances=demand.pod_cache_concurrency
         )

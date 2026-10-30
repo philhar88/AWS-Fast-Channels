@@ -304,7 +304,8 @@ All notable changes to this project are documented here. The format follows
   - The guidance's Prebid Cache function gets 1,769 MB and 8 instances of provisioned concurrency
     (`pod_cache_memory_mb`, `pod_cache_concurrency`), through the guidance wrapper. The write is on the auction's
     deadline. At the guidance's own settings, a 100-session break lost 17 of its 100 pods; with these, it lost
-    none. They cost about $0.17 an hour while the stage exists.
+    none. The census gate sets the provisioned concurrency while a channel is on air and removes it 15 minutes
+    after the last one stops, so the instances cost about $0.17 an hour only then.
   - `mock` deploys a GAM-like ad server that answers only requests with the origin secret. `gam` and `freewheel` are
     configuration and setup instructions; they are not tested live.
   - A rotation of the origin secret creates every kept auction tree again with the new value, under a new release.

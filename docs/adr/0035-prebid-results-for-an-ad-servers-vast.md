@@ -99,7 +99,9 @@ We needed to settle five things:
     instance's first request, and that took about 1 s with the CPU of 256 MB.
   - With 1,769 MB (one vCPU) and 8 provisioned instances, the same break cached 100 of 100 pods (write p99 104 ms),
     and five prefetched breaks cached every pod except in a break asked for twice.
-  - The wrapper sets both, in the ad-server mode only. The cost is about $0.17 an hour while the stage exists.
+  - The wrapper sets the memory and the alias, in the ad-server mode only. The census gate sets the alias's
+    provisioned concurrency as it scales Prebid Server, so the instances cost about $0.17 an hour only while a
+    channel is on air.
   - A Lambda function stays the cache server: it meets the deadline with ready instances.
 - **No viewer IP.** The auction is MediaTailor's Function request, which carries no viewer IP, so `/policy` sets no
   `device.ip` on this route. The direct route keeps it.

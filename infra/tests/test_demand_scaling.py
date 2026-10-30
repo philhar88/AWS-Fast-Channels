@@ -14,7 +14,7 @@ from fast_channels.core.demand import (
     WARMUP_RATE_PER_TASK,
 )
 from fast_channels.infra.config import DemandTasks
-from fast_channels.infra.constructs.demand.scaling import census_gate_definition
+from fast_channels.infra.constructs.demand.scaling import PodCacheConcurrency, census_gate_definition
 from fast_channels.infra.constructs.demand.warmup import warmup_buildspec
 
 if TYPE_CHECKING:
@@ -101,6 +101,39 @@ def test_the_gate_scales_to_zero_only_after_15_minutes_without_a_channel() -> No
     assert definition["States"]["WaitBeforeScaleIn"]["Seconds"] == SCALE_IN_AFTER_SECONDS == 900
     assert definition["States"]["ScaleIn"]["Arguments"]["DesiredCount"] == 0
     assert definition["States"]["LowerMinimum"]["Arguments"]["MinCapacity"] == 0
+
+
+def test_in_the_ad_server_mode_the_cache_function_is_provisioned_with_the_service() -> None:
+    """M8-09: the Prebid Cache alias's provisioned concurrency is set with the scale-out and removed with the scale-in
+    (nothing to remove is not a failure)."""
+    pod_cache = PodCacheConcurrency(function="fastm-pbs-CacheHandler", alias="live", instances=8)
+    definition = census_gate_definition(
+        cluster="c", service="s", parameter="/fastm/ops/running-channels", tasks=TASKS, pod_cache=pod_cache
+    )
+    states = definition["States"]
+
+    assert run(definition, running=1)[-2:] == ["ScaleOut", "ProvisionPodCache"]
+    provision = states["ProvisionPodCache"]
+    assert provision["Resource"] == "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig"
+    assert provision["Arguments"] == {
+        "FunctionName": "fastm-pbs-CacheHandler",
+        "Qualifier": "live",
+        "ProvisionedConcurrentExecutions": 8,
+    }
+    assert run(definition, running=0, parameter="0")[-2:] == ["ScaleIn", "ReleasePodCache"]
+    release = states["ReleasePodCache"]
+    assert release["Resource"] == "arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig"
+    assert release["Arguments"] == {"FunctionName": "fastm-pbs-CacheHandler", "Qualifier": "live"}
+    [catch] = release["Catch"]
+    assert "Lambda.ProvisionedConcurrencyConfigNotFoundException" in catch["ErrorEquals"]
+    assert states[catch["Next"]]["Type"] == "Succeed"
+    assert run(definition, running=0, parameter="1")[-1] == "ChannelsBack", "nothing removed while a channel runs"
+
+
+def test_without_an_ad_server_the_gate_touches_no_function() -> None:
+    definition = census_gate_definition(cluster="c", service="s", parameter="/fastm/ops/running-channels", tasks=TASKS)
+    assert not {"ProvisionPodCache", "ReleasePodCache"} & set(definition["States"])
+    assert definition["States"]["ScaleOut"]["End"] and definition["States"]["ScaleIn"]["End"]
 
 
 def test_the_warmup_replays_probe_auctions_with_a_verified_vegeta() -> None:

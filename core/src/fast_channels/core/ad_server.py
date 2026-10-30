@@ -304,6 +304,8 @@ def mock_answer(query: Mapping[str, str], *, cache_url: str, house_url: str, imp
 
 # --- the guidance's Prebid Cache function --------------------------------------------------------------------------
 
+POD_CACHE_ALIAS: Final = "live"
+"""The Prebid Cache function's alias that the guidance's Lambda target groups invoke in the ad-server mode."""
 POD_CACHE_CONTEXT: Final = "fastPodCache"
 """CDK context of ``scripts/guidance_app.py``: the Prebid Cache function's settings (:class:`PodCacheFunction` as
 JSON), with an ad server only."""
@@ -312,11 +314,13 @@ JSON), with an ad server only."""
 class PodCacheFunction(BaseModel):
     """The guidance's Prebid Cache function in the ad-server mode: the composed pod's write is on an auction's deadline,
     so a herd must not wait for new instances. ``scripts/guidance_app.py`` sets its memory and puts the guidance's
-    Lambda target groups on an alias with ``provisioned`` instances."""
+    Lambda target groups on an alias, whose ``provisioned`` instances the census gate sets while a channel is on air
+    (CloudFormation does not manage them)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     memory_mib: int = Field(ge=128, le=10240)
     provisioned: int = Field(ge=0, le=1000)
-    """Provisioned concurrency of the alias; 0: the target groups invoke the function as the guidance has it."""
-    alias: str = "live"
+    """The instances the census gate provisions on the alias while a channel is on air; 0: no alias, the target groups
+    invoke the function as the guidance has it."""
+    alias: str = POD_CACHE_ALIAS

@@ -58,6 +58,8 @@ BUILD: Final = REPO / "build" / "prebid-guidance"
 VENV: Final = BUILD / ".venv"
 CDK: Final = REPO / "node_modules" / ".bin" / "cdk"
 GUIDANCE_APP: Final = REPO / "scripts" / "guidance_app.py"
+CACHE_FUNCTION: Final = "CacheHandler"
+"""The guidance's Prebid Cache function, in its logical id (``prebid_server/cache_construct.py``)."""
 """The guidance's app with the PDS sidecar (ADR-0036), which a stage with ``modules.pds`` deploys it with."""
 PDS_SOURCES: Final = REPO / "pds"
 PDS_PACKAGE: Final = "fast-channels-pds"
@@ -873,11 +875,8 @@ class DemandStage:
                     tables[subnet] = table["RouteTableId"]
         groups = self.client("elbv2").describe_target_groups(LoadBalancerArn=parameters[Parameter.ALB_ARN])
         [target_group] = [g["TargetGroupArn"] for g in groups["TargetGroups"] if g["TargetType"] == "ip"]
-        internal = (
-            self.internal_balancer(parameters[Parameter.VPC_ID])
-            if self.config.modules.demand.ad_server is not AdServer.NONE
-            else None
-        )
+        ad_server = self.config.modules.demand.ad_server is not AdServer.NONE
+        internal = self.internal_balancer(parameters[Parameter.VPC_ID]) if ad_server else None
         return DemandNetwork(
             container_log_group=self.container_log_group(
                 parameters[Parameter.CLUSTER_ARN], parameters[Parameter.SERVICE_ARN]
@@ -892,7 +891,22 @@ class DemandStage:
             simulator_code_key=simulator_code_key,
             internal_alb_dns=internal[0] if internal else None,
             internal_alb_zone_id=internal[1] if internal else None,
+            cache_function=self.cache_function() if ad_server else None,
         )
+
+    def cache_function(self) -> str | None:
+        """The guidance's Prebid Cache function (its stack's ``CacheHandler``), whose alias the census gate provisions
+        in the ad-server mode; None without one."""
+        found = [
+            str(resource["PhysicalResourceId"])
+            for resource in self.client("cloudformation").describe_stack_resources(
+                StackName=names.guidance_stack(self.prefix)
+            )["StackResources"]
+            if resource["ResourceType"] == "AWS::Lambda::Function" and CACHE_FUNCTION in resource["LogicalResourceId"]
+        ]
+        if len(found) > 1:
+            raise DemandError(f"the guidance's stack has {len(found)} {CACHE_FUNCTION} functions; expected one")
+        return found[0] if found else None
 
     def internal_balancer(self, vpc_id: str) -> tuple[str, str] | None:
         """The guidance's internal load balancer (DNS name, canonical zone): the one in its VPC that its own stacks

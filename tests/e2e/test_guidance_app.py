@@ -326,7 +326,9 @@ def cache_like() -> Stack:
     return stack
 
 
-def test_the_cache_function_gets_its_memory_and_an_alias_with_provisioned_concurrency() -> None:
+def test_the_cache_function_gets_its_memory_and_an_alias_for_the_census_gate() -> None:
+    """The alias the target groups invoke has no provisioned concurrency in the template: the census gate sets it
+    while a channel is on air (and CloudFormation leaves it alone)."""
     stack = cache_like()
     alias = wrapper.augment_pod_cache(stack, {"memory_mib": 1024, "provisioned": 4, "alias": "live"})
     template = Template.from_stack(stack)
@@ -335,10 +337,7 @@ def test_the_cache_function_gets_its_memory_and_an_alias_with_provisioned_concur
     [function] = template.find_resources("AWS::Lambda::Function").values()
     assert function["Properties"]["MemorySize"] == 1024
     [found] = template.find_resources("AWS::Lambda::Alias").values()
-    assert (found["Properties"]["Name"], found["Properties"]["ProvisionedConcurrencyConfig"]) == (
-        "live",
-        {"ProvisionedConcurrentExecutions": 4},
-    )
+    assert found["Properties"]["Name"] == "live" and "ProvisionedConcurrencyConfig" not in found["Properties"]
     [alias_id] = template.find_resources("AWS::Lambda::Alias")
     groups = template.find_resources("AWS::ElasticLoadBalancingV2::TargetGroup")
     lambdas = {name: g for name, g in groups.items() if g["Properties"].get("TargetType") == "lambda"}
@@ -369,9 +368,9 @@ def test_a_guidance_without_its_cache_function_is_refused() -> None:
     not (CHECKOUT / guidance.APPLIED_MARKER).is_file(),
     reason="needs `uv run python scripts/prebid_guidance.py apply` (network) to fill build/prebid-guidance/checkout",
 )
-def test_the_real_guidance_puts_its_cache_target_groups_on_the_provisioned_alias(tmp_path: Path) -> None:
+def test_the_real_guidance_puts_its_cache_target_groups_on_the_alias(tmp_path: Path) -> None:
     """The pinned guidance through the wrapper with ``fastPodCache`` (M8-09): the Prebid Cache function's memory, its
-    alias with provisioned concurrency, and each of its four Lambda target groups invoking the alias."""
+    alias (provisioned by the census gate, not the template), and each of its four Lambda target groups invoking it."""
     venv = demand.guidance_toolchain(CHECKOUT)
     context = {
         "stackPrefix": "fastcih",
@@ -405,7 +404,7 @@ def test_the_real_guidance_puts_its_cache_target_groups_on_the_provisioned_alias
     ]
     assert function["Properties"]["MemorySize"] == 1024
     [(alias_id, alias)] = [(k, r) for k, r in resources.items() if r["Type"] == "AWS::Lambda::Alias"]
-    assert alias["Properties"]["ProvisionedConcurrencyConfig"] == {"ProvisionedConcurrentExecutions": 4}
+    assert "ProvisionedConcurrencyConfig" not in alias["Properties"]
     groups = [
         r
         for r in resources.values()

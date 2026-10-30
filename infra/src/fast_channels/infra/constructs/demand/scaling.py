@@ -3,7 +3,9 @@
 * :class:`CensusGate`: a JSONata state machine that the channel census's ``Census Changed`` events start. When the
   first channel starts it raises the guidance's ECS service to ``tasks.min`` (the tier minimum); when the last one
   stops it waits 15 minutes, reads the census's last count again, and scales the service to zero if no channel runs.
-  It uses only Application Auto Scaling, ECS and SSM SDK calls.
+  In the ad-server mode (M8-09) the Prebid Cache function's alias follows the same way: its provisioned concurrency
+  is set with the service, and removed with it. It uses only Application Auto Scaling, ECS, Lambda and SSM SDK
+  calls.
 * :class:`Dayparts`: one Application Auto Scaling scheduled action per ``modules.demand.dayparts`` entry, raising the
   minimum ahead of a busy daypart; target tracking (the guidance's) covers the time between them.
 
@@ -12,9 +14,10 @@ guidance deploy resets it to ``ECSTaskMinCapacity`` until the next census change
 """
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
-from aws_cdk import Duration, RemovalPolicy, Stack
+from aws_cdk import ArnFormat, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as events_targets
 from aws_cdk import aws_iam as iam
@@ -41,8 +44,24 @@ def scalable_resource(cluster: str, service: str) -> str:
     return f"service/{cluster}/{service}"
 
 
-def census_gate_definition(*, cluster: str, service: str, parameter: str, tasks: DemandTasks) -> dict[str, Any]:
-    """The census gate's JSONata state machine for one ``Census Changed`` event's detail."""
+@dataclass(frozen=True)
+class PodCacheConcurrency:
+    """The ad-server mode's Prebid Cache function: its alias's provisioned concurrency while a channel is on air."""
+
+    function: str
+    alias: str
+    instances: int
+
+
+NOT_PROVISIONED: Final = ("Lambda.ProvisionedConcurrencyConfigNotFoundException", "Lambda.ResourceNotFoundException")
+"""Nothing to remove: the gate removed it before, or no channel ran since the deploy."""
+
+
+def census_gate_definition(
+    *, cluster: str, service: str, parameter: str, tasks: DemandTasks, pod_cache: PodCacheConcurrency | None = None
+) -> dict[str, Any]:
+    """The census gate's JSONata state machine for one ``Census Changed`` event's detail; with ``pod_cache``, the
+    Prebid Cache function's provisioned concurrency follows the service."""
     target = {
         "ServiceNamespace": "ecs",
         "ResourceId": scalable_resource(cluster, service),
@@ -96,7 +115,7 @@ def census_gate_definition(*, cluster: str, service: str, parameter: str, tasks:
                     "DesiredCount": "{% $max([$desired, $floor]) %}",
                 },
                 "Retry": retry,
-                "End": True,
+                **({"Next": "ProvisionPodCache"} if pod_cache else {"End": True}),
             },
             "WaitBeforeScaleIn": {"Type": "Wait", "Seconds": SCALE_IN_AFTER_SECONDS, "Next": "StillNoChannel"},
             "StillNoChannel": {
@@ -125,9 +144,33 @@ def census_gate_definition(*, cluster: str, service: str, parameter: str, tasks:
                 "Resource": "arn:aws:states:::aws-sdk:ecs:updateService",
                 "Arguments": {"Cluster": cluster, "Service": service, "DesiredCount": 0},
                 "Retry": retry,
-                "End": True,
+                **({"Next": "ReleasePodCache"} if pod_cache else {"End": True}),
             },
+            **(_pod_cache_states(pod_cache, retry) if pod_cache else {}),
         },
+    }
+
+
+def _pod_cache_states(pod_cache: PodCacheConcurrency, retry: list[dict[str, Any]]) -> dict[str, Any]:
+    """Set the Prebid Cache alias's provisioned concurrency with the service, and remove it with it."""
+    qualified = {"FunctionName": pod_cache.function, "Qualifier": pod_cache.alias}
+    return {
+        "ProvisionPodCache": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig",
+            "Arguments": {**qualified, "ProvisionedConcurrentExecutions": pod_cache.instances},
+            "Retry": retry,
+            "End": True,
+        },
+        "ReleasePodCache": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig",
+            "Arguments": qualified,
+            "Retry": [{**retry[0], "ErrorEquals": ["Lambda.TooManyRequestsException", "Lambda.ServiceException"]}],
+            "Catch": [{"ErrorEquals": list(NOT_PROVISIONED), "Next": "PodCacheReleased"}],
+            "End": True,
+        },
+        "PodCacheReleased": {"Type": "Succeed"},
     }
 
 
@@ -140,6 +183,7 @@ class CensusGate(Construct):
         service_arn: the guidance's Prebid Server service.
         census_parameter: the census's last count (``/<prefix>/ops/running-channels``).
         tasks: the tier minimum and the service maximum.
+        pod_cache: the ad-server mode's Prebid Cache function, whose alias the gate provisions with the service.
         log_retention: the state machine's log retention.
         dead_letters: where undeliverable ``Census Changed`` events go.
 
@@ -160,6 +204,7 @@ class CensusGate(Construct):
         tasks: DemandTasks,
         log_retention: logs.RetentionDays,
         dead_letters: sqs.IQueue,
+        pod_cache: PodCacheConcurrency | None = None,
     ) -> None:
         super().__init__(scope, id)
         stack = Stack.of(self)
@@ -172,7 +217,9 @@ class CensusGate(Construct):
             retention=log_retention,
             removal_policy=RemovalPolicy.DESTROY,
         )
-        definition = census_gate_definition(cluster=cluster, service=service, parameter=census_parameter, tasks=tasks)
+        definition = census_gate_definition(
+            cluster=cluster, service=service, parameter=census_parameter, tasks=tasks, pod_cache=pod_cache
+        )
         self.state_machine = sfn.StateMachine(
             self,
             "StateMachine",
@@ -190,6 +237,18 @@ class CensusGate(Construct):
             conditions={"StringEquals": {"application-autoscaling:service-namespace": "ecs"}},
         )
         allow(self.state_machine, ["ecs:DescribeServices", "ecs:UpdateService"], [service_arn])
+        if pod_cache:
+            function = stack.format_arn(
+                service="lambda",
+                resource="function",
+                resource_name=pod_cache.function,
+                arn_format=ArnFormat.COLON_RESOURCE_NAME,
+            )
+            allow(
+                self.state_machine,
+                ["lambda:PutProvisionedConcurrencyConfig", "lambda:DeleteProvisionedConcurrencyConfig"],
+                [function, f"{function}:{pod_cache.alias}"],
+            )
         allow(
             self.state_machine,
             ["ssm:GetParameter"],

@@ -170,6 +170,9 @@ class DemandNetwork(BaseModel):
     """The guidance's internal load balancer, which takes Prebid Cache's writes from the tasks (the ad-server mode's
     ``cache.<prefix>.fast.internal`` record)."""
     internal_alb_zone_id: str | None = Field(default=None, pattern=r"^Z[A-Z0-9]+$")
+    cache_function: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    """The guidance's Prebid Cache function (ad-server mode): the census gate provisions its alias while a channel is on
+    air."""
     """Its canonical hosted zone (the record is an alias)."""
 
 

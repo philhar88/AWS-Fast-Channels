@@ -23,8 +23,9 @@ construct one does not own (:func:`augment`):
 - the sidecar's log group, at the stack's root (so no condition applies to it).
 
 In the ad-server mode (M8-09) the context ``fastPodCache`` (``core.ad_server.PodCacheFunction``) adds, to the
-guidance's Prebid Cache function (:func:`augment_pod_cache`): its memory, and an alias with provisioned concurrency
-that the guidance's Lambda target groups invoke instead of the function. The composed pod's write is on an auction's
+guidance's Prebid Cache function (:func:`augment_pod_cache`): its memory, and an alias that the guidance's Lambda
+target groups invoke instead of the function. The census gate sets the alias's provisioned concurrency while a
+channel is on air and removes it after (CloudFormation leaves it alone). The composed pod's write is on an auction's
 deadline, and a herd's new instances took 1.4 s to start (fastcih, 2026-10-30).
 
 The sidecar comes as the CDK context ``fastPds`` (``core.pds.sidecar.Sidecar`` as JSON): its image, environment,
@@ -77,9 +78,10 @@ class SidecarError(Exception):
 
 
 def augment_pod_cache(stack: Stack, spec: Mapping[str, Any]) -> lambda_.Alias | None:
-    """Set the memory of the guidance's Prebid Cache function to ``spec["memory_mib"]`` and, with
-    ``spec["provisioned"]`` instances, put every Lambda target group of the guidance on an alias with that provisioned
-    concurrency (ELB may invoke the alias, as the guidance lets it invoke the function); returns the alias.
+    """Set the memory of the guidance's Prebid Cache function to ``spec["memory_mib"]`` and, when the census gate is
+    to provision ``spec["provisioned"]`` instances, put every Lambda target group of the guidance on an alias (ELB may
+    invoke the alias, as the guidance lets it invoke the function); returns the alias. The alias has no provisioned
+    concurrency in the template: the gate sets it while a channel is on air.
 
     Raises:
         SidecarError: not exactly one Prebid Cache function, or no Lambda target group that invokes it.
@@ -107,7 +109,6 @@ def augment_pod_cache(stack: Stack, spec: Mapping[str, Any]) -> lambda_.Alias | 
         "PodCacheAlias",
         alias_name=str(spec["alias"]),
         version=function.current_version,
-        provisioned_concurrent_executions=int(spec["provisioned"]),
     )
     permission = lambda_.CfnPermission(
         stack, "PodCacheAliasInvoke", action="lambda:InvokeFunction", function_name=alias.function_arn, principal=ELB

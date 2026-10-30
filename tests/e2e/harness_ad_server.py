@@ -259,6 +259,27 @@ def warmups(codebuild: Any, project: str, tasks: Sequence[str]) -> dict[str, str
     return status
 
 
+def cache_function(lambda_: Any, prefix: str) -> str | None:
+    """The guidance's Prebid Cache function (``<prefix>-pbs-CacheConstructCacheHandler…``), or None."""
+    start = f"{prefix}-pbs-CacheConstructCacheHandler"
+    found = [
+        str(f["FunctionName"])
+        for page in lambda_.get_paginator("list_functions").paginate()
+        for f in page["Functions"]
+        if f["FunctionName"].startswith(start)
+    ]
+    return found[0] if len(found) == 1 else None
+
+
+def provisioned_status(lambda_: Any, function: str, alias: str) -> str:
+    """The provisioned-concurrency status of ``function``'s ``alias`` (``NONE`` while it has none)."""
+    try:
+        config = lambda_.get_provisioned_concurrency_config(FunctionName=function, Qualifier=alias)
+    except lambda_.exceptions.ProvisionedConcurrencyConfigNotFoundException:
+        return "NONE"
+    return str(config["Status"])
+
+
 @dataclass
 class Logs:
     """CloudWatch Logs reads of one run's window."""

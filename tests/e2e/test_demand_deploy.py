@@ -879,6 +879,35 @@ def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.Dema
     assert network.container_log_group == "fastcix-pbs-PrebidContainerLogs"
 
 
+def test_the_cache_function_is_the_guidance_stacks_cache_handler(stage: _demand.DemandStage, stub: Any) -> None:
+    """The census gate provisions the guidance's Prebid Cache function (ad-server mode): its stack's CacheHandler."""
+    cfn = stub("cloudformation")
+
+    def resource(logical: str, kind: str, physical: str) -> dict[str, Any]:
+        return {
+            "LogicalResourceId": logical,
+            "ResourceType": kind,
+            "PhysicalResourceId": physical,
+            "StackName": "fastcix-pbs",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "Timestamp": datetime(2026, 10, 30, tzinfo=UTC),
+        }
+
+    handler = resource("CacheConstructCacheHandlerBD70291E", "AWS::Lambda::Function", "fastcix-pbs-CacheHandler-x")
+    layer = resource("CacheConstructCacheHandlerLayer", "AWS::Lambda::LayerVersion", "arn:layer")
+    other = resource("PrebidMetricsFunction", "AWS::Lambda::Function", "fastcix-pbs-Metrics-y")
+    cfn.add_response(
+        "describe_stack_resources", {"StackResources": [handler, layer, other]}, {"StackName": "fastcix-pbs"}
+    )
+    assert stage.cache_function() == "fastcix-pbs-CacheHandler-x"
+
+    cfn.add_response("describe_stack_resources", {"StackResources": [handler, handler]}, {"StackName": "fastcix-pbs"})
+    with pytest.raises(_demand.DemandError, match="2 CacheHandler functions"):
+        stage.cache_function()
+    cfn.add_response("describe_stack_resources", {"StackResources": [other]}, {"StackName": "fastcix-pbs"})
+    assert stage.cache_function() is None
+
+
 def test_the_internal_balancer_is_the_guidances_own_in_its_vpc(stage: _demand.DemandStage, stub: Any) -> None:
     """Prebid Cache's write path (ad-server mode): the internal application load balancer in the guidance's VPC that
     the guidance's own stacks created; another VPC's, an internet-facing one and another stack's are not it."""
@@ -933,6 +962,7 @@ def test_only_an_ad_server_stage_looks_for_the_internal_balancer(monkeypatch: py
         monkeypatch.setattr(demand, "container_log_group", lambda *_args: None)
         monkeypatch.setattr(demand, "client", lambda service, region=None: _NetworkClient())
         monkeypatch.setattr(demand, "internal_balancer", internal_balancer)
+        monkeypatch.setattr(demand, "cache_function", lambda: "fastcix-pbs-CacheHandler-x")
         looked.clear()
         network = demand.network()
         assert looked == expected, name

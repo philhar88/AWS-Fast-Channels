@@ -92,6 +92,7 @@ def test_no_unacknowledged_findings_beside_the_guidance(
         "simulator_code_key": "simulator/0123456789abcdef.zip",
         "internal_alb_dns": "internal-fastm-pbs-Internal-1234567890.us-east-1.elb.amazonaws.com",
         "internal_alb_zone_id": "Z35SXDOTRQ7X7K",
+        "cache_function": "fastm-pbs-CacheConstructCacheHandlerBD70291E-abcdEFGH1234",
     }
     deployment = fresh_deployment(
         {

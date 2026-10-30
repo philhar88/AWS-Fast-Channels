@@ -331,14 +331,21 @@ Prebid's *Setting up Prebid Video in FreeWheel*:
   cache function has no instance ready, or when `/select` is slow and leaves no time for the write. The ad server
   then serves its house ad. See [the cache function](#the-cache-function) for how the stage keeps instances ready.
 - An instance of provisioned concurrency costs about $0.021 an hour at 1,769 MB (arm64), so the default 8 cost about
-  $0.17 an hour, about $124 a month, whether or not a channel is on air.
+  $0.17 an hour. The census gate sets them only while a channel is on air, and for 15 minutes after the last one
+  stops.
 
 ### The cache function
 
 The composed pod's write goes to the guidance's Prebid Cache function, through its internal load balancer, on the
 auction's deadline: the exitpoint's extra 150 ms. In the ad-server mode, the guidance wrapper (`scripts/guidance_app.py`)
-gives that function its memory and an alias `live` with provisioned concurrency, which the guidance's four Lambda target
-groups invoke instead of the function ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)).
+gives that function its memory and an alias `live`, which the guidance's four Lambda target groups invoke instead of the
+function ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)). The census gate provisions the alias as it
+scales Prebid Server:
+- when the first channel starts, it sets `pod_cache_concurrency` instances, which take a minute or two to get
+  ready, before the channel's first break;
+- 15 minutes after the last one stops, it removes them.
+
+The template sets none, so a guidance deploy does not change what the gate set.
 
 Measured on a throwaway stage with 100 smart-TV sessions (lane D's herd driver, 2026-10-30):
 

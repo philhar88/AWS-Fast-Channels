@@ -612,8 +612,9 @@ class DemandModule(_Module):
     """How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break."""
     pod_cache_concurrency: int = Field(default=8, ge=0, le=1000)
     """With an ad server: provisioned concurrency of the guidance's Prebid Cache function, whose writes are on an
-    auction's deadline (a new instance takes about 1.4 s to start). A 100-session break in real time peaked at 6
-    instances (docs/demand.md, "The cache function"): about 0.06-0.08 per session of the largest break. 0: none."""
+    auction's deadline (a new instance takes about 1.4 s to start). The census gate sets it while a channel is on air.
+    A 100-session break in real time peaked at 6 instances (docs/demand.md, "The cache function"): about 0.06-0.08 per
+    session of the largest break. 0: none."""
     pod_cache_memory_mb: int = Field(default=1769, ge=128, le=10240)
     """With an ad server: the Prebid Cache function's memory. One vCPU: an instance's first cache connection took
     about 1 s at the guidance's 256 MB and about 250 ms at 1,769 MB."""

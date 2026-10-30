@@ -29,6 +29,7 @@ NETWORK: dict[str, Any] = {
     "simulator_code_key": "simulator/0123456789abcdef.zip",
     "internal_alb_dns": "internal-fastm-pbs-Internal-1234567890.us-east-1.elb.amazonaws.com",
     "internal_alb_zone_id": "Z35SXDOTRQ7X7K",
+    "cache_function": "fastm-pbs-CacheConstructCacheHandlerBD70291E-abcdEFGH1234",
 }
 EXTRA = {NETWORK_CONTEXT: NETWORK}
 MOCK = {
@@ -144,6 +145,43 @@ def test_the_cache_write_path_is_a_private_record_of_the_internal_balancer(deplo
 def test_an_ad_server_needs_the_internal_balancer(deployment: GetDeployment) -> None:
     with pytest.raises(ValueError, match="internal load balancer"):
         deployment(MOCK, extra={NETWORK_CONTEXT: {**NETWORK, "internal_alb_dns": None}})
+
+
+def test_the_census_gate_provisions_the_cache_function_only_with_an_ad_server(deployment: GetDeployment) -> None:
+    """The gate may set and remove the alias's provisioned concurrency of the guidance's Prebid Cache function, and
+    nothing else of Lambda; without an ad server it has no such step."""
+    function = f"arn:aws:lambda:us-east-1:123456789012:function:{NETWORK['cache_function']}"
+    for overrides, provisioned in ((MOCK, True), (GAM, True), ({**MOCK, "modules.demand.ad_server": "none"}, False)):
+        d = deployment(overrides, extra=EXTRA)
+        template = d.template(d.stage.demand)
+        [machine] = [
+            m for m in resources(template, "AWS::StepFunctions::StateMachine") if "census" in json.dumps(m).lower()
+        ]
+        definition = json.loads(machine["DefinitionString"]) if isinstance(machine["DefinitionString"], str) else None
+        text = json.dumps(machine)
+        assert ("putProvisionedConcurrencyConfig" in text) is provisioned, overrides
+        statements = [
+            statement
+            for policy in resources(template, "AWS::IAM::Policy")
+            for statement in policy["PolicyDocument"]["Statement"]
+            if any(
+                str(a).startswith("lambda:")
+                for a in ([statement["Action"]] if isinstance(statement["Action"], str) else statement["Action"])
+            )
+            and "ProvisionedConcurrency" in json.dumps(statement["Action"])
+        ]
+        if provisioned:
+            [statement] = statements
+            assert statement["Resource"] == [function, f"{function}:live"]
+            if definition:
+                assert definition["States"]["ProvisionPodCache"]["Arguments"]["ProvisionedConcurrentExecutions"] == 8
+        else:
+            assert not statements
+
+
+def test_an_ad_server_needs_the_guidances_cache_function(deployment: GetDeployment) -> None:
+    with pytest.raises(ValueError, match="Prebid Cache function"):
+        deployment(MOCK, extra={NETWORK_CONTEXT: {**NETWORK, "cache_function": None}})
 
 
 def test_the_mock_answers_mediatailor_through_an_api_scoped_to_it(deployment: GetDeployment) -> None:
