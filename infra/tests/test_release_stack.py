@@ -535,14 +535,23 @@ def test_the_origin_secret_rotates_on_a_schedule_with_two_values_admitted(deploy
     order, state = [], "Begin"
     while state in states and states[state]["Type"] != "Succeed":
         order.append(state)
-        state = states[state]["Next"]
-    assert order == ["Begin", "Admit", "Propagation", "Probe", "Switch", "OneBreak", "Verify", "Retire"]
+        state = states[state]["Choices"][0]["Next"] if states[state]["Type"] == "Choice" else states[state]["Next"]
+    assert order == ["Begin", "Due?", "Admit", "Propagation", "Probe", "Switch", "OneBreak", "Verify", "Retire"]
+    assert states["Due?"]["Default"] == "NotDue", "a scheduled run that is not due ends at once"
+    assert "reason" in states["Begin"]["Arguments"]["Payload"]
     [busy] = [r for r in states["Begin"]["Retry"] if r["ErrorEquals"] == ["ReleaseBusyError"]]
     assert busy["IntervalSeconds"] == 60
     for step in ("Begin", "Admit", "Probe", "Switch", "Verify", "Retire"):
         assert states[step]["Catch"][-1]["Next"] == "RecordFailure"
     [schedule] = [s for s in resources(template, "AWS::Scheduler::Schedule").values() if "rotation" in s["Description"]]
-    assert schedule["ScheduleExpression"] == "rate(30 days)"
+    # a daily check: Scheduler fires a rate schedule when it is created, so rate(30 days) rotated on every deploy
+    assert schedule["ScheduleExpression"] == "rate(1 day)"
+    [function] = [
+        f
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.release.rotate.handler"
+    ]
+    assert function["Environment"]["Variables"]["SECRET_ROTATION_DAYS"] == "30"
     alarms = {a["AlarmName"] for a in resources(template, "AWS::CloudWatch::Alarm").values()}
     assert "fastm-release-rotation-failed" in alarms
     [role] = [

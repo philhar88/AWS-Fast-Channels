@@ -2747,7 +2747,8 @@
             },
             "RELEASE_TABLE": {
               "Ref": "ControllerState81621A42"
-            }
+            },
+            "SECRET_ROTATION_DAYS": "90"
           }
         },
         "Handler": "fast_channels.functions.release.rotate.handler",
@@ -2935,6 +2936,7 @@
             },
             {
               "Action": [
+                "secretsmanager:DescribeSecret",
                 "secretsmanager:GetSecretValue",
                 "secretsmanager:PutSecretValue"
               ],
@@ -5858,11 +5860,11 @@
     },
     "RotationSchedule588AFE73": {
       "Properties": {
-        "Description": "Origin-secret rotation of fastm every 90 days",
+        "Description": "Origin-secret rotation of fastm: a daily check, rotating every 90 days",
         "FlexibleTimeWindow": {
           "Mode": "OFF"
         },
-        "ScheduleExpression": "rate(90 days)",
+        "ScheduleExpression": "rate(1 day)",
         "ScheduleExpressionTimezone": "Etc/UTC",
         "State": "ENABLED",
         "Target": {
@@ -5960,18 +5962,18 @@
           "Fn::Join": [
             "",
             [
-              "{\"StartAt\":\"Begin\",\"States\":{\"Begin\":{\"Next\":\"Admit\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":100,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              "{\"StartAt\":\"Begin\",\"States\":{\"Begin\":{\"Next\":\"Due?\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"ReleaseBusyError\"],\"IntervalSeconds\":60,\"MaxAttempts\":100,\"BackoffRate\":1}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerRotateA277309F",
                   "Arn"
                 ]
               },
-              "\",\"Payload\":{\"step\":\"begin\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"slots\":\"{% $states.result.Payload %}\"},\"Resource\":\"arn:",
+              "\",\"Payload\":{\"step\":\"begin\",\"reason\":\"{% $exists($states.input.reason) ? $states.input.reason : 'manual' %}\",\"change_id\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"slots\":\"{% $states.result.Payload %}\"},\"Resource\":\"arn:",
               {
                 "Ref": "AWS::Partition"
               },
-              ":states:::lambda:invoke\"},\"Admit\":{\"Next\":\"Propagation\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"WAFOptimisticLockException\"],\"IntervalSeconds\":5,\"MaxAttempts\":5}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              ":states:::lambda:invoke\"},\"Due?\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $slots.due %}\",\"Next\":\"Admit\"}],\"Default\":\"NotDue\"},\"NotDue\":{\"Type\":\"Succeed\"},\"Admit\":{\"Next\":\"Propagation\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2},{\"ErrorEquals\":[\"WAFOptimisticLockException\"],\"IntervalSeconds\":5,\"MaxAttempts\":5}],\"Catch\":[{\"Output\":\"{% $states.errorOutput %}\",\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
               {
                 "Fn::GetAtt": [
                   "ControllerRotateA277309F",

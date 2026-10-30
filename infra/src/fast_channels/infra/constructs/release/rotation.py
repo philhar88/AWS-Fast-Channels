@@ -1,8 +1,10 @@
 """Origin-secret rotation (DESIGN §8.6): the two-value overlap as a state machine, every
-``modules.release.secret_rotation_days`` days (EventBridge Scheduler) and by hand on a suspected exposure.
+``modules.release.secret_rotation_days`` days (a daily EventBridge Scheduler check) and by hand on a suspected
+exposure.
 
 ``<prefix>-release-rotation`` (Step Functions Standard) runs ``fast_channels.functions.release.rotate`` step by step:
-begin (the Release Controller's lock; retried while a release holds it) → admit (a new value for the other slot, at
+begin (a scheduled run that is not due ends here; the Release Controller's lock, held by this execution, retried
+while a release or another rotation holds it) → admit (a new value for the other slot, at
 the WAF beside the current one) → the WAF's propagation → probe (retried until the new value is admitted) → switch
 (every configured sibling, and the slot) → one break → verify (retried until a break was answered; while a monetized
 channel is on air) → retire (a new value for the old slot, which the WAF admits instead) → done. A failure is
@@ -72,8 +74,9 @@ class ReleaseRotation(Construct):
             resource_name=f"{origin_secret(prefix, '')}*",
             arn_format=ArnFormat.COLON_RESOURCE_NAME,
         )
+        function.function.add_environment("SECRET_ROTATION_DAYS", str(rotation_days))
         function.allow(
-            ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"],
+            ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:DescribeSecret"],
             [secrets],
             why="origin secrets A and B of the stage",
         )
@@ -118,7 +121,15 @@ class ReleaseRotation(Construct):
 
     def _state_machine(self, prefix: str) -> sfn.StateMachine:
         change = {"change_id": "{% $states.context.Execution.Name %}"}
-        begin = self._invoke("Begin", {"step": "begin", **change}, assign={"slots": "{% $states.result.Payload %}"})
+        begin = self._invoke(
+            "Begin",
+            {
+                "step": "begin",
+                "reason": "{% $exists($states.input.reason) ? $states.input.reason : 'manual' %}",
+                **change,
+            },
+            assign={"slots": "{% $states.result.Payload %}"},
+        )
         begin.add_retry(errors=["ReleaseBusyError"], interval=Duration.minutes(1), max_attempts=100, backoff_rate=1)
         admit = self._invoke("Admit", {"step": "admit", "target": "{% $slots.target %}", **change})
         admit.add_retry(errors=["WAFOptimisticLockException"], interval=Duration.seconds(5), max_attempts=5)
@@ -141,9 +152,8 @@ class ReleaseRotation(Construct):
         )
         for step in (begin, admit, probe, switch, verify, retire):
             step.add_catch(failed, outputs="{% $states.errorOutput %}")
-        definition = (
-            begin.next(admit)
-            .next(sfn.Wait.jsonata(self, "Propagation", time=sfn.WaitTime.duration(PROPAGATION)))
+        rotate = (
+            admit.next(sfn.Wait.jsonata(self, "Propagation", time=sfn.WaitTime.duration(PROPAGATION)))
             .next(probe)
             .next(switch)
             .next(sfn.Wait.jsonata(self, "OneBreak", time=sfn.WaitTime.duration(ONE_BREAK)))
@@ -151,6 +161,8 @@ class ReleaseRotation(Construct):
             .next(retire)
             .next(sfn.Succeed(self, "Rotated"))
         )
+        due = sfn.Choice(self, "Due?").when(sfn.Condition.jsonata("{% $slots.due %}"), rotate)
+        definition = begin.next(due.otherwise(sfn.Succeed(self, "NotDue")))
         machine = sfn.StateMachine(
             self,
             "StateMachine",
@@ -181,8 +193,10 @@ class ReleaseRotation(Construct):
         scheduler.Schedule(
             self,
             "Schedule",
-            description=f"Origin-secret rotation of {prefix} every {days} days",
-            schedule=scheduler.ScheduleExpression.rate(Duration.days(days)),
+            # A daily check, not rate(<days>): Scheduler fires a rate schedule when it is created (fastm 2026-10-30),
+            # so every deploy would rotate. The check rotates once <days> have passed since the last rotation.
+            description=f"Origin-secret rotation of {prefix}: a daily check, rotating every {days} days",
+            schedule=scheduler.ScheduleExpression.rate(Duration.days(1)),
             target=scheduler_targets.StepFunctionsStartExecution(
                 self.state_machine,
                 input=scheduler.ScheduleTargetInput.from_object({"reason": "scheduled"}),

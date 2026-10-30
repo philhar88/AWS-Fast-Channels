@@ -1,8 +1,8 @@
 """Origin-secret rotation (DESIGN §8.6): the two-value overlap, one step per invocation of the rotation state machine.
 
 The siblings send one of the two origin secrets (``store.origin_slot()``) in ``X-Fast-Origin``, and the WAF rule
-group ``<prefix>-demand-origin`` (rule ``fast-origin-required``) admits either. A rotation runs every
-``modules.release.secret_rotation_days`` days, or by hand on a suspected exposure:
+group ``<prefix>-demand-origin`` (rule ``fast-origin-required``) admits either. A daily check rotates
+when ``modules.release.secret_rotation_days`` days have passed; a rotation also runs by hand on a suspected exposure:
 
 1. ``begin``: hold the Release Controller's lock (no release applies meanwhile) and choose the other slot;
 2. ``admit``: give the other slot a new value and admit it at the WAF, beside the current one;
@@ -18,8 +18,8 @@ may send: the rotation can be run again. No secret value is ever logged or ledge
 """
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from aws_lambda_powertools import Logger
@@ -41,6 +41,8 @@ ROTATION: Final = store.ROTATION
 SCOPE: Final = "CLOUDFRONT"
 RULE: Final = "fast-origin-required"
 SECRET_LENGTH: Final = 48
+DUE_SLACK: Final = timedelta(hours=12)
+"""A daily check a few minutes short of the period still rotates on its day (a rotation takes minutes)."""
 VERIFY_QUERY: Final = (
     "filter originId in [{siblings}] and eventType in ['MAKING_ADS_REQUEST', 'FILLED_AVAIL', "
     "'ERROR_ADS_INVALID_RESPONSE']\n| stats count(*) as n by eventType"
@@ -67,9 +69,29 @@ def _other(slot: str) -> str:
     return next(s for s in ORIGIN_SECRET_SLOTS if s != slot)
 
 
-def begin(change_id: str) -> dict[str, str]:
-    """Hold the lock (``store.ReleaseBusyError`` while a release holds it) and choose the slot to rotate to."""
-    store.lock(ROTATION)
+def last_rotated() -> datetime:
+    """When the siblings' origin secret last changed: the last switch, else the current secret's last change."""
+    if (at := store.origin_rotated_at()) is not None:
+        return at
+    config = settings()
+    client = aws.regional_client("secretsmanager", config.origin_secret_region)
+    found = client.describe_secret(SecretId=origin_secret(config.prefix, store.origin_slot()))
+    return cast("datetime", found.get("LastChangedDate") or found["CreatedDate"])
+
+
+def due() -> bool:
+    """Whether ``secret_rotation_days`` (less :data:`DUE_SLACK`) have passed since the last rotation."""
+    config = settings()
+    config.require("secret_rotation_days")
+    return _now() - last_rotated() >= timedelta(days=config.secret_rotation_days) - DUE_SLACK
+
+
+def begin(change_id: str, *, scheduled: bool = False) -> dict[str, Any]:
+    """Hold the lock for this execution (``store.ReleaseBusyError`` while a release or another rotation holds it)
+    and choose the slot to rotate to. A scheduled run that is not :func:`due` does nothing."""
+    if scheduled and not due():
+        return {"due": False}
+    store.lock(ROTATION, owner=change_id)
     current = store.origin_slot()
     target = _other(current)
     apply.ledger(
@@ -79,7 +101,7 @@ def begin(change_id: str) -> dict[str, str]:
         correlation_id=change_id,
         detail={"from": current, "to": target},
     )
-    return {"current": current, "target": target}
+    return {"due": True, "current": current, "target": target}
 
 
 def _new_value(slot: str) -> None:
@@ -223,7 +245,7 @@ def retire(current: str, change_id: str) -> dict[str, str]:
     apply.ledger(
         names.ROTATION_CHAIN, "rotation.retire", f"slot-{current}", correlation_id=change_id, detail={"slot": current}
     )
-    store.unlock(ROTATION)
+    store.unlock(ROTATION, owner=change_id)
     return {"retired": current}
 
 
@@ -236,12 +258,13 @@ def fail(change_id: str | None, error: Mapping[str, Any]) -> dict[str, bool]:
         correlation_id=change_id or "rotation",
         detail={"error": str(error.get("Error", ""))[:200], "cause": str(error.get("Cause", ""))[:500]},
     )
-    store.unlock(ROTATION)
+    if change_id:
+        store.unlock(ROTATION, owner=change_id)  # only its own: another rotation's lock stays
     return {"failed": True}
 
 
 STEPS: Final[dict[str, Callable[[dict[str, Any]], dict[str, Any]]]] = {
-    "begin": lambda e: begin(e["change_id"]),
+    "begin": lambda e: begin(e["change_id"], scheduled=e.get("reason") == "scheduled"),
     "admit": lambda e: admit(e["target"], e["change_id"]),
     "probe": lambda e: probe(e["target"]),
     "switch": lambda e: switch(e["target"], e["change_id"]),

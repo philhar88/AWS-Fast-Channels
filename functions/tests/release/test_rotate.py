@@ -81,12 +81,39 @@ def released(state: Any, kit: SimpleNamespace) -> SimpleNamespace:
 
 
 def test_begin_holds_the_lock_and_chooses_the_other_slot(state: Any, ledger: Any) -> None:
-    assert rotate.begin("x1") == {"current": "a", "target": "b"}
-    assert state.holder == rotate.ROTATION
+    assert rotate.begin("x1") == {"due": True, "current": "a", "target": "b"}
+    assert (state.holder, state.owner) == (rotate.ROTATION, "x1")
     assert ledger.actions() == [(names.ROTATION_CHAIN, "rotation.begin")]
-    state.holder = 7
     with pytest.raises(store.ReleaseBusyError):
-        rotate.begin("x2")
+        rotate.begin("x2")  # another rotation: it waits (fastm 2026-10-30, two rotations overlapped)
+    rotate.fail("x2", {"Error": "ReleaseBusyError"})
+    assert state.owner == "x1", "a failed rotation gives back only its own lock"
+    state.holder, state.owner = 7, "r0007"
+    with pytest.raises(store.ReleaseBusyError):
+        rotate.begin("x3")
+
+
+def test_a_scheduled_run_rotates_only_when_due(state: Any, ledger: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_ROTATION_DAYS", "90")
+    monkeypatch.setattr(rotate, "_now", lambda: datetime(2026, 10, 30, 12, 0, tzinfo=UTC))
+    state.rotated_at = datetime(2026, 8, 1, 12, 5, tzinfo=UTC)  # 89 days 23 h 55 min ago: due, within the slack
+    assert rotate.begin("s1", scheduled=True)["due"] is True
+    store.unlock(rotate.ROTATION, owner="s1")
+    state.rotated_at = datetime(2026, 9, 1, tzinfo=UTC)
+    assert rotate.begin("s2", scheduled=True) == {"due": False}
+    assert state.holder is None, "a run that is not due takes no lock"
+    assert rotate.begin("m1")["due"] is True, "a rotation by hand is always due"
+
+
+def test_before_the_first_rotation_the_secrets_age_decides(
+    state: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SECRET_ROTATION_DAYS", "90")
+    monkeypatch.setattr(rotate, "_now", lambda: datetime(2026, 10, 30, tzinfo=UTC))
+    stub("secretsmanager").add_response(
+        "describe_secret", {"CreatedDate": datetime(2026, 10, 1, tzinfo=UTC)}, {"SecretId": "fastm/demand/origin-a"}
+    )
+    assert rotate.due() is False
 
 
 def test_the_waf_admits_exactly_the_two_values(stub: Stub) -> None:
@@ -233,9 +260,9 @@ def test_verify_without_a_channel_on_air_rests_on_the_probe(monkeypatch: pytest.
 def test_retire_and_fail_give_the_lock_back(state: Any, ledger: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rotate, "_new_value", lambda slot: None)
     monkeypatch.setattr(rotate, "admit_values", lambda values: None)
-    state.holder = rotate.ROTATION
+    state.holder, state.owner = rotate.ROTATION, "x1"
     assert rotate.retire("a", "x1") == {"retired": "a"} and state.holder is None
-    state.holder = rotate.ROTATION
+    state.holder, state.owner = rotate.ROTATION, "x1"
     assert rotate.fail("x1", {"Error": "NotAdmittedError", "Cause": "slot b is not admitted yet"}) == {"failed": True}
     assert state.holder is None
     assert ledger.actions() == [(names.ROTATION_CHAIN, "rotation.retire"), (names.ROTATION_CHAIN, "rotation.fail")]

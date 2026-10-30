@@ -164,15 +164,19 @@ own timeouts.
 
 The siblings send one of the two origin secrets of the stage in `X-Fast-Origin`; the WAF rule group
 `<prefix>-demand-origin` (rule `fast-origin-required`) admits either, so a rotation never blocks a POST. The state
-machine `<prefix>-release-rotation` runs every `modules.release.secret_rotation_days` days (90 by default,
-EventBridge Scheduler) and can be started by hand on any suspected exposure:
+machine `<prefix>-release-rotation` rotates every `modules.release.secret_rotation_days` days (90 by default).
+EventBridge Scheduler starts it daily, and a scheduled run that is not due ends at once: Scheduler fires a rate
+schedule when the schedule is created, so a rate of 90 days would rotate on every deploy (fastm, 2026-10-30). Due
+means that the days have passed since the siblings last switched secret, or, before the first rotation, since the
+current secret last changed. Start the state machine by hand on any suspected exposure; a run by hand always
+rotates:
 
 ```bash
 aws stepfunctions start-execution --state-machine-arn <RotationStateMachineArn> --input '{"reason": "exposure"}'
 ```
 
-1. **Begin.** It holds the Release Controller's lock, so no release applies meanwhile (it waits for one that holds
-   it), and chooses the slot the siblings do not send.
+1. **Begin.** It holds the Release Controller's lock, as its own execution, so no release or other rotation runs
+   meanwhile (it waits for one that holds the lock). It chooses the slot the siblings do not send.
 2. **Admit.** That slot gets a new value (Secrets Manager), which the rule group admits beside the current one.
 3. **Probe.** After a minute, a probe POST with the new value through the guidance's CloudFront must not be blocked;
    it is retried until the change has reached CloudFront.

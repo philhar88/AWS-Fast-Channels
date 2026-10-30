@@ -17,6 +17,7 @@ conversion:
 
 import json
 import time
+from datetime import UTC, datetime
 from functools import cache
 from typing import TYPE_CHECKING, Any, Final
 
@@ -160,19 +161,29 @@ def put_channel(state: ChannelState, *, version: int) -> None:
         raise
 
 
-def lock(release: int) -> None:
-    """Hold the controller's lock for ``release`` (again, when it already does).
+def lock(release: int, owner: str | None = None) -> None:
+    """Hold the controller's lock for ``release`` (again, when its ``owner`` already does).
+
+    ``owner`` tells apart the holders of one number: every rotation holds :data:`ROTATION`, so each passes its
+    execution's name (two rotations once both held it, fastm 2026-10-30). A release is its own owner.
 
     Raises:
-        ReleaseBusyError: another release holds it and its lock has not expired.
+        ReleaseBusyError: another release or rotation holds it and its lock has not expired.
     """
     now = int(time.time())
     try:
         _table().put_item(
-            Item={"pk": LOCK, "release": release, "expires": now + (settings().release_lock_seconds or LOCK_SECONDS)},
-            ConditionExpression="attribute_not_exists(pk) OR #release = :release OR #expires < :now",
-            ExpressionAttributeNames={"#release": "release", "#expires": "expires"},
-            ExpressionAttributeValues={":release": release, ":now": now},
+            Item={
+                "pk": LOCK,
+                "release": release,
+                "owner": owner or release_tag(release),
+                "expires": now + (settings().release_lock_seconds or LOCK_SECONDS),
+            },
+            ConditionExpression=(
+                "attribute_not_exists(pk) OR #expires < :now OR (#release = :release AND #owner = :owner)"
+            ),
+            ExpressionAttributeNames={"#release": "release", "#owner": "owner", "#expires": "expires"},
+            ExpressionAttributeValues={":release": release, ":owner": owner or release_tag(release), ":now": now},
         )
     except ClientError as error:
         if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
@@ -189,18 +200,24 @@ def holder() -> int | None:
     return int(item["release"])
 
 
-def unlock(release: int) -> None:
-    """Give the lock back if ``release`` holds it."""
+def unlock(release: int, owner: str | None = None) -> None:
+    """Give the lock back if ``release`` (and ``owner``, see :func:`lock`) holds it."""
     try:
         _table().delete_item(
             Key={"pk": LOCK},
-            ConditionExpression="#release = :release",
-            ExpressionAttributeNames={"#release": "release"},
-            ExpressionAttributeValues={":release": release},
+            ConditionExpression="#release = :release AND #owner = :owner",
+            ExpressionAttributeNames={"#release": "release", "#owner": "owner"},
+            ExpressionAttributeValues={":release": release, ":owner": owner or release_tag(release)},
         )
     except ClientError as error:
         if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
+
+
+def origin_rotated_at() -> datetime | None:
+    """When the siblings last switched origin secret (None before the first rotation)."""
+    item = _get(ORIGIN)
+    return datetime.fromtimestamp(int(item["at"]), UTC) if item and "at" in item else None
 
 
 def origin_slot() -> str:
@@ -216,7 +233,7 @@ def put_origin_slot(slot: str) -> None:
     """Record the origin secret the siblings send from now on (the rotation's switch)."""
     if slot not in ORIGIN_SECRET_SLOTS:
         raise ValueError(f"unknown origin secret slot {slot!r}")
-    _table().put_item(Item={"pk": ORIGIN, "slot": slot})
+    _table().put_item(Item={"pk": ORIGIN, "slot": slot, "at": int(time.time())})
 
 
 def secret(slot: str) -> SecretStr:
