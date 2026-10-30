@@ -916,3 +916,31 @@ class ReleaseController(Construct):
             "applied (see the drift check's log for the paths)",
             topic=topic,
         )
+        # A probe that could not follow the stable release (M3-x4), in a promotion (the execution then ends at
+        # ProbesNotFollowed), a rollback, R1 or the probes step: each failure is logged once by the promote function.
+        logs.MetricFilter(
+            self,
+            "ProbeNotFollowed",
+            log_group=self.promote.log_group,
+            filter_name="ProbeNotFollowed",
+            filter_pattern=logs.FilterPattern.string_value("$.message", "=", names.PROBE_NOT_FOLLOWED),
+            metric_namespace=METRICS_NAMESPACE,
+            metric_name="ProbeNotFollowed",
+            metric_value="1",
+            unit=cw.Unit.COUNT,
+        )
+        self.probe_alarm = alarm(
+            self,
+            "ProbeAlarm",
+            name=f"{self._prefix}-release-probe-stale",
+            metric=cw.Metric(
+                namespace=METRICS_NAMESPACE,
+                metric_name="ProbeNotFollowed",
+                statistic=cw.Stats.SUM,
+                period=Duration.minutes(5),
+            ),
+            threshold=1,
+            description="A probe sibling could not be re-applied with its stable sibling's release: it runs an older "
+            "one (see the promote function's log; its probes step catches it up)",
+            topic=topic,
+        )

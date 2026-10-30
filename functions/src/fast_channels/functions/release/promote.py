@@ -170,7 +170,7 @@ def _follow_probes(channels: set[str], change_id: str, *, strict: bool) -> dict[
         try:
             followed_to[channel] = follow_probe(channel, change_id)
         except ProbeFollowError as error:
-            logger.error("probe not followed", extra={"channel": channel, "error": str(error)})
+            logger.error(names.PROBE_NOT_FOLLOWED, extra={"channel": channel, "error": str(error)})
             failures.append(str(error))
     if failures and strict:
         raise ProbeFollowError("; ".join(failures))

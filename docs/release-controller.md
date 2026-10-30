@@ -158,7 +158,8 @@ outside one), the promote function re-applies it with the release its stable sib
 release's trees are deleted once no other sibling keeps them.
 
 If the probe can't be re-applied, the promotion still stands. The execution ends at `ProbesNotFollowed` without
-marking the release failed, and the probe follows at the next promotion or rollback. A stage upgraded since its last
+marking the release failed, and the probe follows at the next promotion or rollback. Every such failure (in a
+promotion, a rollback, R1 or the `probes` step) raises `<prefix>-release-probe-stale`. A stage upgraded since its last
 promotion can catch its probes up by hand:
 
 ```bash
@@ -375,6 +376,7 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-rotation-failed` | An origin-secret rotation failed: the ledger's `rotation.fail` says at which step; run it again |
 | `<prefix>-release-candidate` | Any of the above (but drift) on a pair sibling: rolls a pointer deployment back (AppConfig monitor) and runs R1 |
 | `<sibling>-ads-errors` | More than half of the sibling's ad requests failed in two consecutive 15-minute periods with at least 5 each: `AdDecisionServer.Errors` (non-200, empty or timed-out answers; an empty VAST is not one) against `AdDecisionServer.Latency`'s sample count (one per request, failed or prefetched). A broken route, such as a missing stored request, Prebid Server down or the origin gate refusing, plays the slate and raises nothing else. A mid-break joiner whose remainder is off the 30 s grid is refused with 400, but those requests fall in a break's two minutes, and the next period holds requests that succeed or too few to judge. It is not part of the candidate alarm: a remap or a pointer rollback does not mend the route |
+| `<prefix>-release-probe-stale` | A probe sibling could not be re-applied with its stable sibling's release (the promote function's log says why), so the canary runs an older release: catch it up with the `probes` step ([above](#the-probe-follows-the-stable-release)) |
 | `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
 | `<sibling>-real-time-requests` | On a prefetched sibling, more than 50% of at least 20 ad requests in 5 minutes were real time (`RealTimeAdsRequests`: `MAKING_ADS_REQUEST` with no `prefetchScheduleName`). Late joiners and mid-break joiners are real time by design, so a small audience that zaps a lot can raise it alone; it has no actions of its own |
 | `<prefix>-pds-burst-real-time` | The PDS's `<prefix>-pds-policy-fallbacks` and any `<sibling>-real-time-requests` together: MediaTailor asked for every session at the marker at once (a retrieval it did not use, or a break published closer than the retrieval lead), a sub-second herd the tasks' CPU cannot absorb, and those breaks were served SAFE ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)). With the PDS and prefetch on |

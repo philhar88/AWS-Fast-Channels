@@ -220,8 +220,11 @@ def test_a_probe_that_cannot_follow_fails_the_step_after_the_promotion(
     stub("s3").add_response("put_object", {}, None)
     monkeypatch.setattr(apply, "put_function", lambda function: True)
     stub("mediatailor").add_client_error("put_playback_configuration", "BadRequestException", "no such Function")
+    logged: list[str] = []
+    monkeypatch.setattr(promote.logger, "error", lambda message, **_: logged.append(message))
     with pytest.raises(promote.ProbeFollowError, match="fastm-demo-p-z: not re-applied with r0002"):
         promote.promote(key, 2, "c2", [CANDIDATE])
+    assert logged == ["probe not followed"], "the message <prefix>-release-probe-stale counts"
     channel, _ = state.states["fastm-demo"]
     assert channel.stable == "fastm-demo-p-b" and channel.siblings[PROBE].release == 1
     assert state.statuses[2].status == "PROMOTED" and state.holder is None

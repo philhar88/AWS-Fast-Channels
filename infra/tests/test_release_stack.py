@@ -488,6 +488,20 @@ def test_the_promotion_re_applies_the_probe_and_a_probe_failure_leaves_it_standi
     [linked] = [s for s in granted if "iam:CreateServiceLinkedRole" in actions(s)]
     assert linked["Condition"] == {"StringEquals": {"iam:AWSServiceName": "mediatailor.amazonaws.com"}}
     assert "PromoteFunction" in template.to_json()["Outputs"], "its probes step is run by hand on an upgraded stage"
+    # A stale probe reaches a human: each failure the promote function logs (promotion, rollback, R1, the step)
+    [stale] = [
+        f for f in resources(template, "AWS::Logs::MetricFilter").values() if "probe not followed" in f["FilterPattern"]
+    ]
+    assert stale["FilterPattern"] == '{ $.message = "probe not followed" }'
+    assert "ControllerPromoteLogs" in json.dumps(stale["LogGroupName"])
+    alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    probe_alarm = alarms["fastm-release-probe-stale"]
+    assert (probe_alarm["MetricName"], probe_alarm["Threshold"], probe_alarm["Statistic"]) == (
+        "ProbeNotFollowed",
+        1,
+        "Sum",
+    )
+    assert probe_alarm["AlarmActions"], "it notifies the alert topic"
 
 
 def test_a_failed_smoke_rolls_back_and_stops_the_lab_only_if_it_started_it(deployment: GetDeployment) -> None:

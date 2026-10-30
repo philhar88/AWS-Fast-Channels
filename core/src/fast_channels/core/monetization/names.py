@@ -120,6 +120,11 @@ def burst_alarm(prefix: str) -> str:
     return f"{prefix}-pds-burst-real-time"
 
 
+PROBE_NOT_FOLLOWED: Final = "probe not followed"
+"""The promote function's log message when a probe sibling could not be re-applied with its stable sibling's release
+(M3-x4); a metric filter counts it, and ``<prefix>-release-probe-stale`` alarms on it."""
+
+
 def markers_alarm(configuration: str) -> str:
     """The silent-loss alarm of a playback configuration: more than half of its markers had no ad request in 2 of
     10 minutes with at least 5 markers."""

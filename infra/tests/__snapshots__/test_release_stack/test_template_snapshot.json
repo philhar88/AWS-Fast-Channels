@@ -2259,6 +2259,59 @@
       },
       "Type": "AWS::Events::Rule"
     },
+    "ControllerProbeAlarm8E31727E": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A probe sibling could not be re-applied with its stable sibling's release: it runs an older one (see the promote function's log; its probes step catches it up)",
+        "AlarmName": "fastm-release-probe-stale",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "EvaluationPeriods": 1,
+        "MetricName": "ProbeNotFollowed",
+        "Namespace": "FastChannels",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 300,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    },
+    "ControllerProbeNotFollowedFF331164": {
+      "Properties": {
+        "FilterName": "ProbeNotFollowed",
+        "FilterPattern": "{ $.message = \"probe not followed\" }",
+        "LogGroupName": {
+          "Ref": "ControllerPromoteLogs41919B1C"
+        },
+        "MetricTransformations": [
+          {
+            "MetricName": "ProbeNotFollowed",
+            "MetricNamespace": "FastChannels",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::MetricFilter"
+    },
     "ControllerPromote115724CE": {
       "DependsOn": [
         "ControllerPromoteRoleDefaultPolicy0A23742F",

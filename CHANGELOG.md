@@ -436,7 +436,8 @@ Descoped before the release (the owner, 2026-10-30; each is a two-way door):
   `-p-z`, so the canary kept that release's session controls, trees and ADS body. Once the per-length stored
   requests were removed, every probe request got a 400 and the slate. Every promotion and rollback now re-applies
   the probe with its stable sibling's release (house only, `X-Fast-Probe`), and its earlier trees are deleted once
-  no sibling keeps them. The promote function's `probes` step catches up a stage by hand.
+  no sibling keeps them. A probe that can't follow raises `<prefix>-release-probe-stale`, and the promote function's
+  `probes` step catches up a stage by hand.
 - **Release Controller: a broken ad route raises an alarm.** No alarm counted a monetized sibling's
   `AdDecisionServer.Errors`, so a route that fails every request (a missing stored request, Prebid Server down,
   the origin gate refusing) played the slate and lost the revenue silently. `<sibling>-ads-errors` fires when more
