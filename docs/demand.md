@@ -240,6 +240,10 @@ vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s
 
 ## An ad server in front: Prebid results for its VAST
 
+> **Experimental in v4.0.0, and off by default.** Enable it only to try the ad-server flow. The tested route is the
+> direct one above. No default end-to-end leg runs this mode. While it is enabled, its pre-warmed cache costs about
+> $124 a month, whether or not a channel is on air; see [the cache function](#the-cache-function).
+
 With `modules.demand.ad_server` set, an ad server decides the break and Prebid's results reach it as key-values: the
 standard Prebid video flow for an ad server ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)). The
 default, `none`, is the direct route above, unchanged.
@@ -331,7 +335,8 @@ Prebid's *Setting up Prebid Video in FreeWheel*:
   cache function has no instance ready, or when `/select` is slow and leaves no time for the write. The ad server
   then serves its house ad. See [the cache function](#the-cache-function) for how the stage keeps instances ready.
 - An instance of provisioned concurrency costs about $0.021 an hour at 1,769 MB (arm64), so the default 8 cost about
-  $0.17 an hour, about $124 a month, whether or not a channel is on air.
+  $0.17 an hour, about $124 a month, whether or not a channel is on air. This applies only while the mode is enabled.
+  Scaling the instances with the census gate was deferred with the mode (branch `am/m8-09b-cache-census`).
 
 ### The cache function
 
@@ -432,7 +437,8 @@ ledger archive, and fails on any residue but KMS keys pending deletion. A run ta
 costs a few US dollars. The tests take a few minutes and must start within the census gate's 15 minutes: the leg runs
 no channel, so the gate then scales Prebid Server to zero.
 
-**The ad-server leg** (`tests/e2e/test_15_ad_server.py`) needs the stage `fastciads`: `fastci` with
+**The ad-server leg** (`tests/e2e/test_15_ad_server.py`, experimental: no default leg runs it) needs the stage
+`fastciads`: `fastci` with
 `ad_server: mock` and a 900 s pod cache, so that every pod of the run can still be read back once the ADS log arrives.
 Deploy it with every module on, run `make deploy-demand` with the same stage, then the test. Viewers play the stable
 sibling through three breaks. The test checks:
