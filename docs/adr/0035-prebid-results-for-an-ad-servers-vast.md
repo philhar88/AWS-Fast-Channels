@@ -91,10 +91,16 @@ We needed to settle five things:
   Prebid's long-form route would let the ad server assemble the pod per ad (`hb_pb_cat_dur`), but it would bypass
   those rules.
 - **Latency.** A break waits for the auction before its ad request (up to 1,300 ms of PRE_ADS), then the ad server and
-  the cache read. The cache function is the guidance's, behind a load balancer and not provisioned. A cold write,
-  or a slow `/select` that uses up the exitpoint's time, leaves the break without a cached pod. That break answers
-  no bid, and the ad server serves its house ad. The first end-to-end run measured this on 2 of 9 breaks: a cold
-  write timed out at 304 ms, and a `/select` took 370 ms.
+  the cache read. A write that misses the exitpoint's extra 150 ms leaves the break without a cached pod. That
+  break answers no bid, and the ad server serves its house ad.
+- **The cache function needs ready instances.** The guidance's function, at its 256 MB and without provisioned
+  concurrency, lost 17 of 100 pods in a 100-session break. It scaled to 31 instances, each about 1.4 s to start.
+  - Provisioned concurrency alone did not help at 256 MB. The guidance's handler opens its cache connection on an
+    instance's first request, and that took about 1 s with the CPU of 256 MB.
+  - With 1,769 MB (one vCPU) and 8 provisioned instances, the same break cached 100 of 100 pods (write p99 104 ms),
+    and five prefetched breaks cached every pod except in a break asked for twice.
+  - The wrapper sets both, in the ad-server mode only. The cost is about $0.17 an hour while the stage exists.
+  - A Lambda function stays the cache server: it meets the deadline with ready instances.
 - **No viewer IP.** The auction is MediaTailor's Function request, which carries no viewer IP, so `/policy` sets no
   `device.ip` on this route. The direct route keeps it.
 - **The origin secret sits in the auction Function.** A rotation must therefore re-create the trees that carry the old

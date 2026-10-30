@@ -427,7 +427,7 @@ def test_with_an_ad_server_the_guidance_gets_the_cache_functions_settings(monkey
     assert not [arg for arg in found["fastci"] if arg.startswith(f"{POD_CACHE_CONTEXT}=")]
     [context] = [arg for arg in found["fastciads"] if arg.startswith(f"{POD_CACHE_CONTEXT}=")]
     assert PodCacheFunction.model_validate_json(context.split("=", 1)[1]) == PodCacheFunction(
-        memory_mib=256, provisioned=4
+        memory_mib=1769, provisioned=8
     )
 
 

@@ -121,8 +121,8 @@
           "ad_server": "none",
           "ad_server_tag": "",
           "pod_cache_seconds": 300,
-          "pod_cache_concurrency": 4,
-          "pod_cache_memory_mb": 256
+          "pod_cache_concurrency": 8,
+          "pod_cache_memory_mb": 1769
         },
         "pds": {
           "enabled": false,

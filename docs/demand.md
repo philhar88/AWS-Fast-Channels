@@ -249,6 +249,8 @@ default, `none`, is the direct route above, unchanged.
 | `modules.demand.ad_server` | `none` | `none`, `mock` (the demo's ad server), `gam` or `freewheel`. Needs the release module |
 | `modules.demand.ad_server_tag` | `""` | `gam`/`freewheel`: the publisher's VAST tag, with `{prebid}` once where the key-values go |
 | `modules.demand.pod_cache_seconds` | `300` | How long Prebid Cache keeps a break's pod |
+| `modules.demand.pod_cache_concurrency` | `8` | Provisioned concurrency of the guidance's Prebid Cache function (0: none). See [the cache function](#the-cache-function) |
+| `modules.demand.pod_cache_memory_mb` | `1769` | The Prebid Cache function's memory (one vCPU; the guidance's own is 256 MB) |
 
 How a break is sold on this route:
 
@@ -326,9 +328,32 @@ Prebid's *Setting up Prebid Video in FreeWheel*:
 - The auction adds up to 1,300 ms before the ad request.
 - The auction is MediaTailor's Function request, which carries no viewer IP, so `/policy` sets no `device.ip`.
 - A break answers no bid when the cache write does not finish within the exitpoint's time. That happens when the
-  cache function is cold, or when `/select` is slow and leaves no time for the write. The ad server then serves its
-  house ad. In the end-to-end run this hit 2 of 9 breaks: one write timed out at 304 ms, and once `/select` took
-  370 ms.
+  cache function has no instance ready, or when `/select` is slow and leaves no time for the write. The ad server
+  then serves its house ad. See [the cache function](#the-cache-function) for how the stage keeps instances ready.
+- An instance of provisioned concurrency costs about $0.021 an hour at 1,769 MB (arm64), so the default 8 cost about
+  $0.17 an hour, about $124 a month, whether or not a channel is on air.
+
+### The cache function
+
+The composed pod's write goes to the guidance's Prebid Cache function, through its internal load balancer, on the
+auction's deadline: the exitpoint's extra 150 ms. In the ad-server mode, the guidance wrapper (`scripts/guidance_app.py`)
+gives that function its memory and an alias `live` with provisioned concurrency, which the guidance's four Lambda target
+groups invoke instead of the function ([ADR 0035](adr/0035-prebid-results-for-an-ad-servers-vast.md)).
+
+Measured on a throwaway stage with 100 smart-TV sessions (lane D's herd driver, 2026-10-30):
+
+| Cache function | Break | Pods cached | Peak instances | Notes |
+|---|---|---|---|---|
+| 256 MB, no provisioned concurrency (the guidance's own) | one in real time | 83 of 100 | 31 | 28 new instances, each about 1.4 s to start; their writes timed out |
+| 256 MB, 4 provisioned | one in real time | 79 of 100 | 31 | each provisioned instance's first cache connection took about 1 s, so the burst spilled over |
+| 1,769 MB, 4 provisioned | one in real time | 98 of 100 | 8 | the first connection took about 250 ms; 27 invocations spilled over |
+| 1,769 MB, 8 provisioned | one in real time | 100 of 100 | 6 | write p95 83 ms, p99 104 ms; 1 invocation spilled over |
+| 1,769 MB, 8 provisioned | five, prefetched | 564 of 583 | 28 | breaks 1, 2 and 4 wrote every pod. 18 misses came in break 3, which every session asked for twice: the prefetcher had re-created its schedule, fixed since. 1 miss came in break 5 |
+
+So a break in real time needs about 0.06–0.08 ready instances per session, and a prefetched one less: its requests
+spread over the retrieval window. Set `pod_cache_concurrency` from the audience of the largest break. The guidance's
+handler connects to the cache on an instance's first request, so the memory matters for the CPU that connection
+needs, not for an instance's start (about 1.4 s at any size).
 
 ## Deploy and destroy
 
