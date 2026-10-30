@@ -29,7 +29,7 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CACHE_URL", CACHE)
     monkeypatch.setenv("HOUSE_URL", HOUSE)
     monkeypatch.setenv("IMPRESSION_URL", IMPRESSION)
-    monkeypatch.setattr(ad_server, "origin_secrets", lambda: ["slot-a-value", "slot-b-value"])
+    monkeypatch.setattr(ad_server, "origin_secrets", lambda fresh=False: ["slot-a-value", "slot-b-value"])
 
 
 def _event(query: dict[str, str], headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -88,3 +88,25 @@ def test_without_the_origin_secret_nothing_is_answered(secret: str | None) -> No
 def test_both_slots_are_valid() -> None:
     assert ad_server.authorized("slot-a-value") and ad_server.authorized("slot-b-value")
     assert not ad_server.authorized(None)
+
+
+def test_a_rotated_value_is_read_fresh_at_most_every_ten_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rotation switches the siblings to a value the kept secrets do not hold yet: one fresh read accepts it; a
+    guess makes at most one fresh read per 10 s."""
+    kept, current = ["slot-a-value", "slot-b-old"], ["slot-a-value", "slot-b-new"]
+    reads: list[bool] = []
+
+    def origin_secrets(*, fresh: bool = False) -> list[str]:
+        reads.append(fresh)
+        return current if fresh else kept
+
+    clock = [1000.0]
+    monkeypatch.setattr(ad_server, "origin_secrets", origin_secrets)
+    monkeypatch.setattr(ad_server.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ad_server, "_refreshed", [0.0])
+    assert ad_server.authorized("slot-b-new") and reads == [False, True]
+    reads.clear()
+    assert not ad_server.authorized("guess") and reads == [False], "within 10 s of a fresh read: the kept ones only"
+    clock[0] += 10
+    assert not ad_server.authorized("guess") and reads == [False, False, True]
+    assert ad_server.authorized("slot-a-value") and not ad_server.authorized("")

@@ -7,12 +7,15 @@ Cache (``<cache>?uuid=<hb_uuid>``); anything else, the house line's Wrapper to t
 
 It sits behind an API Gateway HTTP API, and it answers only the stage's own MediaTailor requests: they carry the origin
 secret in ``X-Fast-Origin``, as the demand origin's rule requires for Prebid Server. Both slots are valid at once (a
-rotation never blocks a request), read from Secrets Manager and kept 5 minutes. Anything else is 403, and nothing is
-logged about it beyond a count. Each answer is logged with its line, the session and the break, never the secret.
+rotation never blocks a request), read from Secrets Manager and kept 5 minutes. A value that matches neither is
+checked once more against a fresh read, at most every 10 s, so the value a rotation switches the siblings to is
+accepted at once. Anything else is 403, and nothing is logged about it beyond a count. Each answer is logged with
+its line, the session and the break, never the secret.
 """
 
 import hmac
 import os
+import time
 from typing import TYPE_CHECKING, Any, Final
 
 from aws_lambda_powertools import Logger, Metrics
@@ -32,7 +35,10 @@ metrics = Metrics()
 app = APIGatewayHttpResolver()
 
 SECRET_SECONDS: Final = 300
-"""How long a read origin secret is kept: a rotation's new slot is accepted within 5 minutes."""
+"""How long a read origin secret is kept."""
+REFRESH_SECONDS: Final = 10
+"""At most one fresh read per this many seconds for a value that matches neither kept secret (a rotation's new one,
+or a guess: guesses cannot make the function read Secrets Manager more often)."""
 VAST: Final = "application/xml"
 
 
@@ -47,15 +53,31 @@ def _settings() -> dict[str, str]:
 _secrets = SecretsProvider(boto_config=Config(region_name=os.environ.get("ORIGIN_SECRET_REGION")))
 
 
-def origin_secrets() -> list[str]:
-    """The origin secrets the stage's MediaTailor requests may carry (both slots)."""
+_refreshed: list[float] = [0.0]
+"""When the secrets were last read fresh for an unknown value (monotonic seconds)."""
+
+
+def origin_secrets(*, fresh: bool = False) -> list[str]:
+    """The origin secrets the stage's MediaTailor requests may carry (both slots); ``fresh`` reads them again."""
     names = [name for name in os.environ.get("ORIGIN_SECRETS", "").split(",") if name]
-    return [str(_secrets.get(name, max_age=SECRET_SECONDS)) for name in names]
+    return [str(_secrets.get(name, max_age=SECRET_SECONDS, force_fetch=fresh)) for name in names]
+
+
+def _matches(value: str, secrets: list[str]) -> bool:
+    return any(hmac.compare_digest(value, secret) for secret in secrets if secret)
 
 
 def authorized(value: str | None) -> bool:
-    """Whether ``value`` is one of the origin secrets (compared in constant time)."""
-    return bool(value) and any(hmac.compare_digest(value or "", secret) for secret in origin_secrets() if secret)
+    """Whether ``value`` is one of the origin secrets (compared in constant time), read again at most every
+    :data:`REFRESH_SECONDS` when it matches neither kept one."""
+    if not value:
+        return False
+    if _matches(value, origin_secrets()):
+        return True
+    if time.monotonic() - _refreshed[0] < REFRESH_SECONDS:
+        return False
+    _refreshed[0] = time.monotonic()
+    return _matches(value, origin_secrets(fresh=True))
 
 
 @app.get("/ads")
