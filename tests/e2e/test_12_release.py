@@ -33,6 +33,7 @@ from harness_release import (
     SLOW_MS,
     Rig,
     Viewer,
+    aired,
     breaks,
     entered,
     execution_of,
@@ -473,6 +474,7 @@ def test_a_release_that_breaks_during_its_rollout_rolls_back_unattended(
     remap_started, remapped = task_window(stage, execution, "Rollback")
     time.sleep(LOG_DELAY_S)
     seen = breaks(stage, [v.session for v in viewers], flipped - 600, time.time())
+    shown = aired(stage, [v.session for v in viewers], flipped - 600, time.time())
     print(f"rollback task {remap_started - flipped:.0f}-{remapped - flipped:.0f} s after the lookup turned slow")
     minutes = request_latency(stage, candidate, lookup, flipped - 60, time.time())
     print(f"{lookup} per minute (s from the remap, max ms): {[(round(t - remapped), m) for t, m in minutes]}")
@@ -481,7 +483,9 @@ def test_a_release_that_breaks_during_its_rollout_rolls_back_unattended(
     for session, requests in seen.items():
         print(f"viewer {session}: {[(round(t - remapped, 1), failed) for t, failed in requests]}")
         assert any(flipped <= t <= remap_started for t, _ in requests), f"{session}: no break met the slow lookup"
-        later = [failed for t, failed in requests if t > remapped + REMAP_S]
+        # the breaks that aired after the remap: a prefetched one's request was its retrieval, minutes before (M3-x5)
+        print(f"viewer {session} aired: {[(round(t - remapped, 1), failed) for t, failed in shown[session]]}")
+        later = [failed for t, failed in shown[session] if t > remapped + REMAP_S]
         assert later and not any(later), f"{session}: breaks after the remap {later}"
 
 

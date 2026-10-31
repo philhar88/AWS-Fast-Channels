@@ -150,3 +150,43 @@ def test_a_break_failed_when_its_pre_ads_hook_erred(monkeypatch: pytest.MonkeyPa
     assert [failed for _, failed in found["s2"]] == [True]
     assert [failed for _, failed in found["s3"]] == [False, False], "a missing break id joins nothing"
     assert found["s1"][0][0] == 1793296801.0
+
+
+def test_the_breaks_that_aired_are_joined_to_their_requests_by_break_or_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prefetched break airs minutes after its retrieval (``pf-7``), a real-time one with its request (``b9``); the
+    marker found again with its duration is not another break (M3-x5)."""
+    requests = [
+        {
+            "@timestamp": "2026-10-29 18:00:00.000",
+            "sessionId": "s1",
+            "eventType": "MAKING_ADS_REQUEST",
+            "breakId": "pf-7",
+        },
+        {
+            "@timestamp": "2026-10-29 18:00:00.100",
+            "sessionId": "s1",
+            "eventType": "PRE_ADS_REQUEST_HOOK_ERROR",
+            "breakId": "pf-7",
+        },
+        {
+            "@timestamp": "2026-10-29 18:05:00.000",
+            "sessionId": "s1",
+            "eventType": "MAKING_ADS_REQUEST",
+            "breakId": "b9",
+        },
+    ]
+    markers = [
+        {"@timestamp": "2026-10-29 18:02:00.000", "sessionId": "s1", "breakId": "pf-7"},
+        {"@timestamp": "2026-10-29 18:02:30.000", "sessionId": "s1", "breakId": "c1", "completed": ",DURATION="},
+        {"@timestamp": "2026-10-29 18:04:59.900", "sessionId": "s1", "breakId": "b9"},
+    ]
+
+    def insights(_stage: Any, _group: str, query: str, *_: Any) -> list[dict[str, str]]:
+        return markers if "eventType = 'AD_MARKER_FOUND'" in query else requests
+
+    monkeypatch.setattr(harness_release, "insights", insights)
+    found = harness_release.aired(SimpleNamespace(prefix="fastm"), ["s1"], 0, 1)  # type: ignore[arg-type]
+    assert [failed for _, failed in found["s1"]] == [True, False], "the retrieval's hook failed: its break did too"
+    assert [round(at) for at, _ in found["s1"]] == [1793296920, 1793297100]

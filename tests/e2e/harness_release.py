@@ -648,14 +648,46 @@ def _epoch(timestamp: str) -> float:
     return datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC).timestamp()
 
 
+AIRED_QUERY: Final = (
+    "filter sessionId in [{sessions}] and eventType = 'AD_MARKER_FOUND'\n"
+    "| fields @timestamp, sessionId, coalesce(adBreakCorrelationId, prefetchScheduleName) as breakId\n"
+    "| parse adMarkers /(?<completed>,DURATION=)/\n"
+    "| limit 10000"
+)
+
+
 def breaks(stage: Stage, sessions: Sequence[str], start: float, end: float) -> dict[str, list[tuple[float, bool]]]:
     """Each session's ad requests in time order: (epoch seconds, whether its PRE_ADS hook failed: an error event of
-    its break, or of the session in the :data:`HOOK_WINDOW_S` before it)."""
+    its break, or of the session in the :data:`HOOK_WINDOW_S` before it). A prefetched break's request is its
+    retrieval, minutes before the break airs (:func:`aired` has the breaks)."""
+    return {s: [(at, failed) for at, failed, _ in found] for s, found in _requests(stage, sessions, start, end).items()}
+
+
+def aired(stage: Stage, sessions: Sequence[str], start: float, end: float) -> dict[str, list[tuple[float, bool]]]:
+    """Each session's breaks in the order they aired (the first appearance of their marker): (epoch seconds, whether
+    the PRE_ADS hook of the request that filled it failed). A real-time break's request is made as it airs; a
+    prefetched one's is its retrieval, minutes before, joined by the schedule its events carry."""
+    failed = {(s, b) for s, found in _requests(stage, sessions, start, end).items() for _, f, b in found if f and b}
+    quoted = ", ".join(f"'{s}'" for s in sessions)
+    rows = insights(stage, names.log_group(stage.prefix), AIRED_QUERY.format(sessions=quoted), start, end)
+    found: dict[str, list[tuple[float, bool]]] = {s: [] for s in sessions}
+    for row in rows:
+        if row.get("completed"):  # the marker found again when it gained its duration
+            continue
+        session, break_id = row["sessionId"], row.get("breakId")
+        found[session].append((_epoch(row["@timestamp"]), (session, break_id) in failed))
+    return {s: sorted(v) for s, v in found.items()}
+
+
+def _requests(
+    stage: Stage, sessions: Sequence[str], start: float, end: float
+) -> dict[str, list[tuple[float, bool, str | None]]]:
+    """:func:`breaks`, with each request's break id."""
     quoted = ", ".join(f"'{s}'" for s in sessions)
     rows = insights(stage, names.log_group(stage.prefix), BREAKS_QUERY.format(sessions=quoted), start, end)
     errors = [(r["sessionId"], r.get("breakId"), _epoch(r["@timestamp"])) for r in rows]
     errors = [e for e, r in zip(errors, rows, strict=True) if r["eventType"] != "MAKING_ADS_REQUEST"]
-    found: dict[str, list[tuple[float, bool]]] = {s: [] for s in sessions}
+    found: dict[str, list[tuple[float, bool, str | None]]] = {s: [] for s in sessions}
     for row in rows:
         if row["eventType"] != "MAKING_ADS_REQUEST":
             continue
@@ -663,8 +695,8 @@ def breaks(stage: Stage, sessions: Sequence[str], start: float, end: float) -> d
         failed = any(
             s == session and ((b is not None and b == break_id) or 0 <= at - t <= HOOK_WINDOW_S) for s, b, t in errors
         )
-        found[session].append((at, failed))
-    return {s: sorted(v) for s, v in found.items()}
+        found[session].append((at, failed, break_id))
+    return {s: sorted(v, key=lambda r: r[0]) for s, v in found.items()}
 
 
 def request_latency(
