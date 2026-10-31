@@ -136,19 +136,21 @@ def deliver(
     scope: Construct,
     id: str,
     *,
-    source: logs.CfnDeliverySource,
+    source: logs.CfnDeliverySource | str,
     destination_arn: str,
     after: CfnResource | None = None,
     **options: Any,
 ) -> logs.CfnDelivery:
-    """A vended-log delivery from ``source`` to the delivery destination ``destination_arn`` (``options`` are
-    further ``CfnDelivery`` properties, such as ``record_fields``).
+    """A vended-log delivery from ``source`` (a delivery source, or the name of one that another stack created) to
+    the delivery destination ``destination_arn`` (``options`` are further ``CfnDelivery`` properties, such as
+    ``record_fields``).
 
     CloudWatch Logs creates the deliveries of one source, or to one destination, one at a time: pass the previous
     one as ``after`` to serialize them.
     """
+    name = source.ref if isinstance(source, logs.CfnDeliverySource) else source
     delivery = logs.CfnDelivery(
-        scope, id, delivery_source_name=source.ref, delivery_destination_arn=destination_arn, **options
+        scope, id, delivery_source_name=name, delivery_destination_arn=destination_arn, **options
     )
     if after is not None:
         delivery.add_resource_dependency(after)

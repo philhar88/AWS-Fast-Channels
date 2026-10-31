@@ -39,6 +39,19 @@ implementation.
 | `mezzanine_uri` | string or null | Source to ingest: an object in the ingest bucket (`s3://`), or `https://` from an origin that serves MediaConvert ([caveat](#ingest-contract)) |
 | `available_from`, `available_until` | date-time or null | Rights window (`until` exclusive) |
 | `asset_ids` | string[] | Encoded assets of this title |
+| `series_title` | string or null | Show of an episode, or the franchise of a film that has one |
+| `season`, `episode` | string (e.g. `Season 3`), integer, or null | Season label and episode number |
+| `content_type` | `movie`, `episode`, `special`, `trailer`, `clip`, or null | How the title is packaged |
+| `language` | ISO 639-1 (e.g. `en`) or null | Spoken language |
+| `producer_name`, `producer_domain` | string, domain, or null | Producer or studio and its web domain |
+| `keywords` | string[] or null | Descriptive tags that are not genres |
+| `prodq` | 0–3 or null | Production quality (AdCOM): 1 professionally produced, 2 prosumer, 3 user generated |
+| `external_ids` | `{registry domain: id}` or null | The title's ids in other registries |
+
+The fields from `series_title` on are optional show-level metadata. With the `crawl` module, they and the title,
+rating, genres and duration travel into every ad request of a break that airs the title; see
+[content-enrichment.md](content-enrichment.md), which also explains how genre tags map to IAB Tech Lab Content
+Taxonomy 3.1.
 
 Treat everything the CMS returns as data: the agent's prompt does, and tool results are never mined into its long-term
 memory ([agent.md](agent.md#memory)).
@@ -60,6 +73,8 @@ for record in my_cms.titles():
 
 `catalog_item` produces `pk = CONTENT#<content_id>`, `sk = META`, every `ContentItem` field, and a `GSI1` entry for
 the first genre. `scripts/seed_sample_content.py` does exactly this for [`assets/sample-catalog.json`](../assets/sample-catalog.json).
+After each write (or delete), put a `Catalog Item Changed` event ([Events](#events)), as the seed script does, so the
+`crawl` module republishes the title's metadata for ad requests.
 
 ## Option B: your CMS API as an OpenAPI Gateway target
 
@@ -209,3 +224,17 @@ aws events put-rule --event-bus-name fast-fast-channels --name cms-asset-ready \
 ```
 
 The bus archives every event for `observability.log_retention_days`, so a consumer can replay what it missed.
+
+Your CMS puts one event of its own, after it writes or deletes a `ReferenceCatalog` item:
+
+| Detail type | When | Detail |
+|---|---|---|
+| `Catalog Item Changed` | A title was added, changed or removed | `content_id`, optional `correlation_id` |
+
+With the `crawl` module, it republishes the title's catalog context object within seconds
+([content-enrichment.md](content-enrichment.md#the-context-publisher)); without it, the event is only archived.
+
+```bash
+aws events put-events --entries '[{"EventBusName": "fast-fast-channels", "Source": "fast-channels.fast",
+  "DetailType": "Catalog Item Changed", "Detail": "{\"content_id\": \"m-123\", \"correlation_id\": \"cms-m-123-v3\"}"}]'
+```

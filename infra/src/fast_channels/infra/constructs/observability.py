@@ -21,10 +21,18 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
 from aws_cdk import aws_sqs as sqs
+from aws_cdk import aws_ssm as ssm
 from aws_cdk import aws_stepfunctions as sfn
 from constructs import Construct
 
-from fast_channels.core.events import DETAIL_TYPES, AssetFailed, AutopilotRun, LadderFailed, event_source
+from fast_channels.core.events import (
+    DETAIL_TYPES,
+    AssetFailed,
+    AutopilotRun,
+    CensusChanged,
+    LadderFailed,
+    event_source,
+)
 from fast_channels.core.tags import TAG_APP
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.alerts import (
@@ -32,6 +40,7 @@ from fast_channels.infra.constructs.alerts import (
     PERIOD,
     alarm,
     alert_topic,
+    alert_topic_name,
     cdn_error_alarm,
     cdn_metric,
     dead_letter_alarm,
@@ -52,6 +61,7 @@ __all__ = [
     "QUOTA_ALARM_RATIO",
     "RUNNING_CHANNELS_METRIC",
     "TRACE_QUERIES",
+    "CensusChanges",
     "ChannelCensus",
     "FastEventBus",
     "MediaObservability",
@@ -60,6 +70,7 @@ __all__ = [
     "cdn_error_alarm",
     "cdn_metric",
     "census_definition",
+    "census_parameter_name",
     "log_group_arn",
     "rule_log_group",
     "vended_log_group",
@@ -127,16 +138,36 @@ TRACE_QUERIES: Final[tuple[TraceQuery, ...]] = (
 (``CdnAccessLogs``), outside Logs Insights: query them with Athena by ``cmcd-session-id``."""
 
 
-def census_definition(prefix: str) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class CensusChanges:
+    """Where the census records its last count and announces that the count crossed zero (the ops module)."""
+
+    parameter: str
+    """Name of the SSM parameter holding the last count."""
+    event_bus: str
+    """Name of the deployment's event bus (``Census Changed`` events)."""
+
+
+def census_parameter_name(prefix: str) -> str:
+    """SSM parameter in which the census records the last count (with the ops module)."""
+    return f"/{prefix}/ops/running-channels"
+
+
+def census_definition(prefix: str, changes: CensusChanges | None = None) -> dict[str, Any]:
     """Express workflow counting this deployment's running Channel Assembly channels and publishing the count as
     ``FastChannels/RunningChannels{App=<prefix>}``.
 
     Channel Assembly publishes no metric while a channel runs without viewers, yet bills every running hour. A
     channel belongs to the deployment by its ``fast:app`` tag (IaC channels get it from the stage, agent channels
     from the tools; CONTRACTS §E): name prefixes would also match deployments whose prefix extends this one.
+
+    With ``changes`` the workflow then compares the count with the last one it recorded: when one of them is 0 and
+    the other is not, it puts a ``Census Changed`` event (``core.events.CensusChanged``) on the bus before it
+    records the new count, so a failed put is retried by the next census (consumers see each change at least
+    once). Without it the definition is v3.0's.
     """
     own = f"Tags.`{TAG_APP}` = '{prefix}'"
-    return {
+    definition: dict[str, Any] = {
         "Comment": f"Count the running channels tagged {TAG_APP}={prefix}",
         "QueryLanguage": "JSONata",
         "StartAt": "Start",
@@ -177,6 +208,63 @@ def census_definition(prefix: str) -> dict[str, Any]:
             },
         },
     }
+    if changes is not None:
+        publish = definition["States"]["PublishCount"]
+        del publish["End"]
+        publish["Next"] = "ReadLastCount"
+        definition["States"] |= _census_change_states(prefix, changes)
+    return definition
+
+
+def _census_change_states(prefix: str, changes: CensusChanges) -> dict[str, Any]:
+    """States after ``PublishCount`` that announce a zero crossing (:func:`census_definition`)."""
+    retry = [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 2, "MaxAttempts": 2}]
+    return {
+        "ReadLastCount": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+            "Arguments": {"Name": changes.parameter},
+            "Assign": {"previous": "{% $number($states.result.Parameter.Value) %}"},
+            "Retry": retry,
+            "Next": "Changed",
+        },
+        "Changed": {
+            "Type": "Choice",
+            "Choices": [
+                {"Condition": "{% ($running = 0) != ($previous = 0) %}", "Next": "PublishCensusChanged"},
+                {"Condition": "{% $running != $previous %}", "Next": "RecordCount"},
+            ],
+            "Default": "Unchanged",
+        },
+        "PublishCensusChanged": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::events:putEvents",
+            "Arguments": {
+                "Entries": [
+                    {
+                        "EventBusName": changes.event_bus,
+                        "Source": event_source(prefix),
+                        "DetailType": DETAIL_TYPES[CensusChanged],
+                        "Detail": {
+                            "running": "{% $running %}",
+                            "previous": "{% $previous %}",
+                            "correlation_id": "{% $states.context.Execution.Name %}",
+                        },
+                    }
+                ]
+            },
+            "Retry": retry,
+            "Next": "RecordCount",
+        },
+        "RecordCount": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+            "Arguments": {"Name": changes.parameter, "Value": "{% $string($running) %}", "Overwrite": True},
+            "Retry": retry,
+            "End": True,
+        },
+        "Unchanged": {"Type": "Succeed"},
+    }
 
 
 class ChannelCensus(Construct):
@@ -187,11 +275,17 @@ class ChannelCensus(Construct):
         prefix: deployment prefix (the ``fast:app`` tag value counted).
         log_retention: retention of the workflow's log group.
         removal_policy: what happens to that log group when the stack is deleted.
+        event_bus: put ``Census Changed`` on this bus when the count crosses zero (the ops module), recording the
+            last count in the SSM parameter :func:`census_parameter_name`; ``None`` (v3.0) publishes the metric
+            only.
 
     Attributes:
         state_machine: the census workflow.
         running_channels: its metric (maximum per period).
         channel_hours: running channel-hours per day (the census samples summed over a day).
+        last_count: the SSM parameter with the last count, when ``event_bus`` is given. CloudFormation creates it
+            at ``0`` and the census overwrites it; consumers read it as the current count (at most one census
+            interval old).
     """
 
     def __init__(
@@ -202,6 +296,7 @@ class ChannelCensus(Construct):
         prefix: str,
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
+        event_bus: FastEventBus | None = None,
     ) -> None:
         super().__init__(scope, id)
         log_group = logs.LogGroup(
@@ -211,11 +306,22 @@ class ChannelCensus(Construct):
             retention=log_retention,
             removal_policy=removal_policy,
         )
+        self.last_count: ssm.StringParameter | None = None
+        changes = None
+        if event_bus is not None:
+            changes = CensusChanges(parameter=census_parameter_name(prefix), event_bus=event_bus.name)
+            self.last_count = ssm.StringParameter(
+                self,
+                "LastCount",
+                parameter_name=changes.parameter,
+                string_value="0",
+                description=f"Running channels tagged {TAG_APP}={prefix} at the last census that saw a change",
+            )
         self.state_machine = sfn.StateMachine(
             self,
             "StateMachine",
             state_machine_type=sfn.StateMachineType.EXPRESS,
-            definition_body=sfn.DefinitionBody.from_string(json.dumps(census_definition(prefix))),
+            definition_body=sfn.DefinitionBody.from_string(json.dumps(census_definition(prefix, changes))),
             comment=f"Publishes the number of running channels tagged {TAG_APP}={prefix}",
             timeout=Duration.minutes(1),
             tracing_enabled=True,
@@ -235,6 +341,9 @@ class ChannelCensus(Construct):
                 "permissions (the latter is limited to the FastChannels namespace); X-Ray tracing needs '*'"
             },
         )
+        if event_bus is not None and self.last_count is not None:
+            allow(self.state_machine, ["ssm:GetParameter", "ssm:PutParameter"], [self.last_count.parameter_arn])
+            allow(self.state_machine, ["events:PutEvents"], [event_bus.bus.event_bus_arn])
         scheduler.Schedule(
             self,
             "Schedule",
@@ -289,6 +398,8 @@ class MediaObservability(Construct):
         dead_letter_queues: dead-letter queues to alarm on, by label (e.g. ``{"ingest": ...}``).
         channel_manifest_tps_quota: the account's "Channel Manifest Requests" quota.
         max_channel_hours_per_day: running channel-hours per day that raise the cost alarm.
+        census_changes: the census also announces zero crossings on ``event_bus`` (``Census Changed``; the ops
+            module).
 
     Attributes:
         topic: the alert topic.
@@ -316,15 +427,21 @@ class MediaObservability(Construct):
         dead_letter_queues: Mapping[str, sqs.IQueue] | None = None,
         channel_manifest_tps_quota: int = CHANNEL_MANIFEST_TPS_QUOTA,
         max_channel_hours_per_day: float = 24,
+        census_changes: bool = False,
     ) -> None:
         super().__init__(scope, id)
         self._prefix = prefix
         stack = Stack.of(self)
-        self.topic = alert_topic(self, "Topic", name=f"{prefix}-alerts", email=notification_email)
+        self.topic = alert_topic(self, "Topic", name=alert_topic_name(prefix), email=notification_email)
         self.mediaconvert_log_group = self._mediaconvert_job_logs(log_retention, removal_policy)
         self._forward_failures(event_bus.bus)
         self.census = ChannelCensus(
-            self, "Census", prefix=prefix, log_retention=log_retention, removal_policy=removal_policy
+            self,
+            "Census",
+            prefix=prefix,
+            log_retention=log_retention,
+            removal_policy=removal_policy,
+            event_bus=event_bus if census_changes else None,
         )
         self.alarms: dict[str, cw.Alarm] = {}
         for label, state_machine in state_machines.items():

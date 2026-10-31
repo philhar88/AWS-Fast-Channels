@@ -2,6 +2,8 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -10,6 +12,7 @@ import pytest
 from ag_ui.core import RunAgentInput
 from strands.types.exceptions import MCPClientInitializationError
 
+from fast_channels.agent.caps import CapReachedError, SpendCounter
 from fast_channels.agent.hooks import PENDING_APPROVALS_KEY, ToolGuard
 from fast_channels.agent.protocol import AgentRunError, Mode
 from fast_channels.agent.scheduler import Scheduler
@@ -335,3 +338,77 @@ def test_system_prompt_and_skills_reach_the_model(harness: HarnessFactory) -> No
     assert "FAST Channels operator assistant" in call["system_prompt"]
     assert "<name>scheduling</name>" in call["system_prompt"]  # AgentSkills discloses the skill catalogue
     assert {spec["name"] for spec in call["tool_specs"]} >= {"skills", "schedule___plan", "schedule___publish"}
+
+
+def test_every_run_logs_its_task_model_and_model_source(
+    harness: HarnessFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    h = harness([text("ok")])
+
+    with caplog.at_level("INFO", logger="fast_channels.agent.scheduler"):
+        run(h.run("hi"))
+
+    [started] = [r for r in caplog.records if r.getMessage() == "run started"]
+    fields = {key: getattr(started, key) for key in ("task", "model_id", "model_source", "mode")}
+    assert fields == {
+        "task": "scheduler.plan",
+        "model_id": "us.anthropic.claude-haiku-5-5",
+        "model_source": "default",  # the harness's settings name no SSM parameter
+        "mode": "chat",
+    }
+
+
+class FakeCounter:
+    """Records admissions and costs; refuses runs when ``refuse_runs``."""
+
+    def __init__(self, *, refuse_runs: bool = False) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self._refuse_runs = refuse_runs
+
+    def admit(self, task: str, cap_usd: Decimal, *, counter: str = "calls") -> None:
+        self.calls.append((f"admit {counter}", cap_usd))
+        if self._refuse_runs and counter == "runs":
+            raise CapReachedError(task, cap_usd)
+
+    def add(self, task: str, usd: Decimal) -> None:
+        self.calls.append(("add", usd))
+
+
+def test_a_run_past_the_cap_is_refused_before_any_model_call(capped_harness: HarnessFactory) -> None:
+    counter = FakeCounter(refuse_runs=True)
+    h = capped_harness(counter, [text("never")])
+
+    events = run(h.run("hi"))
+
+    assert kinds(events) == ["RUN_STARTED", "RUN_ERROR"]
+    assert events[-1]["code"] == "MODEL_CAP_REACHED"
+    assert "0.01 US dollars" in events[-1]["message"]
+    assert h.models == []
+    assert counter.calls == [("admit runs", Decimal("0.01"))]
+
+
+def test_every_model_call_is_admitted_and_costed(capped_harness: HarnessFactory) -> None:
+    counter = FakeCounter()
+    h = capped_harness(counter, [tool_use("t1", "catalog___search_content", {"text": "x"})], [text("ok")])
+
+    events = run(h.run("find x"))
+
+    assert kinds(events)[-1] == "RUN_FINISHED"
+    assert [name for name, _ in counter.calls] == ["admit runs", "admit calls", "add", "admit calls", "add"]
+    assert all(isinstance(usd, Decimal) and usd > 0 for name, usd in counter.calls if name == "add")
+
+
+def test_without_a_cap_nothing_is_counted(capped_harness: HarnessFactory) -> None:
+    counter = FakeCounter()
+    h = capped_harness(counter, [text("ok")], cap=None)
+
+    run(h.run("hi"))
+
+    assert counter.calls == []
+
+
+def test_the_deployed_counter_table_gets_a_spend_counter(settings: Settings) -> None:
+    deployed = replace(settings, model_counter_table="fast-models", alert_topic_arn="arn:aws:sns:us-east-1:1:t")
+
+    assert isinstance(Scheduler(deployed)._counter, SpendCounter)
+    assert Scheduler(settings)._counter is None

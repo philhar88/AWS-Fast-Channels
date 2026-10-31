@@ -40,6 +40,19 @@ class Plane(StrEnum):
     OPERATOR = "Operator"
 
 
+class Module(StrEnum):
+    """Stacks of optional modules (``modules.<name>.enabled``); a deployment has them only with the module on."""
+
+    OPS = "Ops"
+    RELEASE = "Release"
+    PDS = "Pds"
+    CRAWL = "Crawl"
+
+
+type StackKind = Plane | Module
+"""A stack of a deployment that scripts read."""
+
+
 OUTPUT_KEYS: Final[dict[Plane, tuple[str, ...]]] = {
     Plane.DATA: ("IngestBucketName", "MediaBucketName", "LogsBucketName", "LibraryTableName", "CatalogTableName"),
     Plane.MEDIA: (
@@ -64,8 +77,38 @@ OUTPUT_KEYS: Final[dict[Plane, tuple[str, ...]]] = {
         "ToolFunctions",
     ),
 }
-"""Outputs every deployment has. Two more exist only with what they describe: ``MemoryId`` (Data) with the agent
-plane, and ``AutopilotClientId`` (Operator) when an IaC channel has an ``autopilot_cron``."""
+"""Outputs every deployment has. More exist only with what they describe: ``MemoryId`` (Data) with the agent plane,
+``LakeBucketName``, ``LedgerTableName`` and ``LedgerArchiveBucketName`` (Data) with the ops module, and
+``AutopilotClientId`` (Operator) when an IaC channel has an ``autopilot_cron``."""
+MODULE_OUTPUT_KEYS: Final[dict[Module, tuple[str, ...]]] = {
+    Module.OPS: (
+        "LakeDatabase",
+        "LakeWorkGroup",
+        "AppConfigApplicationId",
+        "AppConfigEnvironmentId",
+        "LedgerStreamName",
+    ),
+    Module.RELEASE: (
+        "StateMachineArn",
+        "RotationStateMachineArn",
+        "BundleBucketName",
+        "BundleKey",
+        "StateTableName",
+        "DriftFunction",
+        "SiblingLogGroup",
+        "Siblings",
+    ),
+    Module.PDS: (
+        "PolicyFunction",
+        "OwnBookFunction",
+        "SelectFunction",
+        "DeliveryFunction",
+        "ConfigBucketName",
+        "TableName",
+    ),
+    Module.CRAWL: ("CatalogContextBucketName", "CatalogContextBaseUrl", "CatalogContextPublisherName"),
+}
+"""Outputs of each module stack."""
 
 
 class StackError(LookupError):
@@ -111,7 +154,7 @@ class Stage:
 
     prefix: str
     session: boto3.Session = field(default_factory=cdk_session)
-    _outputs: dict[Plane, dict[str, str]] = field(default_factory=dict, init=False, repr=False)
+    _outputs: dict[StackKind, dict[str, str]] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def of(cls, prefix: str | None = None, *, session: boto3.Session | None = None) -> Stage:
@@ -128,15 +171,15 @@ class Stage:
     def cloudformation(self) -> CloudFormationClient:
         return self.session.client("cloudformation", region_name=self.region)
 
-    def stack_name(self, plane: Plane) -> str:
+    def stack_name(self, plane: StackKind) -> str:
         return f"{stage_id(self.prefix)}-{plane}"
 
-    def status(self, plane: Plane) -> str | None:
+    def status(self, plane: StackKind) -> str | None:
         """``StackStatus`` of the plane's stack, or None when it does not exist."""
         stack = self._describe(plane)
         return None if stack is None else str(stack["StackStatus"])
 
-    def outputs(self, plane: Plane) -> dict[str, str]:
+    def outputs(self, plane: StackKind) -> dict[str, str]:
         """Every output of the plane's stack; raises StackError when the stack does not exist."""
         if plane not in self._outputs:
             stack = self._describe(plane)
@@ -148,7 +191,7 @@ class Stage:
             self._outputs[plane] = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
         return self._outputs[plane]
 
-    def output(self, plane: Plane, key: str) -> str:
+    def output(self, plane: StackKind, key: str) -> str:
         """One output value; raises StackError naming the outputs the stack does have."""
         outputs = self.outputs(plane)
         if key not in outputs:
@@ -157,7 +200,7 @@ class Stage:
             )
         return outputs[key]
 
-    def json_output(self, plane: Plane, key: str) -> Any:
+    def json_output(self, plane: StackKind, key: str) -> Any:
         """An output holding JSON (``Channels``, ``ToolFunctions``), decoded."""
         value = self.output(plane, key)
         try:
@@ -165,7 +208,7 @@ class Stage:
         except json.JSONDecodeError as error:
             raise StackError(f"output {key} of {self.stack_name(plane)} is not JSON: {error}") from None
 
-    def _describe(self, plane: Plane) -> dict[str, Any] | None:
+    def _describe(self, plane: StackKind) -> dict[str, Any] | None:
         try:
             [stack] = self.cloudformation.describe_stacks(StackName=self.stack_name(plane))["Stacks"]
         except ClientError as error:

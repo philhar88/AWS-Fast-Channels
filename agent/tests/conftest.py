@@ -1,4 +1,6 @@
+import json
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -44,5 +46,25 @@ def harness(settings: Settings, tmp_path: Path) -> HarnessFactory:
 
     def build(*turns: Sequence[Block], handlers: dict[str, Handler] | None = None) -> Harness:
         return Harness.build(settings, tmp_path, turns, handlers or default_handlers(), SESSION_ID)
+
+    return build
+
+
+@pytest.fixture
+def capped_harness(settings: Settings, tmp_path: Path) -> HarnessFactory:
+    """``capped_harness(counter, turn, ...)``: :func:`harness` deployed with the model registry, a $0.01 daily cap
+    (``cap=None``: none) and ``counter`` as the spend counter."""
+
+    def build(counter: object, *turns: Sequence[Block], cap: float | None = 0.01) -> Harness:
+        profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+        entry = {"model": settings.default_model_id, "daily_cap_usd": cap, "profile_arn": profile}
+        deployed = replace(
+            settings,
+            model_task_default=json.dumps(entry),
+            model_profile_arn=profile,
+            model_counter_table="fast-models",
+            allowed_models=frozenset({settings.default_model_id}),
+        )
+        return Harness.build(deployed, tmp_path, turns, default_handlers(), SESSION_ID, counter=counter)  # type: ignore[arg-type]
 
     return build

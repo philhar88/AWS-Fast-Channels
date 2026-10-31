@@ -5,9 +5,10 @@ from typing import Any
 import pytest
 from botocore.stub import ANY
 
+from fast_channels.core.demo_demand import DEMO_CREATIVES, DemoIndex, DemoRole, demo_index_key
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.specs import vast_key
-from fast_channels.core.timeline import BREAK_SLATE_GOPS, HOUSE_AD_GOPS
+from fast_channels.core.timeline import BREAK_SLATE_GOPS, DEMO_AD_GOPS, HOUSE_AD_GOPS
 from fast_channels.functions.ingest import kit
 from fast_channels.functions.ingest.kit import KitImages, child_name, kit_requests
 from fast_channels.functions.ingest.notify import EventDeliveryError
@@ -18,6 +19,7 @@ IMAGES = KitImages(
     break_slate="s3://ingest/brand/d/break.png",
     house_ads=("s3://ingest/brand/d/house-ad-1.png", "s3://ingest/brand/d/house-ad-2.png"),
 )
+DEMO = IMAGES.model_copy(update={"demo": {c.crid: f"s3://cdk-assets/{c.crid}-hash.png" for c in DEMO_CREATIVES}})
 VAST = "{http://www.iab.com/VAST}"
 
 
@@ -41,6 +43,17 @@ def test_kit_requests() -> None:
     assert requests[-1].generator is not None and requests[-1].generator.image_s3_uri == IMAGES.house_ads[1]
     with pytest.raises(ValueError, match="house-ad images"):
         kit_requests(STANDARD.version, IMAGES.model_copy(update={"house_ads": ()}), "kit-1")
+
+
+def test_demo_kits_also_encode_the_demo_creatives() -> None:
+    requests = kit_requests(STANDARD.version, DEMO, "kit-1")
+
+    demo = [r for r in requests if r.generator and r.generator.label.startswith("demo-")]
+    assert [r.generator.label for r in demo if r.generator] == [f"demo-{c.crid}" for c in DEMO_CREATIVES]
+    assert {(r.kind.value, r.generator.duration_gops) for r in demo if r.generator} == {("ad", DEMO_AD_GOPS)}
+    assert len(requests) == 1 + len(BREAK_SLATE_GOPS) + len(HOUSE_AD_GOPS) + len(DEMO_CREATIVES)
+    with pytest.raises(ValueError, match="demo stills missing"):
+        kit_requests(STANDARD.version, IMAGES.model_copy(update={"demo": {"sim1": "s3://b/sim1.png"}}), "kit-1")
 
 
 def expect_ladder_update(stubs: Any) -> None:
@@ -164,3 +177,52 @@ def test_undelivered_events_raise(stubs: Any, lambda_context: Any) -> None:
 def test_unknown_step(lambda_context: Any) -> None:
     with pytest.raises(ValueError, match="unknown step"):
         kit.handler({"step": "later"}, lambda_context)
+
+
+def test_ready_writes_the_demo_index_beside_the_vast_pod(
+    store: Any, stubs: Any, lambda_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = store()
+    monkeypatch.setattr(kit, "S3Store", lambda bucket: objects)
+    expect_ladder_update(stubs)
+    stubs["events"].add_response("put_events", {"FailedEntryCount": 0, "Entries": [{"EventId": "1"}]}, None)
+    house = [
+        child(f"house-ad-{n}", 30030, vod_source=None, creative={"creative_id": f"c{n}", "hls_uri": f"h{n}"})
+        for n in (1, 2)
+    ]
+    demo = [
+        child(
+            f"demo-{c.crid}",
+            30030,
+            vod_source=None,
+            creative={
+                "creative_id": f"demo-{c.crid}-x",
+                "hls_uri": f"https://media.example.com/ads/s/{c.crid}/main.m3u8",
+            },
+        )
+        for c in DEMO_CREATIVES
+    ]
+    assets = [child("filler", 30030), *(child(f"break-{g}", g * 2002) for g in BREAK_SLATE_GOPS), *house, *demo]
+    context = {
+        "ladder_version": STANDARD.version,
+        "job_template": "fast-standard_x",
+        "kit_fingerprint": "fp",
+        "correlation_id": "kit-1",
+        "width": 1920,
+        "height": 1080,
+        "pod_fill_ms": 120120,
+    }
+
+    result = kit.handler({"step": "ready", "kit": context, "assets": assets}, lambda_context)
+
+    key = demo_index_key(STANDARD.version)
+    assert result["demo_key"] == key
+    assert result["house_ads"] == ["c1", "c2"], "demo creatives never join the house pod"
+    index = DemoIndex.model_validate_json(objects.objects[key])
+    assert [c.crid for c in index.creatives] == [c.crid for c in DEMO_CREATIVES]
+    assert {c.creative_id for c in index.creatives if c.crid == "sim3"} == {"demo-sim3-x"}
+    assert [c.adomain for c in index.creatives if c.crid in ("sim3", "sim4")] == ["brand-c.example"] * 2
+    assert len({c.adomain for c in index.creatives if c.role is DemoRole.SIMULATOR}) == 7
+    assert {(c.duration_ms, c.width, c.height) for c in index.creatives} == {(30030, 1920, 1080)}
+    vast = ET.fromstring(objects.objects[vast_key(STANDARD.version)])
+    assert len(list(vast.iter(f"{VAST}Ad"))) == 4

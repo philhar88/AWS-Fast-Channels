@@ -28,11 +28,19 @@ npx cdk synth  '**' -c 'fast-channels.channels.iac=[{"name": "{prefix}-news", "o
 
 An invalid configuration fails synth with one line per problem and its path. The tables below are generated from the
 model's field documentation and list the model's defaults. The shipped `cdk.json` sets every field explicitly with
-those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default prefix).
+those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default prefix). A
+[stage file](#stages) holds the overrides of one named deployment.
+
+The `modules` section holds optional modules for ad monetization, which are being built on the
+`feature/agentic-monetization` branch. Every module is off by default, and with every module off the stacks are
+exactly v3.0.0's, which snapshot tests of every template check (`infra/tests/test_snapshots.py`). A module's
+settings are validated from the start, but enabling a module changes nothing until its code is merged.
+[modules.md](modules.md) describes each module, what of it is merged, how to turn it on, how it fails safe and what
+it costs.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `prefix` | str | `"fast"` | Name prefix of every resource and value of the `fast:app` tag. Change it to deploy several copies in one account and region. |
+| `prefix` | str | `"fast"` | Name prefix of every resource and value of the `fast:app` tag: 2-16 lowercase letters and digits, starting with a letter, without hyphens. Change it to deploy several copies in one account and region. Names and IAM grants are scoped by `<prefix>-*`, so a prefix with a hyphen (`fast-x`) would fall inside another's (`fast-*`). |
 | `removal` | `destroy` or `retain` | `"destroy"` | `destroy` (demo: delete data with the stacks) or `retain` (production: keep data, enable deletion and termination protection). |
 | `ladders.builtin` | list of str | `["standard"]` | Built-in ladders (`ladders/<name>.toml`), each deployed as a MediaConvert job template. Slate and house-ad kits are encoded at deploy time for the default ladder and every ladder an IaC channel uses. |
 | `ladders.default` | str | `"standard"` | Ladder used when a request names none (ingest, agent proposals); one of `builtin`. |
@@ -44,7 +52,7 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `delivery.certificate_arn` | str or null | `null` | ACM certificate in us-east-1 covering `content_domain` (CloudFront only accepts us-east-1 certificates). |
 | `delivery.price_class` | `PriceClass_All` or `PriceClass_200` or `PriceClass_100` | `"PriceClass_All"` | CloudFront price class. |
 | `delivery.cdns` | list of object | `[]` | Additional CDNs that chain to CloudFront; used to list alternative playback URLs. |
-| `ads.mode` | `preconditioned` or `external_vast` | `"preconditioned"` | `preconditioned`: House ads encoded on each channel's ladder and served as a static VAST pod: MediaTailor never transcodes. `external_vast`: A third-party ad decision server; MediaTailor transcodes its creatives. |
+| `ads.mode` | `preconditioned` or `external_vast` | `"preconditioned"` | `preconditioned`: House ads encoded on each channel's ladder and served as a static VAST pod: MediaTailor never transcodes. `external_vast`: A third-party ad decision server; MediaTailor transcodes its creatives to the channel's variants. |
 | `ads.url` | str | with `external_vast` | ADS URL; may contain documented MediaTailor dynamic variables such as `[session.uuid]`. |
 | `agent.enabled` | bool | `true` | Deploy the operator plane (Cognito, agent tools, Gateway, AgentCore Runtime and Memory, console). |
 | `agent.model` | str | `"{geo}.anthropic.claude-haiku-5-5"` | Default Bedrock model id or inference profile of the scheduler agent; one of `allowed_models`. `{geo}` stands for the deployment region's geography: `us` (US regions and ca-central-1), `eu` (Europe), `au` (ap-southeast-2) or `global` (elsewhere). |
@@ -52,17 +60,60 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `agent.admin_email` | str or null | `null` | Email of the first `fast-admins` user (invited by Cognito). Omit to create users yourself. |
 | `agent.machine_client` | bool | `false` | Create the confidential machine client (Cognito `client_credentials`) that integrations and the end-to-end tests use to call the agent and the Gateway; always created when a channel has an `autopilot_cron`. Anyone allowed `cognito-idp:DescribeUserPoolClient` can read its secret, so it is off by default. |
 | `agent.console_dev_url` | str or null | `null` | Local console dev server (`http://localhost:5173/`) to accept as a sign-in and sign-out redirect, for `npm run dev` against this deployment. Off by default: with it, any process listening on that port of an operator's machine can receive their authorization codes. |
-| `observability.transaction_search` | `off` or `enable` or `existing` | `"off"` | `enable` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans are then billed as CloudWatch Logs); `existing` if it is already on in this account and region. |
+| `observability.transaction_search` | `off` or `enable` or `existing` | `"off"` | `enable`: `make account-baseline` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans are then billed as CloudWatch Logs), once per account and region before `make deploy`; `existing` if it is already on in this account and region. Both turn on the agent's traces. `make deploy` and `make destroy` never touch the baseline stack. |
 | `observability.log_retention_days` | int | `7` | Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs). |
 | `observability.mediatailor_log_percent` | int | `100` | Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production). |
+| `observability.as_run` | `per_stage` or `shared` | `"per_stage"` | `per_stage`: the stage subscribes to the as-run log itself (CloudWatch Logs allows five subscriptions per log group, so at most five such stages per account and region); `shared`: the stage reads as-run events from the account's `FastChannels-AsRun` router through EventBridge, which `make as-run-router` deploys once per account and region (ADR-0032). |
 | `observability.capture_prompts` | bool or null | `null` | Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation. Default: only when `transaction_search` is not `off`, because the online evaluations score that content. |
 | `notifications.email` | str or null | `null` | Email subscribed to alarms and asset/ladder failure events. |
+| `modules.ops.enabled` | bool | `false` | Deploy the ops module: a per-stage data lake (S3, Glue, Athena), a hash-chained ledger of changes and money events, account quota alarms and detectors, runbooks and a probe canary. |
+| `modules.ops.lake_retention_days` | int | `30` | Days after which lake objects expire. |
+| `modules.ops.ledger_lock` | `off` or `governance` or `compliance` | `"governance"` | Object Lock mode of the ledger archive. `compliance` locks records even against the account root until their retention ends, so it needs `removal: retain`; use it only in production, after a retention review. |
+| `modules.ops.ledger_retention_days` | int | `30` | Object Lock retention of each ledger record; until it ends, `make destroy` cannot delete the archive (1 on development stages). |
+| `modules.ops.canary` | bool | `true` | Run a synthetic playback canary on the probe playback configuration of each running channel. |
+| `modules.models.enabled` | bool | `false` | Deploy the per-task model registry: one validated entry per LLM task, each with its own IAM role, application inference profile and spend cap. Entries choose only among `agent.allowed_models`. |
+| `modules.models.tasks` | map of str to object | `{"scheduler.plan": {"model": "{geo}.anthropic.claude-haiku-5-5", "route": "bedrock", "effort": {"chat": "low", "plan": "medium"}, "thinking": "adaptive", "max_tokens": 16000, "data_class": "operational", "daily_cap_usd": 5.0, "eval": "haiku-5-5-adaptive-16k"}}` | Registry entries by task name (dot-separated lowercase words); `scheduler.plan` is the scheduler agent. |
+| `modules.models.budgets_action` | bool | `false` | Add an AWS Budget per task role with a `daily_cap_usd` whose action, once the task's spend in the month reaches 31 days of the cap, denies the role's invocations of the task's inference profile (Budgets actions accept no daily budget). Needs `notifications.email` (AWS Budgets emails it when the action runs) and the `fast:task` cost allocation tag activated in the payer account. |
+| `modules.demand.enabled` | bool | `false` | Deploy programmatic demand: the Guidance for Deploying a Prebid Server on AWS as its own app at a pinned tag, with the repository's overlays and Prebid Server module, the guidance's bidder simulator in demo mode, census-gated scaling and an origin rule that admits only this stage's MediaTailor requests. |
+| `modules.demand.mode` | `own_book` or `demo` | `"demo"` | `own_book`: own-book bids only (no simulator); `demo`: the own book plus the guidance's bidder simulator, every number labelled simulated. |
+| `modules.demand.guidance_tag` | str | `"v1.4.0"` | Tag of the guidance, pinned with its commit and the hash of every file the overlays patch. |
+| `modules.demand.simulator` | `guidance_stack` or `lambda` | `"guidance_stack"` | `guidance_stack`: the guidance's simulator stack (its own VPC with two NAT gateways); `lambda`: the same handler as a Lambda target behind an internal load balancer in the Prebid Server VPC, which needs no VPC of its own. |
+| `modules.demand.tasks.min` | int | `2` | Prebid Server tasks while any channel runs (the tier minimum); 0 while none does. |
+| `modules.demand.tasks.max` | int | `4` | Most Prebid Server tasks (the ECS service maximum). |
+| `modules.demand.server_instances` | int | `2` | Prebid Server `server.http.server-instances`: one event loop per task vCPU. |
+| `modules.demand.dayparts` | list of object | `[]` | Scheduled task minimums ahead of busy dayparts; target tracking covers the time between them. |
+| `modules.demand.rate_limit_per_ip` | int | `20000` | Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any MediaTailor egress address's rate). |
+| `modules.demand.ad_server` | `none` \| `mock` \| `gam` \| `freewheel` | `none` | Experimental in v4.0.0. Where the monetized pair siblings send a break's ad request: `none` (the default: Prebid Server answers the pod as VAST), `mock` (the demo's GAM-like ad server), `gam` or `freewheel` (`ad_server_tag`). With an ad server, a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the release module. |
+| `modules.demand.ad_server_tag` | str | `""` | `gam` and `freewheel`: the publisher's VAST tag URL, with `{prebid}` once where the targeting key-values go (inside `cust_params` for GAM, in the key-value section for FreeWheel); empty otherwise. |
+| `modules.demand.pod_cache_seconds` | int | `300` | How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break. |
+| `modules.pds.enabled` | bool | `false` | Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per break. |
+| `modules.pds.policy_timeout_ms` | int | `50` | Timeout of the module's `/policy` call; on expiry the break is served from the own book alone. The PDS sidecar on the task's loopback answered 400-session break herds at p99 12-18 ms, max 36 ms at the module (ADR-0036). |
+| `modules.pds.policy_group_timeout_ms` | int | `75` | Timeout of the hook group that holds the `/policy` call (at least `policy_timeout_ms`). |
+| `modules.pds.select_timeout_ms` | int | `200` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. `/select` reserves the pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-125 ms); 400-session break herds measured p99 65-134 ms, max 111-166 ms at the module, and at 150 ms one pod in 400 fell back (ADR-0036). |
+| `modules.pds.select_group_timeout_ms` | int | `250` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
+| `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's environment). Each line's budget is split over the own book's budget shards; a line stops serving once reservations hold all of it. |
+| `modules.release.enabled` | bool | `false` | Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and is rolled back unattended on an alarm. |
+| `modules.release.channels` | list of str | `[]` | IaC channels to monetize (names from `channels.iac`; `{prefix}` is replaced as there). Their channel policy also admits the sibling configurations `<channel>-p-?`. Adding a channel widens its policy once, and the deployment refuses that while the channel runs: stop it first. |
+| `modules.release.strategy` | `demo` or `standard` or `large` | `"demo"` | `demo` (a simulated audience: 10% steps over 30 minutes), `standard` (up to 20,000 concurrent viewers: 10% steps over 3 hours) or `large` (exponential steps over 4 hours). |
+| `modules.release.lab_channel` | bool | `true` | Create the stopped lab channel `<prefix>-lab`, started only to smoke-test a release while the monetized channel is stopped. |
+| `modules.release.probe_sibling` | bool | `true` | Create a house-only probe playback configuration per channel, for canaries and smoke tests. |
+| `modules.release.secret_rotation_days` | int | `90` | Days between rotations of the origin secret that MediaTailor sends to the demand origin (a daily check rotates once they have passed). |
+| `modules.release.prefetch.enabled` | bool | `true` | Create a SINGLE prefetch schedule for each of the next breaks of a running monetized channel, so MediaTailor asks the ad decision server minutes ahead, spread over a window, and transcodes new creatives before they air. Retrieval transcodes bill whether or not the break airs; the horizon stays short and re-planned breaks lose their schedules. |
+| `modules.release.prefetch.siblings` | str[] | `["a", "b", "k", "l"]` | Sibling letters that get schedules: the general pair and the kids pair (the probe `z` never does). |
+| `modules.release.prefetch.horizon_breaks` | int | `20` | Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration). |
+| `modules.release.prefetch.retrieval_lead_seconds` | int | `150` | Retrieval opens this long before the break. |
+| `modules.release.prefetch.retrieval_end_seconds` | int | `30` | Retrieval closes this long before the break (transcodes take about 20 s). |
+| `modules.release.prefetch.shaping_window_seconds` | int | `90` | MediaTailor spreads the sessions' prefetch requests over this many seconds (`RETRIEVAL_WINDOW` traffic shaping); 0 sends them as the sessions arrive. |
+| `modules.crawl.enabled` | bool | `false` | Deploy show-level content metadata: a catalog context object per title, a cached PRE_ADS lookup by UPID and the OpenRTB `app.content` fields in each ad request, with a holdout that measures the uplift. |
+| `modules.crawl.pre_ads` | bool | `true` | Map the cached PRE_ADS lookup on the monetized playback configurations. |
+| `modules.crawl.holdout_percent` | int | `20` | Share of session-breaks that get no enrichment, the uplift measurement's control arm. |
+| `modules.crawl.publisher_domain` | str or null | `null` | Your domain (e.g. `example.com`), named as the registry of your catalog's content ids in the catalog context objects and in OpenRTB `content.data[].cids`; unset, the content id travels in `content.id` only. |
 
 `channels.iac[]`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `name` | str | required | Channel Assembly channel name. Must start with `<prefix>-`; `<prefix>-agent-` is reserved for channels the agent creates. `{prefix}` is replaced with the deployment prefix (the default is `{prefix}-demo`). |
+| `name` | str | required | Channel Assembly channel name. Must start with `<prefix>-`; `<prefix>-agent-` is reserved for channels the agent creates. `{prefix}` is replaced with the deployment prefix (the default is `{prefix}-demo`). Another channel's name plus `-p-...` (or `<prefix>-lab-p-...`) is refused, with the release module on or off: those are the release module's sibling names, and its IAM grants cover `<channel>-p-*`. So is `<prefix>-agent`, whose siblings would be agent-owned names. |
 | `ladder` | str | `"standard"` | Built-in ladder of every program, slate and house ad on this channel (one of `ladders.builtin`). |
 | `outputs` | list of str | `["hls"]` | Rendition profiles published as channel outputs (subset of `channel_assembly.package_profiles`). |
 | `tier` | `BASIC` or `STANDARD` | `"BASIC"` | Channel tier; billed per running hour, and channels are never started automatically. |
@@ -77,6 +128,40 @@ those values, plus one IaC channel, `{prefix}-demo` (`fast-demo` for the default
 | `manifest_base` | str | required | Base URL this CDN serves MediaTailor manifests under (chains to CloudFront). |
 | `content_base` | str | required | Base URL this CDN serves content segments under. |
 
+`modules.models.tasks.<task>`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `model` | str | required | Bedrock model id or inference profile; one of `agent.allowed_models`, with `{geo}` as there. |
+| `route` | `bedrock` | `"bedrock"` | `bedrock`: the Converse API with the task's own role and application inference profile. |
+| `effort` | `low` or `medium` or `high` or `max` or object | `{"chat": "low", "plan": "medium"}` | Reasoning effort: one level, or one per mode (`chat`, `plan`) for the scheduler agent. |
+| `thinking` | `adaptive` or `disabled` | `"adaptive"` | Extended thinking; fixed per task, because changing it per call rewrites the prompt cache. |
+| `max_tokens` | int | `16000` | Output token budget per model call. |
+| `data_class` | `operational` or `viewer` | `"operational"` | `viewer` if the task's prompts carry viewer data, which keeps the model on a geographic inference profile (never `global.`); swapping such a task's model needs human approval. |
+| `daily_cap_usd` | float or null | `null` | Daily model spend at which the task's token counter refuses further calls (about ten times expected use); `null` sets no cap. |
+| `eval` | str or null | `null` | Key of the passing evaluation record that qualifies `model` for this task. |
+
+`modules.demand.dayparts[]`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `cron` | str | required | Application Auto Scaling `cron(minutes hours day-of-month month day-of-week year)` expression (UTC); fire it at least 10 minutes before the daypart's first break. |
+| `min` | int | required | Task minimum from then on (between `tasks.min` and `tasks.max`). |
+
+`modules.pds.demo_lines[]`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `id` | str | required | Line id, unique among `demo_lines`. |
+| `advertiser` | str | required | Advertiser name (decision records and reports). |
+| `adomain` | str | required | Advertiser domain (OpenRTB `adomain`); pods never repeat one. |
+| `cat` | list of str | `[]` | IAB categories of the line's ads (OpenRTB `cat`). |
+| `creatives` | list of str | required | Creative ids (`crid`) of the direct demo creatives the line serves (`direct1`, `direct2`); a creative serves at most one line. |
+| `cpm` | decimal | required | Price per 1,000 impressions, US dollars (simulated). |
+| `budget` | decimal | required | Total budget, US dollars (simulated); the line stops once reservations reach it. |
+| `caps.per_session` | int or null | `null` | Most impressions of the line per playback session; `null`: uncapped. |
+| `tier0` | bool | `false` | A guaranteed line: placed first in a pod, ahead of any bid. |
+
 <details>
 <summary>Regenerate the tables after changing a field's documentation</summary>
 
@@ -88,10 +173,17 @@ from enum import Enum
 from types import NoneType, UnionType
 from typing import Annotated, Literal, get_args, get_origin
 
-from pydantic import BaseModel
-from pydantic_core import PydanticUndefined
+from pydantic import BaseModel, TypeAdapter
+from pydantic_core import to_jsonable_python
 
-from fast_channels.infra.config import CdnEndpoint, ChannelConfig, FastChannelsConfig
+from fast_channels.infra.config import (
+    CdnEndpoint,
+    ChannelConfig,
+    DemandDaypart,
+    DemoLine,
+    FastChannelsConfig,
+    ModelTask,
+)
 
 
 def text(doc):
@@ -104,14 +196,20 @@ def kind(t):
         return " or ".join(kind(a) for a in get_args(t) if a is not NoneType) + null
     if get_origin(t) is tuple:
         return f"list of {kind(get_args(t)[0])}"
+    if get_origin(t) is dict:
+        return f"map of {kind(get_args(t)[0])} to {kind(get_args(t)[1])}"
     if issubclass(t, Enum):
         return " or ".join(f"`{m.value}`" for m in t)
-    return "object" if issubclass(t, BaseModel) else t.__name__
+    return "object" if issubclass(t, BaseModel) else t.__name__.lower()
 
 
-def default(value):
-    value = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
-    return "required" if value is PydanticUndefined else f"`{json.dumps(value)}`"
+def default(field):
+    if field.is_required():
+        return "required"
+    value = field.get_default(call_default_factory=True)
+    if field.default_factory:  # a factory may return raw values, validated like a value from cdk.json
+        value = TypeAdapter(field.annotation).validate_python(value)
+    return f"`{json.dumps(to_jsonable_python(value))}`"
 
 
 def rows(model, path=""):
@@ -121,7 +219,7 @@ def rows(model, path=""):
             variants = {get_args(v.model_fields["mode"].annotation)[0].value: v for v in get_args(get_args(t)[0])}
             modes = " or ".join(f"`{mode}`" for mode in variants)
             docs = " ".join(f"`{mode}`: {text(v.__doc__)}" for mode, v in variants.items())
-            yield f"| `{key}.mode` | {modes} | {default(field.default.mode.value)} | {docs} |"
+            yield f"| `{key}.mode` | {modes} | `{json.dumps(field.default.mode.value)}` | {docs} |"
             for mode, v in variants.items():
                 for sub, f in v.model_fields.items():
                     if get_origin(f.annotation) is not Literal:
@@ -129,10 +227,18 @@ def rows(model, path=""):
         elif isinstance(t, type) and issubclass(t, BaseModel) and not field.description:  # a section: its fields
             yield from rows(t, f"{key}.")
         else:
-            yield f"| `{key}` | {kind(t)} | {default(field.default)} | {text(field.description)} |"
+            yield f"| `{key}` | {kind(t)} | {default(field)} | {text(field.description)} |"
 
 
-for title, model in [("", FastChannelsConfig), ("channels.iac[]", ChannelConfig), ("delivery.cdns[]", CdnEndpoint)]:
+tables = [
+    ("", FastChannelsConfig),
+    ("channels.iac[]", ChannelConfig),
+    ("delivery.cdns[]", CdnEndpoint),
+    ("modules.models.tasks.<task>", ModelTask),
+    ("modules.demand.dayparts[]", DemandDaypart),
+    ("modules.pds.demo_lines[]", DemoLine),
+]
+for title, model in tables:
     heading = [f"`{title}`:", ""] if title else []
     print(*heading, "| Key | Type | Default | Description |", "|---|---|---|---|", *rows(model), "", sep="\n")
 EOF
@@ -153,10 +259,29 @@ Notes:
   `ladders.builtin` get their job template only.
 - `delivery.cdns` adds per-CDN playback URLs to `channels___get_channel` and the console; it does not change
   what MediaTailor or Channel Assembly write ([multi-CDN](delivery-and-multi-cdn.md#multi-cdn-in-v30)).
+- `prefix` has no hyphen. A deployment's resource names, IAM grants, Cedar policies, subscription filters and
+  event patterns are scoped by `<prefix>-*` (its MediaTailor Functions by `<prefix>_*`). With a hyphen, the
+  deployment `fast` would also cover a deployment `fast-x`. With `demand` on, the prefix is at most 10 characters,
+  because it is the qualifier of the guidance's CDK bootstrap.
 - Cross-field validation: channel outputs ⊆ `package_profiles`; `external_vast` requires a URL with documented ADS
   variables only; the region must offer MediaTailor Channel Assembly and MediaConvert (and AgentCore when
   `agent.enabled`); geographic inference profiles must be callable from the region; `log_retention_days` must be a
   CloudWatch retention value.
+- Module rules: an enabled `demand` needs `ops`; `pds` needs `ops` and `demand`; `release` needs `ops`, `demand`
+  and `pds`; `crawl` needs `pds` and `release`. `release.channels` ⊆ the IaC channel names (after `{prefix}` is
+  replaced). With `release` on and `lab_channel` true, no IaC channel may be called `<prefix>-lab`. Whatever the
+  modules, no IaC channel may be named like another channel's or `<prefix>-lab`'s siblings (`<channel>-p-...`),
+  or `<prefix>-agent`. With `ops` on, `ledger_lock: compliance` needs `removal: retain`. With `models` on, every
+  task's model is one of `agent.allowed_models` and callable from the region, a task with `data_class: viewer`
+  never names a `global.`
+  profile (also when `{geo}` resolves to `global`), with `agent.enabled` the registry holds the scheduler agent's
+  `scheduler.plan`, every task's `eval` names a passing eval record for its model and settings
+  (`evals/records/<task>/<key>.json`, [agent.md](agent.md#model-registry)), and `budgets_action` needs
+  `notifications.email`. Within a module: `demand.tasks.min` ≤ `tasks.max`, with each
+  daypart's `min` between them; each PDS hook group timeout at least its call's timeout; unique demo line ids and
+  release channels. Unknown keys are refused at every level.
+- Model-registry task names contain dots, which a dotted override path would split: override a task with an object,
+  which is deep-merged, e.g. `-c 'fast-channels.modules.models.tasks={"scheduler.plan": {"max_tokens": 8000}}'`.
 - `{geo}` in model ids resolves at synth time: `us.` in US regions and ca-central-1, `eu.` in Europe, `au.` in
   ap-southeast-2, `global.` elsewhere (APAC regions have no `apac.` profile of the 5.5 models), so no region needs a
   model override.
@@ -184,6 +309,77 @@ overrides go to the CDK CLI directly, for example
 
 `make synth` and `make diff` show what would change. Every synth runs cdk-nag (AWS Solutions and Serverless packs) and
 fails on unacknowledged findings.
+
+### Stages
+
+A stage is a named deployment whose overrides live in a file, `stages/<name>.json`: a partial `fast-channels` block
+that names its `prefix` and states only what differs from `cdk.json`. Each top-level key is passed as
+`-c fast-channels.<key>=<JSON>` and deep-merged into `cdk.json`'s block, so `{"modules": {"ops": {"enabled": true}}}`
+turns one module on and keeps the rest of `cdk.json`. `STAGE=<name>` selects a stage for `make synth`, `diff`,
+`deploy` and `destroy` (as CDK context) and for `make seed` and `trace` (its prefix):
+
+```bash
+make synth STAGE=fastm                       # cdk-nag included
+make deploy STAGE=fastm                      # FastChannels-fastm-Data, -Media, -Ops, -Models, -Operator, -Crawl,
+                                             # -DemandEdge, -DemandBuild
+make deploy-demand STAGE=fastm               # the guidance, -Demand and -Pds (demand module)
+make seed STAGE=fastm SEED_ARGS="--wait --yes"
+make destroy STAGE=fastm
+make deploy STAGE=fastci PREFIX=fastcipr7    # the same stage under another prefix
+uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage becomes
+```
+
+A missing or malformed stage file stops `make` before any command runs. The repository ships three stages for the
+modules' development, each with every module on: `fastm`, `fastci` (the end-to-end tests' default prefix), and
+`fastciads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
+([docs/demand.md](demand.md#deploy-and-destroy)).
+
+Each deployment subscribes to the account's as-run log, which allows five subscriptions, so an account and region
+holds at most five deployments with the default `observability.as_run: per_stage`. The stages read the account's
+shared as-run router instead (`as_run: shared`, [ADR-0032](adr/0032-shared-as-run-router.md)), so they take no
+subscription. Deploy the router once per account and region, after any deployment's Media stack (which creates the
+as-run log group):
+
+```bash
+make as-run-router STAGE=fastm   # the stack FastChannels-AsRun, with fastm's log retention and alert email
+```
+
+`make deploy` and `make destroy` never select the router stack. It is termination protected. Delete it only once no
+deployment in the account and region is `shared`: turn termination protection off and delete the stack.
+
+The account baseline (`FastChannels-AccountBaseline`, CloudWatch Transaction Search) works the same way. With
+`observability.transaction_search: enable`, deploy it once per account and region before the deployment, whose
+trace deliveries need it ([observability.md](observability.md#transaction-search)):
+
+```bash
+make account-baseline STAGE=fastm   # refused unless the stage's transaction_search is enable
+```
+
+`make deploy` and `make destroy` never select it either, so its termination protection never stops a teardown
+part-way.
+
+A module with merged code adds its own stack after the ones it builds on, and may change theirs
+([deploy and destroy order](modules.md#deploy-and-destroy-order)):
+
+| Module | Adds | Changes |
+|---|---|---|
+| `ops` | `FastChannels-<prefix>-Ops`: the lake's Glue database `<prefix>_lake` (tables and views), the Athena workgroup `<prefix>-lake`, the lake copies of the IaC playback configurations' MediaTailor logs, the ledger writer with its Firehose stream, dead-letter queue and alarms, the account quota and hook alarms, the zero-ad-sessions detector, the `ListAlerts` poller, the runbooks `<prefix>-runbook-<id>`, the probe canary `<prefix>-probe`, and the AppConfig application `<prefix>-fast` with environment `<prefix>` and the feature flags `flags` ([observability.md](observability.md#lake), [ledger](observability.md#ledger), [runbooks](observability.md#runbooks-flags-and-the-probe)) | Data: the lake bucket, the ledger table and the ledger archive (outputs `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`). Media: the channel census also puts `Census Changed` events and keeps its last count in `/<prefix>/ops/running-channels`; the as-run reconciler also marks breaks `AIRED` from `AdBreakStart`, a sweep marks the rest `UNAIRED`, and the JSON EPG feed's breaks carry their `event_id` and `upid` ([channel-assembly.md](channel-assembly.md#the-schedule-of-record-and-the-epg)) |
+| `models` | `FastChannels-<prefix>-Models`: per task an application inference profile `<prefix>-<task>` and a registry entry `/<prefix>/models/tasks/<task>`, the spend-counter table `<prefix>-models`, and with `budgets_action` an AWS Budget and action per task role ([agent.md](agent.md#model-registry)) | Operator: the scheduler agent reads its `scheduler.plan` entry instead of the ModelSpec parameter (which is not created), and its role may invoke only that task's profile |
+| `demand` | `FastChannels-<prefix>-DemandEdge` (us-east-1: the two origin secrets and the WAF rule group) and `-DemandBuild` (the image repository and build project, the guidance bootstrap's execution policy). `make deploy-demand` then adds the guidance's own bootstrap `<prefix>-cdk-bootstrap`, the guidance `<prefix>-pbs` (and `<prefix>-pbs-sim` with the `guidance_stack` simulator), the SSM contract `/<prefix>/demand/*` and `FastChannels-<prefix>-Demand` (the private zone, the census gate, dayparts and warm-up, the `lambda` simulator, and with `ad_server: mock` the mock ad server). With an `ad_server`, the guidance's Prebid Cache function gets its memory and provisioned concurrency ([demand.md](demand.md#deploy-and-destroy)) | Media: in demo mode each ladder kit also encodes the ten demo creatives, once |
+| `pds` | With `make deploy-demand`, the PDS sidecar in the guidance's Prebid Server task and `FastChannels-<prefix>-Pds` beside the guidance ([pds.md](pds.md#the-service)) | Data: the table `<prefix>-pds`, the private config bucket and the SSM parameters `/<prefix>/pds/config-bucket` and `/<prefix>/pds/lake-bucket` (outputs `PdsTableName`, `PdsConfigBucketName`) |
+| `release` | `FastChannels-<prefix>-Release`, deployed by `make deploy-demand` after the Pds stack: the Release Controller with its state machine `<prefix>-release`, state table, bundle bucket, drift check and alarm `<prefix>-release-drift`, the siblings `<channel>-p-a/b/z` it creates at run time, their KMS-encrypted log group `/aws/vendedlogs/mediatailor/<prefix>-release`, hook alarms and zero-ad-sessions detector, and the playback plans `/plan/playback/<channel>.json`, the release pointer (AppConfig profile `release`, its strategy and the composite alarm `<prefix>-release-candidate`), the smoke test and runbook R1 ([release-controller.md](release-controller.md)) | Media: the SSM parameters `/<prefix>/release/*` the Release stack reads, the sibling pattern in the monetized channels' policies, and the stopped lab channel `<prefix>-lab` (`lab_channel`). Ops: the AppConfig environment monitors `<prefix>-release-candidate`. Operator: `/<prefix>/release/tool-functions`. Pds: `/<prefix>/pds/delivery-function` and `policy-log-group`. Every stack: the managed policy `ReleaseGuard`, attached to each role, denies the writes only the controller may make |
+| `crawl` | `FastChannels-<prefix>-Crawl`: the catalog context publisher, its daily sweep and its dead-letter alarm ([content-enrichment.md](content-enrichment.md#the-context-publisher)) | — |
+
+With the default `observability.as_run: per_stage`, at most five stages can exist per account and region: each Media
+stack subscribes its as-run reconciler to the account-shared log group `MediaTailor/Channel/AsRunLog`, and CloudWatch
+Logs allows five subscription filters per log group (quota `L-87E7D306`, not adjustable). `shared` stages take none
+(above). [modules.md](modules.md#account-level-limits-and-teardown-residue) lists every limit that stages share in
+an account, and what a teardown leaves behind.
+
+With `modules.demand` on, `make deploy` deploys the repository's stacks only. The Prebid Server guidance, its own CDK
+bootstrap and images, and the stacks that need the guidance (Demand, then Pds and Release) follow with
+`make deploy-demand STAGE=<name>` ([demand.md](demand.md#deploy-and-destroy)). `make destroy-demand` removes them,
+Release first, before `make destroy`. [modules.md](modules.md#deploy-and-destroy-order) gives the whole order.
 
 ### Updates
 
@@ -213,13 +409,39 @@ Draining a channel deletes only the programs Channel Assembly can still hold: it
 library programs from a day ago on, never the whole program history. Each pass stops before its function times out
 and reports what is left; the next poll, or the next `make destroy`, resumes where it stopped.
 
-- With `removal: destroy` (default) buckets are emptied and deleted, tables and Memory deleted.
+- With `removal: destroy` (default) buckets are emptied and deleted, tables and Memory deleted. The Ops stack goes
+  before Media and Data: its lake copies' deliveries first, then the Glue tables, views and workgroup (with its query
+  history); the lake bucket (every version of every object) and the ledger table go with the Data stack.
+- The ops module's ledger archive is **retained** whenever `modules.ops.ledger_lock` is `governance` or `compliance`
+  (its records are under S3 Object Lock, and a ledger outlives the stack that wrote it). After `make destroy`,
+  `uv run python scripts/ledger_verify.py purge --prefix <prefix>` lists it and `--apply` deletes the versions whose
+  retention has passed and then the bucket; in governance mode `--apply --bypass-governance` deletes it at once
+  (`s3:BypassGovernanceRetention` needed). Compliance-mode records cannot be deleted by anyone before their retention
+  ends, which is why `compliance` needs `removal: retain`. Development stages use `ledger_retention_days: 1`.
 - With `removal: retain` the stacks are termination protected and the Data stack's resources are retained; the
   reaper does nothing, so runtime resources stay too. To delete such a deployment, turn termination protection
   off, run `make destroy` (the Media stack stops at `DELETE_FAILED` while its source location still holds VOD
   sources), then `scripts/cleanup.py --apply` and `make destroy` again.
-- Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search), the account-shared
-  as-run log group `MediaTailor/Channel/AsRunLog`, MediaConvert job history and CDK bootstrap assets.
+- Never deleted with a deployment: the `FastChannels-AccountBaseline` stack (Transaction Search, of `make
+  account-baseline`), the `FastChannels-AsRun` stack (the as-run router of `make as-run-router`), the account-shared
+  as-run log group `MediaTailor/Channel/AsRunLog`, MediaConvert job history, CDK bootstrap assets and, with the ops
+  module, a locked ledger archive (above) and the probe canary's function logs `/aws/lambda/cwsyn-<prefix>-probe-*`
+  (Synthetics creates them at the canary's first run and deletes only the function; delete the group by hand).
+- Left after every `make destroy`, modules or not: two log groups of CDK's log-retention provider, which deleting the
+  Operator stack recreates and no stack owns, one of them without retention:
+  `FastChannels-<prefix>-Operator-LogRetention…ResourceLogs…` and
+  `/aws/lambda/FastChannels-<prefix>-Oper-LogRetention…`.
+  Find them with `aws logs describe-log-groups --log-group-name-pattern LogRetention` and delete both by hand with
+  `aws logs delete-log-group`.
+- With the demand module, `make destroy-demand` leaves only the guidance's six KMS keys, scheduled for deletion with
+  the 7-day minimum ([demand.md](demand.md#deploy-and-destroy)).
+- With the release module, deleting the Release stack (`make destroy-demand`) first runs its reaper. The reaper deletes:
+  - the siblings, with their prefetch schedules and log deliveries;
+  - the Functions;
+  - the playback plans.
+
+  Each deletion is checked against the resource's ownership tag. The module's KMS key for the siblings' logs is then
+  scheduled for deletion, with CDK's default 30-day window ([release-controller.md](release-controller.md#deploy-and-destroy)).
 - If the reaper fails on its first attempt (the error is shown in the stack events), run `make destroy` again; it
   resumes where it stopped.
 - When the reaper cannot finish (a VOD source locked by orphaned programs, an interrupted destroy, a stack deleted
@@ -287,7 +509,8 @@ Defaults per account and region; request increases in Service Quotas before you 
 | AgentCore Runtime | New sessions; active sessions | 25 TPS; 5,000 (us-east-1) | |
 | Amazon Bedrock | Tokens and requests per minute per model | Account specific | Check before running many autopilots |
 | CloudFront | Custom cache and response headers policies | 20 each per account | The distribution uses no custom cache policy and one response headers policy |
-| CloudWatch Logs | Subscription filters per log group | 2 | At most two deployments per account and region reconcile the shared as-run log |
+| CloudWatch Logs | Subscription filters per log group | 5 (`L-87E7D306`, not adjustable) | The as-run log: one per `per_stage` deployment and one for the as-run router; `shared` deployments take none (ADR-0032) |
+| Amazon VPC | VPCs; Elastic IP addresses (per region) | 5; 5 | Demand module only: the guidance's VPC with two NAT gateways (2 addresses), and with the default `guidance_stack` simulator a second VPC with two more ([modules.md](modules.md#account-level-limits-and-teardown-residue)) |
 | Cognito | Emails with the default sender | Low daily limit | Configure Amazon SES for production |
 
 ## Costs
@@ -314,6 +537,9 @@ What costs money while nobody watches: running channels (stop them), CloudWatch 
 the CloudFront, AgentCore and DynamoDB request charges of whatever still calls them. An idle deployment with stopped
 channels costs a few dollars a month. A 24/7 BASIC channel adds about $73 a month before ads and delivery.
 
+The optional modules have their own costs ([modules.md](modules.md#what-the-modules-cost)). The largest is the demand
+module's: a stage with the Prebid Server guidance deployed costs about $120–150 a month with every channel stopped.
+
 ## Security model
 
 | Layer | Control |
@@ -326,11 +552,15 @@ channels costs a few dollars a month. A 24/7 BASIC channel adds about $73 a mont
 | Agent | The agent forwards the operator's own token; the Gateway authorises every call with Cedar in `ENFORCE` mode; approval-gated tools wait for a human; no role may change the Gateway or its policies (explicit `Deny`). The Gateway's service role trusts only this deployment's Gateway (`aws:SourceAccount`, `aws:SourceArn`), and the Runtime role may read no object of the CDK assets bucket but its own code |
 | Autopilot credential | Exists only when an IaC channel has an `autopilot_cron`. Cognito returns the machine client's secret from `DescribeUserPoolClient`, which the AWS managed `ReadOnlyAccess` and `SecurityAudit` policies grant, so read-only access to the account is enough to mint autopilot tokens and plan and publish on the autopilot's channels. Deny `cognito-idp:DescribeUserPoolClient` on the user pool to every principal but the autopilot function's role (an SCP or permissions boundary) |
 | Tools (IAM) | One least-privilege role per tool target; destructive MediaTailor actions only on `<prefix>-agent-*`; creation calls only with this deployment's `fast:app` request tag; the channels tool may create one IAM role only, MediaTailor's service-linked role, without which MediaTailor refuses to turn on an agent channel's logs ([agent.md](agent.md#authorisation-cognito-groups-and-cedar)); item-level DynamoDB grants; the reaper reaches only `<prefix>-*` names |
-| Model | Invocation limited to `agent.allowed_models`; the runtime-mutable ModelSpec cannot name other models or providers; no `temperature` |
+| Model | Invocation limited to `agent.allowed_models`; the runtime-mutable ModelSpec and model-registry entries cannot name other models or providers; no `temperature`. With `modules.models` each task's role may invoke only the task's application inference profile, registry tasks with viewer data stay on a geographic inference profile, and a daily spend cap per task stops a runaway |
 | Prompt logging | Message content (operator prompts, the system prompt, tool results, model replies) stays out of the Runtime's logs and spans unless `observability.capture_prompts` is on, which it is by default only with `transaction_search` (online evaluations score that content). With it, anyone who can read `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` reads every operator's conversation ([observability.md](observability.md#what-the-agent-runtime-records)) |
 | Audit | The Gateway passes no caller identity to the tools. Every call of a write or destructive tool logs a `tool audit` record (tool, arguments and outcome, with the call's correlation id, Gateway request id and X-Ray trace id) in its function's log group, and the Gateway's `APPLICATION_LOGS` record each request; for agent runs the Runtime's `run started` record names the actor of the same correlation id (the session id). Correlation and trace ids are chosen by the caller, and console calls straight to the Gateway (Start, Stop) carry no actor, so these records link calls to conversations but do not prove who made them ([observability.md](observability.md#audit-trail)) |
 | Alerts | EventBridge publishes failure events to `<prefix>-alerts` through a rule-scoped role; the topic admits no service principal |
 | Prompt injection | Tool results are treated as data by the prompt and never mined into long-term memory (`extractionMode=SKIP`); Cedar and approvals apply whatever the model decides |
+| Demand origin (`demand`) | The guidance's web ACL references the stage's WAF rule group first. The rule group blocks `/openrtb2/*` without one of the stage's two origin secrets. It blocks every other path but `/openrtb2/auction` and `/status` (and, with an ad server, `GET` and `HEAD /cache?uuid=<uuid4>`), and IPs above `rate_limit_per_ip`. The siblings send the secret, read when a release applies. The Release Controller rotates it with both values admitted ([release-controller.md](release-controller.md#origin-secret-rotation)). The guidance's log analytics stays off: its reporter logs every request header, the ticket and the secret included |
+| Pod Decision Service (`pds`) | The sidecar listens only on the task's loopback (`127.0.0.1:8090`). Its grants are item-level (`BUDGET#`, `CAP#` and `RES#` items, the ledger's `pds/*` chains), and its snapshot sits in a private config bucket that no CDN serves. The viewer-IP rule ignores client-set `X-Forwarded-For` entries, and an identity failure zeroes every viewer parameter ([pds.md](pds.md#privacy-modes)) |
+| Monetized configurations (`release`) | Every other role of the stage is explicitly denied the controller's writes on the siblings, their prefetch schedules, the monetized channels and the deployment's Functions (managed policy `ReleaseGuard`). The siblings' log deliveries leave out the fields that can hold the origin secret or a ticket. Their log group has its own KMS key, and the guard denies reading it to every role of the stage but its named readers ([release-controller.md](release-controller.md#the-ownership-guard)) |
+| Ledger and lake (`ops`) | Ledger entries are hash-chained per chain and archived under S3 Object Lock; `scripts/ledger_verify.py verify` checks every chain. The lake reads the CloudFront logs without `c-ip`, `cs-uri-query` and `x-forwarded-for`, and copies of the MediaTailor logs without the fields that can hold the origin secret or a ticket ([observability.md](observability.md#lake)) |
 | Code | No public Lambda function URLs; cdk-nag AwsSolutions and Serverless on every synth with per-construct acknowledgements and reasons |
 
 Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
@@ -345,7 +575,8 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
   acknowledgements).
 - Cognito: require MFA, send email through Amazon SES, consider the Plus feature plan for threat protection, and keep
   `fast-admins` small.
-- Restrict who may call `ssm:PutParameter` on `/<prefix>/agent/model-spec` and trim `agent.allowed_models`.
+- Restrict who may call `ssm:PutParameter` on `/<prefix>/agent/model-spec` (and `/<prefix>/models/tasks/*` with
+  `modules.models`) and trim `agent.allowed_models`.
 - With an autopilot, deny `cognito-idp:DescribeUserPoolClient` on the user pool to everyone but the autopilot's role
   (see [Security model](#security-model)).
 - Keep message content out of the Runtime's logs outside debugging sessions (with Transaction Search, set
@@ -374,6 +605,8 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | Deletion fails at `RuntimeResourceReaper` | A non-transient error on its first, synchronous attempt | Fix the error in the stack events and run `make destroy` again |
 | Deletion fails at a channel's lifecycle resource: `deleted <n> programs of <channel>, <m> remain` | The drain ran out of time before every program was deleted | Run `make destroy` again; it resumes with the programs that remain |
 | Deletion fails on the source location or a slate | A runtime resource created outside the tools (e.g. a channel created by hand uses the filler slate) | Delete that resource, or run `scripts/cleanup.py --apply`, then destroy again |
+| The Media stack fails at `AWS::Logs::SubscriptionFilter` with `ServiceLimitExceeded` on `MediaTailor/Channel/AsRunLog` | Five deployments (or four and the as-run router) already subscribe to the account's as-run log | Use `observability.as_run: shared` with the as-run router ([Stages](#stages)), or destroy a `per_stage` deployment |
+| `make deploy-demand` fails on the guidance: AWS::Glue::Database `Database already exists` | Another guidance in the account and region was deployed before overlay O1 prefixed its Glue database name | Run `make deploy-demand` for that stage from the current code (CloudFormation replaces its database with the prefixed name), then retry |
 
 ### Ingest
 
@@ -406,6 +639,8 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | Filler plays instead of programs | No program at that time, or a block started in the past | `schedule___get_schedule` shows the gaps; plan from now + 10 minutes |
 | SSAI 504 for a few minutes after a channel change | Channel policy propagation | Wait |
 | First ad break shows only slate | MediaTailor imports a new creative (`NEW_CREATIVE`) | Expected for the first break of each creative |
+| Breaks outside 30-120 s get the slate (`PodsRejectedOutOfRange` in `FastChannels/PrebidServer/<prefix>`; the module's line says `REJECTED OUT_OF_RANGE`) | The fast-ctv module builds a pod only for 30 to 120 s (`hooks.fast-ctv.pod-min-s`, `pod-max-s`): under 30 s no 30 s ad fits, and a longer break is no break of the planner's (300 s is what MediaTailor sends when the break has no duration). `PodsRejectedUnreadable` is a length that is not whole seconds | Check the channel's ad-break lengths: `schedule___get_schedule` and the programs' `AdBreaks`. Plan breaks on the 30.03 s grid, up to four slots |
+| `<prefix>-pds-burst-real-time` fires; a break's pods were own book and house ads only (`POLICY_UNAVAILABLE` in the module's lines) | Every session of a prefetched sibling asked in real time at the marker at once, a sub-second herd: about 50 auctions a task in half a second outrun the task's CPU ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)) | Find the break (`evid` in the module's lines) and its schedule `pf-<evid>`: CloudTrail `CreatePrefetchSchedule`/`DeletePrefetchSchedule` show a schedule deleted after its retrievals; a break published less than the retrieval lead (150 s) ahead has none. The breaks were served, never empty. A large real-time audience is sized as in [demand.md](demand.md#sizing-prebid-server-for-a-break) |
 
 ### Agent and console
 
@@ -417,7 +652,7 @@ Report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | `RUN_ERROR GATEWAY_UNAVAILABLE`: the gateway lists no tools for this caller | The user is in no group (Cedar permits nothing), or the Gateway was deployed seconds ago | Add the user to a group; otherwise retry in a minute |
 | `FORBIDDEN` (retryable) from `register_vod_source` | The BYO bucket policy is not applied or has not propagated | Apply the statements `create_source_location` returned; retry |
 | The first autopilot run after a deploy failed | A `rate()` schedule fires at creation, when the new Gateway may not list tools yet | It is retried once; the next scheduled run works |
-| Trace deliveries fail to deploy | X-Ray trace delivery needs Transaction Search | Set `observability.transaction_search` to `enable` or `existing` |
+| Trace deliveries fail to deploy | X-Ray trace delivery needs Transaction Search, which is off in the account and region | With `observability.transaction_search: enable`, run `make account-baseline` first; with `existing`, turn Transaction Search on (or use `enable`); or set it to `off` |
 | Console sign-in fails locally (`redirect_mismatch`) | The console client accepts a local dev server only when the deployment allows it | Deploy with `-c fast-channels.agent.console_dev_url=http://localhost:5173/` and use `npm run dev` on port 5173 |
 | A tool call shows "Declined" (`DECLINED`) or "Failed" (`TOOL_ERROR`) | The operator rejected the approval, or the call never reached a tool (Cedar denial, Gateway or MCP error) | The result's message says which; a Cedar denial names the policy (`<prefix>_tools_<policy>`) |
 | Invitation emails do not arrive | Cognito's default sender quota | Use SES, or create users with a known temporary password |

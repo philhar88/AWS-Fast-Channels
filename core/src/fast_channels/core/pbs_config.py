@@ -1,0 +1,512 @@
+"""Prebid Server configuration of the demand module: the files the AWS Prebid Server guidance loads (docs/demand.md).
+
+Pure renderers, without I/O, for one stage (:func:`render`):
+
+- ``current-config/prebid-config.yaml``: the guidance copies ``prebid-server/current/`` over ``default/`` file for
+  file, so this file replaces the guidance's default ``prebid-config.yaml`` and repeats every default it keeps. It
+  turns the guidance's five shipped adapters off, the bidder simulator (``amt``) on in demo mode, adds the own book as
+  a ``generic`` alias on the Pod Decision Service and configures the fast-ctv module.
+- ``stored_requests/fast-pod.json`` and ``fast-pod-kids.json`` (with the ad-server route, ``fast-adsrv-pod.json`` and
+  ``fast-adsrv-pod-kids.json``): one stored request per route, a template pod of one 30 s slot. They name only the
+  own book: third-party bidders, IDs and user data are added by the fast-ctv policy hook after a positive, in-time
+  ``/policy`` answer, so a hook that is skipped, slow, failing or absent leaves own book and house only (the no-hook
+  contract).
+- ``stored_accounts/<prefix>.json``: the stage's account, with the module's execution plan and the Activity Controls.
+
+MediaTailor's POST names the route's stored request and sends the break's length as ``ext.fast.pod_s``
+(``{{session.avail_duration_secs}}``, whole seconds rounded half up). The fast-ctv module shapes the pod from it: one
+slot per whole 30 s (``ext.fast.slot_s``), ``poddur`` the break's length, for any length from :data:`POD_MIN_SECONDS`
+to :data:`POD_MAX_SECONDS`, which covers a mid-break joiner's remainder. A zero, missing (MediaTailor sends 300 s) or
+unreadable length is outside the range: the module rejects the auction and answers an empty VAST, so the Channel
+Assembly slate plays.
+
+Nothing rendered here is secret: the origin secret lives in the WAF rule group, never in Prebid Server.
+"""
+
+import json
+import re
+from collections.abc import Iterable, Mapping
+from typing import Any, Final
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from fast_channels.core.demo_demand import InlineCreative, vast_ad
+from fast_channels.core.naming import PREFIX_PATTERN
+from fast_channels.core.pds.book import AD_SYSTEM
+from fast_channels.core.pds.names import PORT as PDS_PORT
+from fast_channels.core.timeline import whole_seconds
+
+POD_SECONDS: Final = (30, 60, 90, 120)
+"""The grid's break lengths: one to four 30 s slots (the 30.03 s grid, rounded)."""
+SLOT_SECONDS: Final = 30
+POD_MIN_SECONDS: Final = min(POD_SECONDS)
+"""The shortest break the module shapes a pod for (``hooks.fast-ctv.pod-min-s``): one slot."""
+POD_MAX_SECONDS: Final = max(POD_SECONDS)
+"""The longest break the module shapes a pod for (``hooks.fast-ctv.pod-max-s``): the grid's four slots. MediaTailor's
+300 s for a missing duration is outside the range."""
+POD_FIELD: Final = "pod_s"
+"""``ext.fast.pod_s``: the break's whole seconds, which the POST body sends as a string (fast-ctv's ``PodShape``)."""
+SLOT_FIELD: Final = "slot_s"
+"""``ext.fast.slot_s``: a slot's seconds, which the stored request sets (fast-ctv's ``PodShape``)."""
+PBS_VERSION: Final = "4.4.0"
+"""The Prebid Server Java release the stage's image is built from (``vendor/prebid-guidance/PIN.toml``): the latest
+release, the only one supported since v4.0.0 (ADR-0020)."""
+TMAX_MS: Final = 500
+OWN_BOOK: Final = "ownbook"
+"""Bidder code of the own book: a ``generic`` alias on the Pod Decision Service's ``/ownbook/openrtb``."""
+OWN_BOOK_MAXBIDS: Final = 9
+"""Bids per slot that Prebid Server keeps from the own book (``ext.prebid.multibid``). Without it, Prebid Server keeps
+one bid per bidder and slot, the best, and the house ads would never reach the module. Per slot ``/select`` needs the
+own book's winner, a standalone for MediaTailor's ad buffet and the house fillers; the own book bids each house ad of
+the kit (2) and each line's creative that fits (one per line: 2 in demo mode), 4 today. 9, Prebid Server's most,
+keeps every bid of up to 7 lines; beyond that the lowest-priced bids, the house ads first, are cut."""
+SIMULATOR: Final = "amt"
+"""Bidder code of the guidance's bidder simulator (its ``amt`` adapter)."""
+SHIPPED_ADAPTERS: Final = ("appnexus", "ix", "openx", "pubmatic", "rubicon")
+"""Adapters the guidance's default configuration enables; turned off until a seat is qualified."""
+MODULE: Final = "fast-ctv"
+POLICY_HOOK: Final = "fast-ctv-policy"
+VAST_HOOK: Final = "fast-ctv-vast"
+AUCTION_ENDPOINT: Final = "/openrtb2/auction"
+TRACKER_PATH: Final = "/ads/b.gif"
+TRACKER_QUERY: Final = "d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
+"""Our impression tracker's query; the module fills the placeholders, URL-encoded, for every rendered ad."""
+CONTENT_CATTAX: Final = 9
+"""IAB Content Taxonomy 3.1 (AdCOM ``cattax`` 9)."""
+VIDEO_MIMES: Final = ("application/x-mpegURL", "video/mp4")
+VIDEO_PROTOCOLS: Final = (3, 6, 7, 8)
+"""VAST 3.0 and 4.0, inline and wrapper (AdCOM List: Creative Subtypes - Audio/Video)."""
+_HOST: Final = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
+
+
+PDS_BASE_URL: Final = f"http://127.0.0.1:{PDS_PORT}"
+"""The Pod Decision Service as Prebid Server reaches it: the sidecar in the same task (ADR-0036)."""
+SIMULATOR_RECORD: Final = "sim"
+"""The bidder simulator's record in the stage's private zone (``lambda`` mode)."""
+CTV_PRICE_GRANULARITY: Final[Mapping[str, Any]] = {
+    "precision": 2,
+    "ranges": [
+        {"min": 0, "max": 20, "increment": 0.10},
+        {"min": 20, "max": 50, "increment": 0.50},
+        {"min": 50, "max": 100, "increment": 1.00},
+    ],
+}
+"""``hb_pb`` buckets for CTV: 10 cents up to $20, 50 cents up to $50, $1 up to $100 (CTV CPMs run well above web
+display's, so Prebid's ``medium`` and ``high`` granularities cap too low). One line item per bucket matches it."""
+POD_CACHE_FIELD: Final = "pod_cache"
+"""``ext.fast.pod_cache``: the fast-ctv module's ad-server ask (``PodCache.FIELD`` in Java)."""
+CACHE_RECORD: Final = "cache"
+"""Prebid Cache's write endpoint in the stage's private zone: the guidance's internal load balancer (ad-server mode)."""
+CACHE_PATH: Final = "/cache"
+POD_CACHE_GROUP_MS: Final = 150
+"""What the ad-server mode adds to the exitpoint group's timeout: the composed pod's one write to Prebid Cache."""
+
+
+def private_zone(prefix: str) -> str:
+    """The stage's private hosted zone in the Prebid Server VPC: ``<prefix>.fast.internal``."""
+    return f"{prefix}.fast.internal"
+
+
+def simulator_host(prefix: str) -> str:
+    """Stable name of the bidder simulator in ``lambda`` mode (an internal load balancer in the Prebid Server VPC)."""
+    return f"{SIMULATOR_RECORD}.{private_zone(prefix)}"
+
+
+def cache_host(prefix: str) -> str:
+    """Stable name of Prebid Cache's write endpoint inside the Prebid Server VPC (``cache.internal.host``)."""
+    return f"{CACHE_RECORD}.{private_zone(prefix)}"
+
+
+def stored_request_id(*, kids: bool = False, ad_server: bool = False) -> str:
+    """``fast-pod`` (``fast-pod-kids`` for child-directed playback configurations); the ad-server route's are
+    ``fast-adsrv-pod`` and ``fast-adsrv-pod-kids`` (``core.ad_server``)."""
+    return f"fast-{'adsrv-' if ad_server else ''}pod{'-kids' if kids else ''}"
+
+
+def auction_body(seconds: int | str, *, kids: bool = False, ad_server: bool = False) -> dict[str, Any]:
+    """The POST body MediaTailor sends for a ``seconds`` break (``core.monetization.playback.ads_body`` rendered): the
+    route's stored request and the break's whole seconds as a string. Probes, smoke tests and warm-ups send it too."""
+    return {
+        "ext": {
+            "prebid": {"storedrequest": {"id": stored_request_id(kids=kids, ad_server=ad_server)}},
+            "fast": {POD_FIELD: str(seconds)},
+        }
+    }
+
+
+def stored_request_ids(*, ad_server: bool = False) -> tuple[str, ...]:
+    """Every stored request a stage serves: the direct route's two, and with ``ad_server`` the ad-server route's."""
+    routes = (False, True) if ad_server else (False,)
+    return tuple(stored_request_id(kids=kids, ad_server=route) for route in routes for kids in (False, True))
+
+
+class HouseAd(BaseModel):
+    """One of the kit's house ads in the module's configuration (``hooks.fast-ctv.house-ads``): the pod of last
+    resort when a break would otherwise be empty because the PDS could not be asked."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    crid: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    adm: str = Field(min_length=1, max_length=8192)
+    """An inline VAST 4.2 ad without an impression of its own (``core.demo_demand.vast_ad``)."""
+    dur: int = Field(gt=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+
+    @field_validator("adm")
+    @classmethod
+    def _no_placeholder(cls, adm: str) -> str:
+        if "${" in adm:  # Spring would read it as a property placeholder
+            raise ValueError("a house ad's VAST may not contain '${'")
+        return adm
+
+
+def house_ads(creatives: Iterable[InlineCreative]) -> tuple[HouseAd, ...]:
+    """The module's configured house ads: the kit's (``core.pds.book.house_creatives``), rendered as the own book
+    renders them."""
+    return tuple(
+        HouseAd(
+            crid=c.crid,
+            adm=vast_ad(c, ad_system=AD_SYSTEM),
+            dur=whole_seconds(c.duration_ms),
+            w=c.width,
+            h=c.height,
+        )
+        for c in creatives
+    )
+
+
+class PbsSettings(BaseModel):
+    """What one stage's Prebid Server configuration depends on."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    prefix: str = Field(pattern=PREFIX_PATTERN)
+    """Deployment prefix: the account id, the publisher id and the private zone's name."""
+    simulator: bool
+    """Demo mode: the guidance's bidder simulator (``amt``) may bid when ``/policy`` adds it."""
+    server_instances: int = Field(ge=1)
+    """``server.http.server-instances``: one Vert.x event loop per task vCPU."""
+    tracker_base_url: str = Field(pattern=r"^https://[a-z0-9.-]+$")
+    """Scheme and host of the stage's CDN, which serves our impression tracker ``/ads/b.gif``."""
+    publisher_domain: str
+    """Domain in ``source.schain`` (the seller's advertising system)."""
+    app_name: str = Field(default="FAST Channels", min_length=1, max_length=100)
+    policy_timeout_ms: int = Field(default=50, gt=0)
+    policy_group_timeout_ms: int = Field(default=75, gt=0)
+    select_timeout_ms: int = Field(default=200, gt=0)
+    select_group_timeout_ms: int = Field(default=250, gt=0)
+    house_ads: tuple[HouseAd, ...] = ()
+    """The kit's house ads, which the module renders when a break would otherwise be empty (``/policy`` unavailable
+    and the own book silent, or ``/select`` unavailable and the auction without a house ad)."""
+    ad_server: bool = False
+    """``modules.demand.ad_server`` is not ``none``: the ad-server route's stored requests, Prebid Cache's write
+    endpoint inside the VPC and the pod's cache write in the exitpoint's budget (M8-09)."""
+    pod_cache_seconds: int = Field(default=300, ge=30, le=3600)
+    """How long a cached pod lives in Prebid Cache (``ext.fast.pod_cache.ttlseconds``)."""
+
+    @field_validator("publisher_domain")
+    @classmethod
+    def _domain(cls, domain: str) -> str:
+        if not _HOST.fullmatch(domain):
+            raise ValueError(f"not a domain name: {domain!r}")
+        return domain
+
+    @property
+    def pds_base_url(self) -> str:
+        """The Pod Decision Service: the sidecar on the task's loopback (ADR-0036)."""
+        return PDS_BASE_URL
+
+    @property
+    def tracker_template(self) -> str:
+        return f"{self.tracker_base_url}{TRACKER_PATH}?{TRACKER_QUERY}"
+
+
+def tracker_host(cdn_base_url: str) -> str:
+    """The host of a CDN base URL (``https://d1.cloudfront.net/`` -> ``d1.cloudfront.net``)."""
+    host = urlsplit(cdn_base_url).hostname
+    if not host:
+        raise ValueError(f"not a URL with a host: {cdn_base_url!r}")
+    return host
+
+
+def _template_slot() -> dict[str, Any]:
+    """The stored request's one slot, ``s1``: a pod of one 30 s slot (``slotinpod`` 0). The module copies it once per
+    slot of the break and sets each copy's ``id`` (``s1``, ``s2``, …), ``poddur`` and ``slotinpod`` (1 first, -1 last,
+    0 between); an account without the module sends it as it is."""
+    return {
+        "id": "s1",
+        "video": {
+            "mimes": list(VIDEO_MIMES),
+            "protocols": list(VIDEO_PROTOCOLS),
+            "w": 1920,
+            "h": 1080,
+            "plcmt": 1,
+            "linearity": 1,
+            "startdelay": -1,
+            "podid": "1",  # OpenRTB 2.6 types it as a string
+            "poddur": SLOT_SECONDS,
+            "rqddurs": [SLOT_SECONDS],
+            "slotinpod": 0,
+        },
+        "ssai": 3,
+        "ext": {"prebid": {"bidder": {OWN_BOOK: {}}}},
+    }
+
+
+def stored_request(settings: PbsSettings, *, kids: bool = False, ad_server: bool = False) -> dict[str, Any]:
+    """The route's stored request: a template pod of one 30 s slot (``s1``), own book only, which may bid several ads
+    per slot (:data:`OWN_BOOK_MAXBIDS`). The fast-ctv module shapes it to the break: one copy of the slot per whole
+    ``ext.fast.slot_s`` of ``ext.fast.pod_s`` (the POST body's), each with ``poddur`` the break's length.
+
+    The ad-server route's (``ad_server``) is the same pod plus two asks of the fast-ctv module: cache the composed pod
+    for ``pod_cache_seconds`` (``ext.fast.pod_cache``) and answer its Prebid targeting in CTV price buckets
+    (``ext.prebid.targeting``). It sets no ``ext.prebid.cache``, so Prebid Server's core never caches single bids.
+    """
+    ext: dict[str, Any] = {
+        "prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": OWN_BOOK_MAXBIDS}]},
+        "fast": {SLOT_FIELD: SLOT_SECONDS},
+    }
+    if ad_server:
+        ext["prebid"]["targeting"] = {
+            "pricegranularity": dict(CTV_PRICE_GRANULARITY),
+            "includewinners": True,
+            "includebidderkeys": False,
+        }
+        ext["fast"][POD_CACHE_FIELD] = {"ttlseconds": settings.pod_cache_seconds}
+    return {
+        "id": stored_request_id(kids=kids, ad_server=ad_server),
+        "at": 1,
+        "tmax": TMAX_MS,
+        "cur": ["USD"],
+        "app": {
+            "id": f"{settings.prefix}-app",
+            "name": settings.app_name,
+            "publisher": {"id": settings.prefix},
+            "content": {"livestream": 1, "context": 1, "cattax": CONTENT_CATTAX},
+        },
+        "source": {
+            "schain": {
+                "complete": 1,
+                "ver": "1.0",
+                "nodes": [{"asi": settings.publisher_domain, "sid": settings.prefix, "hp": 1}],
+            }
+        },
+        "regs": {"coppa": 1 if kids else 0},
+        "imp": [_template_slot()],
+        "ext": ext,
+    }
+
+
+def _group(timeout_ms: int, hook: str) -> dict[str, Any]:
+    return {"groups": [{"timeout": timeout_ms, "hook-sequence": [{"module-code": MODULE, "hook-impl-code": hook}]}]}
+
+
+def _own_book_only() -> dict[str, Any]:
+    """An activity that only the own book may perform."""
+    # Prebid Server Java reads the component type by its enum name: "bidder", as the Prebid documentation
+    # spells it, makes the whole account unreadable (found by the contract tests).
+    rule = {"condition": {"component_type": ["BIDDER"], "component_name": [OWN_BOOK]}, "allow": True}
+    return {"default": False, "rules": [rule]}
+
+
+def account(settings: PbsSettings) -> dict[str, Any]:
+    """The stage's account: the module's execution plan, and Activity Controls that keep IDs, user first-party data
+    and precise geolocation from every bidder but the own book (every Phase-1 session is contextual)."""
+    return {
+        "id": settings.prefix,
+        "status": "active",
+        "auction": {"debug-allow": False},
+        "hooks": {
+            "execution-plan": {
+                "endpoints": {
+                    AUCTION_ENDPOINT: {
+                        "stages": {
+                            "processed-auction-request": _group(settings.policy_group_timeout_ms, POLICY_HOOK),
+                            "exitpoint": _group(
+                                settings.select_group_timeout_ms + (POD_CACHE_GROUP_MS if settings.ad_server else 0),
+                                VAST_HOOK,
+                            ),
+                        }
+                    }
+                }
+            }
+        },
+        "privacy": {
+            "allowactivities": {
+                activity: _own_book_only() for activity in ("transmitEids", "transmitUfpd", "transmitPreciseGeo")
+            }
+        },
+    }
+
+
+def prebid_config(settings: PbsSettings) -> dict[str, Any]:
+    """The Prebid Server application configuration (``prebid-config.yaml``), as data.
+
+    ``${NAME}`` values are Spring placeholders for environment variables the guidance's task definition and
+    entrypoint set. Differences from the guidance's default file: ``server.http.server-instances``; the shipped
+    adapters off, the simulator per mode and the own book; the module; GDPR out of scope by default (the stage serves
+    the United States; a request that signals GDPR is still enforced); the unprotected log-level endpoint off.
+    """
+    pds = settings.pds_base_url
+    return {
+        "status-response": "ok",
+        "server": {
+            # The ALB reaches the tasks over TLS on 8443 (the guidance's required settings).
+            "http": {"enabled": True, "port": 8443, "server-instances": settings.server_instances},
+            "ssl": True,
+            "jks-path": "${SSL_KEYSTORE_PATH}",
+            "jks-password": "${SSL_KEYSTORE_PASS}",
+        },
+        "adapters": {
+            **{name: {"enabled": False} for name in SHIPPED_ADAPTERS},
+            SIMULATOR: {"enabled": settings.simulator},
+            "generic": {
+                "aliases": {
+                    # An alias's ortb-version binds to the enum by name; "2.6" stops Prebid Server at startup.
+                    OWN_BOOK: {
+                        "enabled": True,
+                        "endpoint": f"{pds}/ownbook/openrtb",
+                        "ortb-version": "ORTB_2_6",
+                        # 4.x refuses to start without a vendor id on a configured generic alias (an NPE, P0-20
+                        # §4.13). The own book is the publisher itself: no IAB TCF vendor, so 0.
+                        "meta-info": {"vendor-id": 0},
+                    },
+                },
+            },
+        },
+        "hooks": {
+            MODULE: {
+                "enabled": True,
+                "policy-url": f"{pds}/policy",
+                "policy-timeout-ms": settings.policy_timeout_ms,
+                "select-url": f"{pds}/select",
+                "select-timeout-ms": settings.select_timeout_ms,
+                "tracker-template": settings.tracker_template,
+                "house-ads": json.dumps([ad.model_dump() for ad in settings.house_ads], separators=(",", ":")),
+                "pod-min-s": POD_MIN_SECONDS,
+                "pod-max-s": POD_MAX_SECONDS,
+                "log-requests": True,
+            },
+        },
+        "metrics": {"logback": {"enabled": True, "name": "METRICS", "interval": 30}},
+        "cache": {
+            "scheme": "https",
+            "host": "${CACHE_HOST}",
+            "path": CACHE_PATH,
+            "query": "uuid=",
+            # Writes stay inside the VPC (the guidance's internal load balancer admits only the tasks); the
+            # targeting still names the public host above, where only GET /cache?uuid=<uuid4> passes the edge.
+            **(
+                {"internal": {"scheme": "http", "host": cache_host(settings.prefix), "path": CACHE_PATH}}
+                if settings.ad_server
+                else {}
+            ),
+        },
+        "settings": {
+            "enforce-valid-account": False,
+            "generate-storedrequest-bidrequest-id": True,
+            "s3": {
+                "endpoint": "${SETTINGS_S3_ENDPOINT}",
+                "bucket": "${SETTINGS_S3_BUCKET}",
+                "region": "${SETTINGS_S3_REGION}",
+                "accounts-dir": "stored_accounts",
+                "stored-imps-dir": "stored_impressions",
+                "stored-requests-dir": "stored_requests",
+                "stored-responses-dir": "stored_responses",
+            },
+            # The guidance's defaults: a 60 s TTL gave sporadic "Stored request processing failed" 400s (P0-21), so
+            # configuration changes go out with a new ECS deployment instead.
+            "in-memory-cache": {
+                "cache-size": 10000,
+                "ttl-seconds": 1200,
+                "s3-update": {"refresh-rate": 900000, "timeout": 30000},
+            },
+        },
+        "gdpr": {
+            "default-value": 0,
+            # The vendor-list cache directories inside the guidance's image.
+            "vendorlist": {
+                "v2": {"cache-dir": "/var/tmp/vendor2"},  # noqa: S108
+                "v3": {"cache-dir": "/var/tmp/vendor3"},  # noqa: S108
+                # Mandatory in 4.x (P0-20 §4.13): where the live vendor list is cached at startup.
+                "live": {"startup-cache-dir": "/var/tmp/vendor-live"},  # noqa: S108
+            },
+        },
+        "admin-endpoints": {"logging-changelevel": {"enabled": False}},
+        "analytics": {"global": {"adapters": "psdoaAnalytics"}, "psdoa": {"enabled": "${LOG_ANALYTICS_ENABLED}"}},
+    }
+
+
+_CONFIG_HEADER: Final = """\
+# Prebid Server configuration of stage {prefix}, rendered by scripts/prebid_guidance.py render-config
+# (fast_channels.core.pbs_config). Do not edit: the guidance copies prebid-server/current/ over default/ file for file,
+# so this file replaces its default prebid-config.yaml, and a re-render overwrites it.
+"""
+
+
+def render(settings: PbsSettings) -> dict[str, str]:
+    """Every file of the stage's configuration, by path relative to the guidance's ``deployment/ecr/prebid-server``
+    directory (where the guidance uploads them from at deploy time)."""
+    files = {"current-config/prebid-config.yaml": _CONFIG_HEADER.format(prefix=settings.prefix)}
+    files["current-config/prebid-config.yaml"] += to_yaml(prebid_config(settings))
+    for ad_server in (False, True) if settings.ad_server else (False,):
+        for kids in (False, True):
+            files[f"stored_requests/{stored_request_id(kids=kids, ad_server=ad_server)}.json"] = _json(
+                stored_request(settings, kids=kids, ad_server=ad_server)
+            )
+    files[f"stored_accounts/{settings.prefix}.json"] = _json(account(settings))
+    return files
+
+
+def _json(data: Mapping[str, Any]) -> str:
+    return json.dumps(data, indent=2) + "\n"
+
+
+_PLAIN_KEY: Final = re.compile(r"[A-Za-z0-9/][A-Za-z0-9._/-]*")
+
+
+def to_yaml(data: Mapping[str, Any]) -> str:
+    """Block-style YAML of a mapping of mappings, sequences and scalars. Strings are double-quoted (JSON escapes are
+    YAML escapes), so no value is ever read back as another type."""
+    return "".join(_yaml_lines(data, 0))
+
+
+def _scalar(value: Any) -> str:
+    match value:
+        case bool() | None:
+            return json.dumps(value)
+        case int():
+            return str(value)
+        case str():
+            return json.dumps(value, ensure_ascii=False)
+        case dict() if not value:
+            return "{}"
+        case list() | tuple() if not value:
+            return "[]"
+    raise TypeError(f"cannot write {type(value).__name__} as YAML")
+
+
+def _key(key: str) -> str:
+    return key if _PLAIN_KEY.fullmatch(key) else json.dumps(key)
+
+
+def _yaml_lines(data: Mapping[str, Any], indent: int) -> list[str]:
+    pad = "  " * indent
+    lines = []
+    for key, value in data.items():
+        match value:
+            case dict() if value:
+                lines += [f"{pad}{_key(key)}:\n", *_yaml_lines(value, indent + 1)]
+            case list() | tuple() if value:
+                lines.append(f"{pad}{_key(key)}:\n")
+                for item in value:
+                    if isinstance(item, dict) and item:
+                        first, *rest = _yaml_lines(item, indent + 2)
+                        lines += [f"{pad}  - {first.lstrip()}", *rest]
+                    else:
+                        lines.append(f"{pad}  - {_scalar(item)}\n")
+            case _:
+                lines.append(f"{pad}{_key(key)}: {_scalar(value)}\n")
+    return lines

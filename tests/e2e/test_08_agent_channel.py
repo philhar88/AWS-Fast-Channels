@@ -23,6 +23,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from harness import ToolError
 
+from fast_channels.core.specs import SIBLING_PATTERN
 from fast_channels.core.tags import TAG_APP, TAG_CORRELATION, TAG_LADDER, TAG_OWNER, Owner
 from fast_channels.functions.channel_ops import is_missing
 from fast_channels.functions.tools.channels import PlaybackTemplate
@@ -142,9 +143,12 @@ def test_channel_and_playback_configuration_are_tagged_logged_and_paired(
     logging = configuration.get("LogConfiguration", {})
     assert logging.get("EnabledLoggingStrategies") == ["VENDED_LOGS"], logging
     assert logging.get("PercentEnabled") == template.log_percent, logging
-    # Only this channel's own playback configuration may read the channel (core.specs.channel_policy).
+    # Only this channel's own playback configuration may read the channel, and with the release module also its
+    # siblings <configuration>-p-? (core.specs.channel_policy).
+    own = configuration["PlaybackConfigurationArn"]
+    readers = [own, f"{own}{SIBLING_PATTERN}"] if template.sibling_policy else own
     assert statement["Resource"] == described["Arn"], statement
-    assert statement["Condition"]["ArnLike"] == {"aws:SourceArn": configuration["PlaybackConfigurationArn"]}
+    assert statement["Condition"]["ArnLike"] == {"aws:SourceArn": readers}, statement
 
 
 def test_every_log_type_is_delivered_and_tagged(

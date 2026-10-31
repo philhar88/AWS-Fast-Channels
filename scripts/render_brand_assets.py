@@ -1,10 +1,12 @@
-"""Render the brand stills of every ladder kit into ``assets/brand/`` (1920x1080 RGB PNGs).
+"""Render the brand stills of every ladder kit into ``assets/brand/`` (1920x1080 RGB PNGs), and with ``--demo`` the
+demo creatives' stills (demand demo mode) into ``assets/demo/``.
 
 MediaConvert's VideoGenerator turns each still into a slate or house ad of a whole number of GOPs on the ladder
 (SPEC §5.2), so the files are inputs, not decoration: changing one re-provisions every kit (``LadderProvisioner``
 fingerprints them). The committed PNGs are what this script renders; run it after changing the design::
 
     uv run python scripts/render_brand_assets.py [--out assets/brand] [--font /path/to/Font.ttf]
+    uv run python scripts/render_brand_assets.py --demo [--out assets/demo]
 
 The default font is Noto Sans (SIL Open Font License), with DejaVu Sans as fallback; pass ``--font`` on systems
 that have neither.
@@ -19,11 +21,13 @@ from typing import Final
 
 from PIL import Image, ImageDraw, ImageFont
 
-from fast_channels.core.timeline import HOUSE_AD_GOPS
+from fast_channels.core.demo_demand import DEMO_CREATIVES
+from fast_channels.core.timeline import DEMO_AD_GOPS, HOUSE_AD_GOPS
 
 WIDTH, HEIGHT = 1920, 1080
 GOP_SECONDS: Final = 2  # nominal; at 29.97 fps a GOP lasts 2.002 s
 OUT: Final = Path(__file__).resolve().parents[1] / "assets" / "brand"
+DEMO_OUT: Final = OUT.parent / "demo"
 FONTS: Final = (
     "/usr/share/fonts/google-noto-vf/NotoSans[wght].ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -70,6 +74,36 @@ def stills() -> list[Still]:
             )
             for n, (gops, (top, bottom)) in enumerate(zip(HOUSE_AD_GOPS, house_colours, strict=True), start=1)
         ),
+    ]
+
+
+DEMO_COLOURS: Final = (
+    ((0x1D, 0x81, 0x02), (0x0B, 0x3D, 0x01)),
+    ((0xD1, 0x32, 0x12), (0x5C, 0x12, 0x05)),
+    ((0x00, 0x73, 0xBB), (0x00, 0x2E, 0x4D)),
+    ((0x00, 0x73, 0xBB), (0x00, 0x2E, 0x4D)),  # sim4: sim3's advertiser
+    ((0x8D, 0x6E, 0x00), (0x3B, 0x2E, 0x00)),
+    ((0x9A, 0x1F, 0x6E), (0x3D, 0x0B, 0x2B)),
+    ((0x00, 0x7E, 0x7A), (0x00, 0x33, 0x31)),
+    ((0x5A, 0x4F, 0xCF), (0x22, 0x1C, 0x5C)),
+    ((0x41, 0x4D, 0x5C), (0x16, 0x1D, 0x26)),
+    ((0x41, 0x4D, 0x5C), (0x16, 0x1D, 0x26)),
+)
+"""Background gradients of the demo creatives, in ``DEMO_CREATIVES`` order."""
+
+
+def demo_stills() -> list[Still]:
+    """One still per demo creative: its advertiser, domain and creative id, labelled simulated."""
+    return [
+        Still(
+            f"{creative.crid}.png",
+            top,
+            bottom,
+            creative.advertiser,
+            f"{creative.adomain} \u00b7 {creative.crid} \u00b7 simulated demo ad",
+            badge=f"{DEMO_AD_GOPS * GOP_SECONDS} seconds",
+        )
+        for creative, (top, bottom) in zip(DEMO_CREATIVES, DEMO_COLOURS, strict=True)
     ]
 
 
@@ -120,14 +154,16 @@ def default_font() -> str:
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
-    parser.add_argument("--out", type=Path, default=OUT, help="output directory (default: assets/brand)")
+    parser.add_argument("--demo", action="store_true", help="render the demo creatives' stills instead")
+    parser.add_argument("--out", type=Path, help="output directory (default: assets/brand, or assets/demo)")
     parser.add_argument("--font", help="TrueType/OpenType font file (default: Noto Sans or DejaVu Sans)")
     args = parser.parse_args(argv)
     font_path = args.font or default_font()
-    args.out.mkdir(parents=True, exist_ok=True)
-    for still in stills():
-        render(still, font_path).save(args.out / still.file, optimize=True)
-        print(args.out / still.file)
+    out: Path = args.out or (DEMO_OUT if args.demo else OUT)
+    out.mkdir(parents=True, exist_ok=True)
+    for still in demo_stills() if args.demo else stills():
+        render(still, font_path).save(out / still.file, optimize=True)
+        print(out / still.file)
 
 
 if __name__ == "__main__":

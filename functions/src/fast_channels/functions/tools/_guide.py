@@ -26,6 +26,21 @@ class Gap(BaseModel):
     duration_ms: int
 
 
+def guide_breaks(program: store.ProgramRecord) -> list[epg.EpgBreak]:
+    """The program's breaks as guide entries, with their event ids and UPIDs when ``EPG_BREAK_IDS`` is set (ops
+    module)."""
+    ids = settings().epg_break_ids
+    return [
+        epg.EpgBreak(
+            offset_ms=b.offset_ms,
+            duration_ms=b.duration_ms,
+            event_id=b.event_id if ids else None,
+            upid=b.upid if ids else None,
+        )
+        for b in program.breaks
+    ]
+
+
 def guide_entry(program: store.ProgramRecord) -> epg.EpgProgram:
     return epg.EpgProgram(
         name=program.name,
@@ -36,7 +51,7 @@ def guide_entry(program: store.ProgramRecord) -> epg.EpgProgram:
         end=store.iso(program.end_ms),
         rating=program.rating,
         genres=program.genres,
-        breaks=[epg.EpgBreak(offset_ms=b.offset_ms, duration_ms=b.duration_ms) for b in program.breaks],
+        breaks=guide_breaks(program),
         status=program.status.value,
     )
 

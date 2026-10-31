@@ -1,0 +1,428 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pod Decision Service /policy, contract version 1",
+  "description": "The fast-ctv module asks before each auction; it applies the answer verbatim to the bid request.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/PolicyRequest"
+    },
+    {
+      "$ref": "#/$defs/PolicyResponse"
+    }
+  ],
+  "$defs": {
+    "Deal": {
+      "additionalProperties": false,
+      "description": "An OpenRTB ``imp.pmp.deals`` entry the module adds to every imp.",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "bidfloor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "at": {
+          "anyOf": [
+            {
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "At"
+        },
+        "wseat": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Wseat",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Deal",
+      "type": "object"
+    },
+    "Device": {
+      "additionalProperties": false,
+      "description": "OpenRTB ``device`` fields the module sets. A null ``ip``/``ipv6`` makes the module remove that field.",
+      "properties": {
+        "ip": {
+          "anyOf": [
+            {
+              "format": "ipv4",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Viewer IPv4 address from the viewer-IP rule.",
+          "title": "Ip"
+        },
+        "ipv6": {
+          "anyOf": [
+            {
+              "format": "ipv6",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Viewer IPv6 address from the viewer-IP rule.",
+          "title": "Ipv6"
+        },
+        "devicetype": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeviceType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "AdCOM device type from the User-Agent."
+        }
+      },
+      "title": "Device",
+      "type": "object"
+    },
+    "DeviceType": {
+      "description": "AdCOM 1.0 device types (OpenRTB ``device.devicetype``).",
+      "enum": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "title": "DeviceType",
+      "type": "integer"
+    },
+    "Fpd": {
+      "additionalProperties": false,
+      "description": "First-party data scoping: the bidders allowed to receive first-party data (``ext.prebid.data.bidders``).",
+      "properties": {
+        "bidders": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bidders",
+          "type": "array"
+        }
+      },
+      "title": "Fpd",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "Mode": {
+      "description": "Privacy mode of one break: what third parties may receive (docs/pds.md#privacy-modes).",
+      "enum": [
+        "FULL",
+        "PSEUDONYMOUS",
+        "CONTEXTUAL",
+        "SAFE",
+        "KIDS"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "Money": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "PolicyRequest": {
+      "additionalProperties": false,
+      "description": "``POST /policy``: what the module knows about the break before the auction.",
+      "properties": {
+        "v": {
+          "const": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "t": {
+          "default": "",
+          "description": "Playback ticket, empty when the session has none.",
+          "pattern": "^[A-Za-z0-9_-]{0,22}$",
+          "title": "T",
+          "type": "string"
+        },
+        "sid": {
+          "description": "MediaTailor session id.",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "title": "Sid",
+          "type": "string"
+        },
+        "pc": {
+          "description": "Calling playback configuration.",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "title": "Pc",
+          "type": "string"
+        },
+        "fv": {
+          "default": "",
+          "description": "Release of the configuration's Functions.",
+          "pattern": "^[A-Za-z0-9_-]{0,32}$",
+          "title": "Fv",
+          "type": "string"
+        },
+        "evid": {
+          "description": "SCTE-35 event id of the break.",
+          "pattern": "^[0-9]{1,10}$",
+          "title": "Evid",
+          "type": "string"
+        },
+        "upid": {
+          "default": "",
+          "description": "Segmentation UPID of the break: the content id.",
+          "maxLength": 255,
+          "title": "Upid",
+          "type": "string"
+        },
+        "dur_ms": {
+          "description": "Break duration as MediaTailor requested it (session.avail_duration_ms).",
+          "minimum": 0,
+          "title": "Dur Ms",
+          "type": "integer"
+        },
+        "ua": {
+          "default": "",
+          "description": "User-Agent of the ADS request: the viewer's.",
+          "maxLength": 2048,
+          "title": "Ua",
+          "type": "string"
+        },
+        "xff": {
+          "default": "",
+          "description": "X-Forwarded-For as Prebid Server received it.",
+          "maxLength": 8192,
+          "title": "Xff",
+          "type": "string"
+        },
+        "cfva": {
+          "default": "",
+          "description": "CloudFront-Viewer-Address at Prebid Server, if any.",
+          "maxLength": 64,
+          "title": "Cfva",
+          "type": "string"
+        },
+        "ctx": {
+          "default": "",
+          "description": "Catalog context header (x-fast-ctx), if any.",
+          "maxLength": 1000,
+          "title": "Ctx",
+          "type": "string"
+        },
+        "probe": {
+          "default": false,
+          "description": "X-Fast-Probe: a synthetic probe session.",
+          "title": "Probe",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "v",
+        "sid",
+        "pc",
+        "evid",
+        "dur_ms"
+      ],
+      "title": "PolicyRequest",
+      "type": "object"
+    },
+    "PolicyResponse": {
+      "additionalProperties": false,
+      "description": "``/policy`` answer: the patch the module applies verbatim to the bid request; it never removes the own book.",
+      "properties": {
+        "v": {
+          "const": 1,
+          "default": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "decision_id": {
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode"
+        },
+        "reason": {
+          "$ref": "#/$defs/Reason"
+        },
+        "bidders": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "type": "object"
+          },
+          "description": "Bidders added to every imp, with their parameters (none in SAFE and KIDS).",
+          "title": "Bidders",
+          "type": "object"
+        },
+        "regs": {
+          "$ref": "#/$defs/Regs",
+          "default": {
+            "coppa": 0,
+            "gpp": null,
+            "gpp_sid": null
+          }
+        },
+        "device": {
+          "$ref": "#/$defs/Device",
+          "default": {
+            "ip": null,
+            "ipv6": null,
+            "devicetype": null
+          }
+        },
+        "app_content": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OpenRTB app.content fields (show-level metadata), or null for none.",
+          "title": "App Content"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OpenRTB user object; FULL only, else null.",
+          "title": "User"
+        },
+        "fpd": {
+          "$ref": "#/$defs/Fpd",
+          "default": {
+            "bidders": []
+          }
+        },
+        "deals": {
+          "description": "Deals for every imp; FULL only.",
+          "items": {
+            "$ref": "#/$defs/Deal"
+          },
+          "title": "Deals",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision_id",
+        "mode",
+        "reason"
+      ],
+      "title": "PolicyResponse",
+      "type": "object"
+    },
+    "Reason": {
+      "description": "Why a break got its mode.",
+      "enum": [
+        "bound",
+        "missing",
+        "invalid",
+        "unknown",
+        "replay",
+        "pc_mismatch",
+        "expired_or_raced",
+        "opted_out",
+        "consent_unavailable",
+        "probe",
+        "kids"
+      ],
+      "title": "Reason",
+      "type": "string"
+    },
+    "Regs": {
+      "additionalProperties": false,
+      "description": "OpenRTB ``regs`` the module sets.",
+      "properties": {
+        "coppa": {
+          "default": 0,
+          "enum": [
+            0,
+            1
+          ],
+          "title": "Coppa",
+          "type": "integer"
+        },
+        "gpp": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "GPP string, where known.",
+          "title": "Gpp"
+        },
+        "gpp_sid": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "GPP section ids applicable, where known.",
+          "title": "Gpp Sid"
+        }
+      },
+      "title": "Regs",
+      "type": "object"
+    }
+  }
+}

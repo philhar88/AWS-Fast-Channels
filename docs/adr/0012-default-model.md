@@ -1,6 +1,6 @@
 # 0012 — Claude Haiku 5.5 as the default model, pluggable via a model spec
 
-**Status:** Accepted
+**Status:** Accepted, amended by [0029](0029-per-task-model-registry.md) (the per-task model registry)
 
 ## Context
 The agent must be cheap by default and replaceable. A scheduling benchmark (fill 3 h and 6 h blocks under programming

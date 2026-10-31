@@ -3,11 +3,17 @@
     uv run python scripts/generate_contracts.py          # write the files
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
-Outputs: ``ingest-request.schema.json`` and ``events.schema.json`` (JSON Schema 2020-12),
-``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json`` (the
-same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
+Outputs: ``ingest-request.schema.json``, ``events.schema.json``, ``model-registry.schema.json``,
+``eval-record.schema.json``, ``catalog-context.schema.json`` and ``monetization-bundle.schema.json`` (JSON Schema
+2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json``
+(the same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
 targets: every schema is inline, optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/
 ``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
+
+``pds-policy.schema.json`` and ``pds-select.schema.json`` are the Pod Decision Service contract with the fast-ctv
+Prebid Server module (requests as the PDS accepts them, responses as it writes them). The examples under
+``fixtures/pds/<call>/`` are shared with the module's tests: their ``description``, ``context`` and ``request`` are
+written by hand, and their ``response`` is what the PDS rules answer, regenerated here.
 """
 
 import argparse
@@ -15,19 +21,28 @@ import json
 import re
 import sys
 from collections.abc import Iterator
+from ipaddress import ip_network
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic.json_schema import models_json_schema
 
 from fast_channels.core.catalog import CONTENT_ID_PATTERN, ContentItem, ContentPage, ContentQuery
+from fast_channels.core.crawl.catalog_context import CatalogContext
 from fast_channels.core.events import DETAIL_TYPES
 from fast_channels.core.ingest import IngestRequest
+from fast_channels.core.model_registry import RECOMMENDER_CHECKS, REQUIRED_CHECKS, SCHEDULER_TASK, EvalRecord, TaskEntry
+from fast_channels.core.monetization.bundle import Bundle
+from fast_channels.core.pds.models import PolicyRequest, PolicyResponse, SelectRequest, SelectResponse
+from fast_channels.core.pds.pod import PodContext, select_pod, select_response
+from fast_channels.core.pds.policy import Demand, decide
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
+FIXTURES = CONTRACTS / "fixtures" / "pds"
+"""Hand-written inputs of the PDS examples (read from the repository even when ``CONTRACTS`` points elsewhere)."""
 JSON_SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 VERSION = "3.0.0"
 
@@ -35,6 +50,11 @@ VERSION = "3.0.0"
 def ingest_request_schema() -> dict[str, Any]:
     """JSON Schema of the IngestPipeline input (S3 sidecar, ``Ingest Requested`` event or StartExecution)."""
     return {"$schema": JSON_SCHEMA, **IngestRequest.model_json_schema()}
+
+
+def catalog_context_schema() -> dict[str, Any]:
+    """JSON Schema of the catalog context object ``catalog/ctx/v1/<content_id>.json`` (immutable: v2 is a new file)."""
+    return {"$schema": JSON_SCHEMA, **CatalogContext.model_json_schema(mode="serialization")}
 
 
 def events_schema() -> dict[str, Any]:
@@ -62,14 +82,176 @@ def events_schema() -> dict[str, Any]:
     }
 
 
+def model_registry_schema() -> dict[str, Any]:
+    """JSON Schema of a model-registry entry, the SSM document ``/<prefix>/models/tasks/<task>`` that the agent and
+    other model callers read; the examples are the shipped ``scheduler.plan`` entry (us-east-1) and a viewer-data
+    task."""
+    profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/"
+    examples = [
+        TaskEntry(model="us.anthropic.claude-haiku-5-5", daily_cap_usd=5, profile_arn=f"{profile}a1b2c3d4e5f6"),
+        TaskEntry.model_validate(
+            {
+                "model": "us.anthropic.claude-haiku-5-5",
+                "effort": "low",
+                "max_tokens": 8000,
+                "data_class": "viewer",
+                "daily_cap_usd": 30,
+                "profile_arn": f"{profile}f6e5d4c3b2a1",
+            }
+        ),
+    ]
+    return {
+        "$schema": JSON_SCHEMA,
+        **TaskEntry.model_json_schema(),
+        "title": "FAST Channels model-registry entry",
+        "description": (
+            "SSM parameter /<prefix>/models/tasks/<task> (String, JSON), one per LLM task; "
+            f"{SCHEDULER_TASK} is the scheduling agent's. The model must be one of the deployment's allowed models, "
+            "and profile_arn the task's application inference profile; readers refuse an entry that is invalid, "
+            "names any other model or names another profile."
+        ),
+        "examples": [entry.model_dump(mode="json") for entry in examples],
+    }
+
+
+def pds_schema(call: str, description: str, request: type[BaseModel], response: type[BaseModel]) -> dict[str, Any]:
+    """JSON Schema of one PDS call: the request as the PDS validates it, the response as it serializes it."""
+    refs, definitions = models_json_schema(
+        [(request, "validation"), (response, "serialization")], ref_template="#/$defs/{model}"
+    )
+    return {
+        "$schema": JSON_SCHEMA,
+        "title": f"Pod Decision Service {call}, contract version 1",
+        "description": description,
+        "oneOf": [refs[request, "validation"], refs[response, "serialization"]],
+        **definitions,
+    }
+
+
+def pds_policy_schema() -> dict[str, Any]:
+    """``POST /policy``: the module's request and the patch the PDS answers with."""
+    return pds_schema(
+        "/policy",
+        "The fast-ctv module asks before each auction; it applies the answer verbatim to the bid request.",
+        PolicyRequest,
+        PolicyResponse,
+    )
+
+
+def pds_select_schema() -> dict[str, Any]:
+    """``POST /select``: every bid of the auction and the pod the PDS selects."""
+    return pds_schema(
+        "/select",
+        "The fast-ctv module sends every bid after the auction and renders exactly the pod the answer names.",
+        SelectRequest,
+        SelectResponse,
+    )
+
+
+def pds_fixture_response(call: str, document: dict[str, Any]) -> dict[str, Any]:
+    """The PDS answer to a fixture's request, given the fixture's PDS-side context."""
+    context = document["context"]
+    match call:
+        case "policy":
+            decision = decide(
+                PolicyRequest.model_validate(document["request"]),
+                Demand(context["demand"]),
+                origin_facing=[ip_network(network) for network in context["origin_facing"]],
+                kids_channel=context["kids_channel"],
+            )
+            return decision.response.model_dump(mode="json")
+        case "select":
+            request = SelectRequest.model_validate(document["request"])
+            pod = select_pod(request, PodContext.model_validate(context["pod"]))
+            response = select_response(request, pod, tracker_base=context["tracker_base"], enr=context["enr"])
+            return response.model_dump(mode="json")
+        case _:
+            raise ValueError(f"no PDS call {call!r} (fixtures/pds/<policy|select>/*.json)")
+
+
+def pds_fixtures() -> dict[str, dict[str, Any]]:
+    """Every PDS example with its response regenerated, by path under ``contracts/``."""
+    fixtures = {}
+    for path in sorted(FIXTURES.glob("*/*.json")):
+        document = json.loads(path.read_text())
+        document["response"] = pds_fixture_response(path.parent.name, document)
+        fixtures[path.relative_to(FIXTURES.parents[1]).as_posix()] = document
+    return fixtures
+
+
+def monetization_bundle_schema() -> dict[str, Any]:
+    """JSON Schema of the release bundle as stored (``release/<digest>/bundle.json``): the digest and the bundle."""
+    bundle = Bundle.model_json_schema(by_alias=True)
+    definitions = bundle.pop("$defs")
+    return {
+        "$schema": JSON_SCHEMA,
+        "title": "FAST Channels release bundle",
+        "description": (
+            "Desired monetization state rendered at synth and applied by the Release Controller: every Function "
+            "document (ids are stems; the release adds _rNNNN), every sibling playback configuration without the "
+            "origin secret, the expected channel-policy pattern, the stored requests and the rollout."
+        ),
+        "type": "object",
+        "required": ["digest", "bundle"],
+        "additionalProperties": False,
+        "properties": {
+            "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the bundle JSON."},
+            "bundle": bundle,
+        },
+        "$defs": definitions,
+    }
+
+
+def eval_record_schema() -> dict[str, Any]:
+    """JSON Schema of an eval record, ``evals/records/<task>/<key>.json``: the evidence that qualifies a model for a
+    registry task. The example is the record format of the Phase-2 recommender, whose suite must report the
+    deterministic faithfulness check."""
+    example = EvalRecord.model_validate(
+        {
+            "task": "recommender",
+            "key": "haiku-5-5-adaptive-8k",
+            "model": "us.anthropic.claude-haiku-5-5",
+            "effort": "low",
+            "thinking": "adaptive",
+            "max_tokens": 8000,
+            "suite": "recommender conformance v1: 300 synthetic viewers, 8 personas",
+            "runs": 1,
+            "passed": True,
+            "checks": [
+                {"name": "schema_valid", "passed": True, "value": 1.0, "threshold": ">= 0.99"},
+                {"name": "faithfulness", "passed": True, "value": 0.933, "threshold": ">= 0.90"},
+                {"name": "policy_violations", "passed": True, "value": 0, "threshold": "== 0"},
+                {"name": "cost_per_rail", "passed": True, "value": 0.0024, "threshold": "<= 0.01"},
+            ],
+            "cost_usd": "0.49",
+            "recorded_at": "2026-10-27T22:00:00Z",
+        }
+    )
+    required = "; ".join(f"{task}: {', '.join(checks)}" for task, checks in REQUIRED_CHECKS.items())
+    return {
+        "$schema": JSON_SCHEMA,
+        **EvalRecord.model_json_schema(),
+        "title": "FAST Channels eval record",
+        "description": (
+            "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the "
+            "model registry on, synth refuses a task whose eval names no passing record for its model family and "
+            f"settings (effort, thinking, max_tokens). Required checks by task: {required}. The recommender's "
+            f"({', '.join(RECOMMENDER_CHECKS)}) include the deterministic faithfulness check: each tile's reason cites "
+            "only facts of the input."
+        ),
+        "examples": [example.model_dump(mode="json")],
+    }
+
+
 def _flatten(schema: Any, definitions: dict[str, Any]) -> Any:
     """Inline ``$ref``s, collapse ``anyOf: [X, null]`` to ``X`` and drop pydantic's ``title`` noise."""
     if isinstance(schema, list):
         return [_flatten(item, definitions) for item in schema]
     if not isinstance(schema, dict):
         return schema
-    if "$ref" in schema:
-        return _flatten(definitions[schema["$ref"].rsplit("/", 1)[-1]], definitions)
+    if "$ref" in schema:  # the referencing schema's own keywords (a property's description) win
+        siblings = {k: v for k, v in schema.items() if k != "$ref"}
+        return _flatten(definitions[schema["$ref"].rsplit("/", 1)[-1]] | siblings, definitions)
     if "anyOf" in schema:  # only ``X | None`` unions exist in the catalog models
         (branch,) = [s for s in schema["anyOf"] if s != {"type": "null"}]
         return _flatten(branch | {k: v for k, v in schema.items() if k != "anyOf"}, definitions)
@@ -186,8 +368,15 @@ def render() -> dict[str, str]:
     return {
         "ingest-request.schema.json": as_json(ingest_request_schema()),
         "events.schema.json": as_json(events_schema()),
+        "model-registry.schema.json": as_json(model_registry_schema()),
+        "eval-record.schema.json": as_json(eval_record_schema()),
+        "catalog-context.schema.json": as_json(catalog_context_schema()),
+        "monetization-bundle.schema.json": as_json(monetization_bundle_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
+        "pds-policy.schema.json": as_json(pds_policy_schema()),
+        "pds-select.schema.json": as_json(pds_select_schema()),
+        **{name: as_json(document) for name, document in pds_fixtures().items()},
     }
 
 
@@ -202,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             if not path.exists() or path.read_text() != text:
                 stale.append(name)
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
     if stale:
         print(f"out of date: {', '.join(stale)}; run scripts/generate_contracts.py", file=sys.stderr)

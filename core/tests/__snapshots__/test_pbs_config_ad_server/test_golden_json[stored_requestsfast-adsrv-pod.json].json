@@ -1,0 +1,112 @@
+{
+  "app": {
+    "content": {
+      "cattax": 9,
+      "context": 1,
+      "livestream": 1
+    },
+    "id": "fastm-app",
+    "name": "FAST Channels",
+    "publisher": {
+      "id": "fastm"
+    }
+  },
+  "at": 1,
+  "cur": [
+    "USD"
+  ],
+  "ext": {
+    "fast": {
+      "pod_cache": {
+        "ttlseconds": 300
+      },
+      "slot_s": 30
+    },
+    "prebid": {
+      "multibid": [
+        {
+          "bidder": "ownbook",
+          "maxbids": 9
+        }
+      ],
+      "targeting": {
+        "includebidderkeys": false,
+        "includewinners": true,
+        "pricegranularity": {
+          "precision": 2,
+          "ranges": [
+            {
+              "increment": 0.1,
+              "max": 20,
+              "min": 0
+            },
+            {
+              "increment": 0.5,
+              "max": 50,
+              "min": 20
+            },
+            {
+              "increment": 1.0,
+              "max": 100,
+              "min": 50
+            }
+          ]
+        }
+      }
+    }
+  },
+  "id": "fast-adsrv-pod",
+  "imp": [
+    {
+      "ext": {
+        "prebid": {
+          "bidder": {
+            "ownbook": {}
+          }
+        }
+      },
+      "id": "s1",
+      "ssai": 3,
+      "video": {
+        "h": 1080,
+        "linearity": 1,
+        "mimes": [
+          "application/x-mpegURL",
+          "video/mp4"
+        ],
+        "plcmt": 1,
+        "poddur": 30,
+        "podid": "1",
+        "protocols": [
+          3,
+          6,
+          7,
+          8
+        ],
+        "rqddurs": [
+          30
+        ],
+        "slotinpod": 0,
+        "startdelay": -1,
+        "w": 1920
+      }
+    }
+  ],
+  "regs": {
+    "coppa": 0
+  },
+  "source": {
+    "schain": {
+      "complete": 1,
+      "nodes": [
+        {
+          "asi": "d111111abcdef8.cloudfront.net",
+          "hp": 1,
+          "sid": "fastm"
+        }
+      ],
+      "ver": "1.0"
+    }
+  },
+  "tmax": 500
+}

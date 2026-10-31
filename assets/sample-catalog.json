@@ -17,6 +17,11 @@
         494000,
         690000
       ],
+      "content_type": "movie",
+      "language": "en",
+      "producer_name": "Blender Foundation",
+      "producer_domain": "blender.org",
+      "prodq": 1,
       "mezzanine_uri": "https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv",
       "license": "CC BY 3.0 — © Blender Foundation | durian.blender.org"
     },
@@ -35,6 +40,11 @@
         254000,
         488000
       ],
+      "content_type": "movie",
+      "language": "en",
+      "producer_name": "Blender Foundation",
+      "producer_domain": "blender.org",
+      "prodq": 1,
       "mezzanine_uri": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
       "license": "CC BY 3.0 — © Blender Foundation | mango.blender.org"
     },
@@ -52,6 +62,11 @@
         218000,
         440000
       ],
+      "content_type": "movie",
+      "language": "en",
+      "producer_name": "Orange Open Movie Project",
+      "producer_domain": "elephantsdream.org",
+      "prodq": 1,
       "mezzanine_uri": "https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov",
       "license": "CC BY 2.5 — © Orange Open Movie Project | elephantsdream.org"
     },
@@ -67,6 +82,11 @@
       ],
       "duration_ms": 52000,
       "cue_points_ms": [],
+      "content_type": "trailer",
+      "language": "en",
+      "producer_name": "Blender Foundation",
+      "producer_domain": "blender.org",
+      "prodq": 1,
       "mezzanine_uri": "https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4",
       "license": "CC BY 3.0 — © Blender Foundation | durian.blender.org"
     }

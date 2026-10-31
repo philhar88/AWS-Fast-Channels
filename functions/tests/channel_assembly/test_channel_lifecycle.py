@@ -87,6 +87,22 @@ def test_guard_fails_fast_on_a_running_channel(stub: Stub, cfn_event: Event, con
         handler(guard_event(cfn_event, {**SPEC, "Tier": "STANDARD"}), context)
 
 
+def test_guard_refuses_to_widen_the_policy_of_a_running_channel(stub: Stub, cfn_event: Event, context: Any) -> None:
+    """Turning the release module on adds the sibling pattern to the policy; on a running channel a policy change
+    breaks the sessions of the configurations it keeps (P0-08), so it waits for a stopped channel."""
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("describe_channel", describe("RUNNING"), {"ChannelName": CHANNEL})
+    stack_status(stub, "UPDATE_IN_PROGRESS")
+    event = guard_event(cfn_event, SPEC)
+    event["ResourceProperties"]["SiblingPattern"] = f"{CHANNEL}-p-?"
+
+    with pytest.raises(ChannelRunningError, match=r"RUNNING, and changing the channel policy .* breaks its sessions"):
+        handler(event, context)
+
+    mediatailor.add_response("describe_channel", describe("STOPPED"), {"ChannelName": CHANNEL})
+    assert handler(event, context)["Data"] == {"StoppedForUpdate": ""}
+
+
 def test_guard_stops_a_running_channel_when_allowed(stub: Stub, cfn_event: Event, context: Any) -> None:
     mediatailor = stub("mediatailor")
     mediatailor.add_response("describe_channel", describe("RUNNING"), {"ChannelName": CHANNEL})

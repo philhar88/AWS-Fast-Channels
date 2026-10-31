@@ -6,6 +6,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 from fast_channels.core import specs
+from fast_channels.core.monetization.validators import Rule, check_channel_policy
 from fast_channels.core.profiles import DEFAULT_PACKAGE_PROFILES, profile
 from fast_channels.core.timeline import Plan, PlanInputAsset, ProgrammingBrief, plan_block
 
@@ -140,6 +141,19 @@ def test_channel_policy_is_sigv4_only() -> None:
         "StringEquals": {"aws:SourceAccount": "123456789012"},
         "ArnLike": {"aws:SourceArn": CONFIG_ARN},
     }
+
+
+def test_channel_policy_admits_the_siblings_by_a_static_pattern() -> None:
+    """The release module's monetized channels (P0-08): the v3.0.0 configuration and ``<channel>-p-?``, exactly."""
+    policy = specs.channel_policy(
+        channel_arn=CHANNEL_ARN, playback_configuration_arn=CONFIG_ARN, account="123456789012", siblings=True
+    )
+    (statement,) = policy["Statement"]
+    assert statement["Condition"]["ArnLike"] == {"aws:SourceArn": [CONFIG_ARN, f"{CONFIG_ARN}-p-?"]}
+    assert check_channel_policy(policy, channel="fast-demo") == []
+    # The single-ARN v3.0.0 policy is what R-C1 refuses on a monetized channel: the siblings would get 504s.
+    v3 = specs.channel_policy(channel_arn=CHANNEL_ARN, playback_configuration_arn=CONFIG_ARN, account="1")
+    assert [v.rule for v in check_channel_policy(v3, channel="fast-demo")] == [Rule.C1]
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 """MediaTailor ad insertion: playback configurations and their shared vended-logs destination (SPEC §5.3)."""
 
-from typing import Final
+from typing import Any, Final
 
 from aws_cdk import RemovalPolicy, Stack
 from aws_cdk import aws_logs as logs
@@ -8,6 +8,7 @@ from aws_cdk import aws_mediatailor as mediatailor
 from constructs import Construct
 
 from fast_channels.core import specs
+from fast_channels.core.naming import mediatailor_log_group
 from fast_channels.infra.constructs.channel_assembly._cfn import override, with_tokens
 from fast_channels.infra.constructs.logs import deliver, vended_log_group
 
@@ -50,7 +51,7 @@ class MediaTailorLogs(Construct):
         self.log_group = vended_log_group(
             self,
             "Logs",
-            name=f"/aws/vendedlogs/mediatailor/{prefix}",
+            name=mediatailor_log_group(prefix),
             delivery_sources=f"{prefix}-*",
             retention=log_retention,
             removal_policy=removal_policy,
@@ -94,13 +95,15 @@ def playback_configuration_template(
     log_destination_arn: str,
     log_percent: int,
     ads_url: str | None = None,
+    sibling_policy: bool = False,
 ) -> str:
     """JSON of what agent-created playback configurations share (``MediaExports.playback_configuration_template``,
     the tools' ``PLAYBACK_CONFIG_TEMPLATE``)::
 
         {"content_base_url": str, "log_percent": int, "log_destination_arn": str,
          "log_types": {"AD_DECISION_SERVER_LOGS": "ads", "MANIFEST_SERVICE_LOGS": "manifest", "TRANSCODE_LOGS":
-         "transcode"}, "ads_url": str}   # ads_url only with an external ADS
+         "transcode"}, "ads_url": str,   # ads_url only with an external ADS
+         "sibling_policy": true}          # only with the release module
 
     A tool builds a channel's configuration with ``core.specs.playback_configuration(name=<channel>,
     video_content_source_url=<channel base URL>, ads_url=template.get("ads_url") or core.specs.ads_url(...),
@@ -113,16 +116,20 @@ def playback_configuration_template(
         log_destination_arn: :attr:`MediaTailorLogs.destination_arn`.
         log_percent: share of sessions that log (``observability.mediatailor_log_percent``).
         ads_url: the external ADS URL (``ads.mode = external_vast``); ``None`` for preconditioned ads.
+        sibling_policy: agent channels' policies also admit sibling configurations ``<channel>-p-?``
+            (``core.specs.channel_policy(siblings=True)``), so the release module can monetize them later without
+            changing a policy (``modules.release.enabled``).
     """
-    return Stack.of(scope).to_json_string(
-        {
-            "content_base_url": content_base_url,
-            "log_percent": log_percent,
-            "ads_url": ads_url,
-            "log_destination_arn": log_destination_arn,
-            "log_types": VENDED_LOG_TYPES,
-        }
-    )
+    template: dict[str, Any] = {
+        "content_base_url": content_base_url,
+        "log_percent": log_percent,
+        "ads_url": ads_url,
+        "log_destination_arn": log_destination_arn,
+        "log_types": VENDED_LOG_TYPES,
+    }
+    if sibling_policy:
+        template["sibling_policy"] = True
+    return Stack.of(scope).to_json_string(template)
 
 
 class AdInsertion(Construct):

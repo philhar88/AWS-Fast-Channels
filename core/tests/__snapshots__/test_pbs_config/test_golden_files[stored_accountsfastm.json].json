@@ -1,0 +1,95 @@
+{
+  "auction": {
+    "debug-allow": false
+  },
+  "hooks": {
+    "execution-plan": {
+      "endpoints": {
+        "/openrtb2/auction": {
+          "stages": {
+            "exitpoint": {
+              "groups": [
+                {
+                  "hook-sequence": [
+                    {
+                      "hook-impl-code": "fast-ctv-vast",
+                      "module-code": "fast-ctv"
+                    }
+                  ],
+                  "timeout": 250
+                }
+              ]
+            },
+            "processed-auction-request": {
+              "groups": [
+                {
+                  "hook-sequence": [
+                    {
+                      "hook-impl-code": "fast-ctv-policy",
+                      "module-code": "fast-ctv"
+                    }
+                  ],
+                  "timeout": 75
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "id": "fastm",
+  "privacy": {
+    "allowactivities": {
+      "transmitEids": {
+        "default": false,
+        "rules": [
+          {
+            "allow": true,
+            "condition": {
+              "component_name": [
+                "ownbook"
+              ],
+              "component_type": [
+                "BIDDER"
+              ]
+            }
+          }
+        ]
+      },
+      "transmitPreciseGeo": {
+        "default": false,
+        "rules": [
+          {
+            "allow": true,
+            "condition": {
+              "component_name": [
+                "ownbook"
+              ],
+              "component_type": [
+                "BIDDER"
+              ]
+            }
+          }
+        ]
+      },
+      "transmitUfpd": {
+        "default": false,
+        "rules": [
+          {
+            "allow": true,
+            "condition": {
+              "component_name": [
+                "ownbook"
+              ],
+              "component_type": [
+                "BIDDER"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "status": "active"
+}

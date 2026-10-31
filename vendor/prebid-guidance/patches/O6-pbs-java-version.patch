@@ -1,0 +1,35 @@
+O6: the JDK of the Prebid Server Java build is a build argument (FAST Channels overlay on the guidance v1.4.0)
+
+The guidance builds Prebid Server Java 3.43.0 with Corretto 21. Prebid Server Java 4.x needs Java 25 (Spring Boot 4,
+Vert.x 5). ARG JDK (default 21, as shipped) selects the apk package and JAVA_HOME; the image build passes JDK=25 for
+a stage with modules.demand.pbs_version 4.4.0, together with a docker-build-config.json for that release.
+
+diff --git a/deployment/ecr/prebid-server/Dockerfile b/deployment/ecr/prebid-server/Dockerfile
+--- a/deployment/ecr/prebid-server/Dockerfile
++++ b/deployment/ecr/prebid-server/Dockerfile
+@@ -18,13 +18,15 @@
+ 
+ # Build argument to control AMT bidder file inclusion
+ ARG INCLUDE_AMT_BIDDER=false
++# Overlay O6 (FAST Channels): the Corretto major version (21 for Prebid Server Java 3.x, 25 for 4.x)
++ARG JDK=21
+ 
+ # Install required dependencies
+ RUN wget -O /etc/apk/keys/amazoncorretto.rsa.pub https://apk.corretto.aws/amazoncorretto.rsa.pub && \
+     echo "https://apk.corretto.aws/" >> /etc/apk/repositories && \
+     apk update && \
+     apk add --no-cache \
+-        amazon-corretto-21 \
++        amazon-corretto-${JDK} \
+         maven=3.9.11-r0 \
+         git \
+         jq \
+@@ -32,7 +34,7 @@
+         bash
+ 
+ # Set JAVA_HOME
+-ENV JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
++ENV JAVA_HOME=/usr/lib/jvm/java-${JDK}-amazon-corretto
+ ENV PATH="${JAVA_HOME}/bin:${PATH}"
+ 
+ # Create custom JRE

@@ -1,0 +1,20 @@
+O7: ECS deployments keep 100% of the desired tasks healthy (FAST Channels overlay on the guidance v1.4.0)
+
+The Prebid Server service uses the CDK default minimum healthy percent of 50%: a forced deployment (the guidance's
+documented way to load a new configuration) ran on a single task for about 3 minutes. Minimum healthy 100% and
+maximum 200%: new tasks start before old ones stop.
+
+diff --git a/source/infrastructure/prebid_server/ecs_service_construct.py b/source/infrastructure/prebid_server/ecs_service_construct.py
+--- a/source/infrastructure/prebid_server/ecs_service_construct.py
++++ b/source/infrastructure/prebid_server/ecs_service_construct.py
+@@ -38,6 +38,10 @@
+             vpc_subnets=ec2.SubnetSelection(subnets=prebid_task_subnets),
+             enable_ecs_managed_tags=True,  # Enable ECS managed tags
+             propagate_tags=ecs.PropagatedTagSource.TASK_DEFINITION,
++            # Overlay O7 (FAST Channels): a deployment (such as a configuration push) never runs fewer tasks than
++            # the desired count; the CDK default of 50% halves capacity for minutes.
++            min_healthy_percent=100,
++            max_healthy_percent=200,
+             capacity_provider_strategies=[
+                 ecs.CapacityProviderStrategy(
+                     capacity_provider="FARGATE",

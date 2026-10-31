@@ -142,6 +142,86 @@
           "$ref": "#/$defs/AutopilotRun"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Catalog Item Changed"
+        },
+        "detail": {
+          "$ref": "#/$defs/CatalogItemChanged"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Census Changed"
+        },
+        "detail": {
+          "$ref": "#/$defs/CensusChanged"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Channel Alert"
+        },
+        "detail": {
+          "$ref": "#/$defs/ChannelAlert"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Desired State Rendered"
+        },
+        "detail": {
+          "$ref": "#/$defs/DesiredStateRendered"
+        }
+      }
     }
   ],
   "$defs": {
@@ -269,6 +349,141 @@
         "summary"
       ],
       "title": "AutopilotRun",
+      "type": "object"
+    },
+    "CatalogItemChanged": {
+      "description": "A title of the reference catalog was added, changed or removed. A CMS sync job puts this event after writing\nthe ``ReferenceCatalog`` item; the content enrichment module republishes the title's catalog context object.",
+      "properties": {
+        "content_id": {
+          "description": "The title's catalog id.",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Content Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Trace id of the change in your CMS.",
+          "title": "Correlation Id"
+        }
+      },
+      "required": [
+        "content_id"
+      ],
+      "title": "CatalogItemChanged",
+      "type": "object"
+    },
+    "CensusChanged": {
+      "description": "The number of the deployment's running channels crossed zero: the first channel started, or the last one\nstopped (published by the channel census with the ops module on; at most one census interval late).",
+      "properties": {
+        "running": {
+          "description": "Running channels now; 0 when the last one stopped.",
+          "minimum": 0,
+          "title": "Running",
+          "type": "integer"
+        },
+        "previous": {
+          "description": "Running channels at the census before.",
+          "minimum": 0,
+          "title": "Previous",
+          "type": "integer"
+        },
+        "correlation_id": {
+          "description": "Name of the census execution that saw the change.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "running",
+        "previous",
+        "correlation_id"
+      ],
+      "title": "CensusChanged",
+      "type": "object"
+    },
+    "ChannelAlert": {
+      "description": "A Channel Assembly alert of a running channel changed (ops module): Channel Assembly and MediaTailor publish no\nevents, so a poller reads ``ListAlerts`` every minute and publishes each alert changed in that minute once.",
+      "properties": {
+        "channel": {
+          "title": "Channel",
+          "type": "string"
+        },
+        "code": {
+          "description": "Alert code; for PROGRAM_ALERT the message names the program and its alert.",
+          "title": "Code",
+          "type": "string"
+        },
+        "category": {
+          "description": "SCHEDULING_ERROR (breaks playback), PLAYBACK_WARNING or INFO.",
+          "title": "Category",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "resource_arn": {
+          "title": "Resource Arn",
+          "type": "string"
+        },
+        "last_modified": {
+          "description": "UTC ISO-8601 time of the alert's last change.",
+          "title": "Last Modified",
+          "type": "string"
+        },
+        "correlation_id": {
+          "description": "The poll's scheduled time, which every alert of one poll shares.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel",
+        "code",
+        "category",
+        "message",
+        "resource_arn",
+        "last_modified",
+        "correlation_id"
+      ],
+      "title": "ChannelAlert",
+      "type": "object"
+    },
+    "DesiredStateRendered": {
+      "description": "A deployment rendered a new release bundle (release module): the stack wrote it to the release bucket, and the\nRelease Controller validates and applies it to each monetized channel's idle sibling.",
+      "properties": {
+        "bundle_key": {
+          "description": "S3 key of the bundle document, release/<digest>/bundle.json.",
+          "title": "Bundle Key",
+          "type": "string"
+        },
+        "digest": {
+          "description": "SHA-256 of the bundle: its version.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "correlation_id": {
+          "description": "The CloudFormation request that rendered it.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_key",
+        "digest",
+        "correlation_id"
+      ],
+      "title": "DesiredStateRendered",
       "type": "object"
     },
     "GeneratorInput": {

@@ -1,6 +1,7 @@
 """Fixtures: FAST Channels stages synthesized from the shipped cdk.json context, with asset bundling disabled."""
 
 import json
+import os
 import re
 import shutil
 from collections.abc import Callable, Iterator, Mapping
@@ -14,8 +15,8 @@ from aws_cdk.assertions import Template
 from syrupy.extensions.json import JSONSnapshotExtension
 
 from fast_channels.core.ladder import BUILTIN_DIR, LADDERS_DIR_ENV, Ladder, LadderOps, propose
-from fast_channels.infra.app import build
-from fast_channels.infra.config import FastChannelsConfig
+from fast_channels.infra.app import ACCOUNT_BASELINE, AS_RUN_ROUTER, build
+from fast_channels.infra.config import EVAL_RECORDS, EVAL_RECORDS_ENV, FastChannelsConfig
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -26,14 +27,20 @@ ACCOUNT = "123456789012"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CDK_CONTEXT: dict[str, Any] = json.loads((REPO_ROOT / "cdk.json").read_text())["context"]
 type Overrides = Mapping[str, Any]
+FIXTURE_RECORDS = Path(__file__).parent / "data" / "evals"
+"""Eval records of tasks without a suite yet (the recommender's), for configurations these tests synthesize."""
+os.environ[EVAL_RECORDS_ENV] = os.pathsep.join([str(EVAL_RECORDS), str(FIXTURE_RECORDS)])
 WEAK_REFERENCE_OUTPUT = "PublishOutput"
 """Name prefix of the outputs behind weak cross-stack references (``Fn::GetStackOutput``)."""
 
 
-def context(overrides: Overrides | None = None) -> dict[str, Any]:
-    """cdk.json context plus ``-c fast-channels.<path>=<value>``-style overrides, with bundling disabled."""
-    dotted = {f"fast-channels.{k}": v for k, v in (overrides or {}).items()}
-    return {**CDK_CONTEXT, "aws:cdk:bundling-stacks": [], **dotted}
+def context(overrides: Overrides | None = None, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """cdk.json context plus ``-c fast-channels.<path>=<value>``-style overrides and other ``extra`` context (such as
+    the guidance's network), with bundling disabled. The keys ``as-run-router`` (``make as-run-router``) and
+    ``account-baseline`` (``make account-baseline``) are passed as they are."""
+    flags = (AS_RUN_ROUTER, ACCOUNT_BASELINE)
+    dotted = {k if k in flags else f"fast-channels.{k}": v for k, v in (overrides or {}).items()}
+    return {**CDK_CONTEXT, "aws:cdk:bundling-stacks": [], **dotted, **(extra or {})}
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +63,10 @@ def deploy(
     region: str = "us-east-1",
     account: str | None = ACCOUNT,
     outdir: Path | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> Deployment:
     """A new, unsynthesized deployment (tests may still add constructs to its stacks)."""
-    app = App(context=context(overrides), outdir=str(outdir) if outdir else None)
+    app = App(context=context(overrides, extra), outdir=str(outdir) if outdir else None)
     return Deployment(app, build(app, account=account, region=region))
 
 
@@ -73,10 +81,12 @@ def deployment() -> Callable[..., Deployment]:
     """Cached deployments by (overrides, region); do not add constructs to them."""
     cache: dict[str, Deployment] = {}
 
-    def get(overrides: Overrides | None = None, *, region: str = "us-east-1") -> Deployment:
-        key = json.dumps([overrides or {}, region], sort_keys=True)
+    def get(
+        overrides: Overrides | None = None, *, region: str = "us-east-1", extra: Mapping[str, Any] | None = None
+    ) -> Deployment:
+        key = json.dumps([overrides or {}, region, extra or {}], sort_keys=True)
         if key not in cache:
-            cache[key] = deploy(overrides, region=region)
+            cache[key] = deploy(overrides, region=region, extra=extra)
         return cache[key]
 
     return get

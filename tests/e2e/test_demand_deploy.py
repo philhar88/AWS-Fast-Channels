@@ -1,0 +1,1441 @@
+"""Offline tests of the demand module's deploy and destroy (scripts/_demand.py, not marked e2e), with botocore
+Stubber standing in for AWS. The live deploy, smoke and destroy run in the e2e demand leg."""
+
+import io
+import json
+import zipfile
+from collections.abc import Iterator, Mapping
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Final
+
+import _demand
+import boto3
+import prebid_guidance
+import pytest
+from botocore.exceptions import ClientError
+from botocore.stub import Stubber
+
+from fast_channels.core import ad_server
+from fast_channels.core.ad_server import POD_CACHE_CONTEXT, PodCacheFunction
+from fast_channels.core.demand import Parameter
+from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
+from fast_channels.core.ladder import Ladder
+from fast_channels.core.monetization import playback
+from fast_channels.core.pds.sidecar import CONTEXT, Sidecar, sidecar
+from fast_channels.core.specs import vast_key
+
+REGION = "us-east-1"
+LOCK = """
+[[package]]
+name = "aws-cdk-lib"
+version = "2.237.0"
+groups = ["main", "dev", "local"]
+files = [{file = "aws_cdk_lib-2.237.0-py3-none-any.whl", hash = "sha256:aaa"}]
+
+[[package]]
+name = "pywin32"
+version = "310"
+groups = ["main"]
+markers = "sys_platform == \\"win32\\""
+files = [{file = "pywin32-310-cp311-cp311-win32.whl", hash = "sha256:bbb"}]
+
+[[package]]
+name = "pytest-mock"
+version = "3.14.0"
+groups = ["dev"]
+markers = {dev = "python_version >= \\"3.11\\""}
+files = [{file = "pytest_mock-3.14.0-py3-none-any.whl", hash = "sha256:ccc"}]
+
+[[package]]
+name = "sphinx"
+version = "8.0.0"
+groups = ["docs"]
+files = [{file = "sphinx-8.0.0-py3-none-any.whl", hash = "sha256:ddd"}]
+
+[[package]]
+name = "aws-solutions-cdk"
+version = "2.0.0"
+groups = ["local"]
+files = []
+
+[package.source]
+type = "directory"
+url = "cdk_solution_helper_py/helpers_cdk"
+"""
+
+
+def session() -> boto3.Session:
+    return boto3.Session(region_name=REGION, aws_access_key_id="test", aws_secret_access_key="test")
+
+
+@pytest.fixture(scope="module")
+def fastci() -> Any:
+    return prebid_guidance.stage_config("fastci", "fastcix", REGION)
+
+
+@pytest.fixture
+def stage(fastci: Any) -> Iterator[_demand.DemandStage]:
+    demand = _demand.DemandStage(fastci, "fastci", session())
+    demand.__dict__["account"] = "123456789012"  # cached_property: no STS call
+    yield demand
+
+
+@pytest.fixture
+def stub(stage: _demand.DemandStage) -> Iterator[Any]:
+    stubbers: list[Stubber] = []
+
+    def stubbed(service: str, region: str | None = None) -> Stubber:
+        stubber = Stubber(stage.client(service, region))
+        stubber.activate()
+        stubbers.append(stubber)
+        return stubber
+
+    yield stubbed
+    for stubber in stubbers:
+        stubber.assert_no_pending_responses()
+        stubber.deactivate()
+
+
+def test_lock_requirements_keep_the_installed_groups_with_hashes_and_markers(tmp_path: Path) -> None:
+    lock = tmp_path / "poetry.lock"
+    lock.write_text(LOCK)
+
+    requirements, local = _demand.lock_requirements(lock)
+
+    assert requirements == [
+        "aws-cdk-lib==2.237.0 --hash=sha256:aaa",
+        'pywin32==310 ; sys_platform == "win32" --hash=sha256:bbb',
+        'pytest-mock==3.14.0 ; (python_version >= "3.11") --hash=sha256:ccc',
+    ]
+    assert local == ["cdk_solution_helper_py/helpers_cdk"]
+
+
+def test_the_image_tag_is_the_contexts_content(tmp_path: Path) -> None:
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "buildspec.yml").write_text("version: 0.2\n")
+    first = _demand.context_digest(tmp_path)
+
+    assert _demand.context_digest(tmp_path) == first
+    assert _demand.zip_directory(tmp_path) == _demand.zip_directory(tmp_path)
+    with zipfile.ZipFile(io.BytesIO(_demand.zip_directory(tmp_path))) as archive:
+        assert sorted(archive.namelist()) == ["buildspec.yml", "context/Dockerfile"]
+    (tmp_path / "context" / "Dockerfile").write_text("FROM alpine\n")
+    assert _demand.context_digest(tmp_path) != first
+
+
+def test_a_release_the_guidance_does_not_build_gets_its_own_build_config(
+    stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(_demand, "BUILD", tmp_path)
+    config = stage.checkout / _demand.CONFIG_ROOT / "docker-build-config.json"
+    (stage.checkout / _demand.CONFIG_ROOT / "amt-bidder").mkdir(parents=True)
+    (stage.checkout / "source/loadtest/amt-bidder").mkdir(parents=True)
+    shipped = {"GIT_TAG_VERSION": "3.43.0", "GIT_REPO_URL": "https://github.com/prebid/prebid-server-java"}
+    config.write_text(json.dumps(shipped | {"MVN_CLI_OPTIONS": "-Dmaven.test.skip"}))
+
+    as_shipped = stage.build_context(tmp_path / "out")
+    assert json.loads((as_shipped / "context/docker-build-config.json").read_text())["GIT_TAG_VERSION"] == "3.43.0"
+    shipped_digest = _demand.context_digest(as_shipped)
+
+    spec = prebid_guidance.PbsBuild(jdk="25", mvn_options="-Dmaven.test.skip -Dcheckstyle.skip")
+    context = stage.build_context(tmp_path / "out", ("4.4.0", spec))
+    assert json.loads((context / "context/docker-build-config.json").read_text()) == {
+        "GIT_TAG_VERSION": "4.4.0",
+        "GIT_REPO_URL": "https://github.com/prebid/prebid-server-java",
+        "MVN_CLI_OPTIONS": "-Dmaven.test.skip -Dcheckstyle.skip",
+    }
+    assert json.loads(config.read_text())["GIT_TAG_VERSION"] == "3.43.0", "the checkout is unchanged"
+    assert _demand.context_digest(context) != shipped_digest, "another image tag"
+
+
+def test_running_tasks_without_a_warm_up_are_warmed(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm, ecs, codebuild = stub("ssm"), stub("ecs"), stub("codebuild")
+    cluster = "arn:aws:ecs:us-east-1:123456789012:cluster/c"
+    service = "arn:aws:ecs:us-east-1:123456789012:service/c/s"
+    old, new = (f"arn:aws:ecs:us-east-1:123456789012:task/c/{t}" for t in ("old", "new"))
+    page = {
+        "Parameters": [
+            {"Name": "/fastcix/demand/cluster-arn", "Value": cluster},
+            {"Name": "/fastcix/demand/service-arn", "Value": service},
+        ]
+    }
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ecs.add_response(
+        "list_tasks", {"taskArns": [old, new]}, {"cluster": cluster, "serviceName": service, "desiredStatus": "RUNNING"}
+    )
+    project = "fastcix-pbs-warmup"
+    codebuild.add_response(
+        "list_builds_for_project", {"ids": [f"{project}:1"]}, {"projectName": project, "sortOrder": "DESCENDING"}
+    )
+    environment = {
+        "type": "ARM_CONTAINER",
+        "image": "i",
+        "computeType": "BUILD_GENERAL1_SMALL",
+        "environmentVariables": [{"name": "TASK_ARN", "value": old, "type": "PLAINTEXT"}],
+    }
+    codebuild.add_response(
+        "batch_get_builds", {"builds": [{"id": f"{project}:1", "environment": environment}]}, {"ids": [f"{project}:1"]}
+    )
+    override = [{"name": "TASK_ARN", "value": new, "type": "PLAINTEXT"}]
+    codebuild.add_response(
+        "start_build",
+        {"build": {"id": f"{project}:2"}},
+        {"projectName": project, "environmentVariablesOverride": override},
+    )
+    codebuild.add_response(
+        "batch_get_builds", {"builds": [{"id": f"{project}:2", "buildStatus": "SUCCEEDED"}]}, {"ids": [f"{project}:2"]}
+    )
+
+    assert stage.warm_running_tasks() == {new: "SUCCEEDED"}, "the task the rule already warmed is left alone"
+
+
+def test_console_bucket() -> None:
+    url = "https://us-east-1.console.aws.amazon.com/s3/home?region=us-east-1&bucket=fastcix-pbs-bucket83908e77-abc"
+
+    assert _demand.console_bucket(url) == "fastcix-pbs-bucket83908e77-abc"
+
+
+def test_retained_resources_include_what_lambda_and_container_insights_create() -> None:
+    rows = [
+        {"ResourceType": "AWS::S3::Bucket", "PhysicalResourceId": "fastcix-pbs-bucket"},
+        {"ResourceType": "AWS::Logs::LogGroup", "PhysicalResourceId": "fastcix-pbs-container"},
+        {"ResourceType": "AWS::Lambda::Function", "PhysicalResourceId": "fastcix-pbs-HeaderSecret"},
+        {"ResourceType": "AWS::KMS::Key", "PhysicalResourceId": "key-1"},
+        {"ResourceType": "AWS::ECS::TaskDefinition", "PhysicalResourceId": "arn:aws:ecs:td/x:1"},
+        {"ResourceType": "AWS::EC2::VPC", "PhysicalResourceId": "vpc-1"},
+        {"ResourceType": "AWS::S3::Bucket"},
+    ]
+
+    retained = _demand.retained_resources(rows, "fastcix-pbs-Cluster")
+
+    assert retained == _demand.Retained(
+        buckets=["fastcix-pbs-bucket"],
+        log_groups=[
+            "fastcix-pbs-container",
+            "/aws/lambda/fastcix-pbs-HeaderSecret",
+            "/aws/ecs/containerinsights/fastcix-pbs-Cluster/performance",
+        ],
+        keys=["key-1"],
+        task_definitions=["arn:aws:ecs:td/x:1"],
+    )
+
+
+def test_names_follow_the_prefix(stage: _demand.DemandStage) -> None:
+    assert (stage.prefix, stage.stage_id) == ("fastcix", "FastChannels-fastcix")
+    assert stage.repository_stacks() == ["FastChannels-fastcix/DemandEdge", "FastChannels-fastcix/DemandBuild"]
+    assert (stage.edge_stack, stage.build_stack) == (
+        "FastChannels-fastcix-DemandEdge",
+        "FastChannels-fastcix-DemandBuild",
+    )
+    assert stage.checkout.name == "fastcix"
+    context = stage.repository_context()
+    assert context[context.index("-c") + 1].startswith("fast-channels.")
+    assert any(arg == 'fast-channels.prefix="fastcix"' for arg in context)
+
+
+def test_the_pds_and_release_stacks_deploy_after_the_demand_stack(stage: _demand.DemandStage) -> None:
+    assert (stage.pds_stack, stage.release_stack) == ("FastChannels-fastcix-Pds", "FastChannels-fastcix-Release")
+    assert stage.beside_stacks() == [
+        "FastChannels-fastcix/Demand",
+        "FastChannels-fastcix/Pds",
+        "FastChannels-fastcix/Release",
+    ]
+
+
+def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
+    return {
+        "StackName": name,
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+        "Outputs": [{"OutputKey": key, "OutputValue": value} for key, value in outputs.items()],
+    }
+
+
+PDS_PARAMETERS = ("config-bucket", "lake-bucket", "media-bucket", "content-base-url", "ladder-version")
+
+
+def test_the_pds_needs_the_parameters_of_the_data_and_media_stacks(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    names = [f"/fastcix/pds/{p}" for p in (*PDS_PARAMETERS, "catalog-context-bucket")]  # fastci has the crawl module
+    ssm.add_response(
+        "get_parameters",
+        {"Parameters": [], "InvalidParameters": names[3:]},
+        {"Names": names},
+    )
+    with pytest.raises(_demand.DemandError, match=r"content-base-url.*make deploy"):
+        stage.check_pds_state()
+
+    ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
+    stage.check_pds_state()
+
+
+def test_without_the_crawl_module_the_pds_needs_no_catalog_bucket(fastci: Any) -> None:
+    modules = fastci.modules.model_copy(update={"crawl": fastci.modules.crawl.model_copy(update={"enabled": False})})
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    ssm = Stubber(stage.client("ssm"))
+    names = [f"/fastcix/pds/{p}" for p in PDS_PARAMETERS]
+    ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
+    with ssm:
+        stage.check_pds_state()
+    ssm.assert_no_pending_responses()
+
+
+def test_a_pds_stack_the_module_no_longer_has_is_deleted(fastci: Any, stub: Any) -> None:
+    modules = fastci.modules.model_copy(update={"pds": fastci.modules.pds.model_copy(update={"enabled": False})})
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Release"]
+    cloudformation = Stubber(stage.client("cloudformation"))
+    name = {"StackName": "FastChannels-fastcix-Pds"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
+    cloudformation.add_response("delete_stack", {}, name)
+    cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
+    with cloudformation:
+        stage.check_pds_state()
+    cloudformation.assert_no_pending_responses()
+
+
+def test_the_release_stack_needs_the_media_stacks_parameters(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    name = {"Name": "/fastcix/release/content-base-url"}
+    ssm.add_client_error("get_parameter", "ParameterNotFound", expected_params=name)
+    with pytest.raises(_demand.DemandError, match="make deploy"):
+        stage.check_release_state()
+    ssm.add_response("get_parameter", {"Parameter": {"Name": name["Name"], "Value": "https://cdn"}}, name)
+    stage.check_release_state()
+
+
+def test_a_release_stack_the_module_no_longer_has_is_deleted(fastci: Any) -> None:
+    modules = fastci.modules.model_copy(
+        update={"release": fastci.modules.release.model_copy(update={"enabled": False})}
+    )
+    stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Pds"]
+    cloudformation = Stubber(stage.client("cloudformation"))
+    name = {"StackName": "FastChannels-fastcix-Release"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
+    cloudformation.add_response("delete_stack", {}, name)
+    cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
+    with cloudformation:
+        stage.check_release_state()
+    cloudformation.assert_no_pending_responses()
+
+
+def test_the_census_gate_starts_with_the_last_count(stage: _demand.DemandStage, stub: Any) -> None:
+    """Prebid Server's task count follows the running channels; the PDS has no gate of its own (its sidecar runs in
+    those tasks)."""
+    ssm, cloudformation, stepfunctions = stub("ssm"), stub("cloudformation"), stub("stepfunctions")
+    ssm.add_response(
+        "get_parameter",
+        {"Parameter": {"Name": "/fastcix/ops/running-channels", "Value": "1"}},
+        {"Name": "/fastcix/ops/running-channels"},
+    )
+    arns = {"FastChannels-fastcix-Demand": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcix-census-gate"}
+    detail = json.dumps({"detail": {"running": 1, "previous": 1, "correlation_id": "deploy-demand"}})
+    for name, arn in arns.items():
+        cloudformation.add_response(
+            "describe_stacks", {"Stacks": [_stack(name, {"CensusGateArn": arn})]}, {"StackName": name}
+        )
+    for arn in arns.values():
+        stepfunctions.add_response(
+            "start_execution",
+            {"executionArn": f"{arn}:x", "startDate": datetime(2026, 10, 29, tzinfo=UTC)},
+            {"stateMachineArn": arn, "input": detail},
+        )
+
+    assert stage.start_census_gate() == f"{arns['FastChannels-fastcix-Demand']}:x"
+
+
+def test_guidance_parameters_are_keyed_by_the_renamed_stack(stage: _demand.DemandStage) -> None:
+    assert stage.guidance_parameters("fastcix-pbs", {"SpotInstanceWeight": "0", "EnableLogAnalytics": "false"}) == [
+        "--parameters",
+        "fastcix-pbs:SpotInstanceWeight=0",
+        "--parameters",
+        "fastcix-pbs:EnableLogAnalytics=false",
+    ]
+
+
+def test_a_parameter_not_in_the_registry_is_refused(stage: _demand.DemandStage) -> None:
+    with pytest.raises(_demand.DemandError, match="not in GUIDANCE_PARAMETERS"):
+        stage.guidance_parameters("fastcix-pbs", {"RequestsPerTargetThreshold": "100"})
+
+
+def test_a_redeploy_takes_the_new_image_not_the_previous_parameter(
+    stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guidance's image is the default of its ContainerImage parameter: with previous parameter values reused, a
+    redeploy with another image (measured on a Prebid Server release change) kept the previous image running."""
+    monkeypatch.setattr(type(stage), "toolchain", lambda self: Path("/venv"))
+
+    command = [str(arg) for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
+
+    assert "--no-previous-parameters" in command
+    assert command[:3] == [str(_demand.CDK), "deploy", "prebid-server-deployment-on-aws"]
+
+
+def test_with_the_pds_the_guidance_deploys_through_the_wrapper_with_the_sidecar(
+    stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(type(stage), "toolchain", lambda self: Path("/venv"))
+    spec = sidecar(
+        prefix="fastcix",
+        image="i",
+        partition="aws",
+        region="us-east-1",
+        account="123456789012",
+        config_bucket="b",
+        content_base_url="https://cdn",
+        log_retention_days=7,
+    )
+
+    plain = [str(arg) for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
+    command = [
+        str(arg)
+        for arg in stage.guidance_command("prebid-server-deployment-on-aws", simulator=False, with_sidecar=spec)
+    ]
+
+    assert plain[plain.index("--app") + 1] == "/venv/bin/python app.py"
+    assert command[command.index("--app") + 1] == f"/venv/bin/python {_demand.GUIDANCE_APP}"
+    assert Sidecar.model_validate_json(command[command.index(f"{CONTEXT}={spec.model_dump_json()}")].split("=", 1)[1])
+    assert not [arg for arg in plain if arg.startswith(f"{CONTEXT}=")]
+
+
+def test_with_an_ad_server_the_guidance_gets_the_cache_functions_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M8-09: the Prebid Cache function's provisioned concurrency and memory go to the wrapper as context, only in the
+    ad-server mode and only through the wrapper."""
+    spec = sidecar(
+        prefix="fastcix",
+        image="i",
+        partition="aws",
+        region="us-east-1",
+        account="123456789012",
+        config_bucket="b",
+        content_base_url="https://cdn",
+        log_retention_days=7,
+    )
+    found: dict[str, list[str]] = {}
+    for name in ("fastci", "fastciads"):
+        demand = _demand.DemandStage(prebid_guidance.stage_config(name, "fastcix", REGION), name, session())
+        monkeypatch.setattr(type(demand), "toolchain", lambda self: Path("/venv"))
+        demand.__dict__["account"] = "123456789012"  # cached_property: no STS call
+        found[name] = [
+            str(arg)
+            for arg in demand.guidance_command("prebid-server-deployment-on-aws", simulator=False, with_sidecar=spec)
+        ]
+        plain = [str(arg) for arg in demand.guidance_command("prebid-server-deployment-on-aws", simulator=False)]
+        assert not [arg for arg in plain if arg.startswith(f"{POD_CACHE_CONTEXT}=")], "the guidance's own app.py"
+
+    assert not [arg for arg in found["fastci"] if arg.startswith(f"{POD_CACHE_CONTEXT}=")]
+    [context] = [arg for arg in found["fastciads"] if arg.startswith(f"{POD_CACHE_CONTEXT}=")]
+    assert PodCacheFunction.model_validate_json(context.split("=", 1)[1]) == PodCacheFunction(
+        memory_mib=1769, provisioned=8
+    )
+
+
+def test_the_sidecar_reads_its_buckets_and_follows_the_crawl_module(stage: _demand.DemandStage, stub: Any) -> None:
+    """fastci has the crawl module: the sidecar gets its settings and the catalog-context bucket."""
+    ssm = stub("ssm")
+    names = [f"/fastcix/pds/{p}" for p in (*PDS_PARAMETERS, "catalog-context-bucket")]
+    ssm.add_response("get_parameters", {"Parameters": []}, {"Names": names})
+    found = {"/fastcix/pds/config-bucket": "fastcix-pds-config", "/fastcix/pds/catalog-context-bucket": "ctx"}
+    ssm.add_response(
+        "get_parameters",
+        {"Parameters": [{"Name": k, "Value": v, "Type": "String"} for k, v in found.items()]},
+        {"Names": list(found)},
+    )
+
+    spec = stage.sidecar("123456789012.dkr.ecr.us-east-1.amazonaws.com/fastcix-pds:abc", "https://cdn.example")
+
+    assert spec.environment["PDS_CONFIG_BUCKET"] == "fastcix-pds-config"
+    assert spec.environment["CATALOG_CONTEXT_BUCKET"] == "ctx"
+    assert spec.environment["CRAWL_HOLDOUT_PERCENT"] == str(stage.config.modules.crawl.holdout_percent)
+    assert "PBS_VERSION" not in spec.environment, "Prebid Server Java 4.4.0 only: the patch sends 2.6 natively"
+    assert spec.environment["CONTENT_BASE_URL"] == "https://cdn.example"
+    assert spec.log_group == "/aws/ecs/fastcix-pds"
+    assert {s["Sid"] for s in spec.statements} >= {"PdsCatalogContextList", "PdsCatalogContexts"}
+
+
+def test_without_the_crawl_module_the_sidecar_has_none_of_its_settings(fastci: Any) -> None:
+    modules = fastci.modules.model_copy(update={"crawl": fastci.modules.crawl.model_copy(update={"enabled": False})})
+    config = fastci.model_copy(update={"modules": modules})
+
+    assert _demand.crawl_environment(config) is None
+    assert _demand.crawl_environment(fastci) is not None
+
+
+def test_the_lambda_simulator_is_reached_through_the_private_zone(stage: _demand.DemandStage) -> None:
+    assert stage.simulator_endpoint("image") == {"SimulatorEndpoint": "http://sim.fastcix.fast.internal/"}
+
+
+def test_smoke_passes_only_with_every_check() -> None:
+    pod = {"status": 200, "content_type": "application/xml; charset=utf-8", "ads": 2}
+    results: dict[str, dict[str, Any]] = {
+        **{f"{seconds}s": dict(pod) for seconds in (30, 48, 60, 90, 120)},
+        "out-of-range-300s": {"status": 200, "content_type": "application/xml", "ads": 0},
+        "house-ads": {"count": 2},
+        "no-secret": {"status": 403},
+        "other-path": {"status": 403},
+    }
+
+    assert _demand.SMOKE_SECONDS == (30, 48, 60, 90, 120), "the grid and a length off it"
+    assert _demand.smoke_passed(results)
+    without_kit = {k: dict(v) for k, v in results.items()} | {"house-ads": {"count": 0}}
+    without_kit["48s"]["ads"] = 0
+    assert _demand.smoke_passed(without_kit), "without the kit's house ads a probe's pod is empty"
+    for key, change in (
+        ("60s", {"content_type": "application/json"}),
+        ("90s", {"ads": None}),
+        ("48s", {"ads": 0}),
+        ("no-secret", {"status": 200}),
+        ("out-of-range-300s", {"ads": 1}),
+        ("out-of-range-300s", {"status": 400}),
+        ("other-path", {"status": 404}),
+    ):
+        broken = {k: dict(v) for k, v in results.items()}
+        broken[key] |= change
+        assert not _demand.smoke_passed(broken), key
+    del results["120s"]
+    assert not _demand.smoke_passed(results)
+
+
+@pytest.mark.parametrize(
+    ("text", "ads"),
+    [
+        ('<VAST version="4.2"><Ad id="a"/><Ad id="b"/></VAST>', 2),
+        ('<VAST version="4.2"/>', 0),
+        ('<VAST version="3.0"><Ad id="a"/></VAST>', None),
+        ('{"seatbid": []}', None),
+    ],
+)
+def test_the_smoke_counts_a_vast_4_2_pods_ads(text: str, ads: int | None) -> None:
+    assert _demand.vast_ads(text) == ads
+
+
+def test_empty_bucket_deletes_every_version_and_marker(stage: _demand.DemandStage, stub: Any) -> None:
+    s3 = stub("s3")
+    s3.add_response(
+        "list_object_versions",
+        {"Versions": [{"Key": "a", "VersionId": "1"}], "DeleteMarkers": [{"Key": "a", "VersionId": "2"}]},
+        {"Bucket": "b"},
+    )
+    s3.add_response(
+        "delete_objects",
+        {},
+        {
+            "Bucket": "b",
+            "Delete": {"Objects": [{"Key": "a", "VersionId": "1"}, {"Key": "a", "VersionId": "2"}], "Quiet": True},
+        },
+    )
+
+    assert _demand.empty_bucket(stage.client("s3"), "b") == 2
+
+
+def test_remove_retained_shortens_long_key_deletion_windows(stage: _demand.DemandStage, stub: Any) -> None:
+    now = datetime.now(UTC)
+    kms = stub("kms")
+    kms.add_response(
+        "describe_key",
+        {"KeyMetadata": {"KeyId": "k30", "KeyState": "PendingDeletion", "DeletionDate": now + timedelta(days=30)}},
+        {"KeyId": "k30"},
+    )
+    kms.add_response("cancel_key_deletion", {"KeyId": "k30"}, {"KeyId": "k30"})
+    kms.add_response("schedule_key_deletion", {"KeyId": "k30"}, {"KeyId": "k30", "PendingWindowInDays": 7})
+    kms.add_response(
+        "describe_key",
+        {"KeyMetadata": {"KeyId": "k7", "KeyState": "PendingDeletion", "DeletionDate": now + timedelta(days=7)}},
+        {"KeyId": "k7"},
+    )
+    kms.add_response("describe_key", {"KeyMetadata": {"KeyId": "kon", "KeyState": "Enabled"}}, {"KeyId": "kon"})
+    kms.add_response("schedule_key_deletion", {"KeyId": "kon"}, {"KeyId": "kon", "PendingWindowInDays": 7})
+    logs = stub("logs")
+    logs.add_client_error("delete_log_group", "ResourceNotFoundException", expected_params={"logGroupName": "gone"})
+    ecs = stub("ecs")
+    ecs.add_response("deregister_task_definition", {}, {"taskDefinition": "td:1"})
+    ecs.add_response("delete_task_definitions", {}, {"taskDefinitions": ["td:1"]})
+    s3 = stub("s3")
+    s3.add_client_error("list_object_versions", "NoSuchBucket", expected_params={"Bucket": "gone-bucket"})
+
+    stage.remove_retained(
+        _demand.Retained(
+            buckets=["gone-bucket"], log_groups=["gone"], keys=["k30", "k7", "kon"], task_definitions=["td:1"]
+        )
+    )
+
+
+def test_parameters_are_read_and_deleted_by_path(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    page = {"Parameters": [{"Name": "/fastcix/demand/vpc-id", "Value": "vpc-1"}]}
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ssm.add_response(
+        "delete_parameters", {"DeletedParameters": ["/fastcix/demand/vpc-id"]}, {"Names": ["/fastcix/demand/vpc-id"]}
+    )
+
+    assert stage.parameters() == {Parameter.VPC_ID.value: "vpc-1"}
+    stage.delete_parameters()
+
+
+def test_more_than_ten_parameters_are_deleted_ten_at_a_time(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm = stub("ssm")
+    names = [f"/fastcix/demand/{parameter.value}" for parameter in Parameter]
+    page = {"Parameters": [{"Name": name, "Value": "x"} for name in names]}
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ssm.add_response("delete_parameters", {"DeletedParameters": names[:10]}, {"Names": names[:10]})
+    ssm.add_response("delete_parameters", {"DeletedParameters": names[10:]}, {"Names": names[10:]})
+
+    assert len(names) > 10
+    stage.delete_parameters()
+
+
+def test_retained_resources_are_read_page_by_page(stage: _demand.DemandStage, stub: Any) -> None:
+    """DescribeStackResources stops at 100 resources; the guidance has about 350."""
+    cloudformation = stub("cloudformation")
+    row = {"LastUpdatedTimestamp": datetime(2026, 10, 29, tzinfo=UTC), "ResourceStatus": "CREATE_COMPLETE"}
+    first = [
+        {
+            **row,
+            "LogicalResourceId": f"B{n}",
+            "PhysicalResourceId": f"fastcix-pbs-b{n}",
+            "ResourceType": "AWS::S3::Bucket",
+        }
+        for n in range(100)
+    ]
+    second = [{**row, "LogicalResourceId": "K", "PhysicalResourceId": "k1", "ResourceType": "AWS::KMS::Key"}]
+    cloudformation.add_response(
+        "list_stack_resources", {"StackResourceSummaries": first, "NextToken": "t"}, {"StackName": "fastcix-pbs"}
+    )
+    cloudformation.add_response(
+        "list_stack_resources", {"StackResourceSummaries": second}, {"StackName": "fastcix-pbs", "NextToken": "t"}
+    )
+    stack = {
+        "StackName": "fastcix-pbs",
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+    }
+    cloudformation.add_response("describe_stacks", {"Stacks": [stack]}, {"StackName": "fastcix-pbs"})
+    cloudformation.add_client_error(
+        "list_stack_resources", "ValidationError", expected_params={"StackName": "fastcix-pbs-sim"}
+    )
+
+    retained = stage.retained()
+
+    assert len(retained.buckets) == 100
+    assert retained.keys == ["k1"]
+
+
+def test_deleted_network_resources_are_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    ec2 = stub("ec2")
+    subnet = "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-1"
+    endpoint = "arn:aws:ec2:us-east-1:123456789012:vpc-endpoint/vpce-1"
+    ec2.add_client_error("describe_subnets", "InvalidSubnetID.NotFound", expected_params={"SubnetIds": ["subnet-1"]})
+    ec2.add_response(
+        "describe_vpc_endpoints", {"VpcEndpoints": [{"VpcEndpointId": "vpce-1"}]}, {"VpcEndpointIds": ["vpce-1"]}
+    )
+
+    assert stage.gone(subnet, REGION)
+    assert not stage.gone(endpoint, REGION)
+
+
+def test_a_deleted_peering_connection_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    ec2 = stub("ec2")
+    arn = "arn:aws:ec2:us-east-1:123456789012:vpc-peering-connection/pcx-1"
+    for code in ("deleted", "active"):
+        ec2.add_response(
+            "describe_vpc_peering_connections",
+            {"VpcPeeringConnections": [{"VpcPeeringConnectionId": "pcx-1", "Status": {"Code": code}}]},
+            {"VpcPeeringConnectionIds": ["pcx-1"]},
+        )
+
+    assert stage.gone(arn, REGION)
+    assert not stage.gone(arn, REGION)
+
+
+def test_a_key_pending_deletion_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    kms = stub("kms")
+    arn = "arn:aws:kms:us-east-1:123456789012:key/k1"
+    kms.add_response("describe_key", {"KeyMetadata": {"KeyId": "k1", "KeyState": "PendingDeletion"}}, {"KeyId": arn})
+    kms.add_response("describe_key", {"KeyMetadata": {"KeyId": "k1", "KeyState": "Enabled"}}, {"KeyId": arn})
+
+    assert stage.gone(arn, REGION)
+    assert not stage.gone(arn, REGION)
+
+
+def test_a_deleted_nat_gateway_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    ec2 = stub("ec2")
+    arn = "arn:aws:ec2:us-east-1:123456789012:natgateway/nat-1"
+    ec2.add_response(
+        "describe_nat_gateways",
+        {"NatGateways": [{"NatGatewayId": "nat-1", "State": "deleted"}]},
+        {"NatGatewayIds": ["nat-1"]},
+    )
+
+    assert stage.gone(arn, REGION)
+
+
+def test_cli_refuses_a_stage_without_demand(capsys: pytest.CaptureFixture[str]) -> None:
+    assert prebid_guidance.main(["inventory", "--prefix", "fastcix"]) == 1
+    assert "modules.demand is off" in capsys.readouterr().err
+
+
+def test_doctor_lists_the_tools(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        prebid_guidance, "iterate_tool_versions", lambda: iter([("git", "git 2"), ("cdk", "MISSING: x")])
+    )
+
+    assert prebid_guidance.main(["doctor"]) == 1
+    assert "cdk              MISSING: x" in capsys.readouterr().out
+
+
+STANDARD = Ladder.builtin("standard")
+
+
+def demo() -> Any:
+    encoded = {
+        c.crid: (f"demo-{c.crid}-x", f"https://media.example.com/ads/standard/demo-{c.crid}-x/main.m3u8", 30030)
+        for c in DEMO_CREATIVES
+    }
+    return demo_index(STANDARD.version, encoded, width=1920, height=1080)
+
+
+def stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
+    return {
+        "StackName": name,
+        "CreationTime": datetime(2026, 10, 29, tzinfo=UTC),
+        "StackStatus": "CREATE_COMPLETE",
+        "Outputs": [{"OutputKey": k, "OutputValue": v} for k, v in outputs.items()],
+    }
+
+
+def test_the_demo_index_comes_from_the_media_bucket(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation, s3 = stub("cloudformation"), stub("s3")
+    data = {"MediaBucketName": "fastcix-media"}
+    media = {"DefaultLadderVersion": STANDARD.version, "ContentBaseUrl": "https://media.example.com"}
+    cloudformation.add_response(
+        "describe_stacks",
+        {"Stacks": [stack("FastChannels-fastcix-Data", data)]},
+        {"StackName": "FastChannels-fastcix-Data"},
+    )
+    cloudformation.add_response(
+        "describe_stacks",
+        {"Stacks": [stack("FastChannels-fastcix-Media", media)]},
+        {"StackName": "FastChannels-fastcix-Media"},
+    )
+    s3.add_response(
+        "get_object",
+        {"Body": io.BytesIO(demo().model_dump_json().encode())},
+        {"Bucket": "fastcix-media", "Key": demo_index_key(STANDARD.version)},
+    )
+
+    assert stage.demo_index() == demo()
+
+
+def test_a_demand_only_stage_has_no_demo_index(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation = stub("cloudformation")
+    cloudformation.add_client_error(
+        "describe_stacks", "ValidationError", expected_params={"StackName": "FastChannels-fastcix-Data"}
+    )
+
+    assert stage.demo_index() is None
+
+
+KIT_VAST: Final = "".join(
+    [
+        '<VAST xmlns="http://www.iab.com/VAST" version="4.2">',
+        *(
+            f'<Ad sequence="{n}"><InLine><Creatives><Creative id="h{n}-std-0a1b"><Linear>'
+            "<Duration>00:00:30.030</Duration><MediaFiles>"
+            f'<MediaFile width="1920" height="1080">https://media.example.com/ads/std/h{n}/main.m3u8</MediaFile>'
+            "</MediaFiles></Linear></Creative></Creatives></InLine></Ad>"
+            for n in (1, 2, 1)
+        ),
+        "</VAST>",
+    ]
+)
+"""The kit's VAST pod (``ads/<ladder>/vast.xml``), which repeats its house ads."""
+
+
+def media_stacks(cloudformation: Any) -> None:
+    for name, outputs in (
+        ("FastChannels-fastcix-Data", {"MediaBucketName": "fastcix-media"}),
+        (
+            "FastChannels-fastcix-Media",
+            {"DefaultLadderVersion": STANDARD.version, "ContentBaseUrl": "https://m.example"},
+        ),
+    ):
+        cloudformation.add_response("describe_stacks", {"Stacks": [stack(name, outputs)]}, {"StackName": name})
+
+
+def test_the_modules_house_ads_are_the_kits(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation, s3 = stub("cloudformation"), stub("s3")
+    media_stacks(cloudformation)
+    s3.add_response(
+        "get_object",
+        {"Body": io.BytesIO(KIT_VAST.encode())},
+        {"Bucket": "fastcix-media", "Key": vast_key(STANDARD.version)},
+    )
+
+    ads = stage.house_ads()
+
+    assert [(ad.crid, ad.dur, ad.w) for ad in ads] == [("house1", 30, 1920), ("house2", 30, 1920)]
+    assert "h1-std-0a1b" in ads[0].adm and "<Impression>" not in ads[0].adm
+
+
+def test_without_a_kit_the_module_has_no_house_ads(stage: _demand.DemandStage, stub: Any) -> None:
+    cloudformation, s3 = stub("cloudformation"), stub("s3")
+    media_stacks(cloudformation)
+    s3.add_client_error(
+        "get_object", "NoSuchKey", expected_params={"Bucket": "fastcix-media", "Key": vast_key(STANDARD.version)}
+    )
+
+    assert stage.house_ads() == ()
+
+
+def test_the_simulator_creatives_bill_on_the_cdn_beacon(stage: _demand.DemandStage) -> None:
+    rendered = stage.simulator_creatives(demo(), "https://media.example.com/")
+
+    assert rendered is not None
+    creatives = json.loads(rendered)
+    assert [c["crid"] for c in creatives] == [f"sim{n}" for n in range(1, 9)]
+    assert creatives[0]["burl"].startswith("https://media.example.com/ads/b.gif?seat=amt&cr=sim1&p=${AUCTION_PRICE}")
+    assert stage.simulator_creatives(None, "https://media.example.com") is None
+
+
+def test_the_simulator_package_holds_the_handler_and_the_creatives(
+    stage: _demand.DemandStage, stub: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handler = tmp_path / _demand.SIMULATOR_HANDLER
+    handler.mkdir(parents=True)
+    (handler / "handler.py").write_text("def lambda_handler(event, context): ...\n")
+    (handler / "bid_response.json").write_text("{}")
+    monkeypatch.setattr(type(stage), "checkout", property(lambda self: tmp_path))
+    uploaded: list[dict[str, Any]] = []
+    s3 = stub("s3")
+    for _ in range(2):
+        s3.add_response("put_object", {}, None)
+    stage.client("s3").meta.events.register(
+        "provide-client-params.s3.PutObject", lambda params, **_: uploaded.append(params)
+    )
+
+    key = stage.simulator_package('[{"crid": "sim1"}]')
+    again = stage.simulator_package('[{"crid": "sim1"}]')
+
+    assert key == again, "the key is the package's content hash"
+    assert key.startswith("simulator/") and key.endswith(".zip")
+    assert uploaded[0]["Bucket"] == "fastcix-cdk-assets-123456789012-us-east-1"
+    body = uploaded[0]["Body"]
+    with zipfile.ZipFile(io.BytesIO(body if isinstance(body, bytes) else body.getvalue())) as package:
+        assert sorted(package.namelist()) == ["bid_response.json", "handler.py", "video_creatives.json"]
+
+
+def test_the_network_names_each_subnets_zone_and_route_table(stage: _demand.DemandStage, stub: Any) -> None:
+    ssm, ec2, elb, ecs = stub("ssm"), stub("ec2"), stub("elbv2"), stub("ecs")
+    alb = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fastcix-alb/0123456789abcdef"
+    pbs = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-pbs/0123456789abcdef"
+    values = {
+        "vpc-id": "vpc-1",
+        "alb-arn": alb,
+        "private-subnet-ids": "subnet-a,subnet-b",
+        "task-security-group-id": "sg-1",
+        "cluster-arn": "arn:aws:ecs:us-east-1:123456789012:cluster/c",
+        "service-arn": "arn:aws:ecs:us-east-1:123456789012:service/c/s",
+        "cloudfront-domain": "d1.cloudfront.net",
+    }
+    page = {"Parameters": [{"Name": f"/fastcix/demand/{k}", "Value": v} for k, v in values.items()]}
+    ssm.add_response("get_parameters_by_path", page, {"Path": "/fastcix/demand/"})
+    ec2.add_response(
+        "describe_subnets",
+        {
+            "Subnets": [
+                {"SubnetId": "subnet-a", "AvailabilityZone": "us-east-1a"},
+                {"SubnetId": "subnet-b", "AvailabilityZone": "us-east-1b"},
+            ]
+        },
+        {"SubnetIds": ["subnet-a", "subnet-b"]},
+    )
+    ec2.add_response(
+        "describe_route_tables",
+        {
+            "RouteTables": [
+                {"RouteTableId": "rtb-0a", "Associations": [{"SubnetId": "subnet-a"}]},
+                {"RouteTableId": "rtb-0b", "Associations": [{"Main": True}]},
+            ]
+        },
+        {"Filters": [{"Name": "vpc-id", "Values": ["vpc-1"]}]},
+    )
+    cache = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-cache/0123456789abcdef"
+    elb.add_response(
+        "describe_target_groups",
+        {
+            "TargetGroups": [
+                {"TargetGroupArn": cache, "TargetType": "lambda"},
+                {"TargetGroupArn": pbs, "TargetType": "ip"},
+            ]
+        },
+        {"LoadBalancerArn": alb},
+    )
+    task = "arn:aws:ecs:us-east-1:123456789012:task-definition/fastcix-pbs:3"
+    ecs.add_response(
+        "describe_services",
+        {"services": [{"taskDefinition": task}]},
+        {"cluster": values["cluster-arn"], "services": [values["service-arn"]]},
+    )
+    container = {
+        "name": "Prebid-Container",
+        "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "fastcix-pbs-PrebidContainerLogs"}},
+    }
+    ecs.add_response(
+        "describe_task_definition",
+        {"taskDefinition": {"containerDefinitions": [{"name": "sidecar"}, container]}},
+        {"taskDefinition": task},
+    )
+
+    network = stage.network("simulator/0123456789abcdef.zip")
+
+    assert [(s.id, s.az, s.route_table) for s in network.private_subnets] == [
+        ("subnet-a", "us-east-1a", "rtb-0a"),
+        ("subnet-b", "us-east-1b", "rtb-0b"),
+    ]
+    assert (network.vpc_id, network.task_security_group_id) == ("vpc-1", "sg-1")
+    assert network.target_group_arn == pbs, "the Prebid Server targets, not the cache's Lambda"
+    assert network.container_log_group == "fastcix-pbs-PrebidContainerLogs"
+
+
+def test_the_internal_balancer_is_the_guidances_own_in_its_vpc(stage: _demand.DemandStage, stub: Any) -> None:
+    """Prebid Cache's write path (ad-server mode): the internal application load balancer in the guidance's VPC that
+    the guidance's own stacks created; another VPC's, an internet-facing one and another stack's are not it."""
+    elb = stub("elbv2")
+    arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{}/0123456789abcdef"
+
+    def balancer(name: str, vpc: str = "vpc-1", scheme: str = "internal") -> dict[str, Any]:
+        return {
+            "LoadBalancerArn": arn.format(name),
+            "DNSName": f"internal-{name}.us-east-1.elb.amazonaws.com",
+            "CanonicalHostedZoneId": "Z35SXDOTRQ7X7K",
+            "VpcId": vpc,
+            "Scheme": scheme,
+            "Type": "application",
+        }
+
+    def tagged(name: str, stack: str) -> dict[str, Any]:
+        return {"ResourceArn": arn.format(name), "Tags": [{"Key": "aws:cloudformation:stack-name", "Value": stack}]}
+
+    listed = [balancer("own"), balancer("pds"), balancer("public", scheme="internet-facing"), balancer("x", "vpc-2")]
+    elb.add_response("describe_load_balancers", {"LoadBalancers": listed}, {})
+    elb.add_response(
+        "describe_tags",
+        {"TagDescriptions": [tagged("own", "fastcix-pbs-Internal"), tagged("pds", "FastChannels-fastcix-Pds")]},
+        {"ResourceArns": [arn.format("own"), arn.format("pds")]},
+    )
+    assert stage.internal_balancer("vpc-1") == ("internal-own.us-east-1.elb.amazonaws.com", "Z35SXDOTRQ7X7K")
+
+    elb.add_response("describe_load_balancers", {"LoadBalancers": [balancer("own"), balancer("own2")]}, {})
+    elb.add_response(
+        "describe_tags",
+        {"TagDescriptions": [tagged("own", "fastcix-pbs"), tagged("own2", "fastcix-pbs-Internal")]},
+        {"ResourceArns": [arn.format("own"), arn.format("own2")]},
+    )
+    with pytest.raises(_demand.DemandError, match="2 internal load balancers"):
+        stage.internal_balancer("vpc-1")
+
+    elb.add_response("describe_load_balancers", {"LoadBalancers": []}, {})
+    assert stage.internal_balancer("vpc-1") is None
+
+
+def test_only_an_ad_server_stage_looks_for_the_internal_balancer(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked: list[str] = []
+
+    def internal_balancer(vpc: str) -> tuple[str, str]:
+        looked.append(vpc)
+        return _INTERNAL, "Z35SXDOTRQ7X7K"
+
+    for name, expected in (("fastci", []), ("fastciads", ["vpc-1"])):
+        demand = _demand.DemandStage(prebid_guidance.stage_config(name, "fastcix", REGION), name, session())
+        monkeypatch.setattr(demand, "parameters", lambda: _NETWORK_PARAMETERS)
+        monkeypatch.setattr(demand, "container_log_group", lambda *_args: None)
+        monkeypatch.setattr(demand, "client", lambda service, region=None: _NetworkClient())
+        monkeypatch.setattr(demand, "internal_balancer", internal_balancer)
+        looked.clear()
+        network = demand.network()
+        assert looked == expected, name
+        assert network.internal_alb_dns == (_INTERNAL if expected else None)
+
+
+_INTERNAL = "internal-fastcix-pbs-Internal-1234567890.us-east-1.elb.amazonaws.com"
+_NETWORK_PARAMETERS = {
+    Parameter.VPC_ID: "vpc-1",
+    Parameter.ALB_ARN: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fastcix-alb/0123",
+    Parameter.PRIVATE_SUBNET_IDS: "subnet-a,subnet-b",
+    Parameter.TASK_SECURITY_GROUP: "sg-1",
+    Parameter.CLUSTER_ARN: "arn:aws:ecs:us-east-1:123456789012:cluster/c",
+    Parameter.SERVICE_ARN: "arn:aws:ecs:us-east-1:123456789012:service/c/s",
+    Parameter.CLOUDFRONT_DOMAIN: "d1.cloudfront.net",
+}
+
+
+class _NetworkClient:
+    """EC2 and ELB answers of a two-subnet guidance VPC."""
+
+    def describe_subnets(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"Subnets": [{"SubnetId": f"subnet-{z}", "AvailabilityZone": f"us-east-1{z}"} for z in "ab"]}
+
+    def describe_route_tables(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"RouteTables": [{"RouteTableId": "rtb-0a", "Associations": [{"Main": True}]}]}
+
+    def describe_target_groups(self, **_kwargs: Any) -> dict[str, Any]:
+        arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcix-pbs/0123456789abcdef"
+        return {"TargetGroups": [{"TargetGroupArn": arn, "TargetType": "ip"}]}
+
+
+def test_a_task_without_one_log_group_or_a_missing_service_gives_none(stage: _demand.DemandStage, stub: Any) -> None:
+    ecs = stub("ecs")
+
+    def logging(name: str, group: str) -> dict[str, Any]:
+        return {"name": name, "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": group}}}
+
+    for containers, expected in (
+        ([{"name": "c"}], None),
+        ([logging("a", "g1"), logging("b", "g2")], None),
+        ([logging("only", "g3")], "g3"),
+    ):
+        ecs.add_response("describe_services", {"services": [{"taskDefinition": "td"}]})
+        ecs.add_response("describe_task_definition", {"taskDefinition": {"containerDefinitions": containers}})
+        assert stage.container_log_group("cluster", "service") == expected
+    ecs.add_response("describe_services", {"services": []})
+    assert stage.container_log_group("cluster", "service") is None
+
+
+def test_the_simulator_smoke_wants_one_demo_bid_per_slot(stage: _demand.DemandStage, stub: Any) -> None:
+    def answer(crids: list[str]) -> dict[str, Any]:
+        bids = [{"impid": f"s{n}", "crid": c, "adomain": ["x"], "price": 1, "dur": 30} for n, c in enumerate(crids, 1)]
+        body = json.dumps({"id": "smoke", "seatbid": [{"bid": bids}]})
+        return {"Payload": io.BytesIO(json.dumps({"statusCode": 200, "body": body}).encode())}
+
+    lam = stub("lambda")
+    lam.add_response("invoke", answer(["sim1", "sim2", "sim3", "sim4"]), None)
+    lam.add_response("invoke", answer(["sim1", "sim2", "sim3", "banner_creative_1"]), None)
+    lam.add_response("invoke", answer(["sim1", "sim2"]), None)
+
+    good = stage.simulator_smoke(demo())
+    assert good["passed"] and good["function"] == "fastcix-demand-simulator"
+    assert [b["crid"] for b in good["bids"]] == ["sim1", "sim2", "sim3", "sim4"]
+    assert not stage.simulator_smoke(demo())["passed"], "not a demo creative"
+    assert not stage.simulator_smoke(demo())["passed"], "a slot without a bid"
+
+
+SERVICE_PARAMETERS: Final = {
+    "cluster-arn": "arn:aws:ecs:us-east-1:123456789012:cluster/fastcix-pbs-PrebidCluster",
+    "service-arn": "arn:aws:ecs:us-east-1:123456789012:service/fastcix-pbs-PrebidCluster/fastcix-pbs-Service",
+}
+
+
+def service_with(stage: _demand.DemandStage, stub: Any, desired: int, running: int) -> None:
+    stage.__dict__["parameters"] = lambda: dict(SERVICE_PARAMETERS)
+    stub("ecs").add_response(
+        "describe_services",
+        {"services": [{"serviceName": "fastcix-pbs-Service", "desiredCount": desired, "runningCount": running}]},
+        {"cluster": SERVICE_PARAMETERS["cluster-arn"], "services": [SERVICE_PARAMETERS["service-arn"]]},
+    )
+
+
+def test_the_smoke_is_skipped_loudly_when_the_census_gate_holds_prebid_server_at_zero(
+    stage: _demand.DemandStage, stub: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    service_with(stage, stub, desired=0, running=0)
+
+    assert prebid_guidance.report_smoke(stage) == 0
+    out = capsys.readouterr().out
+    assert "smoke skipped: 0 running Prebid Server tasks (no channel on air; census gate)" in out
+    results = json.loads(out[out.index("{\n") : out.rindex("}") + 1])
+    assert results == {"skipped": _demand.SMOKE_SKIPPED, "passed": None}, "a skipped smoke never passes"
+
+
+def test_desired_tasks_that_do_not_run_are_no_reason_to_skip(stage: _demand.DemandStage, stub: Any) -> None:
+    service_with(stage, stub, desired=2, running=0)
+
+    assert stage.smoke_skip_reason() is None, "the smoke runs, and its 503s fail it"
+
+
+def test_the_smoke_counts_the_simulator_and_the_creatives() -> None:
+    results: dict[str, Any] = {
+        **{f"{s}s": {"status": 200, "content_type": "application/xml", "ads": 1} for s in (30, 48, 60, 90, 120)},
+        "out-of-range-300s": {"status": 200, "content_type": "application/xml", "ads": 0},
+        "no-secret": {"status": 403},
+        "other-path": {"status": 403},
+        "simulator": {"passed": True},
+        "demo-creatives": {"passed": True},
+    }
+
+    assert _demand.smoke_passed(results)
+    for check in ("simulator", "demo-creatives"):
+        assert not _demand.smoke_passed({**results, check: {"passed": False}}), check
+
+
+class FakeS3:
+    """The guidance's two buckets in memory; ``corrupt`` keys read back other bytes than were put, and with
+    ``ignore_prefix`` a listing returns every key of the bucket (a listing that ignored its prefix)."""
+
+    def __init__(
+        self,
+        objects: dict[tuple[str, str], bytes],
+        corrupt: frozenset[str] = frozenset(),
+        *,
+        ignore_prefix: bool = False,
+    ) -> None:
+        self.objects, self.corrupt, self.ignore_prefix = dict(objects), corrupt, ignore_prefix
+        self.puts: list[str] = []
+        self.deletes: list[str] = []
+
+    def get_paginator(self, operation: str) -> Any:
+        assert operation == "list_objects_v2"
+        fake = self
+
+        class Paginator:
+            def paginate(self, *, Bucket: str, Prefix: str) -> Iterator[dict[str, Any]]:  # noqa: N803 - S3's names
+                keys = sorted(
+                    key
+                    for bucket, key in fake.objects
+                    if bucket == Bucket and (fake.ignore_prefix or key.startswith(Prefix))
+                )
+                for start in range(0, max(len(keys), 1), 2):  # pages of two keys, as S3 pages a long listing
+                    yield {"Contents": [{"Key": key} for key in keys[start : start + 2]]} if keys else {}
+
+        return Paginator()
+
+    def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
+        del self.objects[Bucket, Key]
+        self.deletes.append(Key)
+        return {}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
+        if (Bucket, Key) not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
+        body = b"stale" if Key in self.corrupt else self.objects[Bucket, Key]
+        return {"Body": io.BytesIO(body)}
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> dict[str, Any]:  # noqa: N803 - the S3 API's names
+        self.objects[Bucket, Key] = Body
+        self.puts.append(Key)
+        return {}
+
+
+CONFIG_PARAMETERS: Final = {
+    Parameter.SETTINGS_BUCKET: "fastcix-pbs-settings",
+    Parameter.STORED_REQUESTS_BUCKET: "fastcix-pbs-stored",
+    Parameter.CLUSTER_ARN: "arn:aws:ecs:us-east-1:123456789012:cluster/fastcix-pbs",
+    Parameter.SERVICE_ARN: "arn:aws:ecs:us-east-1:123456789012:service/fastcix-pbs/svc",
+}
+
+
+@pytest.fixture
+def config_stage(stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch) -> _demand.DemandStage:
+    monkeypatch.setattr(stage, "parameters", lambda: {k.value: v for k, v in CONFIG_PARAMETERS.items()})
+    monkeypatch.setattr(stage, "house_ads", lambda: ())
+    return stage
+
+
+def with_s3(stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, s3: FakeS3) -> list[str]:
+    """``stage`` on ``s3``; returns the list its rolls append to."""
+    rolls: list[str] = []
+    original = stage.client
+    monkeypatch.setattr(
+        stage, "client", lambda service, region=None: s3 if service == "s3" else original(service, region)
+    )
+    monkeypatch.setattr(stage, "roll", lambda: rolls.append("rolled"))
+    return rolls
+
+
+def test_an_unchanged_configuration_is_left_alone_and_the_tasks_keep_running(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first deploy: the guidance uploaded the same files when its stack was created."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3(rendered)
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert config_stage.upload_config("https://cdn.example") == []
+    assert (s3.puts, rolls) == ([], [])
+    assert ("fastcix-pbs-settings", "prebid-server/current/prebid-config.yaml") in rendered
+    assert any(bucket == "fastcix-pbs-stored" and key.startswith("stored_requests/") for bucket, key in rendered)
+
+
+def test_a_changed_setting_reaches_an_existing_stage_and_rolls_the_tasks(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guidance's own upload runs only at its stack's creation: a new timeout would otherwise never apply."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    held = dict(rendered)
+    config = ("fastcix-pbs-settings", "prebid-server/current/prebid-config.yaml")
+    held[config] = held[config].replace(b"policy-timeout-ms: 50", b"policy-timeout-ms: 80")
+    account = next(location for location in held if location[1].startswith("stored_accounts/"))
+    del held[account]
+    s3 = FakeS3(held)
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert sorted(config_stage.upload_config("https://cdn.example")) == sorted([config[1], account[1]])
+    assert s3.objects == rendered
+    assert rolls == ["rolled"]
+
+
+def test_an_upload_that_does_not_read_back_is_refused(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    key = "prebid-server/current/prebid-config.yaml"
+    s3 = FakeS3({}, corrupt=frozenset({key}))
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    with pytest.raises(_demand.DemandError, match="not the rendered one"):
+        config_stage.upload_config("https://cdn.example")
+    assert len(s3.puts) == len(rendered) and rolls == []
+
+
+SETTINGS_BUCKET, STORED_BUCKET = (
+    CONFIG_PARAMETERS[Parameter.SETTINGS_BUCKET],
+    CONFIG_PARAMETERS[Parameter.STORED_REQUESTS_BUCKET],
+)
+SHIPPED: Final = {
+    (SETTINGS_BUCKET, "prebid-server/current/README.md"): b"the guidance's",
+    (STORED_BUCKET, "stored_accounts/README.md"): b"the guidance's",
+    (STORED_BUCKET, "stored_requests/README.md"): b"the guidance's",
+    (STORED_BUCKET, "stored_requests/video-test-stored-req.json"): b"{}",
+    (STORED_BUCKET, "stored_responses/README.md"): b"the guidance's",
+}
+"""What the guidance's custom resource uploads into the managed prefixes with its stack (GUIDANCE_CONFIG_FILES)."""
+UNMANAGED: Final = {
+    (SETTINGS_BUCKET, "prebid-server/default/prebid-config.yaml"): b"the guidance's default",
+    (STORED_BUCKET, "stored_impressions/preroll-config.json"): b"{}",
+    (STORED_BUCKET, "stored_impressions/README.md"): b"the guidance's",
+    (SETTINGS_BUCKET, "elsewhere/fast-pod-60s.json"): b"{}",
+}
+"""Objects outside the managed prefixes, the guidance's and anyone's: the prune never lists or touches them."""
+STALE: Final = {
+    (STORED_BUCKET, "stored_requests/fast-pod-60s.json"): b"{}",
+    (STORED_BUCKET, "stored_requests/fast-pod-kids-120s.json"): b"{}",
+    (STORED_BUCKET, "stored_requests/fast-adsrv-pod.json"): b"{}",
+    (STORED_BUCKET, "stored_accounts/fastold.json"): b"{}",
+    (SETTINGS_BUCKET, "prebid-server/current/old-config.yaml"): b"x",
+}
+"""What earlier configurations left: the per-length stored requests before v4.0.0, the ad-server route's once the mode
+is off, another account, another configuration file."""
+
+
+def test_the_prune_keeps_what_the_guidance_ships(config_stage: _demand.DemandStage) -> None:
+    values = {k.value: v for k, v in CONFIG_PARAMETERS.items()}
+    assert {config_stage.config_location(rel, values) for rel in _demand.GUIDANCE_CONFIG_FILES} == set(SHIPPED)
+    with pytest.raises(_demand.DemandError, match="not in a configuration directory the deploy manages"):
+        config_stage.config_location("stored_impressions/preroll-config.json", values)
+
+
+PER_LENGTH_BODY: Final = '{"ext":{"prebid":{"storedrequest":{"id":"fast-pod-{{session.avail_duration_secs}}s"}}}}'
+"""A sibling of a release before the single stored request."""
+PER_LENGTH_AUCTION: Final = (
+    "{% $string({'ext': {'prebid': {'storedrequest': {'id': 'fast-adsrv-pod-' & "
+    "$string(session.avail_duration_secs) & 's'}}}}) %}"
+)
+
+
+class FakeMediaTailor:
+    """Playback configurations and Functions by name, with their request bodies."""
+
+    def __init__(
+        self, configurations: Mapping[str, str | None], functions: Mapping[str, str | None] | None = None
+    ) -> None:
+        self.configurations, self.functions = dict(configurations), dict(functions or {})
+
+    def get_paginator(self, operation: str) -> Any:
+        items = {
+            "list_playback_configurations": [{"Name": name} for name in self.configurations],
+            "list_functions": [{"FunctionId": function_id} for function_id in self.functions],
+        }[operation]
+
+        class Paginator:
+            def paginate(self) -> Iterator[dict[str, Any]]:
+                yield {"Items": items}
+
+        return Paginator()
+
+    def get_playback_configuration(self, *, Name: str) -> dict[str, Any]:  # noqa: N803 - the API's names
+        body = self.configurations[Name]
+        return {"Name": Name} | ({"AdDecisionServerConfiguration": {"HttpRequest": {"Body": body}}} if body else {})
+
+    def get_function(self, *, FunctionId: str) -> dict[str, Any]:  # noqa: N803 - the API's names
+        body = self.functions[FunctionId]
+        return {"FunctionId": FunctionId} | ({"HttpRequestConfiguration": {"Body": body}} if body else {})
+
+
+def with_mediatailor(stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, mediatailor: FakeMediaTailor) -> None:
+    clients = stage.client
+    monkeypatch.setattr(
+        stage, "client", lambda service, region=None: mediatailor if service == "mediatailor" else clients(service)
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "patterns"),
+    [
+        (playback.ads_body(kids=False), ["fast-pod"]),
+        (playback.ads_body(kids=True), ["fast-pod-kids"]),
+        (PER_LENGTH_BODY, ["fast-pod-*s"]),
+        (ad_server.auction_body(kids=False), ["fast-adsrv-pod"]),
+        (PER_LENGTH_AUCTION, ["fast-adsrv-pod-*s"]),
+        (None, []),
+        ('{"sid":"{{session.uuid}}"}', []),
+        ("storedrequest=fast-pod", None),
+    ],
+)
+def test_a_request_body_names_its_stored_requests_as_patterns(body: str | None, patterns: list[str] | None) -> None:
+    assert _demand.stored_request_patterns(body) == patterns
+
+
+def test_without_prune_nothing_is_deleted_and_the_stale_objects_are_listed(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The default for every deploy: live siblings of an earlier release may still name what is stale."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    account = next(location for location in rendered if location[1].startswith("stored_accounts/"))
+    s3 = FakeS3({**{k: v for k, v in rendered.items() if k != account}, **SHIPPED, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+
+    assert config_stage.upload_config("https://cdn.example") == [account[1]]
+    assert s3.objects == {**rendered, **SHIPPED, **STALE} and s3.deletes == []
+    assert rolls == ["rolled"], "the upload still rolls the tasks"
+    listed = capsys.readouterr().out
+    assert "5 stale configuration objects" in listed
+    assert "run upload-config with --prune after every sibling uses the new body" in listed
+
+
+def test_the_prune_keeps_what_a_live_configuration_still_names(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stable sibling of an earlier release still sends the per-length body: deleting ``fast-pod-60s`` would answer
+    its every 60 s break with 400 and the slate. The rest goes."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(
+        config_stage,
+        monkeypatch,
+        FakeMediaTailor(
+            {
+                "fastcix-demo-p-a": PER_LENGTH_BODY,
+                "fastcix-demo-p-b": playback.ads_body(kids=False),
+                "fastcix-demo": None,
+                "other-demo-p-a": '{"ext":{"prebid":{"storedrequest":{"id":"fast-*"}}}}',
+            },
+            {"fastcix_demo_p_b_pa_auction": PER_LENGTH_AUCTION, "other_pa_auction": "{% 'storedrequest' %}"},
+        ),
+    )
+
+    deleted = config_stage.upload_config("https://cdn.example", prune=True)
+
+    kept = {
+        (STORED_BUCKET, "stored_requests/fast-pod-60s.json"),
+        (STORED_BUCKET, "stored_requests/fast-pod-kids-120s.json"),  # fast-pod-*s matches the kids ids too
+    }
+    assert sorted(deleted) == sorted(key for bucket, key in STALE if (bucket, key) not in kept)
+    assert s3.objects == {**rendered, **SHIPPED, **UNMANAGED, **{location: STALE[location] for location in kept}}
+    assert rolls == ["rolled"]
+    listed = capsys.readouterr().out
+    assert (
+        f"keeping s3://{STORED_BUCKET}/stored_requests/fast-pod-60s.json: still named by "
+        "playback configuration fastcix-demo-p-a"
+    ) in listed
+    assert "fast-adsrv-pod.json" not in "".join(line for line in listed.splitlines() if "keeping" in line), (
+        "fast-adsrv-pod-*s does not match the single id; another stage's configurations are not read"
+    )
+
+
+def test_the_prune_deletes_once_every_configuration_uses_the_new_body(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE})
+    rolls = with_s3(config_stage, monkeypatch, s3)
+    body = playback.ads_body(kids=False)
+    with_mediatailor(
+        config_stage,
+        monkeypatch,
+        FakeMediaTailor(
+            {"fastcix-demo-p-a": body, "fastcix-demo-p-b": body, "fastcix-demo-p-z": body},
+            {"fastcix_demo_p_a_crawl_lookup": None},  # the ad-server mode is off: no auction names fast-adsrv-pod
+        ),
+    )
+
+    assert sorted(config_stage.upload_config("https://cdn.example", prune=True)) == sorted(key for _, key in STALE)
+    assert s3.objects == {**rendered, **SHIPPED, **UNMANAGED}
+    assert (s3.puts, rolls) == ([], ["rolled"])
+    listed = capsys.readouterr().out
+    assert "pruning 5 stale configuration objects" in listed
+    assert f"s3://{STORED_BUCKET}/stored_requests/fast-pod-60s.json" in listed, "listed before they go"
+
+
+def test_an_auction_function_keeps_the_stored_request_it_names(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The ad-server route names its stored request in a PRE_ADS Function, not in the playback configuration."""
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **STALE})
+    with_s3(config_stage, monkeypatch, s3)
+    function = {"fastcix_demo_p_a_pa_auction": ad_server.auction_body(kids=False)}
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({}, function))
+
+    assert "stored_requests/fast-adsrv-pod.json" not in config_stage.upload_config("https://cdn.example", prune=True)
+    assert (STORED_BUCKET, "stored_requests/fast-adsrv-pod.json") in s3.objects
+    assert "still named by function fastcix_demo_p_a_pa_auction" in capsys.readouterr().out
+
+
+def test_a_body_the_guard_cannot_read_keeps_every_stored_request(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **STALE})
+    with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({"fastcix-demo-p-a": "storedrequest=fast-pod-60s"}))
+
+    deleted = config_stage.upload_config("https://cdn.example", prune=True)
+
+    assert sorted(deleted) == ["prebid-server/current/old-config.yaml", "stored_accounts/fastold.json"]
+    assert all(key.startswith("stored_requests/") for _, key in set(s3.objects) & set(STALE))
+
+
+def test_deploy_and_upload_config_take_prune(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+
+    class Stage:
+        prefix = "fastcix"
+
+        def upload_config(self, content_base_url: str, *, prune: bool = False) -> list[str]:
+            calls.append(prune)
+            return []
+
+    monkeypatch.setattr(prebid_guidance, "demand_stage", lambda args: Stage())
+    monkeypatch.setattr(prebid_guidance, "content_base_url", lambda args, prefix: "https://cdn.example")
+    for argv in (["upload-config"], ["upload-config", "--prune"]):
+        assert prebid_guidance.main([*argv, "--prefix", "fastcix"]) == 0
+    assert calls == [False, True]
+
+
+def test_nothing_is_pruned_when_the_upload_does_not_read_back(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = FakeS3({**STALE}, corrupt=frozenset({"prebid-server/current/prebid-config.yaml"}))
+    rolls = with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({}))
+
+    with pytest.raises(_demand.DemandError, match="not the rendered one"):
+        config_stage.upload_config("https://cdn.example", prune=True)
+    assert (s3.deletes, rolls) == ([], [])
+
+
+def test_the_prune_refuses_anything_outside_the_managed_prefixes(
+    config_stage: _demand.DemandStage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rendered = config_stage.config_objects("https://cdn.example")
+    s3 = FakeS3({**rendered, **SHIPPED, **UNMANAGED, **STALE}, ignore_prefix=True)
+    rolls = with_s3(config_stage, monkeypatch, s3)
+    with_mediatailor(config_stage, monkeypatch, FakeMediaTailor({}))
+
+    with pytest.raises(_demand.DemandError, match="refusing to prune outside the managed configuration prefixes"):
+        config_stage.upload_config("https://cdn.example", prune=True)
+    assert (s3.deletes, rolls) == ([], [])

@@ -1,5 +1,5 @@
-"""``FastChannels-AccountBaseline``: account-and-region singletons, deployed when
-``observability.transaction_search`` is ``enable``."""
+"""``FastChannels-AccountBaseline``: account-and-region singletons, deployed by ``make account-baseline`` for
+``observability.transaction_search: enable``."""
 
 from typing import TYPE_CHECKING, Any, Final
 
@@ -15,8 +15,9 @@ STACK_NAME: Final = "FastChannels-AccountBaseline"
 
 
 class AccountBaselineStack(Stack):
-    """CloudWatch Transaction Search (indexing 1 %). Termination protected and retained, so it is never part of a
-    normal teardown; delete it deliberately to turn Transaction Search off."""
+    """CloudWatch Transaction Search (indexing 1 %). Only ``make account-baseline`` synthesizes it into the stage
+    (context ``account-baseline``), so ``make deploy`` and ``make destroy`` never select it. Termination protected
+    and retained: delete it deliberately to turn Transaction Search off."""
 
     def __init__(self, scope: Construct, id: str, **kwargs: Any) -> None:
         super().__init__(

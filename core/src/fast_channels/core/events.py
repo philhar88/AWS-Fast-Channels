@@ -7,6 +7,7 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field
 
+from fast_channels.core.catalog import CONTENT_ID_PATTERN
 from fast_channels.core.ingest import AssetKind, IngestRequest
 
 
@@ -69,6 +70,45 @@ class AutopilotRun(BaseModel):
     summary: str
 
 
+class CatalogItemChanged(BaseModel):
+    """A title of the reference catalog was added, changed or removed. A CMS sync job puts this event after writing
+    the ``ReferenceCatalog`` item; the content enrichment module republishes the title's catalog context object."""
+
+    content_id: str = Field(pattern=CONTENT_ID_PATTERN, max_length=64, description="The title's catalog id.")
+    correlation_id: str | None = Field(None, description="Trace id of the change in your CMS.")
+
+
+class CensusChanged(BaseModel):
+    """The number of the deployment's running channels crossed zero: the first channel started, or the last one
+    stopped (published by the channel census with the ops module on; at most one census interval late)."""
+
+    running: int = Field(ge=0, description="Running channels now; 0 when the last one stopped.")
+    previous: int = Field(ge=0, description="Running channels at the census before.")
+    correlation_id: str = Field(description="Name of the census execution that saw the change.")
+
+
+class ChannelAlert(BaseModel):
+    """A Channel Assembly alert of a running channel changed (ops module): Channel Assembly and MediaTailor publish no
+    events, so a poller reads ``ListAlerts`` every minute and publishes each alert changed in that minute once."""
+
+    channel: str
+    code: str = Field(description="Alert code; for PROGRAM_ALERT the message names the program and its alert.")
+    category: str = Field(description="SCHEDULING_ERROR (breaks playback), PLAYBACK_WARNING or INFO.")
+    message: str
+    resource_arn: str
+    last_modified: str = Field(description="UTC ISO-8601 time of the alert's last change.")
+    correlation_id: str = Field(description="The poll's scheduled time, which every alert of one poll shares.")
+
+
+class DesiredStateRendered(BaseModel):
+    """A deployment rendered a new release bundle (release module): the stack wrote it to the release bucket, and the
+    Release Controller validates and applies it to each monetized channel's idle sibling."""
+
+    bundle_key: str = Field(description="S3 key of the bundle document, release/<digest>/bundle.json.")
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$", description="SHA-256 of the bundle: its version.")
+    correlation_id: str = Field(description="The CloudFormation request that rendered it.")
+
+
 DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     IngestRequest: "Ingest Requested",
     AssetReady: "Asset Ready",
@@ -77,6 +117,10 @@ DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     LadderFailed: "Ladder Failed",
     SchedulePublished: "Schedule Published",
     AutopilotRun: "Autopilot Run",
+    CatalogItemChanged: "Catalog Item Changed",
+    CensusChanged: "Census Changed",
+    ChannelAlert: "Channel Alert",
+    DesiredStateRendered: "Desired State Rendered",
 }
 
 

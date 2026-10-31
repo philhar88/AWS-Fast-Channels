@@ -1,0 +1,30 @@
+{
+  "task": "scheduler.plan",
+  "key": "haiku-5-5-adaptive-16k",
+  "model": "us.anthropic.claude-haiku-5-5",
+  "effort": {
+    "chat": "low",
+    "plan": "medium"
+  },
+  "thinking": "adaptive",
+  "max_tokens": 16000,
+  "suite": "scheduler conformance v1 (fake Gateway tools): standard, hard",
+  "runs": 3,
+  "passed": true,
+  "checks": [
+    {
+      "name": "scenario_hard",
+      "passed": true,
+      "value": 1.0,
+      "threshold": "3/3 runs"
+    },
+    {
+      "name": "scenario_standard",
+      "passed": true,
+      "value": 1.0,
+      "threshold": "3/3 runs"
+    }
+  ],
+  "cost_usd": "0.033548",
+  "recorded_at": "2026-10-29T01:36:17.964222Z"
+}

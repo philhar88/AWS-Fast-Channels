@@ -65,7 +65,81 @@ class Settings:
     max_agent_channels: int = field(default_factory=lambda: int(_env("MAX_AGENT_CHANNELS") or 0))
     scheduler_group: str = field(default_factory=lambda: _env("SCHEDULER_GROUP"))
     scheduler_role_arn: str = field(default_factory=lambda: _env("SCHEDULER_ROLE_ARN"))
+    catalog_context_bucket: str = field(default_factory=lambda: _env("CATALOG_CONTEXT_BUCKET"))
+    """The crawl module's bucket of catalog context objects (``catalog/ctx/v1/<content_id>.json``)."""
+    publisher_domain: str = field(default_factory=lambda: _env("PUBLISHER_DOMAIN"))
+    """The publisher's domain, the registry of catalog content ids in context objects (empty: not configured)."""
+    crawl_holdout_percent: int | None = field(
+        default_factory=lambda: int(raw) if (raw := _env("CRAWL_HOLDOUT_PERCENT")) else None
+    )
+    """Share of session-breaks in the crawl module's ``crawl-v1`` holdout; None when the module is off."""
     region: str = field(default_factory=lambda: _env("AWS_REGION"))
+    ledger_table: str = field(default_factory=lambda: _env("LEDGER_TABLE"))
+    """The ops module's ledger table (``<prefix>-ledger``)."""
+    ledger_stream: str = field(default_factory=lambda: _env("LEDGER_STREAM"))
+    """The Firehose stream that archives linked ledger records."""
+    census_parameter: str = field(default_factory=lambda: _env("CENSUS_PARAMETER"))
+    """SSM parameter with the channel census's last count (ops module)."""
+    ads_log_group: str = field(default_factory=lambda: _env("ADS_LOG_GROUP"))
+    """The deployment's MediaTailor vended-log group (``/aws/vendedlogs/mediatailor/<prefix>``)."""
+    as_run_breaks: bool = field(default_factory=lambda: _env("AS_RUN_BREAKS") == "true")
+    """The as-run reconciler marks breaks aired (ops module)."""
+    epg_break_ids: bool = field(default_factory=lambda: _env("EPG_BREAK_IDS") == "true")
+    """EPG feeds carry each break's SCTE-35 event id and UPID (ops module)."""
+    appconfig_application: str = field(default_factory=lambda: _env("APPCONFIG_APPLICATION"))
+    """The stage's AppConfig application (``<prefix>-fast``), which holds the ``flags`` profile (ops module)."""
+    appconfig_environment: str = field(default_factory=lambda: _env("APPCONFIG_ENVIRONMENT"))
+    """Its environment (``<prefix>``)."""
+    iac_channels: tuple[str, ...] = field(default_factory=lambda: _csv("IAC_CHANNELS"))
+    """The IaC channels' names (comma-separated ``IAC_CHANNELS``)."""
+    always_on: tuple[str, ...] = field(default_factory=lambda: _csv("ALWAYS_ON_CHANNELS"))
+    """Channels that runbook R12 may start when found stopped (the envelope's always-on list; none yet)."""
+    evergreen_block: str = field(default_factory=lambda: _env("EVERGREEN_BLOCK"))
+    """The pre-approved evergreen block that R13 and R15 would swap in (none yet)."""
+    pds_config_bucket: str = field(default_factory=lambda: _env("PDS_CONFIG_BUCKET"))
+    """The Pod Decision Service's private config bucket, which holds its snapshot (pds module)."""
+    pds_snapshot_base: str = field(default_factory=lambda: _env("PDS_SNAPSHOT_BASE"))
+    """JSON of what the deployment configures in the snapshot (``core.pds.snapshot.SnapshotBase``)."""
+    pds_table: str = field(default_factory=lambda: _env("PDS_TABLE"))
+    """The Pod Decision Service's table (``<prefix>-pds``: budgets, caps, reservations, delivery)."""
+    release_bucket: str = field(default_factory=lambda: _env("RELEASE_BUCKET"))
+    """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
+    release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
+    """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
+    release_siblings: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_SIBLINGS"))
+    """The monetized channels' sibling configurations (comma-separated ``RELEASE_SIBLINGS``)."""
+    release_lock_seconds: int = field(default_factory=lambda: int(_env("RELEASE_LOCK_SECONDS") or 0))
+    """How long the Release Controller's lock outlives an execution that died holding it (its timeout)."""
+    release_profile: str = field(default_factory=lambda: _env("RELEASE_PROFILE"))
+    """The id of the release pointer's AppConfig profile (``release``)."""
+    release_strategy: str = field(default_factory=lambda: _env("RELEASE_STRATEGY"))
+    release_at_once_strategy: str = field(default_factory=lambda: _env("RELEASE_AT_ONCE_STRATEGY"))
+    """The release pointer's strategy for a deployment that moves no viewer or goes back (no bake)."""
+    """The id of the release pointer's deployment strategy (the stage's rollout tier)."""
+    pds_policy_log_group: str = field(default_factory=lambda: _env("PDS_POLICY_LOG_GROUP"))
+    """The PDS ``/policy`` function's log group, where its decision records are (the release smoke test counts
+    them)."""
+    secret_rotation_days: int = field(default_factory=lambda: int(_env("SECRET_ROTATION_DAYS") or 0))
+    """``modules.release.secret_rotation_days``: the scheduled origin-secret rotation's period."""
+    pbs_origin: str = field(default_factory=lambda: _env("PBS_ORIGIN"))
+    """The demand gate's CloudFront (``https://<domain>``): the origin-secret rotation's probe POSTs there."""
+    tool_functions: str = field(default_factory=lambda: _env("TOOL_FUNCTIONS"))
+    """JSON of the agent tools' function names by target (the release module's lab smoke test uses them)."""
+    release_table: str = field(default_factory=lambda: _env("RELEASE_TABLE"))
+    """The Release Controller's state table (``<prefix>-release``)."""
+    prefetch_policy: str = field(default_factory=lambda: _env("PREFETCH_POLICY"))
+    """JSON of ``modules.release.prefetch``'s timing (``core.monetization.prefetch.PrefetchPolicy``)."""
+    prefetch_letters: tuple[str, ...] = field(default_factory=lambda: _csv("PREFETCH_SIBLINGS"))
+    """The sibling letters that get prefetch schedules (comma-separated, e.g. ``a,b``)."""
+    break_lengths_ms: tuple[int, ...] = field(default_factory=lambda: tuple(int(ms) for ms in _csv("BREAK_LENGTHS_MS")))
+    """The stage's break lengths (the default ladder's slate grid), comma-separated milliseconds."""
+    release_log_destination: str = field(default_factory=lambda: _env("RELEASE_LOG_DESTINATION"))
+    """ARN of the siblings' vended-log destination (the module's KMS-encrypted log group)."""
+    lake_deliveries: str = field(default_factory=lambda: _env("LAKE_DELIVERIES"))
+    """JSON ``{log type: {"destination": ARN, "s3": S3 delivery configuration}}``: where the lake (ops module)
+    receives each MediaTailor log type, and in which layout."""
+    origin_secret_region: str = field(default_factory=lambda: _env("ORIGIN_SECRET_REGION"))
+    """Region of the demand origin's secrets (the DemandEdge stack, in us-east-1)."""
 
     @property
     def app(self) -> str:

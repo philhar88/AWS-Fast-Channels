@@ -1,0 +1,375 @@
+"""The crawl module's ``/policy`` patch contributor: the PDS's copy of the catalog, the ``crawl-v1`` arm, the header
+fallback, and the policy function with the module on."""
+
+import io
+import json
+import threading
+import time
+import uuid
+from collections import Counter
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
+from itertools import permutations
+from pathlib import Path
+from typing import Any, Final
+
+import pytest
+from botocore.exceptions import ClientError
+from botocore.response import StreamingBody
+
+from fast_channels.core.catalog import ContentItem
+from fast_channels.core.crawl.catalog_context import CONTEXT_PREFIX, CatalogContext, build_context, context_key
+from fast_channels.core.crawl.names import Source
+from fast_channels.core.crawl.taxonomy import default_genre_map, load_taxonomy
+from fast_channels.core.pds.buckets import bucket
+from fast_channels.core.pds.contributors import Contribution
+from fast_channels.core.pds.models import Mode, PolicyRequest
+from fast_channels.core.pds.snapshot import SnapshotBase, build, demo_demand
+from fast_channels.functions.crawl import patch
+from fast_channels.functions.crawl.patch import CatalogContexts, CrawlContributor, arm
+from fast_channels.functions.pds.store import RETRY_SECONDS
+from fast_channels.functions.settings import settings
+from fast_channels.pds import policy
+
+REPO = Path(__file__).resolve().parents[3]
+BUCKET = "fastm-media-catalogcontextsbucket"
+PUBLISHER = "example.com"
+SAMPLES = {
+    title["content_id"]: ContentItem.model_validate(title)
+    for title in json.loads((REPO / "assets/sample-catalog.json").read_text())["titles"]
+}
+CONTEXTS = {
+    content: build_context(
+        item, genre_map=default_genre_map(), publisher_domain=PUBLISHER, updated=datetime(2026, 10, 28, tzinfo=UTC)
+    )
+    for content, item in SAMPLES.items()
+}
+
+
+def inline(target: Callable[[], None]) -> None:
+    target()
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def body(text: bytes) -> StreamingBody:
+    return StreamingBody(io.BytesIO(text), len(text))
+
+
+def sid_in(arm_wanted: int, percent: int = 20, evid: str = "820461826") -> str:
+    """A session id whose break ``evid`` falls in ``arm_wanted``."""
+    for n in range(1000):
+        sid = f"6f1c2a9e-4b7d-4e2a-9c1e-{n:012d}"
+        if (bucket("crawl-v1", f"{sid}.{evid}") >= percent) == bool(arm_wanted):
+            return sid
+    raise AssertionError("no such session")
+
+
+ENRICHED, HELD_OUT = sid_in(1), sid_in(0)
+
+
+def request(**fields: Any) -> PolicyRequest:
+    base: dict[str, Any] = {
+        "v": 1,
+        "sid": ENRICHED,
+        "pc": "fastm-demo-p-b",
+        "evid": "820461826",
+        "upid": "tears-of-steel",
+        "dur_ms": 60060,
+        "ctx": "",
+    }
+    return PolicyRequest.model_validate(base | fields)
+
+
+def contributor(contexts: dict[str, CatalogContext] | None = None) -> CrawlContributor:
+    copy = CONTEXTS if contexts is None else contexts
+    return CrawlContributor(
+        contexts=lambda: copy,
+        holdout_percent=20,
+        publisher_domain=PUBLISHER,
+        genre_names=load_taxonomy(),
+    )
+
+
+# --- the arm --------------------------------------------------------------------------------------------------------
+
+
+def test_the_arm_is_the_crawl_v1_bucket_of_the_session_break() -> None:
+    assert (arm(ENRICHED, "820461826", 20), arm(HELD_OUT, "820461826", 20)) == (1, 0)
+    assert arm(ENRICHED, "820461826", None) == 0, "module off: every break is unenriched"
+    assert arm(ENRICHED, "820461826", 100) == 0 and arm(HELD_OUT, "820461826", 0) == 1
+
+
+def test_the_holdout_is_its_share_of_session_breaks() -> None:
+    """The unit is the session-break: 100,000 of them (MediaTailor-like session ids, SCTE-35 event ids) fall into the
+    holdout at 20 % ± 0.5 pp (about 4 sd), and a session's breaks are not all in one arm."""
+    breaks = [(str(uuid.UUID(int=n * 7919 + 1)), str(820461826 + evid)) for n in range(10_000) for evid in range(10)]
+    share = sum(1 - arm(sid, evid, 20) for sid, evid in breaks) / len(breaks)
+    assert abs(share - 0.20) <= 0.005, share
+    per_session = Counter(sid for sid, evid in breaks if arm(sid, evid, 20) == 0)
+    assert 0 < max(per_session.values()) < 10, "arms vary across one session's breaks"
+
+
+# --- the contributor ------------------------------------------------------------------------------------------------
+
+
+def test_the_enriched_arm_gets_the_titles_content_from_the_copy() -> None:
+    contribution = contributor().contribute(request(), Mode.CONTEXTUAL)
+    assert contribution.record == {"enr": 1, "ctx": "snapshot"}
+    content = contribution.app_content
+    assert (content["id"], content["title"], content["channel"]) == (
+        "tears-of-steel",
+        "Tears of Steel",
+        {"id": "fastm-demo", "domain": PUBLISHER},
+    )
+    assert "ext" not in content, "the OpenRTB 2.6 fields are native on Prebid Server Java 4.4.0"
+    assert {key: content[key] for key in ("realtime", "firstbroadcast", "genres", "gtax", "data")} == {
+        "realtime": 0,
+        "firstbroadcast": 0,
+        "genres": ["652", "325"],
+        "gtax": 9,
+        "data": [{"name": PUBLISHER, "cids": ["tears-of-steel"]}],
+    }
+
+
+def test_the_holdout_gets_nothing_but_its_record() -> None:
+    contribution = contributor().contribute(request(sid=HELD_OUT, ctx=CONTEXTS["tears-of-steel"].hdr), Mode.FULL)
+    assert contribution == Contribution(record={"enr": 0, "ctx": "snapshot"})
+
+
+@pytest.mark.parametrize("upid", ["FST3tears-of-steel", "tears-of-steel"])
+def test_the_upid_with_or_without_its_format_identifier(upid: str) -> None:
+    assert contributor().contribute(request(upid=upid), Mode.CONTEXTUAL).app_content["id"] == "tears-of-steel"
+
+
+def test_the_header_fills_in_while_the_copy_lacks_the_title() -> None:
+    hdr = CONTEXTS["tears-of-steel"].hdr
+    contribution = contributor({}).contribute(request(ctx=hdr), Mode.CONTEXTUAL)
+    assert contribution.record == {"enr": 1, "ctx": "header"}
+    content = contribution.app_content
+    assert (content["id"], content["genre"], content["len"]) == ("tears-of-steel", "Science Fiction", 734)
+    assert "title" not in content, "the header has no title"
+
+
+@pytest.mark.parametrize(
+    ("fields", "contexts"),
+    [
+        ({"upid": ""}, None),
+        ({"upid": "FST3not a content id"}, None),
+        ({"upid": "no-such-title"}, None),
+        ({"ctx": CONTEXTS["sintel"].hdr}, {}),  # a header naming another title
+        ({"ctx": "v9;id=tears-of-steel"}, {}),
+    ],
+)
+def test_no_metadata_no_content(fields: dict[str, Any], contexts: dict[str, CatalogContext] | None) -> None:
+    contribution = contributor(contexts).contribute(request(**fields), Mode.CONTEXTUAL)
+    assert contribution == Contribution(record={"enr": 1, "ctx": Source.NONE.value})
+
+
+def test_pseudonymous_and_safe() -> None:
+    pseudonymous = contributor().contribute(request(), Mode.PSEUDONYMOUS).app_content
+    assert "title" not in pseudonymous and "id" not in pseudonymous and pseudonymous["genre"] == "Science Fiction"
+    safe = contributor().contribute(request(), Mode.SAFE)
+    assert safe == Contribution(record={"enr": 1, "ctx": "snapshot"})
+
+
+# --- the copy of the catalog ----------------------------------------------------------------------------------------
+
+
+class FakeS3:
+    """The S3 calls :class:`CatalogContexts` makes, answered by ``Key`` and safe across threads.
+
+    ``CatalogContexts`` reads changed objects concurrently (``patch.READERS``), and a botocore ``Stubber`` answers in
+    the order its responses were queued, so concurrent GETs would get each other's bodies. Each GET here waits until
+    ``in_flight`` reads have started (if set), so the reads really overlap, then sleeps its object's ``delays`` entry,
+    so they finish in a chosen order. ``completed`` records that order.
+    """
+
+    def __init__(self, delays: dict[str, float] | None = None, *, in_flight: int | None = None) -> None:
+        self.objects: dict[str, tuple[str, bytes]] = {}
+        self.delays = delays or {}
+        self.denied = False
+        self.lists = 0
+        self.reads: list[str] = []
+        self.completed: list[str] = []
+        self._lock = threading.Lock()
+        self._together = threading.Barrier(in_flight, timeout=10) if in_flight else None
+
+    def put(self, content: str, etag: str, text: bytes | None = None) -> None:
+        self.objects[content] = (etag, text if text is not None else CONTEXTS[content].model_dump_json().encode())
+
+    def get_paginator(self, operation: str) -> Any:
+        assert operation == "list_objects_v2"
+        return self
+
+    def paginate(self, *, Bucket: str, Prefix: str) -> list[dict[str, Any]]:  # noqa: N803 - the S3 parameter names
+        assert (Bucket, Prefix) == (BUCKET, CONTEXT_PREFIX)
+        self.lists += 1
+        if self.denied:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "ListObjectsV2")
+        contents = [{"Key": context_key(content), "ETag": etag} for content, (etag, _) in self.objects.items()]
+        return [{"Contents": contents, "IsTruncated": False}]
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - the S3 parameter names
+        assert Bucket == BUCKET and Key.startswith(CONTEXT_PREFIX)
+        content = Key.removeprefix(CONTEXT_PREFIX).removesuffix(".json")
+        with self._lock:
+            self.reads.append(content)
+        if self._together is not None:
+            self._together.wait()
+        time.sleep(self.delays.get(content, 0.0))
+        with self._lock:
+            self.completed.append(content)
+        return {"Body": body(self.objects[content][1])}
+
+
+def test_loads_the_bucket_then_reads_only_what_changed() -> None:
+    s3, clock = FakeS3({"sintel": 0.02}), Clock()
+    copy = CatalogContexts(BUCKET, client=s3, clock=clock, spawn=inline)
+    s3.put("sintel", '"a"')
+    s3.put("tears-of-steel", '"b"')
+    assert copy.load() == {"sintel": CONTEXTS["sintel"], "tears-of-steel": CONTEXTS["tears-of-steel"]}
+    assert sorted(s3.reads) == ["sintel", "tears-of-steel"]
+
+    clock.now += patch.REFRESH_SECONDS
+    s3.reads.clear()
+    assert set(copy.get()) == {"sintel", "tears-of-steel"}
+    assert (s3.lists, s3.reads) == (2, []), "unchanged: one list, no GET"
+
+    clock.now += patch.REFRESH_SECONDS
+    changed = CONTEXTS["tears-of-steel"].model_copy(update={"contentrating": "TV-MA"})
+    del s3.objects["sintel"]
+    s3.put("tears-of-steel", '"c"', changed.model_dump_json().encode())
+    s3.put("elephants-dream", '"d"')
+    assert copy.get() == {"tears-of-steel": changed, "elephants-dream": CONTEXTS["elephants-dream"]}
+    assert sorted(s3.reads) == ["elephants-dream", "tears-of-steel"]
+
+
+INVALID: Final = ("sintel", "tears-of-steel", "elephants-dream")
+"""The objects of the invalid-object case: not JSON, valid, and another title's context under this title's key."""
+
+
+@pytest.mark.parametrize("finishing", list(permutations(INVALID)))
+def test_an_invalid_object_is_skipped_whatever_order_the_reads_finish_in(
+    finishing: tuple[str, ...], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The three reads overlap (each waits until all three have started) and finish in ``finishing`` order."""
+    s3 = FakeS3({content: 0.01 * finishing.index(content) for content in INVALID}, in_flight=len(INVALID))
+    s3.put("sintel", '"a"', b"not json")
+    s3.put("tears-of-steel", '"b"')
+    s3.put("elephants-dream", '"c"', CONTEXTS["sintel"].model_dump_json().encode())  # under another title's key
+    copy = CatalogContexts(BUCKET, client=s3, spawn=inline)
+
+    assert copy.load() == {"tears-of-steel": CONTEXTS["tears-of-steel"]}
+    [warning] = [r for r in caplog.records if r.getMessage() == "catalog contexts skipped"]
+    assert vars(warning)["invalid"] == ["sintel", "elephants-dream"], "in listing order, not completion order"
+    assert sorted(s3.completed) == sorted(INVALID)
+
+
+def test_the_invalid_object_case_does_finish_in_different_orders() -> None:
+    """A guard on the test above: its delays do change the completion order, so the order-independence it asserts is
+    not vacuous."""
+    orders = set()
+    for finishing in [INVALID, INVALID[::-1]]:
+        s3 = FakeS3({content: 0.05 * finishing.index(content) for content in INVALID}, in_flight=len(INVALID))
+        for content in INVALID:
+            s3.put(content, '"a"')
+        CatalogContexts(BUCKET, client=s3, spawn=inline).load()
+        orders.add(tuple(s3.completed))
+    assert orders == {INVALID, INVALID[::-1]}, orders
+
+
+def test_a_failed_refresh_keeps_the_copy_and_retries_sooner() -> None:
+    s3, clock = FakeS3(), Clock()
+    copy = CatalogContexts(BUCKET, client=s3, clock=clock, spawn=inline)
+    s3.put("sintel", '"a"')
+    copy.load()
+
+    clock.now += patch.REFRESH_SECONDS
+    s3.denied = True
+    assert copy.get() == {"sintel": CONTEXTS["sintel"]}
+    clock.now += RETRY_SECONDS
+    s3.denied = False
+    assert copy.get() == {"sintel": CONTEXTS["sintel"]}
+    assert s3.lists == 3
+    assert s3.reads == ["sintel"], "the retry lists again and reads nothing that has not changed"
+
+
+# --- configuration and the policy function --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def crawl_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for name, value in {
+        "CRAWL_HOLDOUT_PERCENT": "20",
+        "CATALOG_CONTEXT_BUCKET": BUCKET,
+        "PUBLISHER_DOMAIN": PUBLISHER,
+    }.items():
+        monkeypatch.setenv(name, value)
+    settings.cache_clear()
+    patch.contributor.cache_clear()
+    patch.catalog_contexts.cache_clear()
+    yield
+    settings.cache_clear()
+    patch.contributor.cache_clear()
+    patch.catalog_contexts.cache_clear()
+
+
+@pytest.fixture
+def crawl_off() -> Iterator[None]:
+    settings.cache_clear()
+    patch.contributor.cache_clear()
+    yield
+    settings.cache_clear()
+    patch.contributor.cache_clear()
+
+
+@pytest.mark.usefixtures("crawl_off")
+def test_off_without_the_holdout_setting() -> None:
+    assert patch.contributor() is None
+    assert policy.contributors() == ()
+
+
+@pytest.mark.usefixtures("crawl_on")
+def test_on_with_the_stages_settings() -> None:
+    built = patch.contributor()
+    assert built is not None
+    assert (built.holdout_percent, built.publisher_domain) == (20, PUBLISHER)
+    assert patch.catalog_contexts()._bucket == BUCKET
+    assert policy.contributors() == (built,)
+
+
+@pytest.mark.usefixtures("crawl_on")
+def test_on_without_its_bucket_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CATALOG_CONTEXT_BUCKET")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError, match="CATALOG_CONTEXT_BUCKET"):
+        patch.contributor()
+
+
+class _Snapshot:
+    def get(self) -> Any:
+        return build(SnapshotBase(demand=demo_demand("fastm")), now=datetime(2026, 10, 29, tzinfo=UTC))
+
+
+def test_the_policy_answer_and_record_with_the_module_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(policy, "store", _Snapshot)
+    monkeypatch.setattr(policy, "contributor", contributor)
+    response = policy.answer(request().model_dump_json().encode(), time.perf_counter())
+
+    answer = json.loads(response.body)
+    assert answer["app_content"]["title"] == "Tears of Steel"
+    [record] = [vars(r) for r in caplog.records if getattr(r, "record", None) == "pds.policy"]
+    assert (record["contributors"], record["skipped"], record["contributed"]) == (
+        ["crawl"],
+        [],
+        {"enr": 1, "ctx": "snapshot"},
+    )

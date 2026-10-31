@@ -305,7 +305,7 @@ The console's client is in `console/src/lib/agui.ts` and `console/src/lib/sse.ts
 |---|---|
 | Default | `{geo}.anthropic.claude-haiku-5-5`: the region's geographic inference profile, `us.` in US regions and ca-central-1, `eu.` in Europe, `au.` in ap-southeast-2, `global.` elsewhere |
 | Allowed by default | Haiku 5.5 and Sonnet 5.5, as the region's (`{geo}.`) and `global.` profiles (`agent.allowed_models`) |
-| Switch at runtime | SSM parameter `/<prefix>/agent/model-spec` (output `ModelSpecParameter`), read with a 60 s cache |
+| Switch at runtime | SSM parameter `/<prefix>/agent/model-spec` (output `ModelSpecParameter`), read with a 60 s cache; with the [model registry](#model-registry), its `scheduler.plan` entry comes first |
 | Cost | About $0.003–0.006 of Bedrock tokens per schedule built with Haiku 5.5 |
 
 Validation rejects geographic profiles that the deployment region cannot invoke (for example `us.` in `eu-west-1`)
@@ -325,7 +325,67 @@ aws ssm put-parameter --overwrite --name /fast/agent/model-spec --type String \
 The spec is deliberately narrow: a Bedrock model id from the allow-list, effort per mode (sent to Anthropic models
 only), and an output token budget. A spec naming any other model, or failing validation, falls back to the code
 default; a mutable provider or endpoint would let anyone with `ssm:PutParameter` redirect prompts outside the IAM
-allow-list. The agent never sends `temperature`, which Claude 5.x rejects.
+allow-list. The agent never sends `temperature`, which Claude 5.x rejects. The spec may also set `thinking`
+(`adaptive`, the default, which omits the field and leaves the model's own default; or `disabled`, which sends
+`thinking: {type: disabled}` to Anthropic models).
+
+### Model registry
+
+With `modules.models.enabled`, the `FastChannels-<prefix>-Models` stack gives every LLM task in
+`modules.models.tasks` (`cdk.json`):
+
+- an **application inference profile** `<prefix>-<task>`, copied from the system inference profile of the task's model
+  and tagged `fast:task=<task>`. Its id is the `ModelId` of the task's calls in the `AWS/Bedrock` metrics, so each task
+  has its own token, latency, throttle and cost figures; with the `fast:task` cost allocation tag activated (Billing
+  console, payer account), its spend shows in Cost Explorer and AWS Budgets too;
+- a **registry entry**, the SSM parameter `/<prefix>/models/tasks/<task>`: model, route (`bedrock`: Converse), effort,
+  thinking, output token budget, data class, daily cap, eval record and the profile's ARN
+  ([contracts/model-registry.schema.json](../contracts/model-registry.schema.json));
+- a **daily spend counter** in the `<prefix>-models` table.
+
+The stack outputs `TaskParameters`, `TaskProfiles` and `CounterTableName` list them. The scheduler agent's task is
+`scheduler.plan`, which ships with today's ModelSpec values (Haiku 5.5, effort `low` for chat and `medium` for plans,
+16,000 tokens), a daily cap of $5 and its committed eval record. With the registry there is no ModelSpec parameter:
+the agent reads the `scheduler.plan` entry (`MODEL_TASK_PARAMETER`) with a 60 s cache and, when it cannot use it, the
+entry as deployed (`MODEL_TASK_DEFAULT`). An entry that is missing, unreadable, invalid, names a model outside
+`agent.allowed_models` or names another profile is skipped with a `model source unavailable` warning. Synth refuses an entry whose model is not allowed, and an entry
+for a task with viewer data (`data_class: viewer`) on a `global.` profile. Every run's `run started` log record names
+its `task`, `model_id` and `model_source` (`registry`, `model-spec` without the registry, or `default`). A task's thinking setting is fixed:
+it never changes from one call to the next, because a change rewrites the prompt cache.
+
+**Through the profile only.** With the registry, every model call goes through the task's profile
+(`MODEL_PROFILE_ARN`), whatever the source, and the runtime role may invoke nothing else: the profile, and the
+foundation model only through it (`bedrock:InferenceProfileArn`), never the system profile directly or another task's
+profile. `agent.allowed_models` then holds one model for the agent, the task's, so switching the scheduler to another
+model is a `cdk.json` change, an eval record and a deployment (a new profile), not an SSM edit; an edit of the entry
+still tunes effort, thinking, `max_tokens` and the cap. Prompt caching works through the profile.
+
+**Daily cap.** Caps are circuit breakers against a runaway, set at about ten times expected use, not budgets. Before
+each run and each model call the agent makes a conditional write on the counter item `COUNTER#scheduler.plan#<UTC day>`
+that succeeds only while the day's spend is under `daily_cap_usd` (the entry's, or the deployed entry's when the
+entry is unusable); after each call it adds the call's cost from its token usage at list prices (`fast_channels.agent.caps`).
+Past the cap a run ends with `RUN_ERROR` `MODEL_CAP_REACHED` (a call within a run is cancelled with the same message
+as the reply), and the alert topic `<prefix>-alerts` gets one notification per task and day. It resumes at 00:00 UTC
+or as soon as the cap is raised. When the counter cannot be reached the run goes ahead and the agent logs a warning.
+
+With `modules.models.budgets_action` (and `notifications.email`), each task role with a cap also gets an AWS Budget
+on its `fast:task` spend whose action, at 100 %, attaches a policy denying that role's invocations of the task's
+profile. Budgets actions accept no daily budget, so the budget is monthly at 31 days of the daily cap: the counter
+enforces the day, the budget catches what the counter cannot see (another caller of the profile). Budgets see spend
+hours late and only once the cost allocation tag is active; reverse an action in AWS Budgets (Action history) once
+the cause is fixed.
+
+**Eval records and the synth gate.** A model qualifies for a task only with a passing eval record,
+`evals/records/<task>/<key>.json` ([contracts/eval-record.schema.json](../contracts/eval-record.schema.json)), committed
+with the change that uses it. `make eval TASK=scheduler.plan MODEL=<id>` runs the conformance suite below with the
+task's settings from `cdk.json` (effort, thinking, `max_tokens`) and writes the record, passing or not; its key reads
+like `haiku-5-5-adaptive-16k`. With the registry on, synth fails while any task's `eval` names no passing record for
+its model and settings: removing the record, switching `scheduler.plan` to Sonnet 5.5 or changing its `max_tokens`
+each needs a new record. Any routing of the tested model qualifies (`us.`, `eu.`, `global.`). Tasks without a suite
+here (the recommender's ships with its module) need their own: a recommender record must report `schema_valid`,
+`faithfulness` (the deterministic check that each tile's reason cites only facts of the input), `policy_violations`
+and `cost_per_rail`, and a judge sample runs before any default flip. Swapping the model of a task with viewer data
+needs a human's approval.
 
 ### Conformance suite and bringing your own model
 
@@ -335,6 +395,7 @@ each run through the real agent and scored on the published schedule.
 
 ```bash
 make eval MODEL=us.anthropic.claude-sonnet-5-5          # 3 runs per scenario against a local fake tool server
+make eval TASK=scheduler.plan MODEL=us.anthropic.claude-sonnet-5-5   # the same with scheduler.plan's settings: a record
 uv run python scripts/eval_model.py --model-id <id> --runs 3 --scenarios standard,hard \
   --gateway-url "$GATEWAY_URL" --token-file ~/.fast/token --channel <prefix>-agent-eval   # against deployed tools
 ```
@@ -378,8 +439,9 @@ policies apply to it unchanged.
   [observability.md](observability.md#what-the-agent-runtime-records).
 - Runtime application and usage logs, Gateway application logs and Memory application logs are vended to
   `/aws/vendedlogs/bedrock-agentcore/<prefix>/…` log groups.
-- **Traces** need CloudWatch Transaction Search (`observability.transaction_search: enable`, an account-level change;
-  see [observability.md](observability.md#transaction-search)). Without it the Runtime sets
+- **Traces** need CloudWatch Transaction Search (`observability.transaction_search: enable` and
+  `make account-baseline` before `make deploy`, an account-level change; see
+  [observability.md](observability.md#transaction-search)). Without it the Runtime sets
   `OTEL_TRACES_EXPORTER=none`, so it exports no spans and logs no export errors.
 - **Online evaluations** (traces on only): an `OnlineEvaluationConfig` named `<runtime>_online` scores 10 % of
   sessions with the built-in Goal Success Rate, Tool Selection Accuracy and Tool Parameter Accuracy evaluators. They

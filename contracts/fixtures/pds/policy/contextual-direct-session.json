@@ -1,0 +1,55 @@
+{
+  "description": "A session opened directly on MediaTailor (no viewer-side CloudFront hop)",
+  "context": {
+    "demand": {
+      "amt": {}
+    },
+    "origin_facing": [
+      "130.176.0.0/18",
+      "2600:9000:1000::/36"
+    ],
+    "kids_channel": false
+  },
+  "request": {
+    "v": 1,
+    "t": "",
+    "sid": "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d",
+    "pc": "fast-demo-p-a",
+    "fv": "r0001",
+    "evid": "820461826",
+    "upid": "tears-of-steel",
+    "dur_ms": 60060,
+    "ua": "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36",
+    "xff": "81.2.69.160, 3.81.20.30, 130.176.40.9",
+    "cfva": "3.81.20.30:46532",
+    "ctx": "",
+    "probe": false
+  },
+  "response": {
+    "v": 1,
+    "decision_id": "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826",
+    "mode": "CONTEXTUAL",
+    "reason": "missing",
+    "bidders": {
+      "amt": {}
+    },
+    "regs": {
+      "coppa": 0,
+      "gpp": null,
+      "gpp_sid": null
+    },
+    "device": {
+      "ip": "81.2.69.160",
+      "ipv6": null,
+      "devicetype": 3
+    },
+    "app_content": null,
+    "user": null,
+    "fpd": {
+      "bidders": [
+        "ownbook"
+      ]
+    },
+    "deals": []
+  }
+}

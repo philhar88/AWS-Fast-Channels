@@ -1,0 +1,633 @@
+"""Promotion and rollback (R1): the candidates, the pointer deployment, the swap, the remap to the last good tree, and
+the deletion of trees no sibling keeps."""
+
+import json
+from collections.abc import Callable
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any, Final
+
+import pytest
+from botocore.stub import ANY, Stubber
+from pydantic import SecretStr
+
+from fast_channels.core.crawl.functions import CrawlContribution
+from fast_channels.core.monetization.bundle import ChannelInput
+from fast_channels.core.monetization.playback import render
+from fast_channels.core.monetization.release import ReleaseStatus, applied, differences, kept_releases
+from fast_channels.functions.release import apply, promote
+
+type Stub = Callable[[str], Stubber]
+AT = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+SIBLINGS = ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-z"]
+HLS = "https://abc123.mediatailor.us-east-1.amazonaws.com/v1/master/0123abcd/"
+CANDIDATE = {"channel": "fastm-demo", "sibling": "fastm-demo-p-b", "stable": "fastm-demo-p-a"}
+
+
+@pytest.fixture(autouse=True)
+def clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(apply, "_now", lambda: AT)
+    monkeypatch.setattr(promote, "_now", lambda: AT)
+
+
+def released_twice(kit: SimpleNamespace, state: Any, **options: Any) -> str:
+    """Release 1 on every sibling, release 2 on the idle one; both bundles stored and recorded. ``options`` go to
+    ``kit.make_bundle``."""
+    bundle = kit.make_bundle(**options)
+    key = state.add(bundle)
+    first = applied(
+        None, channel="fastm-demo", siblings=SIBLINGS, release=1, digest=bundle.digest, change_id="c1", at=AT
+    )
+    second = applied(
+        first, channel="fastm-demo", siblings=["fastm-demo-p-b"], release=2, digest=bundle.digest, change_id="c2", at=AT
+    )
+    state.states["fastm-demo"] = (second, 2)
+    for release, status in ((1, "APPLIED"), (2, "APPLIED")):
+        state.statuses[release] = ReleaseStatus(
+            release=release, digest=bundle.digest, bundle_key=key, change_id=f"c{release}", status=status, at=AT
+        )
+    state.holder = 2
+    return key
+
+
+def expect_deployment(appconfig: Stubber, content: dict[str, str], *, strategy: str, number: int = 7) -> None:
+    appconfig.add_response(
+        "list_deployments",
+        {"Items": [{"DeploymentNumber": 1, "State": "COMPLETE"}, {"DeploymentNumber": 2, "State": "REVERTED"}]},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "MaxResults": 5},
+    )
+    appconfig.add_response(
+        "create_hosted_configuration_version",
+        {"VersionNumber": 3},
+        {
+            "ApplicationId": "app1",
+            "ConfigurationProfileId": "prof1",
+            "Content": json.dumps(content, sort_keys=True).encode(),
+            "ContentType": "application/json",
+            "Description": ANY,
+        },
+    )
+    appconfig.add_response(
+        "start_deployment",
+        {"DeploymentNumber": number},
+        {
+            "ApplicationId": "app1",
+            "EnvironmentId": "env1",
+            "DeploymentStrategyId": strategy,
+            "ConfigurationProfileId": "prof1",
+            "ConfigurationVersion": "3",
+            "Description": ANY,
+            "Tags": ANY,
+        },
+    )
+
+
+PROBE = "fastm-demo-p-z"
+PROBE_ONLY: Final = {
+    "Name",
+    "AdDecisionServerConfiguration.HttpRequest.Headers.X-Fast-Pc",  # the configuration's own name
+    "AdDecisionServerConfiguration.HttpRequest.Headers.X-Fast-Probe",  # house only, its decision records flagged
+}
+"""Where the probe's configuration of a release may differ from the pair sibling's of the same release."""
+
+
+def expect_probe(
+    state: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch, key: str, release: int, change_id: str
+) -> tuple[dict[str, Any], list[str]]:
+    """The probe's re-apply with ``release``: its Functions (recorded, not put) and its configuration and logging,
+    which the MediaTailor stub expects exactly. Returns the probe's rendered configuration and the FunctionIds."""
+    created: list[str] = []
+    monkeypatch.setattr(apply, "put_function", lambda function: created.append(function.function_id) or True)
+    probe = next(s for s in state.bundle(key).siblings if s.name == PROBE)
+    put, logging = render(
+        probe.playback, prefix="fastm", release=release, change_id=change_id, origin_secret=SecretStr("secret-value-a")
+    )
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("put_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, put)
+    mediatailor.add_response("configure_logs_for_playback_configuration", {"PercentEnabled": 100}, logging)
+    return put, created
+
+
+def test_a_later_release_has_its_idle_sibling_as_candidate(kit: SimpleNamespace, state: Any) -> None:
+    key = released_twice(kit, state)
+    assert promote.candidates(key, 2, ["fastm-demo-p-b"]) == [CANDIDATE]
+    first = applied(None, channel="fastm-demo", siblings=SIBLINGS, release=1, digest="d" * 64, change_id="c1", at=AT)
+    state.states["fastm-demo"] = (first, 1)
+    assert promote.candidates(key, 1, SIBLINGS) == []
+
+
+def test_point_deploys_the_pointer_naming_the_candidate(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    released_twice(kit, state)
+    expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-b"}, strategy="strat1")
+    assert promote.point(2, "c2", [CANDIDATE]) == {
+        "deployment": 7,
+        "version": 3,
+        "pointer": {"fastm-demo": "fastm-demo-p-b"},
+    }
+    assert ledger.actions() == [("release/bundle", "release.point")]
+    stub("appconfig").add_response(
+        "get_deployment",
+        {"State": "ROLLED_BACK", "PercentageComplete": 10.0, "EventLog": [{"Description": "monitor in alarm"}]},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7},
+    )
+    assert promote.pointer_state(7) == {
+        "deployment": 7,
+        "state": "ROLLED_BACK",
+        "percent": 10.0,
+        "done": True,
+        "events": ["monitor in alarm"],
+    }
+
+
+def test_promote_swaps_the_pair_rewrites_the_plan_and_gives_the_lock_back(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = released_twice(kit, state)
+    stub("mediatailor").add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
+    )
+    stub("s3").add_response(
+        "put_object",
+        {},
+        {
+            "Bucket": "fastm-media",
+            "Key": "plan/playback/fastm-demo.json",
+            "Body": ANY,
+            "ContentType": "application/json",
+            "CacheControl": "max-age=30",
+        },
+    )
+    expect_probe(state, stub, monkeypatch, key, 2, "c2")
+    assert promote.promote(key, 2, "c2", [CANDIDATE]) == {
+        "release": 2,
+        "stable": {"fastm-demo": "fastm-demo-p-b"},
+        "probes": {"fastm-demo": 2},
+    }
+    channel, version = state.states["fastm-demo"]
+    assert (channel.stable, channel.idle, version) == ("fastm-demo-p-b", "fastm-demo-p-a", 4)
+    assert state.statuses[2].status == "PROMOTED" and state.holder is None
+    assert state.deployed == {"fastm-demo": "fastm-demo-p-b"}
+    assert ledger.actions() == [("release/fastm-demo", "release.promote"), ("release/fastm-demo", "release.probe")]
+
+
+@pytest.mark.parametrize("crawl", [False, True], ids=["controls only", "with the crawl lookup"])
+def test_after_a_promotion_the_probe_runs_the_stable_release_but_for_its_probe_fields(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch, crawl: bool
+) -> None:
+    """M3-x4: the probe was on release 1 (its channel's first release); the promotion of 2 re-applies it with 2: the
+    same session controls (the PRE_SESSION tree) and ADS body as the new stable sibling, but for its probe fields (and
+    the crawl lookup, a PRE_ADS tree of the pair siblings only). Its Functions of 2 are put (they exist when the
+    pair's tree is the same), and it keeps no history, so the reaper may delete release 1's trees once no other
+    sibling keeps them."""
+    key = released_twice(kit, state, **({"contributions": [CrawlContribution()]} if crawl else {}))
+    stub("mediatailor").add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    probe, created = expect_probe(state, stub, monkeypatch, key, 2, "c2")
+    promote.promote(key, 2, "c2", [CANDIDATE])
+    stable = next(s for s in state.bundle(key).siblings if s.name == "fastm-demo-p-b")
+    pair, _ = render(
+        stable.playback, prefix="fastm", release=2, change_id="c2", origin_secret=SecretStr("secret-value-a")
+    )
+    pair_only = {"FunctionMapping.PRE_ADS_REQUEST"} if crawl else set()
+    assert set(differences(pair, probe)) <= PROBE_ONLY | pair_only and set(differences(probe, pair)) <= PROBE_ONLY
+    assert probe["FunctionMapping"] == {"PRE_SESSION_INITIALIZATION": "fastm_ps_root_r0002"}
+    assert probe["FunctionMapping"].items() <= pair["FunctionMapping"].items()
+    assert ("PRE_ADS_REQUEST" in pair["FunctionMapping"]) is crawl
+    assert (
+        probe["AdDecisionServerConfiguration"]["HttpRequest"]["Body"]
+        == pair["AdDecisionServerConfiguration"]["HttpRequest"]["Body"]
+    )
+    assert probe["AdDecisionServerConfiguration"]["HttpRequest"]["Headers"]["X-Fast-Probe"] == "1"
+    assert created and all(f.endswith("_r0002") for f in created), created
+    channel, _ = state.states["fastm-demo"]
+    assert (channel.siblings[PROBE].release, channel.siblings[PROBE].change_id, channel.history[PROBE]) == (
+        2,
+        "c2",
+        (2,),
+    )
+    assert 1 in kept_releases({"fastm-demo": channel}), "release 1 is still the idle sibling's"
+    assert ledger.entries[-1].detail == {"probe": PROBE, "release": 2, "from": 1, "stable": "fastm-demo-p-b"}
+
+
+def test_a_probe_that_cannot_follow_fails_the_step_after_the_promotion(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The promotion stands (stable, PROMOTED, the lock given back); ProbeFollowError ends the execution
+    (``ProbesNotFollowed``) without the fail step, and the probe stays on its release."""
+    key = released_twice(kit, state)
+    stub("mediatailor").add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    monkeypatch.setattr(apply, "put_function", lambda function: True)
+    stub("mediatailor").add_client_error("put_playback_configuration", "BadRequestException", "no such Function")
+    logged: list[str] = []
+    monkeypatch.setattr(promote.logger, "error", lambda message, **_: logged.append(message))
+    with pytest.raises(promote.ProbeFollowError, match="fastm-demo-p-z: not re-applied with r0002"):
+        promote.promote(key, 2, "c2", [CANDIDATE])
+    assert logged == ["probe not followed"], "the message <prefix>-release-probe-stale counts"
+    channel, _ = state.states["fastm-demo"]
+    assert channel.stable == "fastm-demo-p-b" and channel.siblings[PROBE].release == 1
+    assert state.statuses[2].status == "PROMOTED" and state.holder is None
+
+
+def test_rollback_remaps_the_candidate_to_its_last_good_tree(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    key = released_twice(kit, state)
+    bundle = state.bundle(key)
+    sibling = bundle.siblings[1]
+    put, _ = render(
+        sibling.playback, prefix="fastm", release=1, change_id="c1", origin_secret=SecretStr("secret-value-a")
+    )
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("put_playback_configuration", {}, put)  # back on fastm_ps_root_r0001
+    mediatailor.add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-a"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    stub("appconfig").add_response("list_deployments", {"Items": []}, None)  # nothing to stop
+    expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-a"}, strategy="now1", number=8)
+    result = promote.rollback(key, 2, "c2", [CANDIDATE], {"Error": "SmokeFailed"})
+    assert result == {"release": 2, "remapped": {"fastm-demo-p-b": 1}, "deployment": 8, "probes": {"fastm-demo": 1}}
+    channel, _ = state.states["fastm-demo"]
+    assert channel.siblings["fastm-demo-p-b"].release == 1 and channel.history["fastm-demo-p-b"] == (1,)
+    assert (channel.stable, channel.idle) == ("fastm-demo-p-a", "fastm-demo-p-b")
+    assert state.statuses[2].status == "ROLLED_BACK" and state.holder is None
+    assert ledger.actions() == [("release/bundle", "release.rollback")]
+    assert ledger.entries[0].detail["reason"] == {"Error": "SmokeFailed"}
+
+
+def test_finish_publishes_a_changed_pointer_at_once_and_deletes_old_trees(
+    kit: SimpleNamespace, state: Any, stub: Stub
+) -> None:
+    bundle = kit.make_bundle()
+    state.add(bundle)
+    first = applied(
+        None, channel="fastm-demo", siblings=SIBLINGS, release=4, digest=bundle.digest, change_id="c4", at=AT
+    )
+    state.states["fastm-demo"] = (first, 1)
+    state.holder = 4
+    expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-a"}, strategy="now1")
+    owned = {"fast:app": "fastm", "fast:owner": "release-controller"}
+    stub("mediatailor").add_response(
+        "list_functions",
+        {
+            "Items": [
+                {"FunctionId": "fastm_ps_ctl_r0001", "FunctionType": "CUSTOM_OUTPUT", "Tags": owned},
+                {"FunctionId": "fastm_ps_root_r0001", "FunctionType": "SEQUENTIAL_EXECUTOR", "Tags": owned},
+                {"FunctionId": "fastm_ps_root_r0004", "FunctionType": "SEQUENTIAL_EXECUTOR", "Tags": owned},
+            ]
+        },
+    )
+    stub("mediatailor").add_response("delete_function", {}, {"FunctionId": "fastm_ps_root_r0001"})
+    stub("mediatailor").add_response("delete_function", {}, {"FunctionId": "fastm_ps_ctl_r0001"})
+    result = promote.finish(4, "c4")
+    assert result["deleted"] == ["fastm_ps_root_r0001", "fastm_ps_ctl_r0001"] and state.holder is None
+    assert state.deployed == {"fastm-demo": "fastm-demo-p-a"}
+    state.holder = 4
+    stub("mediatailor").add_response("list_functions", {"Items": []})
+    assert promote.finish(4, "c4")["deployment"] is None  # unchanged: nothing deployed
+
+
+def test_candidates_are_smoke_tested_where_a_channel_runs(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = released_twice(kit, state)
+    event = {"step": "candidates", "bundle_key": key, "release": 2, "change_id": "c2", "siblings": ["fastm-demo-p-b"]}
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response(
+        "describe_channel", {"ChannelState": "RUNNING", "LogConfiguration": {}}, {"ChannelName": "fastm-demo"}
+    )
+    assert promote.handler(event, context) == {"candidates": [CANDIDATE], "smoke": [CANDIDATE], "lab": None}
+    mediatailor.add_response(
+        "describe_channel", {"ChannelState": "STOPPED", "LogConfiguration": {}}, {"ChannelName": "fastm-demo"}
+    )
+    assert promote.handler(event, context) == {"candidates": [CANDIDATE], "smoke": [], "lab": None}
+    assert ledger.actions() == [("release/bundle", "release.hold")]  # no lab channel: applied, not promoted
+    mediatailor.add_client_error("describe_channel", service_error_code="NotFoundException", http_status_code=404)
+    assert not promote.on_air("fastm-demo")
+    with pytest.raises(ValueError, match="unknown step 'x'"):
+        promote.handler({"step": "x"}, context)
+
+
+def test_the_lab_channel_is_smoke_tested_when_no_monetized_channel_runs(
+    kit: SimpleNamespace, state: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    channels = [
+        ChannelInput(name="fastm-demo", video_content_source_url=kit.CA_URL),
+        ChannelInput(name="fastm-lab", video_content_source_url=kit.CA_URL.replace("demo", "lab"), lab=True),
+    ]
+    key = state.add(kit.make_bundle(channels=channels))
+    lab = {"channel": "fastm-lab", "sibling": "fastm-lab-p-b", "stable": "fastm-lab-p-a"}
+    stub("mediatailor").add_response(
+        "describe_channel", {"ChannelState": "STOPPED", "LogConfiguration": {}}, {"ChannelName": "fastm-demo"}
+    )
+    monkeypatch.setenv("TOOL_FUNCTIONS", '{"channels": "f1"}')
+    promote.settings.cache_clear()
+    assert promote.smoke_plan(key, [CANDIDATE, lab]) == {"smoke": [lab], "lab": "fastm-lab"}
+
+
+def test_runbook_r1_remaps_a_pair_sibling_in_alarm_to_its_last_good_tree(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, context: Any
+) -> None:
+    key = released_twice(kit, state)
+    state.holder = None  # no release applying
+    bundle = state.bundle(key)
+    put, _ = render(
+        bundle.siblings[1].playback,
+        prefix="fastm",
+        release=1,
+        change_id="c1",
+        origin_secret=SecretStr("secret-value-a"),
+    )
+    stub("cloudwatch").add_response(
+        "describe_alarms",
+        {
+            "MetricAlarms": [
+                {"AlarmName": "fastm-demo-p-b-presessioninithook-errors"},
+                {"AlarmName": "fastm-demo-p-a-getmanifest-errors"},  # not the tree's: no remap
+                {"AlarmName": "other"},
+            ]
+        },
+        {"StateValue": "ALARM", "AlarmTypes": ["MetricAlarm"]},
+    )
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("put_playback_configuration", {}, put)
+    mediatailor.add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-a"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    alarm = {
+        "id": "event-1",
+        "detail-type": "CloudWatch Alarm State Change",
+        "detail": {"alarmName": "fastm-release-candidate", "state": {"value": "ALARM"}},
+    }
+    assert promote.handler(alarm, context) == {"remapped": {"fastm-demo-p-b": 1}, "probes": {"fastm-demo": 1}}
+    channel, _ = state.states["fastm-demo"]
+    assert channel.siblings["fastm-demo-p-b"].release == 1 and channel.history["fastm-demo-p-b"] == (1,)
+    assert ledger.actions() == [("release/fastm-demo", "release.rollback")]
+    assert ledger.entries[0].detail == {
+        "runbook": "R1",
+        "alarm": "fastm-release-candidate",
+        "sibling": "fastm-demo-p-b",
+        "release": 1,
+    }
+
+
+def test_an_r1_rollback_of_the_stable_sibling_takes_the_probe_back_to_its_release(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Release 2 was promoted and the probe followed it; R1 then remaps the stable sibling to its last good tree (1),
+    and the probe is re-applied with 1."""
+    key = released_twice(kit, state)
+    state.holder = None
+    channel, version = state.states["fastm-demo"]
+    record = channel.siblings["fastm-demo-p-b"].model_copy(update={"change_id": "c2"})
+    after = channel.model_copy(
+        update={
+            "stable": "fastm-demo-p-b",
+            "idle": "fastm-demo-p-a",
+            "siblings": {**channel.siblings, PROBE: record},
+            "history": {**channel.history, PROBE: (2,)},
+        }
+    )
+    state.states["fastm-demo"] = (after, version + 1)
+    bundle = state.bundle(key)
+    put, _ = render(
+        bundle.siblings[1].playback,
+        prefix="fastm",
+        release=1,
+        change_id="c1",
+        origin_secret=SecretStr("secret-value-a"),
+    )
+    stub("cloudwatch").add_response(
+        "describe_alarms", {"MetricAlarms": [{"AlarmName": "fastm-demo-p-b-function-errors"}]}, None
+    )
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("put_playback_configuration", {}, put)  # the stable sibling back on 1
+    mediatailor.add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    probe, created = expect_probe(state, stub, monkeypatch, key, 1, "event-4")
+    assert promote.runbook("fastm-release-candidate", "event-4") == {
+        "remapped": {"fastm-demo-p-b": 1},
+        "probes": {"fastm-demo": 1},
+    }
+    assert probe["FunctionMapping"] == {"PRE_SESSION_INITIALIZATION": "fastm_ps_root_r0001"}
+    assert all(f.endswith("_r0001") for f in created), created
+    channel, _ = state.states["fastm-demo"]
+    assert (channel.siblings[PROBE].release, channel.history[PROBE]) == (1, (1,))
+    assert ledger.actions() == [("release/fastm-demo", "release.rollback"), ("release/fastm-demo", "release.probe")]
+
+
+def test_runbook_r1_leaves_a_release_in_progress_to_its_own_rollback(
+    kit: SimpleNamespace, state: Any, ledger: Any
+) -> None:
+    released_twice(kit, state)  # release 2 holds the lock
+    assert promote.runbook("fastm-release-candidate", "event-2") == {"remapped": {}, "deferred_to": 2}
+    assert ledger.entries == []
+
+
+def test_runbook_r1_skips_a_sibling_without_a_last_good_tree(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    bundle = kit.make_bundle()
+    state.add(bundle)
+    first = applied(
+        None, channel="fastm-demo", siblings=SIBLINGS, release=1, digest=bundle.digest, change_id="c1", at=AT
+    )
+    state.states["fastm-demo"] = (first, 1)
+    stub("cloudwatch").add_response(
+        "describe_alarms", {"MetricAlarms": [{"AlarmName": "fastm-demo-p-a-function-errors"}]}, None
+    )
+    assert promote.runbook("fastm-release-candidate", "event-3") == {"remapped": {}, "probes": {}}
+    assert ledger.entries == []
+
+
+def test_a_pointer_waits_while_another_deployment_of_the_environment_runs(stub: Stub) -> None:
+    stub("appconfig").add_response("list_deployments", {"Items": [{"DeploymentNumber": 4, "State": "BAKING"}]}, None)
+    with pytest.raises(promote.PointerBusyError):
+        promote._deploy({"fastm-demo": "fastm-demo-p-a"}, strategy="now1", description="d", tags={})
+
+
+def test_a_rollback_stops_the_pointers_rollout_but_not_the_flags(stub: Stub) -> None:
+    appconfig = stub("appconfig")
+    appconfig.add_response(
+        "list_deployments",
+        {"Items": [{"DeploymentNumber": 11, "State": "DEPLOYING"}, {"DeploymentNumber": 10, "State": "BAKING"}]},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "MaxResults": 5},
+    )
+    appconfig.add_response(
+        "get_deployment",
+        {"DeploymentNumber": 11, "ConfigurationProfileId": "prof1", "State": "DEPLOYING"},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 11},
+    )
+    appconfig.add_response(
+        "stop_deployment", {}, {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 11}
+    )
+    appconfig.add_response(
+        "get_deployment",
+        {"DeploymentNumber": 10, "ConfigurationProfileId": "flags1", "State": "BAKING"},
+        {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 10},
+    )
+    assert promote.stop_pointer() == [11]
+
+
+def expect_latency(cloudwatch: Stubber, function_id: str, maxima: list[float]) -> None:
+    cloudwatch.add_response(
+        "get_metric_statistics",
+        {"Datapoints": [{"Maximum": m} for m in maxima]},
+        {
+            "Namespace": "AWS/MediaTailor",
+            "MetricName": "Function.Latency",
+            "Dimensions": [
+                {"Name": "ConfigurationName", "Value": "fastm-demo-p-b"},
+                {"Name": "FunctionId", "Value": function_id},
+                {"Name": "HookType", "Value": "PRE_ADS_REQUEST"},
+                {"Name": "FunctionType", "Value": "HTTP_REQUEST"},
+            ],
+            "StartTime": AT,
+            "EndTime": AT,
+            "Period": 60,
+            "Statistics": ["Maximum"],
+        },
+    )
+
+
+def test_a_candidates_request_at_its_timeout_stops_the_pointer(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
+    key = state.add(kit.make_bundle(contributions=[CrawlContribution()]))
+    appconfig, cloudwatch = stub("appconfig"), stub("cloudwatch")
+    where = {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7}
+    appconfig.add_response("get_deployment", {"State": "DEPLOYING", "PercentageComplete": 20.0, "StartedAt": AT}, where)
+    expect_latency(cloudwatch, "fastm_pa_meta_r0002", [266.0, 255.0, 30.0])  # no error metric counts these
+    appconfig.add_response("stop_deployment", {}, where)
+    found = promote.pointer_state(7, key, 2, [CANDIDATE])
+    assert (found["state"], found["done"]) == ("ROLLED_BACK", True)
+    assert found["timed_out"] == {"fastm-demo-p-b": {"fastm_pa_meta_r0002": {"timeout_ms": 250, "minutes": 2}}}
+
+
+def test_a_request_that_timed_out_once_leaves_the_pointer_running(kit: SimpleNamespace, state: Any, stub: Stub) -> None:
+    key = state.add(kit.make_bundle(contributions=[CrawlContribution()]))
+    where = {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7}
+    stub("appconfig").add_response(
+        "get_deployment", {"State": "DEPLOYING", "PercentageComplete": 20.0, "StartedAt": AT}, where
+    )
+    expect_latency(stub("cloudwatch"), "fastm_pa_meta_r0002", [266.0, 77.0])  # a cold first call
+    found = promote.pointer_state(7, key, 2, [CANDIDATE])
+    assert (found["state"], found["done"], "timed_out" in found) == ("DEPLOYING", False, False)
+
+
+def rotated(kit: SimpleNamespace, state: Any, **options: Any) -> str:
+    """:func:`released_twice`, then a rotation created release 2's tree again as release 3 (``recreated_from``),
+    as ``rotate.recreate`` does on the ad-server route: the candidate records 3, and the execution still carries 2."""
+    key = released_twice(kit, state, **options)
+    channel, version = state.states["fastm-demo"]
+    record = channel.siblings["fastm-demo-p-b"].model_copy(update={"release": 3, "change_id": "rot"})
+    moved = channel.model_copy(
+        update={
+            "siblings": {**channel.siblings, "fastm-demo-p-b": record},
+            "history": {**channel.history, "fastm-demo-p-b": (3, 1)},
+        }
+    )
+    state.states["fastm-demo"] = (moved, version + 1)
+    state.statuses[3] = state.statuses[2].model_copy(update={"release": 3, "change_id": "rot", "recreated_from": 2})
+    return key
+
+
+def test_the_recorded_release_follows_a_rotation_back_to_the_execution(kit: SimpleNamespace, state: Any) -> None:
+    rotated(kit, state)
+    channel, _ = state.states["fastm-demo"]
+    assert promote.recorded(channel, "fastm-demo-p-b", 2) == 3, "re-created by the rotation"
+    assert promote.recorded(channel, "fastm-demo-p-a", 1) == 1, "never re-created"
+    assert promote.recorded(channel, "fastm-demo-p-a", 2) == 2, "records another release: the execution's"
+    assert promote.recorded(None, "fastm-demo-p-b", 2) == 2, "no state"
+    state.statuses[4] = state.statuses[3].model_copy(update={"release": 4, "recreated_from": 3})
+    twice = channel.model_copy(
+        update={
+            "siblings": {
+                **channel.siblings,
+                "fastm-demo-p-b": channel.siblings["fastm-demo-p-b"].model_copy(update={"release": 4}),
+            }
+        }
+    )
+    assert promote.recorded(twice, "fastm-demo-p-b", 2) == 4, "two rotations"
+
+
+def test_a_rotated_candidates_request_at_its_timeout_stops_the_pointer(
+    kit: SimpleNamespace, state: Any, stub: Stub
+) -> None:
+    """A re-run of a held release after a rotation: the candidate runs release 3's Functions, not 2's."""
+    key = rotated(kit, state, contributions=[CrawlContribution()])
+    appconfig, cloudwatch = stub("appconfig"), stub("cloudwatch")
+    where = {"ApplicationId": "app1", "EnvironmentId": "env1", "DeploymentNumber": 7}
+    appconfig.add_response("get_deployment", {"State": "DEPLOYING", "PercentageComplete": 20.0, "StartedAt": AT}, where)
+    expect_latency(cloudwatch, "fastm_pa_meta_r0003", [266.0, 255.0])
+    appconfig.add_response("stop_deployment", {}, where)
+    found = promote.pointer_state(7, key, 2, [CANDIDATE])
+    assert found["timed_out"] == {"fastm-demo-p-b": {"fastm_pa_meta_r0003": {"timeout_ms": 250, "minutes": 2}}}
+
+
+def test_a_rotated_candidate_is_promoted_under_its_new_number(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = rotated(kit, state)
+    stub("mediatailor").add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-b"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    expect_probe(state, stub, monkeypatch, key, 3, "c2")
+    assert promote.promote(key, 2, "c2", [CANDIDATE]) == {
+        "release": 2,
+        "stable": {"fastm-demo": "fastm-demo-p-b"},
+        "probes": {"fastm-demo": 3},
+    }
+    assert state.statuses[3].status == "PROMOTED", "the release the candidate runs"
+    assert state.statuses[2].status == "APPLIED", "its trees were created again as 3"
+    assert state.holder is None
+
+
+def test_a_rotated_candidate_is_rolled_back_under_its_new_number(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    key = rotated(kit, state)
+    sibling = state.bundle(key).siblings[1]
+    put, _ = render(
+        sibling.playback, prefix="fastm", release=1, change_id="c1", origin_secret=SecretStr("secret-value-a")
+    )
+    mediatailor = stub("mediatailor")
+    mediatailor.add_response("put_playback_configuration", {}, put)  # back on fastm_ps_root_r0001
+    mediatailor.add_response(
+        "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": "fastm-demo-p-a"}
+    )
+    stub("s3").add_response("put_object", {}, None)
+    stub("appconfig").add_response("list_deployments", {"Items": []}, None)
+    expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-a"}, strategy="now1", number=8)
+    result = promote.rollback(key, 2, "c2", [CANDIDATE], {"Error": "SmokeFailed"})
+    assert result["remapped"] == {"fastm-demo-p-b": 1}, "a re-created candidate is remapped too"
+    channel, _ = state.states["fastm-demo"]
+    assert channel.siblings["fastm-demo-p-b"].release == 1 and channel.history["fastm-demo-p-b"] == (1,)
+    assert state.statuses[3].status == "ROLLED_BACK" and state.statuses[2].status == "APPLIED"
+    assert state.holder is None
+
+
+def test_the_probes_step_catches_a_probe_up_with_its_stable_sibling_without_a_release(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub, monkeypatch: pytest.MonkeyPatch, context: Any
+) -> None:
+    """A stage upgraded since its last promotion: the stable sibling runs 2, the probe still 1. The step, run by hand,
+    re-applies the probe with 2; run again, it changes nothing."""
+    key = released_twice(kit, state)
+    state.holder = None
+    channel, version = state.states["fastm-demo"]
+    swapped = channel.model_copy(update={"stable": "fastm-demo-p-b", "idle": "fastm-demo-p-a"})
+    state.states["fastm-demo"] = (swapped, version)
+    expect_probe(state, stub, monkeypatch, key, 2, "catch-up-1")
+    event = {"step": "probes", "channels": ["fastm-demo"], "change_id": "catch-up-1"}
+    assert promote.handler(event, context) == {"probes": {"fastm-demo": 2}}
+    assert promote.handler(event, context) == {"probes": {"fastm-demo": 2}}, "nothing to do: no call is stubbed"
+    assert ledger.actions() == [("release/fastm-demo", "release.probe")]

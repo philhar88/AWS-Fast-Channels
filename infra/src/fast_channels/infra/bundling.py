@@ -1,9 +1,11 @@
 """Docker-free bundling of uv workspace packages for Lambda and AgentCore (Python 3.14, arm64), with a Docker
-fallback: one pipeline for the functions code asset and the agent code zip."""
+fallback: one pipeline for the functions code asset and the agent code zip. The PDS sidecar's image
+(``scripts/_demand.py``) installs its package with the same pipeline for x86 (:func:`install_package`)."""
 
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 from collections.abc import Mapping
@@ -18,48 +20,81 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[4]
 UV_IMAGE: Final = "ghcr.io/astral-sh/uv:python3.14-bookworm"
 """Image of the Docker fallback, used when ``uv`` is not on the build host's PATH."""
 _PLATFORM: Final = "aarch64-manylinux2014"
+X86_PLATFORM: Final = "x86_64-manylinux_2_28"
+"""The sidecar image's platform: the guidance's x86 task, on a Debian base (glibc 2.41)."""
 _PYTHON: Final = "3.14"
 _EXPORT: Final = ("export", "--frozen", "--no-dev", "--no-editable", "--no-hashes", "--quiet")
-_INSTALL: Final = (
-    "pip",
-    "install",
-    "--no-sources",
-    "--no-installer-metadata",
-    "--no-compile-bytecode",
-    "--quiet",
-    "--python-platform",
-    _PLATFORM,
-    "--python",
-    _PYTHON,
-)
+
+
+def _install(platform: str) -> tuple[str, ...]:
+    return (
+        "pip",
+        "install",
+        "--no-sources",
+        "--no-installer-metadata",
+        "--no-compile-bytecode",
+        "--quiet",
+        "--python-platform",
+        platform,
+        "--python",
+        _PYTHON,
+    )
+
+
+_INSTALL: Final = _install(_PLATFORM)
+
+
+LAMBDA_TASK_ROOT: Final = "/var/task"
+"""Where Lambda unpacks a function's code: the path compiled code objects name."""
+_COMPILE: Final = ("-m", "compileall", "-q", "-j", "0", "--invalidation-mode", "unchecked-hash")
+_DETERMINISTIC: Final = {"PYTHONHASHSEED": "0", "SOURCE_DATE_EPOCH": "0"}
+"""Fixed set iteration order (frozenset constants are marshalled in it) and no timestamps: the same sources compile to
+the same bytes, so the asset hash (of the output) changes only with the code."""
 
 
 @jsii.implements(ILocalBundling)
 class _UvBundling:
     """Export a workspace package's locked dependency closure and install it for the target platform."""
 
-    def __init__(self, package: str, *, extra_files: Mapping[str, str], normalize_modes: bool) -> None:
+    def __init__(
+        self, package: str, *, extra_files: Mapping[str, str], normalize_modes: bool, compile_bytecode: bool
+    ) -> None:
         self._package = package
         self._extra_files = dict(extra_files)
         self._normalize_modes = normalize_modes
+        self._compile_bytecode = compile_bytecode
 
     # jsii passes ``options`` positionally.
     def try_bundle(self, output_dir: str, options: BundlingOptions) -> bool:
-        uv = shutil.which("uv")
-        if uv is None:
+        if shutil.which("uv") is None:
             return False
-        with tempfile.TemporaryDirectory() as work:
-            requirements = Path(work) / "requirements.txt"
-            run = [uv, *_EXPORT, "--package", self._package, "--output-file", str(requirements)]
-            subprocess.run(run, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
-            refresh = _refresh_workspace_packages(requirements)
-            install = [uv, *_INSTALL, *refresh, "--target", output_dir, "--requirement", str(requirements)]
-            subprocess.run(install, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
+        install_package(self._package, Path(output_dir))
         for source, name in self._extra_files.items():
             shutil.copyfile(REPO_ROOT / source, Path(output_dir) / name)
+        if self._compile_bytecode:
+            compile_bytecode(Path(output_dir))
         if self._normalize_modes:
             normalize_modes(Path(output_dir))
         return True
+
+
+def install_package(package: str, target: Path, *, platform: str = _PLATFORM) -> None:
+    """Install workspace package ``package`` and its locked dependency closure into ``target`` for ``platform``,
+    without bytecode.
+
+    Raises:
+        FileNotFoundError: ``uv`` is not on PATH.
+    """
+    uv = shutil.which("uv")
+    if uv is None:
+        raise FileNotFoundError("uv")
+    with tempfile.TemporaryDirectory() as work:
+        requirements = Path(work) / "requirements.txt"
+        run = [uv, *_EXPORT, "--package", package, "--output-file", str(requirements)]
+        subprocess.run(run, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
+        refresh = _refresh_workspace_packages(requirements)
+        install = [uv, *_install(platform), *refresh, "--target", str(target), "--requirement", str(requirements)]
+        subprocess.run(install, check=True, cwd=REPO_ROOT)  # noqa: S603 - fixed argv built here, no shell
 
 
 def _refresh_workspace_packages(requirements: Path) -> list[str]:
@@ -73,6 +108,24 @@ def _refresh_workspace_packages(requirements: Path) -> list[str]:
     return [arg for name in names for arg in ("--refresh-package", name)]
 
 
+def compile_bytecode(root: Path, *, under: str = LAMBDA_TASK_ROOT) -> None:
+    """Precompile every module under ``root`` for the runtime's Python, as unchecked hash-based ``.pyc`` files that
+    name their source under ``under`` (where the runtime finds ``root``: :data:`LAMBDA_TASK_ROOT` for a function),
+    deterministically (:data:`_DETERMINISTIC`).
+
+    Lambda's code directory is read-only, so a bundle without bytecode compiles every module it imports on each cold
+    start: the PDS's imports took 1,134 ms without ``.pyc`` and 168 ms with them (locally), and its functions logged
+    their first client 1.5-2.1 s into init.
+
+    Raises:
+        RuntimeError: the build runs on another Python than the runtime's (its bytecode would be ignored).
+    """
+    if f"{sys.version_info.major}.{sys.version_info.minor}" != _PYTHON:
+        raise RuntimeError(f"bytecode for Python {_PYTHON} needs that Python, not {sys.version.split()[0]}")
+    command = [sys.executable, *_COMPILE, "-s", str(root), "-p", under, str(root)]
+    subprocess.run(command, check=True, env={**os.environ, **_DETERMINISTIC})  # noqa: S603 - fixed argv, no shell
+
+
 def normalize_modes(root: Path) -> None:
     """Directories and executables 755, files 644, whatever the build host's umask (agentcore.md §4.1 limits)."""
     for directory, _, files in os.walk(root):
@@ -83,7 +136,11 @@ def normalize_modes(root: Path) -> None:
 
 
 def uv_bundling(
-    package: str, *, extra_files: Mapping[str, str] | None = None, normalize_modes: bool = False
+    package: str,
+    *,
+    extra_files: Mapping[str, str] | None = None,
+    normalize_modes: bool = False,
+    compile_bytecode: bool = False,
 ) -> BundlingOptions:
     """Bundling of ``package`` and its locked dependencies into an asset's root.
 
@@ -91,6 +148,7 @@ def uv_bundling(
         package: uv workspace package name, e.g. ``fast-channels-functions``.
         extra_files: repository-relative files to copy into the root, by their name there.
         normalize_modes: set every mode to 755/644 (the AgentCore Runtime rejects other modes).
+        compile_bytecode: precompile every module (:func:`compile_bytecode`), for functions whose cold start matters.
     """
     extra = dict(extra_files or {})
     export = " ".join(_EXPORT)
@@ -99,23 +157,40 @@ def uv_bundling(
         f"uv {export} --package {package} --output-file /tmp/r.txt",
         f"uv {install} --target /asset-output -r /tmp/r.txt",
         *(f"cp {source} /asset-output/{name}" for source, name in extra.items()),
+        *(
+            [
+                " ".join(
+                    [
+                        *(f"{k}={v}" for k, v in _DETERMINISTIC.items()),
+                        "python",
+                        *_COMPILE,
+                        f"-s /asset-output -p {LAMBDA_TASK_ROOT} /asset-output",
+                    ]
+                )
+            ]
+            if compile_bytecode
+            else []
+        ),
         *(["chmod -R u=rwX,go=rX /asset-output"] if normalize_modes else []),
     ]
     return BundlingOptions(
         image=DockerImage.from_registry(UV_IMAGE),
-        local=_UvBundling(package, extra_files=extra, normalize_modes=normalize_modes),  # type: ignore[arg-type]
+        local=_UvBundling(  # type: ignore[arg-type]
+            package, extra_files=extra, normalize_modes=normalize_modes, compile_bytecode=compile_bytecode
+        ),
         # The container runs as the host user, without a writable HOME; its cache starts empty.
         environment={"UV_CACHE_DIR": "/tmp/uv-cache"},  # noqa: S108 - inside the throwaway build container
         command=["bash", "-c", " && ".join(steps)],
     )
 
 
-def workspace_code(package: str) -> lambda_.Code:
-    """Lambda code asset containing ``package`` and its locked dependencies (content-hashed on output)."""
+def workspace_code(package: str, *, compile_bytecode: bool = False) -> lambda_.Code:
+    """Lambda code asset containing ``package`` and its locked dependencies (content-hashed on output), with
+    precompiled bytecode if ``compile_bytecode``."""
     return lambda_.Code.from_asset(
         str(REPO_ROOT),
         # The hash of the installed bundle: it changes exactly when code or locked dependencies do. No ``exclude``:
         # CDK applies it to the bundle's fingerprint too (``["**"]`` made the hash constant and froze deployments).
         asset_hash_type=AssetHashType.OUTPUT,
-        bundling=uv_bundling(package),
+        bundling=uv_bundling(package, compile_bytecode=compile_bytecode),
     )

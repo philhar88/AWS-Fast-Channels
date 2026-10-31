@@ -4,23 +4,29 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aws_cdk import CfnOutput, Stack
+from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.model_registry import SCHEDULER_TASK
+from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import agent_namespace, agentcore_name
 from fast_channels.functions.tools.registry import confirm_tools
 from fast_channels.infra.config import TransactionSearchMode
+from fast_channels.infra.constructs.alerts import alert_topic_arn
+from fast_channels.infra.constructs.models.caps import TaskBudget
+from fast_channels.infra.constructs.models.profiles import profile_name
 from fast_channels.infra.constructs.operator.autopilot import Autopilot
 from fast_channels.infra.constructs.operator.console import CONSOLE_DIST, ConsoleConfig, OperatorConsole
 from fast_channels.infra.constructs.operator.deliveries import AgentTelemetry
 from fast_channels.infra.constructs.operator.gateway import AgentGateway
 from fast_channels.infra.constructs.operator.identity import OperatorIdentity, managed_login_url
-from fast_channels.infra.constructs.operator.runtime import SchedulerAgent
+from fast_channels.infra.constructs.operator.runtime import RegistryTask, SchedulerAgent
 from fast_channels.infra.constructs.operator.tools import AgentTools
 
 if TYPE_CHECKING:
     from constructs import Construct
 
     from fast_channels.infra.config import FastChannelsConfig
-    from fast_channels.infra.exports import DataExports, MediaExports
+    from fast_channels.infra.exports import DataExports, MediaExports, ModelsExports
 
 
 class OperatorStack(Stack):
@@ -35,14 +41,17 @@ class OperatorStack(Stack):
     console URL and the console's ``config.json`` names the clients, which would be a cycle across stacks.
 
     Args:
-        config: deployment configuration (``agent``, ``channels``, ``channel_assembly``, ``observability``).
+        config: deployment configuration (``agent``, ``channels``, ``channel_assembly``, ``observability``,
+            ``modules.models``).
         data: Data stack references (tables, buckets, Memory); ``data.memory`` must exist.
         media: Media stack exports (the only thing the operator plane reads from the media plane).
+        models: Models stack exports (the agent's task profile) when the model registry is deployed.
         console_dist: the console build (``console/dist``).
 
     Attributes:
         identity, tools, gateway, agent, console: the operator constructs; autopilot is ``None`` when no IaC
-        channel has an ``autopilot_cron``.
+        channel has an ``autopilot_cron``; budget is the scheduler task's AWS Budgets action with
+        ``modules.models.budgets_action`` and a daily cap, else ``None``.
 
     Raises:
         ValueError: ``data.memory`` is missing.
@@ -56,6 +65,7 @@ class OperatorStack(Stack):
         config: FastChannelsConfig,
         data: DataExports,
         media: MediaExports,
+        models: ModelsExports | None = None,
         console_dist: Path = CONSOLE_DIST,
         **kwargs: Any,
     ) -> None:
@@ -97,6 +107,7 @@ class OperatorStack(Stack):
             cdns=config.delivery.cdns,
             log_retention=retention,
             removal_policy=removal,
+            epg_break_ids=config.modules.ops.enabled,
         )
         self.gateway = AgentGateway(
             self,
@@ -108,6 +119,15 @@ class OperatorStack(Stack):
             agent_channel_prefix=agent_namespace(prefix),
             autopilot_channels=tuple(crons),
         )
+        model_task = None
+        if models is not None:
+            model_task = RegistryTask(
+                name=SCHEDULER_TASK,
+                profile=models.profiles[SCHEDULER_TASK],
+                settings=config.modules.models.tasks[SCHEDULER_TASK],
+                alert_topic_arn=alert_topic_arn(self, prefix),
+            )
+        model = model_task.profile.model if model_task else config.agent.model
         self.agent = SchedulerAgent(
             self,
             "Agent",
@@ -116,15 +136,30 @@ class OperatorStack(Stack):
             gateway_url=self.gateway.url,
             memory=data.memory,
             memory_preference_namespace=data.memory_preference_namespace,
-            model=config.agent.model,
-            allowed_models=config.agent.allowed_models,
+            model=model,
+            allowed_models=(model,) if model_task else config.agent.allowed_models,
             confirm_tools=confirm_tools(),
             prefix=prefix,
             traces=traces,
             log_retention=retention,
             removal_policy=removal,
             record_prompts=config.observability.records_prompts,
+            model_task=model_task,
         )
+        self.budget: TaskBudget | None = None
+        email = config.notifications.email
+        cap = model_task.settings.daily_cap_usd if model_task else None
+        if model_task and cap and config.modules.models.budgets_action and email:
+            self.budget = TaskBudget(
+                self,
+                "Budget",
+                budget_name=profile_name(prefix, SCHEDULER_TASK),
+                task=SCHEDULER_TASK,
+                daily_cap_usd=cap,
+                role=self.agent.runtime.role,
+                profile_arn=model_task.profile.arn,
+                email=email,
+            )
         AgentTelemetry(
             self,
             "Telemetry",
@@ -171,10 +206,24 @@ class OperatorStack(Stack):
             )
         )
         self._outputs()
+        if config.modules.release.enabled:
+            ssm.StringParameter(
+                self,
+                "ReleaseToolFunctions",
+                parameter_name=release_names.parameter_name(config.prefix, release_names.Parameter.TOOL_FUNCTIONS),
+                string_value=self._tool_functions(),
+                description="Read by the release module's stack: the lab channel's smoke test uses the agent tools",
+            )
+
+    def _tool_functions(self) -> str:
+        return self.to_json_string(
+            {target: function.function.function_name for target, function in self.tools.functions.items()}
+        )
 
     def _outputs(self) -> None:
         """Values for operators and scripts (e2e, eval_model.py --gateway-url); ``AutopilotClientId`` only when the
-        machine client exists (an autopilot, or ``agent.machine_client``)."""
+        machine client exists (an autopilot, or ``agent.machine_client``), ``ModelSpecParameter`` only without the
+        model registry."""
         outputs = {
             "ConsoleUrl": self.console.url,
             "UserPoolId": self.identity.user_pool.user_pool_id,
@@ -183,10 +232,8 @@ class OperatorStack(Stack):
             "GatewayUrl": self.gateway.url,
             "RuntimeArn": self.agent.runtime.agent_runtime_arn,
             "RuntimeInvokeUrl": self.agent.invoke_url,
-            "ModelSpecParameter": self.agent.model_spec.parameter_name,
-            "ToolFunctions": self.to_json_string(
-                {target: function.function.function_name for target, function in self.tools.functions.items()}
-            ),
+            **({"ModelSpecParameter": self.agent.model_spec.parameter_name} if self.agent.model_spec else {}),
+            "ToolFunctions": self._tool_functions(),
         }
         if self.identity.autopilot_client is not None:
             outputs["AutopilotClientId"] = self.identity.autopilot_client.user_pool_client_id

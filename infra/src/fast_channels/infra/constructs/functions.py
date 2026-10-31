@@ -34,17 +34,19 @@ _HANDLER_ROOT: Final = "fast_channels.functions."
 
 
 class _SharedCode(Construct):
-    """Holds the stack's single code asset; an ``AssetCode`` can only be bound within one stack."""
+    """Holds the stack's code asset (one with precompiled bytecode, one without); an ``AssetCode`` can only be bound
+    within one stack."""
 
-    def __init__(self, scope: Construct, id: str) -> None:
+    def __init__(self, scope: Construct, id: str, *, compiled: bool) -> None:
         super().__init__(scope, id)
-        self.code = workspace_code(FUNCTIONS_PACKAGE)
+        self.code = workspace_code(FUNCTIONS_PACKAGE, compile_bytecode=compiled)
 
     @classmethod
-    def of(cls, scope: Construct) -> lambda_.Code:
+    def of(cls, scope: Construct, *, compiled: bool = False) -> lambda_.Code:
         stack = Stack.of(scope)
-        holder = stack.node.try_find_child("FastFunctionsCode")
-        return (holder if isinstance(holder, cls) else cls(stack, "FastFunctionsCode")).code
+        id = "FastFunctionsCompiledCode" if compiled else "FastFunctionsCode"
+        holder = stack.node.try_find_child(id)
+        return (holder if isinstance(holder, cls) else cls(stack, id, compiled=compiled)).code
 
 
 class FastFunction(Construct):
@@ -69,6 +71,9 @@ class FastFunction(Construct):
         memory_size: memory in MB (also scales CPU).
         log_retention: retention of the function's log group.
         removal_policy: what happens to the log group when the stack is deleted.
+        compiled: run from the stack's code asset with precompiled bytecode (``bundling.compile_bytecode``), for a
+            function whose cold start is on a caller's deadline. Use it for every function of a stack, or the stack
+            bundles the code twice.
     """
 
     def __init__(
@@ -83,6 +88,7 @@ class FastFunction(Construct):
         memory_size: int = 512,
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
+        compiled: bool = False,
     ) -> None:
         super().__init__(scope, id)
         if not handler.startswith(_HANDLER_ROOT):
@@ -95,7 +101,7 @@ class FastFunction(Construct):
             "Resource",
             runtime=lambda_.Runtime.PYTHON_3_14,
             architecture=lambda_.Architecture.ARM_64,
-            code=_SharedCode.of(self),
+            code=_SharedCode.of(self, compiled=compiled),
             handler=handler,
             description=description,
             role=role,
