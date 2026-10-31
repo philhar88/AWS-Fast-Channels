@@ -72,10 +72,87 @@
         "transaction_search": "off",
         "log_retention_days": 7,
         "mediatailor_log_percent": 100,
+        "as_run": "per_stage",
         "capture_prompts": null
       },
       "notifications": {
         "email": null
+      },
+      "modules": {
+        "ops": {
+          "enabled": false,
+          "lake_retention_days": 30,
+          "ledger_lock": "governance",
+          "ledger_retention_days": 30,
+          "canary": true
+        },
+        "models": {
+          "enabled": false,
+          "tasks": {
+            "scheduler.plan": {
+              "model": "{geo}.anthropic.claude-haiku-5-5",
+              "route": "bedrock",
+              "effort": {
+                "chat": "low",
+                "plan": "medium"
+              },
+              "thinking": "adaptive",
+              "max_tokens": 16000,
+              "data_class": "operational",
+              "daily_cap_usd": 5,
+              "eval": "haiku-5-5-adaptive-16k"
+            }
+          },
+          "budgets_action": false
+        },
+        "demand": {
+          "enabled": false,
+          "mode": "demo",
+          "guidance_tag": "v1.4.0",
+          "simulator": "guidance_stack",
+          "tasks": {
+            "min": 2,
+            "max": 4
+          },
+          "server_instances": 2,
+          "dayparts": [],
+          "rate_limit_per_ip": 20000,
+          "ad_server": "none",
+          "ad_server_tag": "",
+          "pod_cache_seconds": 300,
+          "pod_cache_concurrency": 8,
+          "pod_cache_memory_mb": 1769
+        },
+        "pds": {
+          "enabled": false,
+          "policy_timeout_ms": 50,
+          "policy_group_timeout_ms": 75,
+          "select_timeout_ms": 200,
+          "select_group_timeout_ms": 250,
+          "demo_lines": []
+        },
+        "release": {
+          "enabled": false,
+          "channels": [],
+          "strategy": "demo",
+          "lab_channel": true,
+          "probe_sibling": true,
+          "secret_rotation_days": 90,
+          "prefetch": {
+            "enabled": true,
+            "siblings": ["a", "b", "k", "l"],
+            "horizon_breaks": 20,
+            "retrieval_lead_seconds": 150,
+            "retrieval_end_seconds": 30,
+            "shaping_window_seconds": 90
+          }
+        },
+        "crawl": {
+          "enabled": false,
+          "pre_ads": true,
+          "holdout_percent": 20,
+          "publisher_domain": null
+        }
       }
     },
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,

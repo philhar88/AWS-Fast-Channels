@@ -74,6 +74,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--prefix", help="deployment prefix of the stage under test (default: fast-channels.prefix in cdk.json)"
     )
+    parser.addoption(
+        "--releases",
+        action="store_true",
+        help="test_12_release: make releases on the stage (a broken one, rolled back) and prove the silent-loss "
+        "detector; about 50 minutes, with the stage's first IaC channel on air",
+    )
 
 
 def pytest_report_header(config: pytest.Config) -> str:

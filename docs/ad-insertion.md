@@ -31,7 +31,8 @@ from the console's Channels view, which plays the channel in an SSAI player.
 ## The playback configuration
 
 `core.specs.playback_configuration` builds it for IaC channels (CloudFormation) and agent channels (API) alike. One
-per channel, named after the channel.
+per channel, named after the channel. A channel the release module monetizes also gets sibling configurations
+`<channel>-p-*`, created by the Release Controller ([release-controller.md](release-controller.md)).
 
 | Setting | Value | Why |
 |---|---|---|

@@ -1,0 +1,105 @@
+# The Guidance for Deploying a Prebid Server on AWS, pinned for the demand module (docs/demand.md, ADR-0020).
+#
+# scripts/prebid_guidance.py checks the guidance out at `commit` into build/prebid-guidance/ (never committed),
+# refuses it unless `tag` resolves to `commit` and every file below still has its SHA-256, then applies the overlays
+# in order. To move the pin: change tag and commit, run `prebid_guidance.py verify`, review every file it reports
+# against the overlays, regenerate the patches if needed and update the hashes.
+
+[guidance]
+repository = "https://github.com/aws-solutions-library-samples/prebid-server-deployment-on-aws"
+tag = "v1.4.0"
+commit = "0c7e7e714de37d1f56b29219d7ad9e6d17fac6b2"
+license = "Apache-2.0"
+
+# Prebid Server Java releases the image is built from. The guidance's docker-build-config.json names the tag
+# (GIT_TAG_VERSION); scripts/pbs_module.py and the image build refuse a tag that does not resolve to its commit here.
+[pbs_java]
+repository = "https://github.com/prebid/prebid-server-java"
+
+[pbs_java.commits]
+"4.4.0" = "de50af1076d9cf8375c4af4fa1adcfff96db2c7c"
+
+# The release the image is built from (core.pbs_config.PBS_VERSION, the only supported one since v4.0.0: ADR-0020).
+# The guidance's own docker-build-config.json names 3.43.0 and pins 3.x dependencies (Vert.x 4, Spring Boot 3), so
+# the image build writes one for this release: the JDK major version (overlay O6's build argument) and Maven options.
+[pbs_java.builds."4.4.0"]
+jdk = "25"
+mvn_options = "-Dmaven.test.skip -Dcheckstyle.skip"
+
+# The JDKs scripts/pbs_module.py downloads (checksum-verified) when the one on PATH is another major version.
+[jdks."25".linux-x86_64]
+url = "https://corretto.aws/downloads/resources/25.0.5.0.10/amazon-corretto-25.0.5.0.10-linux-x64.tar.gz"
+sha256 = "1d89b4194f20ee513f4dd9fc2aadd038de3c713c37fd444d77566b3da7b0ee65"
+
+[jdks."25".linux-aarch64]
+url = "https://corretto.aws/downloads/resources/25.0.5.0.10/amazon-corretto-25.0.5.0.10-linux-aarch64.tar.gz"
+sha256 = "8dc8e5379959c0814e99785b53657c35800b74950fc9fa39738d26153b62ef6c"
+
+# Applied in this order. `files` are copied from this directory into the checkout (repository-relative source =
+# checkout-relative destination).
+[[overlays]]
+id = "O1"
+title = "Stack-name prefix (stack and Glue database names) and a dedicated CDK bootstrap"
+patch = "patches/O1-app-prefix-bootstrap.patch"
+
+[[overlays]]
+id = "O2"
+title = "A customer WAF rule group referenced first by the guidance's web ACL"
+patch = "patches/O2-extra-waf-rule-group.patch"
+
+[[overlays]]
+id = "O4"
+title = "The fast-ctv module compiled through the guidance's amt-bidder injection point"
+patch = "patches/O4-fast-ctv-module.patch"
+files = { "amt-bidder/copy-fast-ctv.sh" = "source/loadtest/amt-bidder/copy-fast-ctv.sh", "amt-bidder/pbs-4/AmtConfiguration.java" = "source/loadtest/amt-bidder/pbs-4/AmtConfiguration.java" }
+
+[[overlays]]
+id = "O5"
+title = "Bidder simulator creatives from configuration"
+patch = "patches/O5-simulator-creatives.patch"
+
+[[overlays]]
+id = "O6"
+title = "The JDK of the Prebid Server Java build is a build argument"
+patch = "patches/O6-pbs-java-version.patch"
+
+[[overlays]]
+id = "O7"
+title = "ECS deployments keep 100% of the desired tasks healthy"
+patch = "patches/O7-ecs-deployment.patch"
+
+# SHA-256 of every upstream file an overlay patches, at `commit`.
+[patched]
+"deployment/ecr/prebid-server/Dockerfile" = "d3249e96aac3bc925e43b058cc864bda202f4ade28ef9ae1b0b9d748ec8fdbb0"
+"source/infrastructure/app.py" = "6b5185ab7536bece02240e909fb3171c6b33b9177df088faaf8d85c65a5cb9b7"
+"source/infrastructure/custom_resources/waf_webacl_lambda/create_waf_webacl.py" = "63f0e245458251a7b74eddc49f1f762f79909e0ca0608863d8b78c47f1f10164"
+"source/infrastructure/prebid_server/cloudfront_entry_deployment.py" = "f3fc55b013db2fb4fd73ff86cb56863ebe5e046199601c976f93fe03bd37526b"
+"source/infrastructure/prebid_server/cloudfront_waf_construct.py" = "5ef8093fe9bd37c254bcdcfef49fefba541be907397b026801a11b056aea4725"
+"source/infrastructure/prebid_server/prebid_glue_constructs.py" = "18379a26479af4940b127b66f72087382980e111f1ca4dbf91448fe2275a8bec"
+"source/infrastructure/prebid_server/ecs_service_construct.py" = "eddc03463f91e2fa2647b5752ead345d7df5cdc241e455e0d814abde331f3a11"
+"source/infrastructure/prebid_server/stack_cfn_parameters.py" = "ed64b709976efba34403247c1429751641cd71303aba277985a49dd08aa4ae27"
+"source/loadtest/amt-bidder/copy-bidder-files.sh" = "6a3b0f0d190c21d5821ce35619ff0714632cd544daff6419d617051600425c9b"
+"source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py" = "56142280deeb37c06141031e9bb3ba613acc2ebeb517d21e49337b9b23e1d51d"
+
+# SHA-256 of upstream files the overlays and the rendered configuration rely on without patching them: the
+# configuration layering (bootstrap.sh copies current/ over default/), the defaults that core/pbs_config.py repeats,
+# the build configuration the image build replaces for other releases, the amt adapter configuration that
+# amt-bidder/pbs-4/ ports to 4.x, and the deploy-time upload of the configuration directories. With the PDS on,
+# scripts/guidance_app.py relies on the stack class build_app instantiates (prebid_server_stack.py), the task
+# definitions' ids and Prebid Server's container (ecs_task_construct.py, in both entry deployments), the task size
+# it overrides (stack_constants.py) and the VPC's one S3 gateway endpoint, whose policy it extends (vpc_construct.py);
+# app.py and cloudfront_entry_deployment.py are pinned above.
+[relied_on]
+"deployment/ecr/prebid-server/bootstrap.sh" = "e1471a62147312d8f89b57ce118020f6026fe002101702c843d5579eb24c7317"
+"deployment/ecr/prebid-server/default-config/entrypoint.sh" = "e9b0221b372d27ce95aaa9d38156521b746b19fb15a3b313bd539dda1fe12dcf"
+"deployment/ecr/prebid-server/default-config/prebid-config.yaml" = "5ec52a0f79bb955ae2cfe440b4fd0a304cfeea06116f3e968a49625ddcabea7e"
+"deployment/ecr/prebid-server/docker-build-config.json" = "80283a077f218d255ce9c0671cedd3f677cbe5bb5289322dad87b6aefc6d4255"
+"source/infrastructure/custom_resources/prebid_configs_lambda/upload_prebid_configs.py" = "b262eeced3f499668972da5f1c662e1f9dbac8f4f830319f8d44ff39d0c8bacf"
+"source/infrastructure/prebid_server/alb_entry_deployment.py" = "8ac3f6598c486cf52c99c78cae2cab56216eaa74d5dc7f32784c7ec01151365f"
+"source/infrastructure/prebid_server/cache_construct.py" = "b655605cd08747e9428c2023aa626f0035cbd06cbcc12bfecbbf8ec59c6ca0df"
+"source/infrastructure/prebid_server/container_image_construct.py" = "4cc3e2ddef2c21eff8f394dc605f7bd0b0c07726fa3834c19b00df42dcccadad"
+"source/infrastructure/prebid_server/ecs_task_construct.py" = "38f34d616655879f9c6b24b26f7d7e5d025b0f98e4dd35a22e6d418d6f4f1d1f"
+"source/infrastructure/prebid_server/prebid_server_stack.py" = "4560cdbc2f69de930b9b5108e03a7f9995f8a395320907975fa834b68947617a"
+"source/infrastructure/prebid_server/stack_constants.py" = "6489d7d53bc76995e04915990d641ddf32406c9eafe2612fd897111793f9f026"
+"source/infrastructure/prebid_server/vpc_construct.py" = "7a166ab0e42447d32334f3ab987da6c48f3708bb88307ae2c836efec3f9d5270"
+"source/loadtest/amt-bidder/AmtConfiguration.java" = "a360fed0828ed33b5e487a355e3570e8859ce7266c04ebf7b2fb44b583a97f1c"

@@ -20,7 +20,7 @@ from fast_channels.infra.constructs.channel_assembly.ad_insertion import (
     MediaTailorLogs,
     playback_configuration_template,
 )
-from fast_channels.infra.constructs.channel_assembly.as_run import AS_RUN_LOG_GROUP, AsRunLogging
+from fast_channels.infra.constructs.channel_assembly.as_run import AS_RUN_LOG_GROUP, AsRunLogging, AsRunRouter
 from fast_channels.infra.constructs.channel_assembly.channel import LinearChannel
 from fast_channels.infra.constructs.channel_assembly.origin import ChannelAssemblyOrigin
 from fast_channels.infra.constructs.channel_assembly.reaper import RuntimeResourceReaper
@@ -32,6 +32,7 @@ __all__ = [
     "VENDED_LOG_TYPES",
     "AdInsertion",
     "AsRunLogging",
+    "AsRunRouter",
     "ChannelAssemblyOrigin",
     "LinearChannel",
     "MediaTailorLogs",

@@ -288,6 +288,36 @@ def test_catalog_items_are_the_catalog_tools_own_with_the_staged_mezzanine(stubb
     assert ContentItem.model_validate(item).mezzanine_uri == staged  # what the catalog tool serves
 
 
+def test_catalog_items_are_announced_in_batches_of_ten(stubbed: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(seed, "datetime", _Frozen)
+    events = session().client("events")
+    stubber = stubbed(events)
+    contents = [ContentItem(content_id=f"t{n}", title=f"T{n}") for n in range(12)]
+
+    def batch(ids: range) -> dict[str, Any]:
+        entry = {"Source": "fast-channels.fastci", "DetailType": "Catalog Item Changed", "EventBusName": "bus"}
+        details = (
+            json.dumps({"content_id": f"t{n}", "correlation_id": CORRELATION}, separators=(",", ":")) for n in ids
+        )
+        return {"Entries": [entry | {"Detail": detail} for detail in details]}
+
+    stubber.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{}] * 10}, batch(range(10)))
+    stubber.add_response("put_events", {"FailedEntryCount": 0, "Entries": [{}] * 2}, batch(range(10, 12)))
+    seed.announce(events, contents, prefix="fastci", bus="bus")
+    stubber.add_response("put_events", {"FailedEntryCount": 1, "Entries": [{"ErrorCode": "x"}]})
+    with pytest.raises(SystemExit, match="Catalog Item Changed events rejected"):
+        seed.announce(events, contents[:1], prefix="fastci", bus="bus")
+
+
+CORRELATION = "seed-catalog-20261029T010203Z"
+
+
+class _Frozen(datetime):
+    @classmethod
+    def now(cls, tz: Any = None) -> Any:
+        return datetime(2026, 10, 29, 1, 2, 3, tzinfo=tz)
+
+
 def test_the_ladder_must_be_provisioned(stubbed: Any) -> None:
     table = library_table()
     stubber = stubbed(table.meta.client)
@@ -491,6 +521,91 @@ def test_library_links_follow_assets_and_programs(stubbed: Any) -> None:
     stubber.add_response("query", {"Items": []})
     stubber.add_response("query", {"Items": [program]})
     assert trace.library_links(table, "20261016T120000-a") == ["evid=12"]
+
+
+def test_a_decision_id_links_its_session() -> None:
+    sid = "49f0c250-9e3c-4997-a723-3cd95eff9d42"
+    assert trace.decision_links(f"{sid}.820461826") == [sid]
+    assert trace.decision_links(sid) == []
+    assert trace.decision_links("20261016T120000-a") == []
+
+
+class FakeStateTable:
+    """The Release Controller's state table: ``scan`` pages of ``RELEASE#`` items (one page per call)."""
+
+    def __init__(self, *pages: list[dict[str, str]]) -> None:
+        self.pages = list(pages)
+        self.requests: list[dict[str, Any]] = []
+
+    def scan(self, **request: Any) -> dict[str, Any]:
+        self.requests.append(request)
+        items = self.pages.pop(0)
+        return {"Items": items, **({"LastEvaluatedKey": {"pk": "x"}} if self.pages else {})}
+
+
+def release_item(release: int, change_id: str) -> dict[str, str]:
+    doc = {
+        "release": release,
+        "digest": "a" * 64,
+        "bundle_key": "release/x/bundle.json",
+        "change_id": change_id,
+        "status": "PROMOTED",
+        "at": "2026-10-30T12:00:00Z",
+    }
+    return {"pk": f"RELEASE#r{release:04d}", "doc": json.dumps(doc)}
+
+
+def test_a_change_id_links_its_release_tag_and_back() -> None:
+    change = "01JBC8Z9X4Q7M2N5P8R3T6V9W2"
+    table = FakeStateTable([release_item(6, "01JBC7AAAAAAAAAAAAAAAAAAAA")], [release_item(7, change)])
+    assert trace.release_links(table, change) == ["r0007"]
+    assert table.requests[1]["ExclusiveStartKey"] == {"pk": "x"}
+    assert trace.release_links(FakeStateTable([release_item(7, change)]), "r0007") == [change]
+    assert trace.CHANGE_ID.fullmatch(change) and trace.RELEASE_TAG.fullmatch("r0007")
+    assert not trace.CHANGE_ID.fullmatch("seed-sintel-1a2b3c4d")
+
+
+def test_name_prefixes_cover_the_modules() -> None:
+    prefixes = trace.name_prefixes(Stage("fastci", session()))
+    assert "/aws/ecs/fastci-pds" in prefixes and "fastci-pbs-" in prefixes
+    assert {"FastChannels-fastci-Ops-", "FastChannels-fastci-Release-"} <= set(prefixes)
+
+
+def test_a_name_prefix_without_a_separator_keeps_only_the_deployments_groups() -> None:
+    prefix = "/aws/vendedlogs/mediatailor/fastci"
+    assert trace.owned(prefix, prefix) and trace.owned(f"{prefix}-release", prefix)
+    assert not trace.owned("/aws/vendedlogs/mediatailor/fastciads", prefix)
+    assert trace.owned("/aws/vendedlogs/states/fastci-x", "/aws/vendedlogs/states/fastci-")
+
+
+def test_lake_queries_match_the_id_columns_in_the_partitions_since_the_start() -> None:
+    start = datetime(2026, 10, 30, 8, 5, tzinfo=UTC)
+    [policy] = [table for table in trace.LAKE_TABLES if table.name == "pds_policy"]
+    [ledger] = [table for table in trace.LAKE_TABLES if table.name == "ledger"]
+    query = trace.lake_query(policy, ["sid-1.42", "evid=42", "o'k"], database="fastm_lake", start=start)
+
+    assert query.startswith('SELECT CAST(timestamp AS varchar) AS lake_time, * FROM "fastm_lake"."pds_policy"\n')
+    assert "datehour >= '2026/10/30/08'" in query and "record = 'pds.policy'" in query
+    assert "decision_id IN ('42', 'evid=42', 'o''k', 'sid-1.42')" in query
+    assert query.endswith("LIMIT 1000")
+    ledger_query = trace.lake_query(ledger, ["s.42"], database="d", start=start)
+    assert "day >= '2026/10/30'" in ledger_query and "starts_with(subject, 's.42')" in ledger_query
+
+
+def test_lake_rows_become_timeline_records(stubbed: Any) -> None:
+    athena = session().client("athena")
+    stubber = stubbed(athena)
+    stubber.add_response("start_query_execution", {"QueryExecutionId": "q"}, {"QueryString": "Q", "WorkGroup": "w"})
+    stubber.add_response("get_query_execution", {"QueryExecution": {"Status": {"State": "RUNNING"}}})
+    stubber.add_response("get_query_execution", {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}})
+    header = {"Data": [{"VarCharValue": "lake_time"}, {"VarCharValue": "decision_id"}, {"VarCharValue": "mode"}]}
+    row = {"Data": [{"VarCharValue": "2026-10-30 08:08:31,577+0000"}, {"VarCharValue": "s.42"}, {}]}
+    stubber.add_response("get_query_results", {"ResultSet": {"Rows": [header, row]}})
+    [[record]] = [[trace.lake_record(trace.LAKE_TABLES[0], r) for r in trace.athena_rows(athena, "Q", workgroup="w")]]
+    assert record.timestamp == datetime(2026, 10, 30, 8, 8, 31, 577000, UTC)
+    assert (record.log_group, json.loads(record.message)) == ("lake/pds_policy", {"decision_id": "s.42"})
+    assert trace.lake_time("2026-10-30T08:08:31.5Z") == datetime(2026, 10, 30, 8, 8, 31, 500000, UTC)
+    assert trace.lake_time("") == datetime(1970, 1, 1, tzinfo=UTC)
 
 
 # --- cleanup -------------------------------------------------------------------------------------------------------

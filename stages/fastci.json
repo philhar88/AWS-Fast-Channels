@@ -1,0 +1,61 @@
+{
+  "prefix": "fastci",
+  "observability": {
+    "mediatailor_log_percent": 100,
+    "log_retention_days": 7,
+    "as_run": "shared"
+  },
+  "modules": {
+    "ops": {
+      "enabled": true,
+      "ledger_retention_days": 1
+    },
+    "models": {
+      "enabled": true
+    },
+    "demand": {
+      "enabled": true,
+      "mode": "demo",
+      "simulator": "lambda",
+      "tasks": {
+        "min": 2,
+        "max": 4
+      }
+    },
+    "pds": {
+      "enabled": true,
+      "demo_lines": [
+        {
+          "id": "direct-1",
+          "advertiser": "Direct Advertiser 1",
+          "adomain": "direct1.example",
+          "creatives": ["direct1"],
+          "cpm": 8.00,
+          "budget": 100,
+          "tier0": true
+        },
+        {
+          "id": "direct-2",
+          "advertiser": "Direct Advertiser 2",
+          "adomain": "direct2.example",
+          "creatives": ["direct2"],
+          "cpm": 6.00,
+          "budget": 1,
+          "caps": {"per_session": 4}
+        }
+      ]
+    },
+    "release": {
+      "enabled": true,
+      "channels": [
+        "{prefix}-demo"
+      ],
+      "strategy": "demo"
+    },
+    "crawl": {
+      "enabled": true,
+      "pre_ads": true,
+      "holdout_percent": 20
+    }
+  }
+}

@@ -83,7 +83,13 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
 - its own **playback configuration** of the same name (`STITCHED_ONLY`: server-side ad insertion) with three
   vended-log deliveries ([ad-insertion.md](ad-insertion.md#the-playback-configuration));
 - a **channel policy** that admits only `mediatailor.amazonaws.com` for exactly that playback configuration (SigV4),
-  so anonymous requests to the channel get 403 ([ADR-0007](adr/0007-sigv4-channel-origin-no-cdn-shield.md));
+  so anonymous requests to the channel get 403 ([ADR-0007](adr/0007-sigv4-channel-origin-no-cdn-shield.md)). A
+  channel the release module monetizes (`modules.release.channels`) also admits its sibling playback
+  configurations `<channel>-p-<s>`, by the static pattern `<channel>-p-?` in `ArnLike aws:SourceArn`. `?` is
+  exactly one character, so no other channel's sibling matches; `<channel>*` would. The pattern is set when the
+  channel is created, and no release changes it. A policy change on a running channel takes minutes to grant, and
+  one that revokes a configuration breaks the sessions of the configurations it keeps. So the update guard treats
+  adding the pattern as a change to the channel: stop the channel before you turn the module on for it;
 - a `CHANNEL#<name>` item in the media library (ladder, outputs, playback prefixes, owner `iac`, brief);
 - **lifecycle custom resources**: an update guard that fails fast when an update would change a `RUNNING` channel
   (the `LinearChannel` construct's `restart_on_update=True` stops, updates and restarts instead, also when a later
@@ -91,14 +97,19 @@ Channels in `cdk.json` (`channels.iac`) are created by CloudFormation with `Line
   programs Channel Assembly can still hold (its schedule and the library programs from a day ago on). A delete that
   runs out of time fails with the number of programs left; deleting the stack again resumes.
 
-Names must start with `<prefix>-`; `<prefix>-agent-` is reserved for the agent.
+Names must start with `<prefix>-`; `<prefix>-agent-` is reserved for the agent. Names of the form
+`<channel>-p-...` are reserved for the release module's siblings of every IaC channel and of the lab channel
+`<prefix>-lab`, with the module on or off, and `<prefix>-agent` is refused because its siblings would fall in the
+agent's names ([release-controller.md](release-controller.md#siblings)).
 
 ### Agent channels
 
 `channels___create_channel` builds the same set of resources at runtime, from the same `core.specs` functions, as
 `<prefix>-agent-<name>` (name at most 24 characters), tagged `fast:owner=agent`. It needs a `READY` ladder, and at
 most `channels.max_agent_channels` (default 3) may exist. Only agent channels can be deleted through the tools; Cedar
-forbids destructive channel tools on any other name.
+forbids destructive channel tools on any other name. With the release module on, a new agent channel's policy has
+the sibling pattern too. It is set while the channel is new and stopped, so a later release can monetize the channel
+without changing its policy.
 
 ### Tiers and cost
 
@@ -229,6 +240,17 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   `<CdnBaseUrl>/epg/<channel>.json`.
 - Channel Assembly writes `VodProgramStart` events to the account's as-run log group `MediaTailor/Channel/AsRunLog`.
   A subscription filter sends this deployment's events to a reconciler that marks programs `AIRED` with `aired_at`.
+- With the ops module (`modules.ops.enabled`) the filter also sends `AdBreakStart` events. Such an event carries no
+  break id, so the reconciler takes the program's break whose on-air time is nearest: the program's `aired_at` plus
+  the break's offset into the content plus the breaks before it. A live run of 20 breaks matched exactly that way to
+  the millisecond. The reconciler sets that break's `status` to `AIRED` and its `aired_at` on the `PROGRAM#` item.
+  Every 15 minutes a sweep marks `UNAIRED` the breaks whose time ended more than 10 minutes ago without a start, and
+  the breaks of `SKIPPED` programs: Channel Assembly logs nothing for a break it skips, for example after the
+  channel stopped. Channel Assembly writes as-run events in batches, 13–50 s after they happen (observed), and a
+  break that started less than about a minute before a `StopChannel` can be missing from the log. In one test a
+  session saw ads in a break that the channel stopped 25 s into, and the log has no `AdBreakStart` for it. The sweep
+  then marks such a break `UNAIRED`. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as
+  in the HLS `DATERANGE` and the ad request, so guides and buyers can join on them.
 - Programs removed unaired when a channel starts late are `SKIPPED` ([Starting a channel late](#starting-a-channel-late)):
   listed with that status in the JSON feed, left out of the XMLTV feed.
 - `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow
@@ -242,9 +264,20 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
    "breaks": [{"offset_ms": 246246, "duration_ms": 60060}], "status": "PUBLISHED"}]}
 ```
 
-The as-run log group is shared by every channel in the account and region, and a log group allows two subscription
-filters, so at most two deployments per account and region get the `AIRED` reconciliation. The log group's retention
-is set to the last deploying stack's `observability.log_retention_days`, and deleting a stack leaves the group.
+With the ops module a break in the JSON feed reads
+`{"offset_ms": 246246, "duration_ms": 60060, "event_id": 1817010633, "upid": "FST3sintel"}`.
+
+The as-run log group is shared by every channel in the account and region, and each deployment's Media stack adds one
+subscription filter to it. CloudWatch Logs allows five subscription filters per log group (quota `L-87E7D306`, not
+adjustable), so **at most five such deployments can exist per account and region**: a sixth one fails to create
+its filter. `observability.as_run` lifts the limit
+([ADR-0032](adr/0032-shared-as-run-router.md)): with `shared`, a deployment reads its channels' as-run events from
+the account's default event bus instead, through a rule on `detail.channelName`. The account's router stack
+`FastChannels-AsRun` holds the only filter and puts every event there (source `fast-channels.as-run`, the event type
+as detail-type, the event and its `as_run_id` as detail). `make as-run-router` deploys that stack once per account
+and region; `make deploy` and `make destroy` never select it. It is termination protected and must stay while any
+deployment reads the shared log. The log group's retention is set to the last deploying stack's
+`observability.log_retention_days`, and deleting a stack leaves the group.
 
 ## Alerts
 

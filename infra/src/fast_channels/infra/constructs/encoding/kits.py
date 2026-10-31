@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, cast
 
 from aws_cdk import CustomResource, Duration
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3_assets as s3_assets
 from aws_cdk import aws_s3_deployment as s3deploy
@@ -19,6 +20,7 @@ from aws_cdk import aws_stepfunctions_tasks as tasks
 from aws_cdk import custom_resources as cr
 from constructs import Construct, IConstruct
 
+from fast_channels.core.demo_demand import DEMO_CREATIVES
 from fast_channels.core.timeline import BREAK_SLATE_GOPS, KIT_SPEC
 from fast_channels.infra import nag
 from fast_channels.infra.arns import executions
@@ -34,6 +36,8 @@ BRAND_DIR: Final = REPO_ROOT / "assets" / "brand"
 """Brand stills of every kit (rendered by ``scripts/render_brand_assets.py``)."""
 BRAND_PREFIX: Final = "brand/"
 """Ingest-bucket prefix of the deployed brand stills: ``brand/<digest>/<file>.png``."""
+DEMO_DIR: Final = REPO_ROOT / "assets" / "demo"
+"""Stills of the demo creatives (demand demo mode; ``scripts/render_brand_assets.py --demo``)."""
 _KIT_HANDLERS: Final = "fast_channels.functions.custom_resources.ladder_kit"
 
 
@@ -49,31 +53,47 @@ class LadderProvisioner(Construct):
 
     Input: ``{"ladder": <Ladder JSON>, "job_template": <name>, "kit_fingerprint"?, "owner"?: "iac"|"agent",
     "correlation_id"?}``; the job template must already exist. The brand stills (``assets/brand``) are deployed to
-    ``brand/<digest>/`` of the ingest bucket, which the MediaConvert role already reads.
+    ``brand/<digest>/`` of the ingest bucket, which the MediaConvert role already reads. With ``demo`` the kit also
+    encodes the demo creatives (``fast_channels.core.demo_demand``) from ``assets/demo``: those stills stay CDK file
+    assets, which the MediaConvert role may read object by object, so nothing new is written to the ingest bucket.
 
     Args:
         pipeline: the ingest pipeline that encodes the kit.
         max_parallel_encodes: kit assets encoded at the same time.
+        demo: also encode the demo creatives (demand demo mode).
 
     Attributes:
         state_machine: the provisioner (MediaExports ``ladder_provisioner``).
         brand_digest: hash of the brand stills (part of every kit's fingerprint).
+        demo_digest: hash of the demo stills with ``demo``, else None (then part of every kit's fingerprint).
         brand: the deployment of the stills (kits must run after it).
         kit: the kit-steps function (``FastFunction``).
         log_group: the state machine's log group.
     """
 
-    def __init__(self, scope: Construct, id: str, *, pipeline: IngestPipeline, max_parallel_encodes: int = 4) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        id: str,
+        *,
+        pipeline: IngestPipeline,
+        max_parallel_encodes: int = 4,
+        demo: bool = False,
+    ) -> None:
         super().__init__(scope, id)
         self.pipeline = pipeline
         self.brand_digest = brand_digest()
         self.brand = self._deploy_brand()
         stills = f"s3://{pipeline.ingest_bucket.bucket_name}/{BRAND_PREFIX}{self.brand_digest}/"
-        self.images = {
+        self.images: dict[str, object] = {
             "filler": f"{stills}filler.png",
             "break_slate": f"{stills}break.png",
             "house_ads": [f"{stills}house-ad-1.png", f"{stills}house-ad-2.png"],
         }
+        self.demo_digest: str | None = None
+        if demo:
+            self.demo_digest = brand_digest(DEMO_DIR)
+            self.images["demo"] = self._demo_stills()
         self.kit = FastFunction(
             self,
             "Kit",
@@ -155,6 +175,20 @@ class LadderProvisioner(Construct):
             },
         )
         return deployment
+
+    def _demo_stills(self) -> dict[str, str]:
+        """The demo stills as file assets, readable by the MediaConvert role one object at a time."""
+        stills: dict[str, str] = {}
+        role = self.pipeline.role
+        for creative in DEMO_CREATIVES:
+            asset = s3_assets.Asset(self, f"Demo{creative.crid}", path=str(DEMO_DIR / f"{creative.crid}.png"))
+            role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=["s3:GetObject"], resources=[asset.bucket.arn_for_objects(asset.s3_object_key)]
+                )
+            )
+            stills[creative.crid] = asset.s3_object_url
+        return stills
 
     def _definition(self, max_parallel_encodes: int) -> sfn.IChainable:
         steps = Construct(self, "Steps")
@@ -308,6 +342,7 @@ class LadderKit(Construct):
                 "PackageProfiles": ",".join(pipeline.package_profiles),
                 "SourceLocation": pipeline.source_location_name,
                 "KitSpec": KIT_SPEC,
+                **({"DemoDigest": provisioner.demo_digest} if provisioner.demo_digest else {}),
             },
         )
         self.resource.node.add_dependency(ladder, provisioner.brand)

@@ -479,6 +479,9 @@ class PlaybackTemplate(BaseModel):
     ads_url: str | None = Field(None, description="External VAST ADS; None = the ladder's preconditioned pod.")
     log_destination_arn: str = Field(description="Shared vended-logs delivery destination.")
     log_types: dict[str, str] = Field(description="Vended-log type -> delivery-source name suffix.")
+    sibling_policy: bool = Field(
+        False, description="The release module is on: channel policies also admit the sibling pattern <name>-p-?."
+    )
 
     def delivery_sources(self, playback_configuration: str) -> dict[str, str]:
         """Delivery-source name per log type: ``<name>-<suffix>`` (<= 60 chars: names are at most 47 + 10)."""
@@ -616,6 +619,7 @@ def create_channel(payload: CreateChannelInput, ctx: ToolContext) -> ChannelDeta
             channel_arn=created["Arn"],
             playback_configuration_arn=pc["PlaybackConfigurationArn"],
             account=created["Arn"].split(":")[4],
+            siblings=_template().sibling_policy,  # set once, on a new (stopped) channel; never changed later
         )
         mediatailor.put_channel_policy(ChannelName=name, Policy=json.dumps(policy))
         undo.callback(_best_effort(mediatailor.delete_channel_policy, ChannelName=name))

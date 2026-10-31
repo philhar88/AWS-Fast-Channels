@@ -21,6 +21,13 @@ def client(service: str) -> Any:
 
 
 @cache
+def regional_client(service: str, region: str) -> Any:
+    """:func:`client` in another region (a resource that lives in one region only, such as the demand gate's
+    secrets in us-east-1)."""
+    return boto3.client(service, region_name=region, config=_CONFIG)  # type: ignore[call-overload]
+
+
+@cache
 def table(name: str) -> Table:
     """A DynamoDB table resource (the resource API handles attribute (de)serialisation)."""
     return boto3.resource("dynamodb", config=_CONFIG).Table(name)

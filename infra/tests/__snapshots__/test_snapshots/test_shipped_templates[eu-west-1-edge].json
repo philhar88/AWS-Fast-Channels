@@ -1,0 +1,269 @@
+{
+  "Description": "FAST Channels (fast): CloudFront logs and alarms",
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "AccessLogsS3Delivery7675C16A": {
+      "Properties": {
+        "DeliveryDestinationArn": {
+          "Fn::GetAtt": [
+            "AccessLogsS3Destination6D1E7564",
+            "Arn"
+          ]
+        },
+        "DeliverySourceName": {
+          "Ref": "AccessLogsSource093D5EC0"
+        },
+        "RecordFields": [
+          "timestamp(ms)",
+          "DistributionId",
+          "x-edge-request-id",
+          "x-edge-location",
+          "c-ip",
+          "c-country",
+          "asn",
+          "cs-method",
+          "cs(Host)",
+          "cs-uri-stem",
+          "cs-uri-query",
+          "cs(User-Agent)",
+          "cs(Referer)",
+          "x-forwarded-for",
+          "cs-protocol",
+          "cs-protocol-version",
+          "ssl-protocol",
+          "sc-status",
+          "sc-bytes",
+          "sc-content-type",
+          "sc-range-start",
+          "sc-range-end",
+          "x-edge-result-type",
+          "x-edge-detailed-result-type",
+          "x-edge-response-result-type",
+          "time-taken",
+          "time-to-first-byte",
+          "origin-fbl",
+          "origin-lbl",
+          "cache-behavior-path-pattern",
+          "cmcd-session-id",
+          "cmcd-content-id",
+          "cmcd-object-type",
+          "cmcd-object-duration",
+          "cmcd-encoded-bitrate",
+          "cmcd-top-bitrate",
+          "cmcd-measured-throughput",
+          "cmcd-requested-maximum-throughput",
+          "cmcd-buffer-length",
+          "cmcd-buffer-starvation",
+          "cmcd-deadline",
+          "cmcd-playback-rate",
+          "cmcd-startup",
+          "cmcd-streaming-format",
+          "cmcd-stream-type",
+          "cmcd-next-object-request",
+          "cmcd-next-range-request",
+          "cmcd-version"
+        ],
+        "S3EnableHiveCompatiblePath": true,
+        "S3SuffixPath": "{DistributionId}/{yyyy}/{MM}/{dd}/{HH}",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::Delivery"
+    },
+    "AccessLogsS3Destination6D1E7564": {
+      "Properties": {
+        "DestinationResourceArn": {
+          "Fn::GetStackOutput": {
+            "OutputName": "PublishOutputFnGetAttStorageLogs2A2D4D26Arn595046A4",
+            "Region": "eu-west-1",
+            "StackName": "FastChannels-Data"
+          }
+        },
+        "Name": "fast-eu-west-1-cdn-access-s3",
+        "OutputFormat": "parquet",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::DeliveryDestination"
+    },
+    "AccessLogsSource093D5EC0": {
+      "Properties": {
+        "LogType": "ACCESS_LOGS",
+        "Name": "fast-eu-west-1-cdn-access",
+        "ResourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:cloudfront::123456789012:distribution/",
+              {
+                "Fn::GetStackOutput": {
+                  "OutputName": "PublishOutputRefDeliveryDistribution45EACD51152C9566",
+                  "Region": "eu-west-1",
+                  "StackName": "FastChannels-Media"
+                }
+              }
+            ]
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::DeliverySource"
+    },
+    "Alerts91F83244": {
+      "Properties": {
+        "DisplayName": "FAST Channels alerts",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TopicName": "fast-eu-west-1-alerts"
+      },
+      "Type": "AWS::SNS::Topic"
+    },
+    "AlertsPolicy425C338D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sns:Publish",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": "*",
+              "Resource": {
+                "Ref": "Alerts91F83244"
+              },
+              "Sid": "AllowPublishThroughSSLOnly"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Topics": [
+          {
+            "Ref": "Alerts91F83244"
+          }
+        ]
+      },
+      "Type": "AWS::SNS::TopicPolicy"
+    },
+    "CdnErrors338EB9D4": {
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "Alerts91F83244"
+          }
+        ],
+        "AlarmDescription": "CloudFront 5xx responses above 5 % (MediaTailor or origin failures reach viewers)",
+        "AlarmName": "fast-eu-west-1-cdn-5xx",
+        "ComparisonOperator": "GreaterThanThreshold",
+        "DatapointsToAlarm": 2,
+        "Dimensions": [
+          {
+            "Name": "DistributionId",
+            "Value": {
+              "Fn::GetStackOutput": {
+                "OutputName": "PublishOutputRefDeliveryDistribution45EACD51152C9566",
+                "Region": "eu-west-1",
+                "StackName": "FastChannels-Media"
+              }
+            }
+          },
+          {
+            "Name": "Region",
+            "Value": "Global"
+          }
+        ],
+        "EvaluationPeriods": 3,
+        "MetricName": "5xxErrorRate",
+        "Namespace": "AWS/CloudFront",
+        "OKActions": [
+          {
+            "Ref": "Alerts91F83244"
+          }
+        ],
+        "Period": 300,
+        "Statistic": "Average",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fast"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 5,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

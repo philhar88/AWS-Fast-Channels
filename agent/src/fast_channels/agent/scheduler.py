@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Callable, Hashable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from ag_ui.core import BaseEvent, RunAgentInput, RunErrorEvent, RunStartedEvent
 from strands import Agent
@@ -20,16 +20,18 @@ from strands.session import SessionManager
 from strands.types.exceptions import MCPClientInitializationError, ModelThrottledException
 from strands.vended_plugins.skills import AgentSkills, Skill
 
+from fast_channels.agent.caps import CapGuard, SpendCounter
 from fast_channels.agent.events import EventTranslator, approval_events, run_finished
 from fast_channels.agent.gateway import ToolCatalog, gateway_tools
 from fast_channels.agent.hooks import SharedStateTracker, ToolGuard, pending_approvals
 from fast_channels.agent.identity import Caller
 from fast_channels.agent.memory import session_manager
-from fast_channels.agent.model import ModelSpec, ModelSpecSource, bedrock_model
+from fast_channels.agent.model import TASK, ModelSpec, ModelSpecSource, bedrock_model
 from fast_channels.agent.protocol import AgentRunError, Mode, Turn
 
 if TYPE_CHECKING:
     from strands.agent import AgentResult
+    from strands.hooks import HookCallback, HookProvider
     from strands.types.agent import AgentInput
     from strands.types.content import ContentBlock
     from strands.types.interrupt import InterruptResponseContent
@@ -62,8 +64,8 @@ def skills() -> tuple[Skill, ...]:
 class Scheduler:
     """Runs AG-UI turns of the FAST channel scheduling agent.
 
-    Collaborators default to the real ones (Gateway over MCP, Bedrock, AgentCore Memory); tests and the
-    conformance suite swap them.
+    Collaborators default to the real ones (Gateway over MCP, Bedrock, AgentCore Memory, the spend counter when the
+    deployment has the model registry); tests and the conformance suite swap them.
     """
 
     def __init__(
@@ -73,6 +75,7 @@ class Scheduler:
         tools: ToolOpener | None = None,
         model: ModelFactory | None = None,
         sessions: SessionFactory | None = None,
+        counter: SpendCounter | None = None,
     ) -> None:
         self._settings = settings
         self._specs = ModelSpecSource(settings)
@@ -82,10 +85,17 @@ class Scheduler:
                 settings.gateway_url, caller.authorization, principal=_principal(caller), catalog=catalog
             )
         )
-        self._model = model or (lambda spec, mode: bedrock_model(spec, mode, settings.region))
+        self._model = model or (
+            lambda spec, mode: bedrock_model(spec, mode, settings.region, settings.model_profile_arn)
+        )
         self._sessions = sessions or (
             lambda session_id, caller: session_manager(settings, session_id=session_id, actor_id=caller.actor_id)
         )
+        self._counter = counter
+        if counter is None and settings.model_counter_table:
+            self._counter = SpendCounter(
+                table=settings.model_counter_table, topic_arn=settings.alert_topic_arn, region=settings.region
+            )
 
     async def run(
         self, run_input: RunAgentInput, *, session_id: str | None, headers: Mapping[str, str] | None
@@ -109,18 +119,26 @@ class Scheduler:
         caller = Caller.from_headers(headers)
         turn = Turn.from_input(run_input)
         mode = turn.mode or (Mode.PLAN if caller.machine else Mode.CHAT)
-        spec = self._specs.current()
+        active = self._specs.current()
+        spec = active.spec
         logger.info(
             "run started",
             extra={
                 "correlation_id": session_id,
                 "actor": caller.actor_id,
                 "mode": mode.value,
+                "task": TASK,
                 "model_id": spec.model_id,
+                "model_source": active.source.value,
             },
         )
         tracker = SharedStateTracker(turn.state)
         guard = ToolGuard(correlation_id=session_id, confirm_tools=self._settings.confirm_tools)
+        hooks: list[HookProvider | HookCallback[Any]] = [guard, tracker]
+        if self._counter is not None and active.daily_cap_usd is not None:
+            # A run starts only under the cap (CapReachedError ends it with RUN_ERROR); so does each model call.
+            await asyncio.to_thread(self._counter.admit, TASK, active.daily_cap_usd, counter="runs")
+            hooks.append(CapGuard(self._counter, task=TASK, cap_usd=active.daily_cap_usd, model_id=spec.model_id))
         async with self._tools(caller) as tools:
 
             def build() -> Agent:
@@ -129,7 +147,7 @@ class Scheduler:
                     system_prompt=system_prompt(),
                     tools=[*tools],
                     plugins=[AgentSkills(skills=list(skills()))],
-                    hooks=[guard, tracker],
+                    hooks=hooks,
                     session_manager=self._sessions(session_id, caller),
                     agent_id=AGENT_ID,
                     name="fast-channels-scheduler",

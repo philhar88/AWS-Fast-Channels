@@ -37,6 +37,9 @@ APP_TAG: Final = TAG_APP
 _TABLE_READ: Final = ("GetItem", "BatchGetItem", "Query", "Scan", "ConditionCheckItem")
 _TABLE_WRITE: Final = ("PutItem", "UpdateItem", "DeleteItem", "BatchWriteItem")
 _CHANNELS: Final = "every channel of the deployment is named <prefix>-* (config validation)"
+MEDIATAILOR_SERVICE: Final = "mediatailor.amazonaws.com"
+MEDIATAILOR_SLR: Final = f"aws-service-role/{MEDIATAILOR_SERVICE}/AWSServiceRoleForMediaTailor"
+"""Path and name of MediaTailor's service-linked role, which writes channel and playback configuration logs."""
 _DESCRIPTIONS: Final = {
     "catalog": "Agent tools: reference catalog search",
     "library": "Agent tools: media library and ingest",
@@ -73,6 +76,8 @@ ENVIRONMENT: Final = {
     "encoding": ("LIBRARY_TABLE", "PROVISION_STATE_MACHINE_ARN", "MEDIACONVERT_QUEUE_ARN"),
 }
 """Environment variables (besides ``FAST_PREFIX``) of each target's function, as its tool module reads them."""
+GUIDE_WRITERS: Final = frozenset({"schedule", "channels"})
+"""Targets whose tools rewrite a channel's EPG feeds (``tools._guide.write_guide``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +113,7 @@ class AgentTools(Construct):
         cdns: ``delivery.cdns``, the other CDNs whose playback URLs ``channels___get_channel`` lists.
         log_retention, removal_policy: of the function log groups.
         tools: tool specs by target; defaults to the registry.
+        epg_break_ids: the guide writers put each break's event id and UPID in the EPG feeds (ops module).
 
     Attributes:
         targets: one :class:`ToolTarget` per registry target.
@@ -130,6 +136,7 @@ class AgentTools(Construct):
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         tools: Mapping[str, Sequence[ToolSpec[Any, Any]]] | None = None,
+        epg_break_ids: bool = False,
     ) -> None:
         super().__init__(scope, id)
         self._prefix, self._data, self._media = prefix, data, media
@@ -183,12 +190,15 @@ class AgentTools(Construct):
         self.functions: dict[str, FastFunction] = {}
         targets = []
         for target, target_tools in specs.items():
+            environment = {name: values[name] for name in ("FAST_PREFIX", *ENVIRONMENT[target])}
+            if epg_break_ids and target in GUIDE_WRITERS:
+                environment["EPG_BREAK_IDS"] = "true"
             function = FastFunction(
                 self,
                 target.title(),
                 handler=f"fast_channels.functions.tools.{target}.handler",
                 description=_DESCRIPTIONS[target],
-                environment={name: values[name] for name in ("FAST_PREFIX", *ENVIRONMENT[target])},
+                environment=environment,
                 timeout=_TIMEOUTS.get(target, Duration.seconds(30)),
                 log_retention=log_retention,
                 removal_policy=removal_policy,
@@ -298,6 +308,14 @@ class AgentTools(Construct):
             ),
             [agent_configurations],
             why=owned,
+        )
+        # ConfigureLogsForChannel and ConfigureLogsForPlaybackConfiguration refuse a caller that may not create
+        # MediaTailor's service-linked role, even when the role exists ("Cannot create the service-linked role ...
+        # add the iam:CreateServiceLinkedRole permission"); MediaTailor writes the logs with that role.
+        fn.allow(
+            ["iam:CreateServiceLinkedRole"],
+            [self._stack.format_arn(service="iam", region="", resource="role", resource_name=MEDIATAILOR_SLR)],
+            conditions={"StringEquals": {"iam:AWSServiceName": MEDIATAILOR_SERVICE}},
         )
         fn.allow(
             _mt("DeleteProgram"),

@@ -114,6 +114,55 @@ paths:
                           items:
                             type: "string"
                           type: "array"
+                        series_title:
+                          minLength: 1
+                          type: "string"
+                          description: "Show of an episode, or the franchise of a film that has one."
+                        season:
+                          minLength: 1
+                          type: "string"
+                          description: "Season label, e.g. Season 3."
+                        episode:
+                          minimum: 0
+                          type: "integer"
+                          description: "Episode number within the season."
+                        content_type:
+                          description: "How the title is packaged."
+                          enum:
+                            - "movie"
+                            - "episode"
+                            - "special"
+                            - "trailer"
+                            - "clip"
+                          type: "string"
+                        language:
+                          pattern: "^[a-z]{2}$"
+                          type: "string"
+                          description: "Spoken language, ISO 639-1, e.g. en."
+                        producer_name:
+                          minLength: 1
+                          type: "string"
+                          description: "Producer or studio."
+                        producer_domain:
+                          maxLength: 253
+                          pattern: "^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$"
+                          type: "string"
+                          description: "The producer's web domain, e.g. blender.org."
+                        keywords:
+                          items:
+                            type: "string"
+                          type: "array"
+                          description: "Descriptive tags that are not genres, e.g. live-action."
+                        prodq:
+                          maximum: 3
+                          minimum: 0
+                          type: "integer"
+                          description: "Production quality (AdCOM): 1 professionally produced, 2 prosumer, 3 user generated, 0 unknown."
+                        external_ids:
+                          additionalProperties:
+                            type: "string"
+                          type: "object"
+                          description: "Ids of this title in other registries, keyed by each registry's domain."
                       required:
                         - "content_id"
                         - "title"
@@ -195,6 +244,55 @@ paths:
                     items:
                       type: "string"
                     type: "array"
+                  series_title:
+                    minLength: 1
+                    type: "string"
+                    description: "Show of an episode, or the franchise of a film that has one."
+                  season:
+                    minLength: 1
+                    type: "string"
+                    description: "Season label, e.g. Season 3."
+                  episode:
+                    minimum: 0
+                    type: "integer"
+                    description: "Episode number within the season."
+                  content_type:
+                    description: "How the title is packaged."
+                    enum:
+                      - "movie"
+                      - "episode"
+                      - "special"
+                      - "trailer"
+                      - "clip"
+                    type: "string"
+                  language:
+                    pattern: "^[a-z]{2}$"
+                    type: "string"
+                    description: "Spoken language, ISO 639-1, e.g. en."
+                  producer_name:
+                    minLength: 1
+                    type: "string"
+                    description: "Producer or studio."
+                  producer_domain:
+                    maxLength: 253
+                    pattern: "^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$"
+                    type: "string"
+                    description: "The producer's web domain, e.g. blender.org."
+                  keywords:
+                    items:
+                      type: "string"
+                    type: "array"
+                    description: "Descriptive tags that are not genres, e.g. live-action."
+                  prodq:
+                    maximum: 3
+                    minimum: 0
+                    type: "integer"
+                    description: "Production quality (AdCOM): 1 professionally produced, 2 prosumer, 3 user generated, 0 unknown."
+                  external_ids:
+                    additionalProperties:
+                      type: "string"
+                    type: "object"
+                    description: "Ids of this title in other registries, keyed by each registry's domain."
                 required:
                   - "content_id"
                   - "title"

@@ -5,6 +5,8 @@ Every title is encoded once into plain HLS: MPEG-TS segments with H.264 video an
 AWS Elemental MediaTailor Channel Assembly plays those VOD sources as a linear schedule, MediaTailor ad insertion
 stitches ads into the breaks server-side (SSAI), and Amazon CloudFront delivers everything. A scheduling agent on
 Amazon Bedrock AgentCore builds the schedules through typed tools, under Cedar policies and human approval.
+Optional modules, all off by default, add programmatic demand, a decision service for each ad break, show-level
+metadata, a per-task model registry and the operations they need ([modules.md](modules.md)).
 
 ![Architecture](images/architecture.png)
 
@@ -25,12 +27,28 @@ One CDK `Stage` (`FastChannelsStage`) holds a deployment. Its id is `FastChannel
 |---|---|---|---|
 | `…-Data` | Data | Ingest, media and logs buckets with their bucket policies; `MediaLibrary` and `ReferenceCatalog` DynamoDB tables; AgentCore Memory | Always, first. Termination protection and `RETAIN` with `removal: retain` |
 | `…-Media` | Media | Event bus, ingest pipeline, ladders and their kits, Channel Assembly source location, IaC channels with their playback configurations, CloudFront distribution, runtime-resource reaper, dashboard and alarms | Always |
+| `…-Ops` | Ops | The lake (Glue database, tables and views, Athena workgroup, MediaTailor log copies), the ledger's writer and archive stream, account quota and hook alarms, the zero-ad-sessions detector, the Channel Assembly alerts poller, the runbooks, the AppConfig kill switches and the probe canary ([observability.md](observability.md#lake)) | Only with `modules.ops.enabled`, after Data and Media |
+| `…-Models` | Operator | The per-task model registry: per LLM task an application inference profile `<prefix>-<task>` and an SSM entry `/<prefix>/models/tasks/<task>`; the `<prefix>-models` spend-counter table | Only with `modules.models.enabled`, before Operator |
 | `…-Operator` | Operator | Cognito, agent tool Lambdas, AgentCore Gateway with its Cedar policy engine, AgentCore Runtime, autopilot, operator console | When `agent.enabled` (default) |
+| `…-Crawl` | Demand | The catalog context publisher: one object per title under `catalog/ctx/v1/` in the media bucket, kept in step with the reference catalog ([content-enrichment.md](content-enrichment.md#the-context-publisher)) | Only with `modules.crawl.enabled`, after Data and Media |
 | `…-Edge-<region>` | Media | CloudFront standard-logs-v2 delivery, CDN alert topic and 5xx alarm, in us-east-1 | Only when the deployment region is not us-east-1 (otherwise these live in Media); one per deployment region |
-| `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only with `observability.transaction_search: enable`. One per account and region, termination protected, retained |
+| `…-DemandEdge` | Demand | The two origin secrets and the WAF rule group the Prebid Server guidance's web ACL references first, in us-east-1 ([demand.md](demand.md)) | Only with `modules.demand.enabled`; named `…-DemandEdge-<region>` outside us-east-1 |
+| `…-DemandBuild` | Demand | The Prebid Server image repository, its x86 CodeBuild project, and the CloudFormation execution policy of the guidance's dedicated CDK bootstrap | Only with `modules.demand.enabled` |
+| `…-Demand` | Demand | Beside the guidance: the private zone `<prefix>.fast.internal` in its VPC, in `lambda` mode the bidder simulator behind an internal load balancer, the census gate, the daypart scheduled actions and the warm-up of new Prebid Server tasks | Only once `make deploy-demand` has deployed the guidance (it passes the guidance's network as context) |
+| `…-Pds` | Demand | The Pod Decision Service beside its sidecar (the sidecar answers Prebid Server from inside the guidance's task, ADR-0036): the snapshot publisher, delivery, the reservations' sweeper, the fallback alarms and the decision records' streams into the lake ([pds.md](pds.md#the-service)) | Only with `modules.pds.enabled`, by `make deploy-demand` right after Demand |
+| `…-Release` | Release | Beside the guidance: the Release Controller (the bundle, the apply state machine, its state table, the drift check, the reaper), the siblings' KMS-encrypted log group, their hook alarms and zero-ad-sessions detector ([release-controller.md](release-controller.md)) | Only with `modules.release.enabled`, once `make deploy-demand` has deployed the guidance (after Pds) |
+| `FastChannels-AccountBaseline` | Account | CloudWatch Transaction Search (1 % indexing) and its X-Ray log policy | Only by `make account-baseline`, for `observability.transaction_search: enable`; never by `make deploy` or `make destroy`. One per account and region, termination protected, retained |
+| `FastChannels-AsRun` | Account | The as-run router: the one subscription on the as-run log, putting every event on the default event bus for `observability.as_run: shared` deployments; its alarms and dead-letter queue ([ADR-0032](adr/0032-shared-as-run-router.md)) | Only by `make as-run-router`, never by `make deploy` or `make destroy`. One per account and region, termination protected |
 
-Dependencies run Data → Media → Operator. Cross-stack references are *weak* (`Fn::GetStackOutput`), so stacks can be
-refactored without export locks, and they also cross regions for the Edge stack. Memory lives in the Data stack so
+The demand module's Prebid Server is the AWS guidance, deployed as its own CDK app (`<prefix>-pbs`, and
+`<prefix>-pbs-sim` with the guidance's simulator) by `make deploy-demand`, never by `make deploy`.
+
+Dependencies run Data → Media → (Models →) Operator; Ops and Crawl follow Data and Media; DemandEdge and DemandBuild
+depend on nothing; Demand follows the guidance and Pds follows Demand. Cross-stack references are *weak*
+(`Fn::GetStackOutput`), so stacks can be refactored without export locks, and they also cross regions for the Edge
+stack. Demand and Pds exist only when `make deploy-demand` passes the guidance's network, so Pds reads the Data stack's
+names from SSM parameters instead: a weak reference would break whenever `make deploy` synthesizes Data without Pds.
+[modules.md](modules.md#deploy-and-destroy-order) gives the deploy and destroy order. Memory lives in the Data stack so
 that an Operator rollback can never get stuck on a Memory that is still `CREATING`.
 
 The Data stack owns every bucket policy. Consumer stacks never add statements to it: the policy admits CloudFront
@@ -43,9 +61,16 @@ Scripts, the e2e tests and these docs use these CloudFormation output keys.
 
 | Stack | Outputs |
 |---|---|
-| Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId` |
+| Data | `IngestBucketName`, `MediaBucketName`, `LogsBucketName`, `LibraryTableName`, `CatalogTableName`, `MemoryId`; with `ops`, `LakeBucketName`, `LedgerTableName`, `LedgerArchiveBucketName`; with `pds`, `PdsTableName`, `PdsConfigBucketName` |
 | Media | `CdnBaseUrl`, `ContentBaseUrl`, `EventBusName`, `IngestStateMachineArn`, `LadderProvisionerArn`, `SourceLocationName`, `DefaultLadderVersion`, `Channels` (JSON: `[{name, ladderVersion, outputs, playback: {<output>: <SSAI URL>}}]`), `DashboardUrl`, `DashboardName`, `DistributionId`, `PathContract` |
-| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` |
+| Ops | `LakeDatabase`, `LakeWorkGroup`, `AppConfigApplicationId`, `AppConfigEnvironmentId`, `LedgerStreamName` |
+| Models | `TaskParameters` (JSON `{task: SSM parameter name}`), `TaskProfiles` (JSON `{task: inference profile ARN}`), `CounterTableName` |
+| Operator | `ConsoleUrl`, `UserPoolId`, `ConsoleClientId`, `AutopilotClientId` (only with an `autopilot_cron` or `agent.machine_client`), `CognitoDomain`, `RuntimeArn`, `RuntimeInvokeUrl`, `GatewayUrl`, `ToolFunctions` (JSON `{target: function name}`), `ModelSpecParameter` (not with `modules.models`) |
+| Crawl | `CatalogContextBaseUrl`, `CatalogContextPublisherName` |
+| DemandEdge | `OriginRuleGroupArn`, `OriginSecretAArn`, `OriginSecretBArn` |
+| DemandBuild | `ImageRepositoryUri`, `ImageBuildProject`, `GuidanceExecutionPolicyArn`; with `pds`, `PdsImageRepositoryUri` |
+| Demand | `PrivateZoneId`, `CensusGateArn`, `WarmUpProjectName`, `SimulatorFunction` (`lambda` mode only) |
+| Pds | `DecisionLogGroup` (the sidecar's), `DeliveryFunction`, `SweeperFunction`, `PublisherFunction`, `ConfigBucketName`, `TableName` |
 
 ```bash
 aws cloudformation describe-stacks --stack-name FastChannels-Media \
@@ -181,8 +206,9 @@ sequenceDiagram
     MT-->>P: 301 to the ad segment on the CDN
 ```
 
-The channel policy admits only the channel's own playback configuration (SigV4), so viewers cannot read Channel
-Assembly output without ad insertion, and CloudFront's bucket policy denies the content manifests under `assets/`. See
+The channel policy admits only the channel's own playback configurations (SigV4: the channel's one, plus its
+siblings `<channel>-p-?` when the release module monetizes it), so viewers cannot read Channel Assembly output
+without ad insertion, and CloudFront's bucket policy denies the content manifests under `assets/`. See
 [ad-insertion.md](ad-insertion.md) and [delivery-and-multi-cdn.md](delivery-and-multi-cdn.md).
 
 ## Construct catalogue
@@ -204,7 +230,8 @@ module path.
 | `channel_assembly.ad_insertion` | `MediaTailorLogs` | `/aws/vendedlogs/mediatailor/<prefix>` and its delivery destination |
 | | `AdInsertion` | Playback configuration with three vended-log deliveries |
 | `channel_assembly.channel` | `LinearChannel` | LINEAR channel, its `AdInsertion`, SigV4-only channel policy, lifecycle custom resources |
-| `channel_assembly.as_run` | `AsRunLogging` | As-run log retention and the reconciler that marks programs `AIRED` |
+| `channel_assembly.as_run` | `AsRunLogging` | As-run log retention and the reconciler that marks programs `AIRED`; with `ops`, breaks `AIRED` from `AdBreakStart` and the sweep that marks the rest `UNAIRED` |
+| | `AsRunRouter` | The account's only subscription on the as-run log, putting every event on the default event bus (AsRun stack only) |
 | `channel_assembly.reaper` | `RuntimeResourceReaper` | Delete-first cleanup of runtime resources |
 | `delivery` | `MediaDistribution` | CloudFront distribution driven by `ROUTES` (OAC to S3, MediaTailor origins) and its path contract |
 | | `CdnAccessLogs` | Standard logs v2 to S3 (Parquet, Hive partitions) |
@@ -215,9 +242,28 @@ module path.
 | `operator.tools` | `AgentTools` | One tool Lambda per registry target with least-privilege IAM; auto-stop scheduler group |
 | `operator.gateway` | `AgentGateway` | MCP Gateway (CUSTOM_JWT) with its own conditioned service role, Lambda targets, Cedar policy engine in `ENFORCE` mode |
 | `operator.runtime` | `SchedulerAgent` | AgentCore Runtime (code zip, AG-UI), ModelSpec parameter, online evaluations with traces |
+| `models.registry` | `ModelRegistry` | One validated registry entry per task (SSM), with models only from the allow-list |
+| `models.profiles` | `TaskProfiles` | One application inference profile per task; `task_invoke_statements` grants a role its task's profile only |
+| `models.caps` | `SpendCounters`, `TaskBudget` | The daily spend-counter table and its item-level grant; the optional AWS Budgets action per task role |
 | `operator.deliveries` | `AgentTelemetry` | Vended logs (and traces) of Gateway, Memory and Runtime |
 | `operator.autopilot` | `Autopilot` | Scheduler schedules per channel, autopilot Lambda, DLQ, error and dead-letter alarms |
 | `operator.console` | `OperatorConsole` | Private bucket, CloudFront with OAC and CSP, `config.json` |
+| `ops.lake` | `LakeBucket`, `Lake` | The lake bucket (Data stack); the Glue database, tables and views, Athena workgroup and MediaTailor log copies |
+| `ops.ledger` | `LedgerStorage`, `LedgerWriter` | The ledger table and its Object-Locked archive bucket (Data stack); the stream writer that chains entries, and the Firehose stream into the archive |
+| `ops.detectors` | `AccountQuotaAlarms`, `ConfigurationAlarms`, `ZeroAdsDetector`, `AlertsPoller` | Account quota alarms, per-configuration hook alarms, the hourly zero-ad-sessions detector, the per-minute Channel Assembly alerts poller |
+| `ops.runbooks` | `Runbooks` | The runbooks' function, one state machine per runbook and their triggers |
+| `ops.flags` | `OpsAppConfig` | AppConfig application `<prefix>-fast` with its `flags` feature-flag profile |
+| `ops.canary` | `ProbeCanary` | The probe canary, its census-driven start and stop, and its off-air alarm |
+| `demand.origin_waf` | `OriginGate` | The origin secrets and the WAF rule group that requires one of them |
+| `demand.image_build` | `ImageBuild` | The Prebid Server image repository (and with `modules.pds` the sidecar's) and their x86 build project |
+| `demand.guidance_bootstrap` | `GuidanceExecutionPolicy` | The execution policy of the guidance's dedicated CDK bootstrap |
+| `demand.private_dns` | `PrivateDns` | The private hosted zone `<prefix>.fast.internal` |
+| `demand.simulator` | `LambdaSimulator` | The bidder simulator as a function behind an internal load balancer (`lambda` mode) |
+| `demand.scaling` | `CensusGate`, `Dayparts` | Prebid Server's task minimum by the running channels; scheduled actions ahead of dayparts |
+| `demand.warmup` | `WarmUp` | The warm-up project and the rule that starts it for every new Prebid Server task |
+| `pds.tables`, `pds.config_bucket` | `PdsTable`, `ConfigBucket`, `SnapshotPublisher` | The PDS table and private config bucket (Data stack); the snapshot publisher (Pds stack) |
+| `pds.decisions` | `DecisionLog` | One kind of decision record into the lake |
+| `crawl.publisher` | `ContextPublisher` | The catalog context publisher and its triggers |
 
 Shared recipes next to them: `alerts` (alert topic, alarms, CDN metrics), `logs` (service and vended log groups,
 log deliveries), `queues` (dead-letter queues) and `_provider` (custom-resource providers); and in
@@ -250,7 +296,8 @@ Media bucket keys: `assets/<asset_id>/<ladder>/main*.m3u8` plus MPEG-TS segments
 
 Domain events on the `<prefix>-fast-channels` bus (source `fast-channels.<prefix>`, schema in
 [`contracts/events.schema.json`](../contracts/events.schema.json)): `Ingest Requested` (in), `Asset Ready`,
-`Asset Failed`, `Ladder Ready`, `Ladder Failed`, `Schedule Published`, `Autopilot Run`.
+`Asset Failed`, `Ladder Ready`, `Ladder Failed`, `Schedule Published`, `Autopilot Run`, `Catalog Item Changed` (in;
+your CMS sync job or `make seed`), and with the ops module `Census Changed` and `Channel Alert`.
 
 ## Design principles
 

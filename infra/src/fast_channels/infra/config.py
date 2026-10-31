@@ -10,17 +10,26 @@ Every attribute docstring below is the field's documentation (also exported in t
 """
 
 import json
+import os
 import re
+from decimal import Decimal
 from enum import StrEnum
+from fnmatch import fnmatchcase
 from functools import cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
 
 from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
+from fast_channels.core.ad_server import AdServer
+from fast_channels.core.demand import QUALIFIER_MAX
+from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
-from fast_channels.core.naming import is_agent_owned
+from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSettings, qualification
+from fast_channels.core.monetization.names import sibling_pattern
+from fast_channels.core.naming import PREFIX_PATTERN, agent_namespace, check_prefix, is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
@@ -32,6 +41,15 @@ CONTEXT_KEY: Final = "fast-channels"
 GEO_PLACEHOLDER: Final = "{geo}"
 """Stands for the deployment region's inference-profile geography in model ids (:func:`geo_prefix`)."""
 DEFAULT_MODEL: Final = f"{GEO_PLACEHOLDER}.anthropic.claude-haiku-5-5"
+EVAL_RECORDS: Final = Path(__file__).resolve().parents[4] / "evals" / "records"
+"""The committed eval records (``evals/records/<task>/<key>.json``) that qualify registry entries."""
+EVAL_RECORDS_ENV: Final = "FAST_EVAL_RECORDS"
+"""Directories to read eval records from instead (``os.pathsep``-separated, first match wins), e.g. for tests."""
+SCHEDULER_EVAL: Final = "haiku-5-5-adaptive-16k"
+"""The committed record of the shipped ``scheduler.plan`` entry (``make eval TASK=scheduler.plan``)."""
+SCHEDULER_DAILY_CAP_USD: Final = 5
+"""The scheduler agent's daily spend cap, about ten times a busy demo day: four autopilot runs a day on each of five
+channels and 50 operator turns at about $0.005 each (``make eval``) is about $0.4."""
 DEFAULT_ALLOWED_MODELS: Final = (
     DEFAULT_MODEL,
     f"{GEO_PLACEHOLDER}.anthropic.claude-sonnet-5-5",
@@ -125,6 +143,7 @@ _RETENTION: Final = {
 }
 _HTTPS_URL: Final = r"^https://[^\s/]+(/\S*)?$"
 _EMAIL: Final = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+_DOMAIN: Final = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+$"
 
 
 class ConfigError(ValueError):
@@ -163,6 +182,13 @@ class TransactionSearchMode(StrEnum):
     OFF = "off"
     ENABLE = "enable"
     EXISTING = "existing"
+
+
+class AsRunMode(StrEnum):
+    """How the deployment reads Channel Assembly's account-shared as-run log."""
+
+    PER_STAGE = "per_stage"
+    SHARED = "shared"
 
 
 class PriceClass(StrEnum):
@@ -244,7 +270,10 @@ class ChannelAssemblyConfig(_Section):
 class ChannelConfig(_Section):
     name: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", max_length=40)
     """Channel Assembly channel name. Must start with ``<prefix>-``; ``<prefix>-agent-`` is reserved for channels
-    the agent creates. ``{prefix}`` is replaced with the deployment prefix (the default is ``{prefix}-demo``)."""
+    the agent creates. ``{prefix}`` is replaced with the deployment prefix (the default is ``{prefix}-demo``). Another
+    channel's name plus ``-p-...`` (or ``<prefix>-lab-p-...``) is refused, with the release module on or off: those are
+    the release module's sibling names, and its IAM grants cover ``<channel>-p-*``. So is ``<prefix>-agent``, whose
+    siblings would be agent-owned names."""
     ladder: str = "standard"
     """Built-in ladder of every program, slate and house ad on this channel (one of ``ladders.builtin``)."""
     outputs: tuple[str, ...] = DEFAULT_PACKAGE_PROFILES
@@ -302,7 +331,7 @@ class CdnEndpoint(_Section):
 
 
 class DeliveryConfig(_Section):
-    content_domain: str | None = Field(default=None, pattern=r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+$")
+    content_domain: str | None = Field(default=None, pattern=_DOMAIN)
     """CDN-neutral hostname for content segments and preconditioned ads (e.g. ``media.example.com``). Requires
     ``certificate_arn``; defaults to the CloudFront domain."""
     certificate_arn: str | None = Field(default=None, pattern=r"^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate/\S+$")
@@ -391,12 +420,19 @@ class AgentConfig(_Section):
 
 class ObservabilityConfig(_Section):
     transaction_search: TransactionSearchMode = TransactionSearchMode.OFF
-    """``enable`` deploys the account-level FastChannels-AccountBaseline stack (an account-wide change: X-Ray spans
-    are then billed as CloudWatch Logs); ``existing`` if it is already on in this account and region."""
+    """``enable``: ``make account-baseline`` deploys the account-level FastChannels-AccountBaseline stack (an
+    account-wide change: X-Ray spans are then billed as CloudWatch Logs), once per account and region before
+    ``make deploy``; ``existing`` if it is already on in this account and region. Both turn on the agent's traces.
+    ``make deploy`` and ``make destroy`` never touch the baseline stack."""
     log_retention_days: int = 7
     """Retention of every log group, and expiry of the logs bucket (S3 access and CloudFront logs)."""
     mediatailor_log_percent: int = Field(default=100, ge=0, le=100)
     """Share of MediaTailor sessions that emit vended logs (100 for demos, ~10 in production)."""
+    as_run: AsRunMode = AsRunMode.PER_STAGE
+    """``per_stage``: the stage subscribes to the as-run log itself (CloudWatch Logs allows five subscriptions per log
+    group, so at most five such stages per account and region); ``shared``: the stage reads as-run events from the
+    account's ``FastChannels-AsRun`` router through EventBridge, which ``make as-run-router`` deploys once per account
+    and region (ADR-0032)."""
     capture_prompts: bool | None = None
     """Keep message content (operator prompts, the system prompt, tool results and model replies) in the agent
     runtime's OpenTelemetry logs and spans, where anyone who can read them sees every operator's conversation.
@@ -427,12 +463,389 @@ class NotificationsConfig(_Section):
     """Email subscribed to alarms and asset/ladder failure events."""
 
 
+class LedgerLock(StrEnum):
+    """S3 Object Lock mode of the ledger archive."""
+
+    OFF = "off"
+    GOVERNANCE = "governance"
+    COMPLIANCE = "compliance"
+
+
+class _Module(_Section):
+    """An optional module: nothing of it is deployed unless ``enabled``."""
+
+    enabled: bool = False
+
+
+class OpsModule(_Module):
+    """The ops module (``modules.ops``)."""
+
+    enabled: bool = False
+    """Deploy the ops module: a per-stage data lake (S3, Glue, Athena), a hash-chained ledger of changes and money
+    events, account quota alarms and detectors, runbooks and a probe canary."""
+    lake_retention_days: int = Field(default=30, ge=1)
+    """Days after which lake objects expire."""
+    ledger_lock: LedgerLock = LedgerLock.GOVERNANCE
+    """Object Lock mode of the ledger archive. ``compliance`` locks records even against the account root until
+    their retention ends, so it needs ``removal: retain``; use it only in production, after a retention review."""
+    ledger_retention_days: int = Field(default=30, ge=1, le=36_500)
+    """Object Lock retention of each ledger record; until it ends, ``make destroy`` cannot delete the archive (1 on
+    development stages)."""
+    canary: bool = True
+    """Run a synthetic playback canary on the probe playback configuration of each running channel."""
+
+
+class ModelTask(TaskSettings):
+    """One task's model-registry entry, rendered to SSM ``/<prefix>/models/tasks/<task>`` with ``{geo}`` resolved and
+    the task's application inference profile."""
+
+    @field_validator("model", mode="after")
+    @classmethod
+    def _resolve_model(cls, model: str, info: ValidationInfo) -> str:
+        region = (info.context or {}).get("region")
+        return resolve_geo(model, region) if region else model
+
+
+class ModelsModule(_Module):
+    """The model-registry module (``modules.models``)."""
+
+    enabled: bool = False
+    """Deploy the per-task model registry: one validated entry per LLM task, each with its own IAM role, application
+    inference profile and spend cap. Entries choose only among ``agent.allowed_models``."""
+    tasks: dict[str, ModelTask] = Field(
+        # Validated like a value from cdk.json, so that {geo} resolves for the region.
+        default_factory=lambda: {
+            "scheduler.plan": {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD, "eval": SCHEDULER_EVAL}
+        },
+        validate_default=True,
+    )
+    """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
+    budgets_action: bool = False
+    """Add an AWS Budget per task role with a ``daily_cap_usd`` whose action, once the task's spend in the month
+    reaches 31 days of the cap, denies the role's invocations of the task's inference profile (Budgets actions accept
+    no daily budget). Needs ``notifications.email`` (AWS Budgets emails it when the action runs) and the ``fast:task``
+    cost allocation tag activated in the payer account."""
+
+    @field_validator("tasks")
+    @classmethod
+    def _task_names(cls, tasks: dict[str, ModelTask]) -> dict[str, ModelTask]:
+        if bad := [name for name in tasks if not TASK_NAME.fullmatch(name)]:
+            raise ValueError(f"task names must be dot-separated lowercase words, got {bad}")
+        return tasks
+
+
+class DemandMode(StrEnum):
+    """Where bids come from: the own book alone, or the own book plus the bidder simulator."""
+
+    OWN_BOOK = "own_book"
+    DEMO = "demo"
+
+
+class Simulator(StrEnum):
+    """How the bidder simulator is deployed in demo mode."""
+
+    GUIDANCE_STACK = "guidance_stack"
+    LAMBDA = "lambda"
+
+
+class DemandTasks(_Section):
+    """Prebid Server task counts (ECS service capacity)."""
+
+    min: int = Field(default=2, ge=1)
+    """Prebid Server tasks while any channel runs (the tier minimum); 0 while none does."""
+    max: int = Field(default=4, ge=1)
+    """Most Prebid Server tasks (the ECS service maximum)."""
+
+
+class DemandDaypart(_Section):
+    """A scheduled raise of the Prebid Server task minimum ahead of a busy daypart."""
+
+    cron: str = Field(pattern=r"^cron\(\S+( \S+){5}\)$")
+    """Application Auto Scaling ``cron(minutes hours day-of-month month day-of-week year)`` expression (UTC); fire it
+    at least 10 minutes before the daypart's first break."""
+    min: int = Field(ge=1)
+    """Task minimum from then on (between ``tasks.min`` and ``tasks.max``)."""
+
+
+class DemandModule(_Module):
+    """The demand module (``modules.demand``)."""
+
+    enabled: bool = False
+    """Deploy programmatic demand: the Guidance for Deploying a Prebid Server on AWS as its own app at a pinned tag,
+    with the repository's overlays and Prebid Server module, the guidance's bidder simulator in demo mode,
+    census-gated scaling and an origin rule that admits only this stage's MediaTailor requests."""
+    mode: DemandMode = DemandMode.DEMO
+    """``own_book``: own-book bids only (no simulator); ``demo``: the own book plus the guidance's bidder simulator,
+    every number labelled simulated."""
+    guidance_tag: str = Field(default="v1.4.0", pattern=r"^v\d+\.\d+\.\d+$")
+    """Tag of the guidance, pinned with its commit and the hash of every file the overlays patch."""
+    simulator: Simulator = Simulator.GUIDANCE_STACK
+    """``guidance_stack``: the guidance's simulator stack (its own VPC with two NAT gateways); ``lambda``: the same
+    handler as a Lambda target behind an internal load balancer in the Prebid Server VPC, which needs no VPC of its
+    own."""
+    tasks: DemandTasks = DemandTasks()
+    server_instances: int = Field(default=2, ge=1)
+    """Prebid Server ``server.http.server-instances``: one event loop per task vCPU."""
+    dayparts: tuple[DemandDaypart, ...] = ()
+    """Scheduled task minimums ahead of busy dayparts; target tracking covers the time between them."""
+    rate_limit_per_ip: int = Field(default=20_000, ge=10, le=2_000_000_000)
+    """Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any
+    MediaTailor egress address's rate)."""
+    ad_server: AdServer = AdServer.NONE
+    """Experimental in v4.0.0. Where the monetized pair siblings send a break's ad request: ``none`` (the
+    default: Prebid Server answers the pod as VAST), ``mock`` (the demo's GAM-like ad server), ``gam`` or ``freewheel``
+    (``ad_server_tag``). With an ad server,
+    a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the
+    release module."""
+    ad_server_tag: str = ""
+    """``gam`` and ``freewheel``: the publisher's VAST tag URL, with ``{prebid}`` once where the targeting key-values
+    go (inside ``cust_params`` for GAM, in the key-value section for FreeWheel); empty otherwise."""
+    pod_cache_seconds: int = Field(default=300, ge=30, le=3600)
+    """How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break."""
+    pod_cache_concurrency: int = Field(default=8, ge=0, le=1000)
+    """With an ad server: provisioned concurrency of the guidance's Prebid Cache function, whose writes are on an
+    auction's deadline (a new instance takes about 1.4 s to start). A 100-session break in real time peaked at 6
+    instances (docs/demand.md, "The cache function"): about 0.06-0.08 per session of the largest break. 0: none."""
+    pod_cache_memory_mb: int = Field(default=1769, ge=128, le=10240)
+    """With an ad server: the Prebid Cache function's memory. One vCPU: an instance's first cache connection took
+    about 1 s at the guidance's 256 MB and about 250 ms at 1,769 MB."""
+
+    @model_validator(mode="after")
+    def _ad_server_tag(self) -> Self:
+        match self.ad_server:
+            case AdServer.GAM | AdServer.FREEWHEEL:
+                if not self.ad_server_tag.startswith("https://") or self.ad_server_tag.count("{prebid}") != 1:
+                    raise ValueError(
+                        f"ad_server {self.ad_server} needs ad_server_tag: an https URL with {{prebid}} once"
+                    )
+            case _ if self.ad_server_tag:
+                raise ValueError(f"ad_server_tag is only for gam and freewheel, not {self.ad_server}")
+        return self
+
+    @model_validator(mode="after")
+    def _within_task_limits(self) -> Self:
+        if self.tasks.min > self.tasks.max:
+            raise ValueError(f"tasks.min ({self.tasks.min}) exceeds tasks.max ({self.tasks.max})")
+        if outside := [d.cron for d in self.dayparts if not self.tasks.min <= d.min <= self.tasks.max]:
+            raise ValueError(f"dayparts {outside}: min must lie between tasks.min and tasks.max")
+        return self
+
+
+class LineCaps(_Section):
+    """Frequency caps of a demo line."""
+
+    per_session: int | None = Field(default=None, ge=1)
+    """Most impressions of the line per playback session; ``null``: uncapped."""
+
+
+class DemoLine(_Section):
+    """A synthetic direct line, bid by the own book like a sold insertion order (demo mode)."""
+
+    id: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
+    """Line id, unique among ``demo_lines``."""
+    advertiser: str = Field(min_length=1, max_length=100)
+    """Advertiser name (decision records and reports)."""
+    adomain: str = Field(pattern=_DOMAIN)
+    """Advertiser domain (OpenRTB ``adomain``); pods never repeat one."""
+    cat: tuple[str, ...] = ()
+    """IAB categories of the line's ads (OpenRTB ``cat``)."""
+    creatives: tuple[str, ...] = Field(min_length=1)
+    """Creative ids (``crid``) of the direct demo creatives the line serves (``direct1``, ``direct2``); a creative
+    serves at most one line."""
+    cpm: Decimal = Field(gt=0)
+    """Price per 1,000 impressions, US dollars (simulated)."""
+    budget: Decimal = Field(gt=0)
+    """Total budget, US dollars (simulated); the line stops once reservations reach it."""
+    caps: LineCaps = LineCaps()
+    tier0: bool = False
+    """A guaranteed line: placed first in a pod, ahead of any bid."""
+
+
+class PdsModule(_Module):
+    """The Pod Decision Service module (``modules.pds``)."""
+
+    enabled: bool = False
+    """Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct
+    lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per
+    break."""
+    policy_timeout_ms: int = Field(default=50, gt=0)
+    """Timeout of the module's ``/policy`` call; on expiry the break is served from the own book alone. The sidecar
+    on the task's loopback answered the 400-session herds at p99 12-18 ms, max 36 ms at the module (ADR-0036)."""
+    policy_group_timeout_ms: int = Field(default=75, gt=0)
+    """Timeout of the hook group that holds the ``/policy`` call (at least ``policy_timeout_ms``)."""
+    select_timeout_ms: int = Field(default=200, gt=0)
+    """Timeout of the module's ``/select`` call; on expiry the pod is built from house bids. ``/select`` reserves the
+    pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-125 ms): 400-session break herds measured
+    p99 65-134 ms, max 111-166 ms at the module, and at 150 ms one pod in 400 fell back (ADR-0036)."""
+    select_group_timeout_ms: int = Field(default=250, gt=0)
+    """Timeout of the hook group that holds the ``/select`` call (at least ``select_timeout_ms``)."""
+    demo_lines: tuple[DemoLine, ...] = Field(default=(), max_length=8)
+    """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's
+    environment). Each line's budget is split over the own book's budget shards; a line stops serving once
+    reservations hold all of it."""
+
+    @model_validator(mode="after")
+    def _groups_hold_their_calls(self) -> Self:
+        problems = [
+            f"{call}_group_timeout_ms ({group}) is shorter than {call}_timeout_ms ({timeout})"
+            for call, timeout, group in (
+                ("policy", self.policy_timeout_ms, self.policy_group_timeout_ms),
+                ("select", self.select_timeout_ms, self.select_group_timeout_ms),
+            )
+            if group < timeout
+        ]
+        if problems:
+            raise ValueError("\n".join(problems))
+        _unique(tuple(line.id for line in self.demo_lines))
+        served = tuple(crid for line in self.demo_lines for crid in line.creatives)
+        try:
+            _unique(served)
+        except ValueError as error:
+            raise ValueError(f"demo_lines: a creative serves at most one line: {error}") from None
+        if unknown := sorted(set(served) - set(crids(DemoRole.DIRECT))):
+            raise ValueError(f"demo_lines: not direct demo creatives: {', '.join(unknown)}")
+        return self
+
+
+class ReleaseStrategy(StrEnum):
+    """AppConfig deployment strategy of the release pointer, by audience size."""
+
+    DEMO = "demo"
+    STANDARD = "standard"
+    LARGE = "large"
+
+
+class ReleasePrefetch(_Section):
+    """Ad prefetch on the monetized siblings (``modules.release.prefetch``; DESIGN §10)."""
+
+    enabled: bool = True
+    """Create a SINGLE prefetch schedule for each of the next breaks of a running monetized channel, so MediaTailor
+    asks the ad decision server minutes ahead, spread over a window, and transcodes new creatives before they air.
+    Retrieval transcodes bill whether or not the break airs; the horizon stays short and re-planned breaks lose their
+    schedules."""
+    siblings: tuple[str, ...] = ("a", "b", "k", "l")
+    """Sibling letters that get schedules: the general pair and the kids pair (the probe ``z`` never does)."""
+    horizon_breaks: int = Field(default=20, ge=1, le=24)
+    """Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration)."""
+    retrieval_lead_seconds: int = Field(default=150, ge=60, le=3600)
+    """Retrieval opens this long before the break."""
+    retrieval_end_seconds: int = Field(default=30, ge=10)
+    """Retrieval closes this long before the break (transcodes take about 20 s)."""
+    shaping_window_seconds: int = Field(default=90, ge=0)
+    """MediaTailor spreads the sessions' prefetch requests over this many seconds (``RETRIEVAL_WINDOW`` traffic
+    shaping); 0 sends them as the sessions arrive."""
+
+    @field_validator("siblings")
+    @classmethod
+    def _letters(cls, letters: tuple[str, ...]) -> tuple[str, ...]:
+        if invalid := [s for s in letters if s not in {"a", "b", "k", "l"}]:
+            raise ValueError(f"sibling letters are a, b (general) and k, l (kids); got {invalid}")
+        return _unique(letters)
+
+    @model_validator(mode="after")
+    def _window(self) -> Self:
+        if self.retrieval_end_seconds >= self.retrieval_lead_seconds:
+            raise ValueError("retrieval_end_seconds must be less than retrieval_lead_seconds")
+        return self
+
+
+class ReleaseModule(_Module):
+    """The release module (``modules.release``)."""
+
+    enabled: bool = False
+    """Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor
+    Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and
+    is rolled back unattended on an alarm."""
+    channels: tuple[str, ...] = ()
+    """IaC channels to monetize (names from ``channels.iac``; ``{prefix}`` is replaced as there). Their channel policy
+    also admits the sibling configurations ``<channel>-p-?``. Adding a channel widens its policy once, and the
+    deployment refuses that while the channel runs: stop it first."""
+    strategy: ReleaseStrategy = ReleaseStrategy.DEMO
+    """``demo`` (a simulated audience: 10% steps over 30 minutes), ``standard`` (up to 20,000 concurrent viewers: 10%
+    steps over 3 hours) or ``large`` (exponential steps over 4 hours)."""
+    lab_channel: bool = True
+    """Create the stopped lab channel ``<prefix>-lab``, started only to smoke-test a release while the monetized
+    channel is stopped."""
+    probe_sibling: bool = True
+    """Create a house-only probe playback configuration per channel, for canaries and smoke tests."""
+    secret_rotation_days: int = Field(default=90, ge=1)
+    """Days between rotations of the origin secret that MediaTailor sends to the demand origin."""
+    prefetch: ReleasePrefetch = ReleasePrefetch()
+
+    @field_validator("channels")
+    @classmethod
+    def _unique_channels(cls, channels: tuple[str, ...]) -> tuple[str, ...]:
+        return _unique(channels)
+
+
+class CrawlModule(_Module):
+    """The content-metadata module (``modules.crawl``)."""
+
+    enabled: bool = False
+    """Deploy show-level content metadata: a catalog context object per title, a cached PRE_ADS lookup by UPID and
+    the OpenRTB ``app.content`` fields in each ad request, with a holdout that measures the uplift."""
+    pre_ads: bool = True
+    """Map the cached PRE_ADS lookup on the monetized playback configurations."""
+    holdout_percent: int = Field(default=20, ge=0, le=100)
+    """Share of session-breaks that get no enrichment, the uplift measurement's control arm."""
+    publisher_domain: str | None = Field(default=None, pattern=_DOMAIN)
+    """Your domain (e.g. ``example.com``), named as the registry of your catalog's content ids in the catalog context
+    objects and in OpenRTB ``content.data[].cids``; unset, the content id travels in ``content.id`` only."""
+
+
+_MODULE_NEEDS: Final = {
+    "demand": ("ops",),
+    "pds": ("ops", "demand"),
+    "release": ("ops", "demand", "pds"),
+    "crawl": ("pds", "release"),
+}
+"""Modules an enabled module builds on."""
+
+
+def _listed(names: list[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    return " and ".join([", ".join(names[:-1]), names[-1]] if len(names) > 1 else names)
+
+
+class ModulesConfig(_Section):
+    """Optional modules, each off by default; with every module off the deployment is exactly v3.0.0. Until a
+    module's code is merged, enabling it changes nothing."""
+
+    ops: OpsModule = OpsModule()
+    models: ModelsModule = ModelsModule()
+    demand: DemandModule = DemandModule()
+    pds: PdsModule = PdsModule()
+    release: ReleaseModule = ReleaseModule()
+    crawl: CrawlModule = CrawlModule()
+
+    def enabled(self, name: str) -> bool:
+        """Whether module ``name`` (a field of this section) is on."""
+        module: _Module = getattr(self, name)
+        return module.enabled
+
+    @model_validator(mode="after")
+    def _needs_met(self) -> Self:
+        problems = [
+            f"{name} needs {_listed(missing)}: enable {'them' if len(missing) > 1 else 'it'} or turn {name} off"
+            for name, needs in _MODULE_NEEDS.items()
+            if self.enabled(name) and (missing := [need for need in needs if not self.enabled(need)])
+        ]
+        if self.demand.enabled and self.demand.ad_server is not AdServer.NONE and not self.release.enabled:
+            problems.append(
+                f"demand.ad_server {self.demand.ad_server} needs release: its PRE_ADS auction is a release Function"
+            )
+        if problems:
+            raise ValueError("\n".join(problems))
+        return self
+
+
 class FastChannelsConfig(_Section):
     """FAST Channels deployment configuration (cdk.json context ``fast-channels``)."""
 
-    prefix: str = Field(default="fast", pattern=r"^[a-z][a-z0-9-]{0,14}[a-z0-9]$")
-    """Name prefix of every resource and value of the ``fast:app`` tag. Change it to deploy several copies in one
-    account and region."""
+    prefix: str = Field(default="fast", pattern=PREFIX_PATTERN)
+    """Name prefix of every resource and value of the ``fast:app`` tag: 2-16 lowercase letters and digits, starting
+    with a letter, without hyphens. Change it to deploy several copies in one account and region. Names and IAM grants
+    are scoped by ``<prefix>-*``, so a prefix with a hyphen (``fast-x``) would fall inside another's (``fast-*``)."""
     removal: Removal = Removal.DESTROY
     """``destroy`` (demo: delete data with the stacks) or ``retain`` (production: keep data, enable deletion and
     termination protection)."""
@@ -444,6 +857,13 @@ class FastChannelsConfig(_Section):
     agent: AgentConfig = AgentConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
     notifications: NotificationsConfig = NotificationsConfig()
+    modules: ModulesConfig = ModulesConfig()
+
+    @field_validator("prefix", mode="before")
+    @classmethod
+    def _isolated_prefix(cls, prefix: object) -> object:
+        """Says why a prefix is refused (the pattern alone would not)."""
+        return check_prefix(prefix) if isinstance(prefix, str) else prefix
 
     @property
     def removal_policy(self) -> RemovalPolicy:
@@ -456,22 +876,118 @@ class FastChannelsConfig(_Section):
 
     @model_validator(mode="after")
     def _consistent(self, info: ValidationInfo) -> Self:
+        region: str | None = (info.context or {}).get("region")
         problems = [problem for channel in self.channels.iac for problem in self._channel_problems(channel)]
-        if region := (info.context or {}).get("region"):
+        problems += self._module_problems(region)
+        if region:
             problems += self._region_problems(region)
         if problems:
             raise ValueError("\n".join(problems))
         return self
 
+    @property
+    def lab_channel(self) -> ChannelConfig | None:
+        """The release module's lab channel ``<prefix>-lab`` (``modules.release.lab_channel``): BASIC, created
+        stopped, with the first monetized channel's ladder and outputs. It is started only to smoke-test a release
+        while the monetized channels are stopped, and has siblings like them."""
+        release = self.modules.release
+        if not (release.enabled and release.lab_channel and release.channels):
+            return None
+        first = next(c for c in self.channels.iac if c.name == release.channels[0])
+        return ChannelConfig(name=f"{self.prefix}-lab", ladder=first.ladder, outputs=first.outputs)
+
+    @property
+    def iac_channels(self) -> tuple[ChannelConfig, ...]:
+        """``channels.iac`` and the lab channel."""
+        return (*self.channels.iac, *((self.lab_channel,) if self.lab_channel else ()))
+
+    @property
+    def release_channels(self) -> tuple[str, ...]:
+        """The channels with siblings: ``modules.release.channels`` and the lab channel (none with the module
+        off)."""
+        if not self.modules.release.enabled:
+            return ()
+        return (*self.modules.release.channels, *((self.lab_channel.name,) if self.lab_channel else ()))
+
     def _channel_problems(self, channel: ChannelConfig) -> list[str]:
         where = f"{CONTEXT_KEY}.channels.iac[{channel.name}]"
         if not channel.name.startswith(f"{self.prefix}-") or is_agent_owned(channel.name, self.prefix):
             return [f"{where}: name must start with {self.prefix!r}- but not {self.prefix!r}-agent- (agent-owned)"]
+        if problem := self._sibling_problem(channel.name):
+            return [f"{where}: {problem}"]
         if channel.ladder not in self.ladders.builtin:
             return [f"{where}: ladder {channel.ladder!r} is not in ladders.builtin {list(self.ladders.builtin)}"]
         if extra := [o for o in channel.outputs if o not in self.channel_assembly.package_profiles]:
             return [f"{where}: outputs {extra} are not in channel_assembly.package_profiles"]
         return []
+
+    def _sibling_problem(self, name: str) -> str | None:
+        """Why channel ``name`` would collide with the release module's siblings (``<channel>-p-<letter>``, granted as
+        ``<channel>-p-*``), whether or not the module is on: so that turning it on cannot."""
+        siblings = sibling_pattern(name)
+        if siblings.startswith(agent_namespace(self.prefix)):
+            return (
+                f"{name!r} cannot be an IaC channel: the release module would name its siblings {siblings!r}, inside "
+                f"the agent-owned {agent_namespace(self.prefix)}* names"
+            )
+        lab = f"{self.prefix}-lab"
+        channels = {*(c.name for c in self.channels.iac), lab} - {name}
+        if parent := next((c for c in sorted(channels) if fnmatchcase(name, sibling_pattern(c))), None):
+            of = f"the release lab channel {parent!r}" if parent == lab else f"channel {parent!r}"
+            return (
+                f"{name!r} is a sibling name of {of}: the release module names that channel's playback configurations "
+                f"{parent}-p-<letter> and its IAM grants cover {sibling_pattern(parent)!r}; rename the channel"
+            )
+        return None
+
+    def _module_problems(self, region: str | None) -> list[str]:
+        """Rules between a module and the rest of the configuration (rules among modules: :class:`ModulesConfig`).
+        Model ids are compared with ``{geo}`` resolved for ``region``: a section left at its defaults keeps it."""
+        modules, where = self.modules, f"{CONTEXT_KEY}.modules"
+        iac = [channel.name for channel in self.channels.iac]
+        problems = [
+            f"{where}.release.channels: {name!r} is not an IaC channel (channels.iac: {iac})"
+            for name in modules.release.channels
+            if name not in iac
+        ]
+        if modules.release.enabled and modules.release.lab_channel and (lab := f"{self.prefix}-lab") in iac:
+            problems.append(
+                f"{where}.release.lab_channel: {lab!r} is the release lab channel; rename the IaC channel or set "
+                "lab_channel=false"
+            )
+        if modules.demand.enabled and len(self.prefix) > QUALIFIER_MAX:
+            problems.append(
+                f"{where}.demand: the Prebid Server guidance deploys onto a CDK bootstrap qualified by the prefix, "
+                f"at most {QUALIFIER_MAX} characters; {self.prefix!r} is {len(self.prefix)}"
+            )
+        if modules.ops.enabled and modules.ops.ledger_lock is LedgerLock.COMPLIANCE and self.removal is Removal.DESTROY:
+            problems.append(
+                f"{where}.ops.ledger_lock: compliance-mode records cannot be deleted before their retention ends, "
+                "which removal=destroy needs; use governance or removal=retain"
+            )
+        if modules.models.enabled:
+            allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
+            problems += [
+                f"{where}.models.tasks[{task}]: model {model!r} is not in agent.allowed_models {allowed}"
+                for task, entry in modules.models.tasks.items()
+                if (model := resolve_geo(entry.model, region) if region else entry.model) not in allowed
+            ]
+            problems += [
+                f"{where}.models.tasks[{task}]: {problem}"
+                for task, entry in modules.models.tasks.items()
+                for problem in qualification(eval_records(), task, entry)
+            ]
+            if modules.models.budgets_action and not self.notifications.email:
+                problems.append(
+                    f"{where}.models.budgets_action: AWS Budgets emails notifications.email when an action runs; "
+                    "set it or turn budgets_action off"
+                )
+            if self.agent.enabled and SCHEDULER_TASK not in modules.models.tasks:
+                problems.append(
+                    f"{where}.models.tasks: {SCHEDULER_TASK!r}, the scheduler agent's entry, is missing; add it or set "
+                    "agent.enabled=false"
+                )
+        return problems
 
     def _region_problems(self, region: str) -> list[str]:
         if region not in MEDIA_REGIONS:
@@ -479,13 +995,13 @@ class FastChannelsConfig(_Section):
                 f"region {region}: MediaTailor Channel Assembly and MediaConvert are not both available there; "
                 f"use one of {sorted(MEDIA_REGIONS)}"
             ]
-        if not self.agent.enabled:
-            return []
-        if region not in AGENTCORE_REGIONS:
+        if self.agent.enabled and region not in AGENTCORE_REGIONS:
             return [
                 f"region {region}: Amazon Bedrock AgentCore is not available; set agent.enabled=false or use "
                 f"one of {sorted(AGENTCORE_REGIONS)}"
             ]
+        if not (self.agent.enabled or self.modules.models.enabled):  # nothing invokes the allowed models
+            return []
         local = next((geo for geo, prefixes in _GEO_PROFILE_REGIONS.items() if region.startswith(prefixes)), "global")
         return [
             f"{CONTEXT_KEY}.agent.allowed_models: {model!r} is a {geo}. inference profile, which {region} cannot "
@@ -527,15 +1043,28 @@ class FastChannelsConfig(_Section):
             raise ConfigError(_describe(error)) from None
 
 
+def eval_records() -> tuple[Path, ...]:
+    """Where eval records are read from: :data:`EVAL_RECORDS_ENV` when set, else :data:`EVAL_RECORDS`."""
+    configured = os.environ.get(EVAL_RECORDS_ENV)
+    return tuple(Path(d) for d in configured.split(os.pathsep) if d) if configured else (EVAL_RECORDS,)
+
+
 def _expand_prefix(data: dict[str, Any]) -> None:
-    """Replace ``{prefix}`` in IaC channel names, so one default channel works for every deployment prefix."""
+    """Replace ``{prefix}`` in IaC channel names and in the channels the release module monetizes, so one default
+    channel works for every deployment prefix."""
     prefix = data.get("prefix")
-    channels = data.get("channels")
-    if not isinstance(prefix, str) or not isinstance(channels, dict):
+    if not isinstance(prefix, str):
         return
-    for channel in channels.get("iac") or ():
+    channels = data.get("channels")
+    for channel in (channels.get("iac") or ()) if isinstance(channels, dict) else ():
         if isinstance(channel, dict) and isinstance(channel.get("name"), str):
             channel["name"] = channel["name"].replace("{prefix}", prefix)
+    modules = data.get("modules")
+    release = modules.get("release") if isinstance(modules, dict) else None
+    if isinstance(release, dict) and isinstance(release.get("channels"), list):
+        release["channels"] = [
+            name.replace("{prefix}", prefix) if isinstance(name, str) else name for name in release["channels"]
+        ]
 
 
 def _decode(value: Any) -> Any:

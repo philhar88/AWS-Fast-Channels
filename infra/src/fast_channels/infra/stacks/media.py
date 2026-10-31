@@ -5,9 +5,13 @@ from typing import TYPE_CHECKING, Any, Final
 from aws_cdk import CfnOutput, Duration, Stack
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import source_location_name
-from fast_channels.infra.config import AdsMode, PriceClass
+from fast_channels.core.pds.names import Parameter as PdsParameter
+from fast_channels.core.pds.names import parameter_name as pds_parameter
+from fast_channels.infra.config import AdsMode, AsRunMode, DemandMode, PriceClass
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.channel_assembly import (
     AS_RUN_LOG_GROUP,
@@ -18,6 +22,7 @@ from fast_channels.infra.constructs.channel_assembly import (
     RuntimeResourceReaper,
     playback_configuration_template,
 )
+from fast_channels.infra.constructs.crawl.store import CatalogContextBucket
 from fast_channels.infra.constructs.delivery import CdnAccessLogs, MediaDistribution
 from fast_channels.infra.constructs.encoding import EncodingLadder, IngestPipeline, LadderKit, LadderProvisioner
 from fast_channels.infra.constructs.events import FastEventBus
@@ -59,6 +64,8 @@ class MediaStack(Stack):
         access_logs: its standard-logs-v2 delivery when this stack is in us-east-1, else ``None``.
         events, delivery, origin, vended_logs, pipeline, ladders, provisioner, kits, reaper, as_run, channels,
         observability: the media-plane constructs (``ladders`` and ``kits`` by built-in ladder name).
+        catalog_contexts: the ``crawl`` module's catalog-context bucket (and its ``/catalog/ctx/*`` route), or
+        ``None`` when the module is off.
     """
 
     def __init__(
@@ -77,15 +84,22 @@ class MediaStack(Stack):
             archive_retention=Duration.days(config.observability.log_retention_days),
             removal_policy=removal,
         )
+        # The crawl module's catalog contexts: a bucket of their own, so that a miss is a cacheable 404.
+        self.catalog_contexts: CatalogContextBucket | None = None
+        if config.modules.crawl.enabled:
+            self.catalog_contexts = CatalogContextBucket(self, "CatalogContexts", removal_policy=removal)
         self.delivery = MediaDistribution(
             self,
             "Delivery",
             media_bucket=data.media_bucket,
+            catalog_bucket=self.catalog_contexts.reference if self.catalog_contexts else None,
             content_domain=config.delivery.content_domain,
             certificate_arn=config.delivery.certificate_arn,
             price_class=_PRICE_CLASSES[config.delivery.price_class],
         )
         self.distribution = self.delivery.distribution
+        if self.catalog_contexts is not None:
+            self.catalog_contexts.admit(self.distribution)
         self.access_logs: CdnAccessLogs | None = None
         if self.region == CLOUDFRONT_REGION:
             self.access_logs = CdnAccessLogs(
@@ -129,7 +143,10 @@ class MediaStack(Stack):
             )
             for name in config.ladders.builtin
         }
-        self.provisioner = LadderProvisioner(self, "Kits", pipeline=self.pipeline)
+        demand = config.modules.demand
+        # Demand demo mode: the kits also encode the demo creatives the bidder simulator and direct lines serve.
+        demo = demand.enabled and demand.mode == DemandMode.DEMO
+        self.provisioner = LadderProvisioner(self, "Kits", pipeline=self.pipeline, demo=demo)
         self.kits = {
             name: LadderKit(self, f"Kit{name.title()}", ladder=self.ladders[name], provisioner=self.provisioner)
             for name in _kit_ladders(config)
@@ -158,12 +175,16 @@ class MediaStack(Stack):
             as_run_retention_days=config.observability.log_retention_days,
             log_retention=retention,
             removal_policy=removal,
+            breaks=config.modules.ops.enabled,
+            shared=config.observability.as_run is AsRunMode.SHARED,
         )
         external_ads = config.ads.url if config.ads.mode is AdsMode.EXTERNAL_VAST else None
         self.channels = tuple(
-            self._channel(channel, config=config, data=data, ads_url=external_ads) for channel in config.channels.iac
+            self._channel(channel, config=config, data=data, ads_url=external_ads) for channel in config.iac_channels
         )
         channels = tuple(channel.exports for channel in self.channels)
+        if config.modules.release.enabled:
+            self._release_parameters(config, data, content_base_url)
 
         self.observability = MediaObservability(
             self,
@@ -182,6 +203,7 @@ class MediaStack(Stack):
             notification_email=config.notifications.email,
             trace_log_groups=self._trace_log_groups(),
             dead_letter_queues={"ingest": self.pipeline.dead_letter_queue},
+            census_changes=config.modules.ops.enabled,
         )
         self.exports = MediaExports(
             distribution=self.distribution,
@@ -201,9 +223,27 @@ class MediaStack(Stack):
                 log_destination_arn=self.vended_logs.destination_arn,
                 log_percent=config.observability.mediatailor_log_percent,
                 ads_url=external_ads,
+                sibling_policy=config.modules.release.enabled,
             ),
             mediatailor_log_destination_arn=self.vended_logs.destination_arn,
+            catalog_context_bucket=self.catalog_contexts.reference if self.catalog_contexts else None,
         )
+        if config.modules.pds.enabled:
+            # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
+            parameters = [
+                (PdsParameter.CONTENT_BASE_URL, content_base_url),
+                (PdsParameter.LADDER_VERSION, default_ladder_version),
+            ]
+            if self.catalog_contexts is not None:
+                parameters.append((PdsParameter.CATALOG_CONTEXT_BUCKET, self.catalog_contexts.bucket.bucket_name))
+            for parameter, value in parameters:
+                ssm.StringParameter(
+                    self,
+                    f"Pds{parameter.name.title().replace('_', '')}Parameter",
+                    parameter_name=pds_parameter(prefix, parameter),
+                    string_value=value,
+                    description=f"FAST Channels ({prefix}): for the Pds stack",
+                )
         self._outputs()
 
     def _channel(
@@ -226,6 +266,7 @@ class MediaStack(Stack):
             tier=channel.tier,
             brief=channel.brief,
             log_percent=config.observability.mediatailor_log_percent,
+            siblings=channel.name in config.release_channels,
             removal_policy=config.removal_policy,
         )
         # No dependency on AsRunLogging: channels are created stopped, so they log nothing before the stack is
@@ -233,6 +274,29 @@ class MediaStack(Stack):
         linear.node.add_dependency(kit)  # its filler slate and VAST pod
         self.reaper.run_after_deleting(linear)  # a filler slate in use cannot be deleted (observed)
         return linear
+
+    def _release_parameters(self, config: FastChannelsConfig, data: DataExports, content_base_url: str) -> None:
+        """What the release module's stack, deployed beside the guidance, reads from this one: SSM parameters, not
+        cross-stack references (this stack also deploys without it)."""
+        prefix = config.prefix
+        values = {
+            release_names.parameter_name(prefix, release_names.Parameter.CONTENT_BASE_URL): content_base_url,
+            release_names.parameter_name(prefix, release_names.Parameter.CDN_BASE_URL): self.delivery.cdn_base_url,
+            release_names.parameter_name(prefix, release_names.Parameter.MEDIA_BUCKET): data.media_bucket.bucket_name,
+            **{
+                release_names.channel_parameter_name(prefix, channel.name): channel.channel_url
+                for channel in self.channels
+                if channel.name in config.release_channels
+            },
+        }
+        for name, value in values.items():
+            ssm.StringParameter(
+                self,
+                "ReleaseParameter" + name.removeprefix(f"/{prefix}/release").replace("/", "-"),  # stable per name
+                parameter_name=name,
+                string_value=value,
+                description="Read by the release module's stack (fast_channels.core.monetization.names)",
+            )
 
     def _trace_log_groups(self) -> list[logs.ILogGroup]:
         """Log groups the saved trace queries search besides the bus and MediaConvert logs: the pipeline's state
@@ -289,5 +353,5 @@ class MediaStack(Stack):
 
 def _kit_ladders(config: FastChannelsConfig) -> list[str]:
     """Built-in ladders whose kit is provisioned at deploy time: the default ladder and every IaC channel's."""
-    used = {config.ladders.default, *(channel.ladder for channel in config.channels.iac)}
+    used = {config.ladders.default, *(channel.ladder for channel in config.iac_channels)}
     return [name for name in config.ladders.builtin if name in used]

@@ -1,0 +1,107 @@
+O1: stack-name prefix and a dedicated CDK bootstrap (FAST Channels overlay on the guidance v1.4.0)
+
+The shipped app hard-codes its stack names and synthesizes for the default bootstrap qualifier (hnb659fds), whose
+CloudFormation execution role is often AdministratorAccess. New, optional CDK context values (unset: the app
+synthesizes exactly as shipped):
+  stackPrefix                 stack names <stackPrefix>-pbs and <stackPrefix>-pbs-sim; construct ids are unchanged
+  bootstrapQualifier          a dedicated bootstrap's qualifier, for both stacks
+  fileAssetsBucketName        that bootstrap's file assets bucket
+  imageAssetsRepositoryName   that bootstrap's container assets repository
+CloudFormation parameters are keyed by stack name, so with a prefix pass them as <stackPrefix>-pbs:<Name>=<value>.
+With a prefix the MetricsEtl Glue database is named <stackPrefix>-prebid-server-<region>-metricsetl-database: the
+shipped name is the guidance's only name unique per account and Region that does not depend on the stack, so two
+prefixed deployments in one account and Region collided on it.
+
+diff --git a/source/infrastructure/app.py b/source/infrastructure/app.py
+--- a/source/infrastructure/app.py
++++ b/source/infrastructure/app.py
+@@ -5,8 +5,9 @@
+ import sys
+ from pathlib import Path
+ 
+-from aws_cdk import App, CfnOutput
++from aws_cdk import App, CfnOutput, DefaultStackSynthesizer
+ from aws_solutions.cdk import CDKSolution
++from aws_solutions.cdk.synthesizers import SolutionStackSubstitions
+ 
+ from prebid_server.prebid_server_stack import PrebidServerStack
+ 
+@@ -19,7 +20,26 @@
+ logger = logging.getLogger("cdk-helper")
+ 
+ 
+-def synthesizer():
++# Overlay O1 (FAST Channels): an optional stack-name prefix and a dedicated CDK bootstrap, from CDK context. Without
++# these context values the app synthesizes exactly as shipped.
++#   stackPrefix                stack names <stackPrefix>-pbs and <stackPrefix>-pbs-sim (construct ids unchanged)
++#   bootstrapQualifier         qualifier of a dedicated bootstrap (its cdk-<qualifier>-* roles)
++#   fileAssetsBucketName       that bootstrap's file assets bucket
++#   imageAssetsRepositoryName  that bootstrap's container assets repository
++def dedicated_bootstrap(app):
++    qualifier = app.node.try_get_context("bootstrapQualifier")
++    if not qualifier:
++        return None
++    return {
++        "qualifier": qualifier,
++        "file_assets_bucket_name": app.node.try_get_context("fileAssetsBucketName"),
++        "image_assets_repository_name": app.node.try_get_context("imageAssetsRepositoryName"),
++    }
++
++
++def synthesizer(app):
++    if dedicated := dedicated_bootstrap(app):
++        return SolutionStackSubstitions(**dedicated)
+     return CDKSolution(
+         cdk_json_path=Path(__file__).parent.absolute() / "cdk.json"
+     ).synthesizer
+@@ -31,6 +51,8 @@
+ @solution.context.requires("BUCKET_NAME")
+ def build_app(context):
+     app = App(context=context)
++    stack_prefix = app.node.try_get_context("stackPrefix")
++    dedicated = dedicated_bootstrap(app)
+ 
+     # Read context flag for bidder simulator synthesis
+     # This is a build-time decision: whether to synthesize the BidderSimulatorStack template
+@@ -41,7 +63,12 @@
+     # No cross-stack references — deploy.sh handles the two-step deployment
+     # and passes BidderSimulatorStack outputs as PrebidServerStack CF parameters
+     if deploy_bidding_simulator:
+-        BidderSimulatorStack(app, "BiddingServerSimulator")
++        BidderSimulatorStack(
++            app,
++            "BiddingServerSimulator",
++            stack_name=f"{stack_prefix}-pbs-sim" if stack_prefix else None,
++            synthesizer=DefaultStackSynthesizer(**dedicated) if dedicated else None,
++        )
+ 
+     # Deploy main Prebid Server stack
+     # All configuration is via CloudFormation parameters at deploy time:
+@@ -51,9 +78,10 @@
+     PrebidServerStack(
+         app,
+         PrebidServerStack.name,
++        stack_name=f"{stack_prefix}-pbs" if stack_prefix else None,
+         description=PrebidServerStack.description,
+         template_filename=PrebidServerStack.template_filename,
+-        synthesizer=synthesizer(),
++        synthesizer=synthesizer(app),
+     )
+ 
+     return app.synth(validate_on_synthesis=True, skip_validation=False)
+diff --git a/source/infrastructure/prebid_server/prebid_glue_constructs.py b/source/infrastructure/prebid_server/prebid_glue_constructs.py
+--- a/source/infrastructure/prebid_server/prebid_glue_constructs.py
++++ b/source/infrastructure/prebid_server/prebid_glue_constructs.py
+@@ -148,6 +148,12 @@
+         self.GLUE_RESOURCE_PREFIX = f"{Aws.STACK_NAME}-{Aws.REGION}-{self.id.lower()}"
+         self.GLUE_JOB_NAME = f"{self.GLUE_RESOURCE_PREFIX}-job"
+         self.GLUE_DATABASE_NAME = f"prebid-server-{Aws.REGION}-{self.id.lower()}-database"
++        # Overlay O1 (FAST Channels): with a stack prefix the database name starts with it (lowercase, like every
++        # prefix), so several prefixed deployments can share an account and Region. It is the guidance's only name
++        # unique per account and Region that does not depend on the stack.
++        stack_prefix = self.node.try_get_context("stackPrefix")
++        if stack_prefix:
++            self.GLUE_DATABASE_NAME = f"{stack_prefix.lower()}-{self.GLUE_DATABASE_NAME}"
+         self.GLUE_WORKFLOW_NAME = f"{self.GLUE_RESOURCE_PREFIX}-workflow"
+ 
+         fp = Path(__file__).absolute().parents[1] / "prebid_server"

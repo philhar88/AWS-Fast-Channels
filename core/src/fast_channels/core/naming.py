@@ -13,6 +13,8 @@ from warnings import deprecated
 
 DEFAULT_PREFIX: Final = "fast"
 """Prefix of the default deployment, the one whose stack names carry no prefix (:func:`stage_id`)."""
+PREFIX_PATTERN: Final = r"^[a-z][a-z0-9]{1,15}$"
+"""A deployment prefix: 2-16 lowercase letters and digits, letter first, no hyphen (:func:`check_prefix`)."""
 AGENT_PREFIX_SUFFIX: Final = "agent"
 """Agent-owned runtime resources are named ``<prefix>-agent-...`` (Cedar forbids destructive tools elsewhere)."""
 SOURCE_LOCATION_SUFFIX: Final = "media"
@@ -60,6 +62,27 @@ def agentcore_name(*parts: str) -> str:
     return _fit(name, AGENTCORE_NAME_MAX, "_")
 
 
+def check_prefix(prefix: str) -> str:
+    """``prefix`` if it is a deployment prefix (:data:`PREFIX_PATTERN`).
+
+    Resource names and IAM grants are scoped by ``<prefix>-*`` (FunctionIds by ``<prefix>_*``). A prefix without
+    hyphens never starts with another prefix followed by ``-``, so no deployment's names fall inside another's
+    grants; with hyphens, ``fast-*`` would match every name of a deployment ``fast-x``.
+
+    Raises:
+        ValueError: ``prefix`` is not 2-16 lowercase letters and digits starting with a letter, saying why.
+    """
+    if re.fullmatch(PREFIX_PATTERN, prefix):
+        return prefix
+    why = "resource names and IAM grants are scoped by '<prefix>-*'"
+    if (head := prefix.partition("-")[0]) != prefix:
+        why += f", so the grants of a deployment {head!r} ('{head}-*') would cover the resources of {prefix!r}"
+    raise ValueError(
+        f"{prefix!r} is not a deployment prefix: use 2-16 lowercase letters and digits, starting with a letter, "
+        f"without hyphens; {why}"
+    )
+
+
 def stage_id(prefix: str) -> str:
     """CDK stage id of deployment ``prefix``, which prefixes every stack name: ``FastChannels``
     (``FastChannels-Data``, ...) for :data:`DEFAULT_PREFIX`, else ``FastChannels-<prefix>``."""
@@ -79,6 +102,12 @@ def agent_owned_name(prefix: str, *parts: str) -> str:
 def is_agent_owned(name: str, prefix: str) -> bool:
     """Whether ``name`` belongs to the agent-owned namespace of deployment ``prefix``."""
     return name.startswith(agent_namespace(prefix))
+
+
+def mediatailor_log_group(prefix: str) -> str:
+    """The stage's MediaTailor vended-log group: every playback configuration's ad decision server, manifest and
+    transcode logs."""
+    return f"/aws/vendedlogs/mediatailor/{prefix}"
 
 
 def ladder_path(ladder_version: str) -> str:

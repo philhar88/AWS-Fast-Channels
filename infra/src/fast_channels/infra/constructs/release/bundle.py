@@ -1,0 +1,115 @@
+"""The release bundle rendered at synth (DESIGN §8.1): CDK renders, the Release Controller applies.
+
+:func:`render` builds the bundle from the configuration with :func:`fast_channels.core.monetization.bundle.build_bundle`
+and validates it (synth fails on any violation). Values only known at deploy time (the channels' Channel Assembly
+URLs, the CDN) are CDK tokens: each is swapped for a placeholder host while the bundle is built and validated, and put
+back in its JSON, which CloudFormation then resolves. The ``Custom::DesiredState`` resource validates the resolved
+bundle again, stores it under its digest and announces it.
+"""
+
+import json
+import re
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final
+
+from fast_channels.core.monetization.bundle import (
+    AdServerRoute,
+    Bundle,
+    BundleContribution,
+    ChannelInput,
+    RolloutTier,
+    build_bundle,
+    bundle_document,
+)
+from fast_channels.core.monetization.validators import require_valid, validate_bundle
+from fast_channels.core.pbs_config import POD_SECONDS, stored_request_ids
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from fast_channels.infra.config import FastChannelsConfig
+
+_TOKEN: Final = re.compile(r"\$\{Token\[[^\]]*\]\}")
+STORED_REQUESTS: Final = stored_request_ids()
+"""What the Prebid Server configuration serves (``core.pbs_config.render``): validator R-P5 checks the bodies."""
+AD_SERVER_STORED_REQUESTS: Final = tuple(sorted(set(stored_request_ids(ad_server=True)) - set(STORED_REQUESTS)))
+"""What it serves too with ``modules.demand.ad_server`` set (the auction's stored requests)."""
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedBundle:
+    """The bundle as built at synth (placeholders for deploy-time values) and its JSON with the tokens back."""
+
+    bundle: Bundle
+    document: str
+
+
+class _Placeholders:
+    def __init__(self) -> None:
+        self.tokens: dict[str, str] = {}
+
+    def hide(self, value: str) -> str:
+        """``value`` with every CDK token replaced by a unique ``https://cdk-token-<n>.invalid`` placeholder host
+        (the token is a whole URL) or ``cdk-token-<n>.invalid`` (part of one)."""
+
+        def placeholder(match: re.Match[str]) -> str:
+            whole = match.group() == value
+            host = f"cdk-token-{len(self.tokens)}.invalid"
+            text = f"https://{host}" if whole else host
+            self.tokens[text] = match.group()
+            return text
+
+        return _TOKEN.sub(placeholder, value)
+
+    def restore(self, text: str) -> str:
+        for placeholder, token in sorted(self.tokens.items(), key=lambda item: -len(item[0])):
+            text = text.replace(json.dumps(placeholder)[1:-1], token)
+        return text
+
+
+def render(
+    config: FastChannelsConfig,
+    *,
+    pbs_origin: str,
+    content_base_url: str,
+    channel_urls: Mapping[str, str],
+    contributions: Sequence[BundleContribution] = (),
+    ad_server: Callable[[Callable[[str], str]], AdServerRoute | None] | None = None,
+) -> RenderedBundle:
+    """The deployment's bundle: its monetized channels (``modules.release.channels``, and the lab channel), the
+    Prebid Server origin, and the module's contributions. ``ad_server`` builds the pair siblings' ad-server route
+    from deploy-time values (passed through the placeholders, like the channels' URLs).
+
+    Raises:
+        InvalidBundleError: the bundle breaks a validator.
+    """
+    placeholders = _Placeholders()
+    route = ad_server(placeholders.hide) if ad_server else None
+    iac = {channel.name: channel for channel in config.iac_channels}
+    lab = config.lab_channel.name if config.lab_channel else None
+    channels = [
+        ChannelInput(
+            name=name,
+            video_content_source_url=placeholders.hide(channel_urls[name]),
+            outputs=iac[name].outputs,
+            lab=name == lab,
+        )
+        for name in config.release_channels
+    ]
+    bundle = build_bundle(
+        prefix=config.prefix,
+        channels=channels,
+        content_base_url=placeholders.hide(content_base_url),
+        pbs_origin=pbs_origin,
+        log_percent=config.observability.mediatailor_log_percent,
+        stored_requests=STORED_REQUESTS + (AD_SERVER_STORED_REQUESTS if route else ()),
+        grid_seconds=POD_SECONDS,
+        tier=RolloutTier(config.modules.release.strategy.value),
+        probe_sibling=config.modules.release.probe_sibling,
+        contributions=contributions,
+        ad_server=route,
+    )
+    require_valid(validate_bundle(bundle))
+    document = json.dumps(bundle_document(bundle)["bundle"], sort_keys=True, separators=(",", ":"))
+    return RenderedBundle(bundle=bundle, document=placeholders.restore(document))

@@ -1,6 +1,6 @@
 [project]
 name = "fast-channels"
-version = "3.0.0"
+version = "4.0.0"
 description = "FAST Channels on AWS: a reference architecture for agent-scheduled, ad-supported linear channels."
 readme = "README.md"
 license = "MIT"
@@ -10,17 +10,18 @@ requires-python = ">=3.14"
 package = false
 
 [tool.uv.workspace]
-members = ["core", "functions", "agent", "infra"]
+members = ["core", "functions", "pds", "agent", "infra"]
 
 [dependency-groups]
 dev = [
     "boto3>=1.42",
-    "boto3-stubs[bedrock-agentcore,bedrock-agentcore-control,cloudformation,cognito-idp,dynamodb,events,logs,mediaconvert,mediatailor,s3,scheduler,ssm,stepfunctions]>=1.42",
+    "boto3-stubs[bedrock-agentcore,bedrock-agentcore-control,cloudformation,cognito-idp,dynamodb,events,logs,mediaconvert,mediatailor,s3,scheduler,ssm,stepfunctions]>=1.43.118",
     "mypy>=1.18",
     "pillow>=12",
     "pytest>=8.4",
     "pytest-cov>=7",
-    "ruff>=0.14",
+    "pyyaml>=6",
+    "ruff>=0.17.2",
     "syrupy>=4.9",
 ]
 docs = [
@@ -47,7 +48,7 @@ python_version = "3.14"
 strict = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = ["core/src", "functions/src", "agent/src", "infra/src"]
+mypy_path = ["core/src", "functions/src", "pds/src", "agent/src", "infra/src"]
 plugins = ["pydantic.mypy"]
 warn_unused_ignores = false
 
@@ -56,7 +57,10 @@ module = ["aws_cdk.*", "constructs.*", "cdk_nag.*", "jsii.*", "diagrams.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib", "-ra", "-m", "not e2e"]
+addopts = ["--import-mode=importlib", "-ra", "-m", "not e2e and not pbs"]
 consider_namespace_packages = true
-testpaths = ["core/tests", "functions/tests", "agent/tests", "infra/tests", "tests/e2e"]
-markers = ["e2e: deployed end-to-end tests (require AWS credentials and a deployed stage)"]
+testpaths = ["core/tests", "functions/tests", "pds/tests", "agent/tests", "infra/tests", "tests/e2e", "tests/pbs"]
+markers = [
+    "e2e: deployed end-to-end tests (require AWS credentials and a deployed stage)",
+    "pbs: Prebid Server contract tests (require the jar from scripts/pbs_module.py build and Java 21)",
+]

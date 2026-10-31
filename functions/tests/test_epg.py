@@ -108,3 +108,12 @@ def test_delete_removes_both_feeds() -> None:
         )
         epg.delete("c", bucket="media")
         stub.assert_no_pending_responses()
+
+
+def test_breaks_carry_their_ids_only_when_given(guide: epg.Epg) -> None:
+    plain = epg.EpgBreak(offset_ms=1, duration_ms=2)
+    with_ids = epg.EpgBreak(offset_ms=1, duration_ms=2, event_id=1817010633, upid="FST3sintel")
+
+    assert plain.model_dump_json() == '{"offset_ms":1,"duration_ms":2}'  # the v3.0 feed, byte for byte
+    assert with_ids.model_dump_json() == '{"offset_ms":1,"duration_ms":2,"event_id":1817010633,"upid":"FST3sintel"}'
+    assert '"event_id"' not in guide.model_dump_json()

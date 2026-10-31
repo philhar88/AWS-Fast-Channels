@@ -25,10 +25,18 @@ type ProgramStatus = Literal["PLANNED", "PUBLISHED", "AIRED", "SKIPPED"]
 
 
 class EpgBreak(BaseModel):
-    """An ad break inside a program: ``offset_ms`` into the content, airing for ``duration_ms``."""
+    """An ad break inside a program: ``offset_ms`` into the content, airing for ``duration_ms``. With the ops module
+    each break also names its SCTE-35 segmentation event id and UPID, as in the HLS ``DATERANGE`` and the ad request,
+    so guides and buyers can join a break without recomputing them; without it the feed is v3.0's."""
 
     offset_ms: int
     duration_ms: int
+    event_id: int | None = Field(
+        default=None, exclude_if=lambda value: value is None, description="SCTE-35 segmentation event id (ops module)."
+    )
+    upid: str | None = Field(
+        default=None, exclude_if=lambda value: value is None, description="SCTE-35 segmentation UPID (ops module)."
+    )
 
 
 class EpgProgram(BaseModel):

@@ -1,0 +1,23 @@
+[project]
+name = "fast-channels-pds"
+version = "4.0.0"
+description = "The Pod Decision Service: /policy, /select and the own book, a sidecar in each Prebid Server task."
+requires-python = ">=3.14"
+dependencies = [
+    "fast-channels-core",
+    "fast-channels-functions",
+    "uvicorn>=0.54,<1",
+    "uvloop>=0.21,<1",
+    "httptools>=0.6,<1",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "fast_channels.pds"
+
+[tool.uv.sources]
+fast-channels-core = { workspace = true }
+fast-channels-functions = { workspace = true }

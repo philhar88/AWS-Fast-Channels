@@ -1,0 +1,23 @@
+Overlays on the Guidance for Deploying a Prebid Server on AWS
+=============================================================
+
+The patches under patches/, the script amt-bidder/copy-fast-ctv.sh and amt-bidder/pbs-4/AmtConfiguration.java (a
+Prebid Server Java 4.x port of the guidance's source/loadtest/amt-bidder/AmtConfiguration.java) modify, and are
+applied to, the Guidance for Deploying a Prebid Server on AWS, release v1.4.0 (commit 0c7e7e714de37d1f56b29219d7ad9e6d17fac6b2),
+https://github.com/aws-solutions-library-samples/prebid-server-deployment-on-aws
+
+  Guidance for Deploying a Prebid Server on AWS
+  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance
+  with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for
+  the specific language governing permissions and limitations under the License.
+
+The guidance itself is not redistributed in this repository: scripts/prebid_guidance.py fetches it from its
+repository at the pinned commit into build/prebid-guidance/, which is never committed. Its NOTICE.txt lists the
+third-party components it includes.
+
+Each patch states what it changes and why, and every file it changes gains a comment naming the overlay
+("Overlay O<n> (FAST Channels)"), the prominent notice of the Apache License 2.0, section 4(b). The patches and
+amt-bidder files are distributed under the Apache License, Version 2.0, like the files they modify.

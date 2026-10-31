@@ -38,7 +38,13 @@ from botocore.exceptions import ClientError
 from fast_channels.core.naming import is_agent_owned
 from fast_channels.core.tags import TAG_APP, TAG_OWNER, owned_by, runtime_owned
 from fast_channels.functions import aws
-from fast_channels.functions.channel_ops import MISSING, drain_channel, error_code
+from fast_channels.functions.channel_ops import (
+    MISSING,
+    delete_deliveries,
+    drain_channel,
+    error_code,
+    ignore_missing,
+)
 
 if TYPE_CHECKING:
     from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -177,9 +183,9 @@ def _agent_channels(deployment: Deployment, budget: Budget) -> list[str]:
             ).complete
         ):
             return [f"channel/{c}" for c in channels[done:]]
-        _ignore_missing(mediatailor.delete_channel_policy, ChannelName=channel)
+        ignore_missing(mediatailor.delete_channel_policy, ChannelName=channel)
         _delete_playback_configuration(channel, budget)
-        _ignore_missing(mediatailor.delete_channel, ChannelName=channel)
+        ignore_missing(mediatailor.delete_channel, ChannelName=channel)
         budget.count("Channels")
         logger.info("agent channel deleted", extra={"channel": channel})
     return []
@@ -240,7 +246,7 @@ def _runtime_job_templates(deployment: Deployment, budget: Budget) -> list[str]:
     for template in (t for page in pages for t in page["JobTemplates"]):
         tags = mediaconvert.list_tags_for_resource(Arn=template["Arn"])["ResourceTags"].get("Tags", {})
         if deployment.created_at_runtime(tags):
-            _ignore_missing(mediaconvert.delete_job_template, Name=template["Name"])
+            ignore_missing(mediaconvert.delete_job_template, Name=template["Name"])
             budget.count("JobTemplates")
             logger.info("runtime job template deleted", extra={"job_template": template["Name"]})
     return []
@@ -288,35 +294,7 @@ def _delete_playback_configuration(name: str, budget: Budget) -> None:
         if error_code(error) in MISSING:
             return
         raise
-    _delete_deliveries(arn)
-    _ignore_missing(mediatailor.delete_playback_configuration, Name=name)
+    delete_deliveries(arn)
+    ignore_missing(mediatailor.delete_playback_configuration, Name=name)
     budget.count("PlaybackConfigurations")
     logger.info("agent playback configuration deleted", extra={"playback_configuration": name})
-
-
-def _delete_deliveries(resource_arn: str) -> None:
-    """Delete the deliveries and delivery sources of a resource's vended logs."""
-    logs = aws.client("logs")
-    sources = {
-        source["name"]
-        for page in logs.get_paginator("describe_delivery_sources").paginate()
-        for source in page["deliverySources"]
-        if resource_arn in source.get("resourceArns", [])
-    }
-    if not sources:
-        return
-    for page in logs.get_paginator("describe_deliveries").paginate():
-        for delivery in page["deliveries"]:
-            if delivery["deliverySourceName"] in sources:
-                _ignore_missing(logs.delete_delivery, id=delivery["id"])
-    for source in sorted(sources):
-        _ignore_missing(logs.delete_delivery_source, name=source)
-
-
-def _ignore_missing(operation: Callable[..., Any], **request: Any) -> None:
-    """Call a delete operation; a resource that is already gone counts as deleted."""
-    try:
-        operation(**request)
-    except ClientError as error:
-        if error_code(error) not in MISSING:
-            raise

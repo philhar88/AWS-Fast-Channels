@@ -32,15 +32,79 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: uv run ruff format --check
       - run: uv run ruff check
-      - run: uv run mypy core/src functions/src agent/src infra/src
+      - run: uv run mypy core/src functions/src pds/src agent/src infra/src
       - name: mypy scripts tests/e2e
         run: uv run mypy scripts tests/e2e
         env:
           MYPYPATH: scripts:tests/e2e # their modules import scripts/_stack.py and tests/e2e/harness.py by name
+      - name: mypy tests/pbs
+        run: uv run mypy tests/pbs
+        env:
+          MYPYPATH: tests/pbs # its own conftest.py, so checked apart from tests/e2e
       # Every package's tests, plus the offline tests of tests/e2e and scripts/ (pytest testpaths; marker "not e2e").
       - run: uv run pytest --cov=fast_channels --cov-report=term-missing:skip-covered
       - name: No unfilled release placeholders in the docs
         run: "! git grep -nE '\\{\\{[A-Z_]+\\}\\}' -- '*.md'"
+
+  guidance-overlays:
+    name: Prebid Server guidance overlays
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked --all-packages
+      # Fetches the guidance at the pinned tag and fails if the tag moved, a pinned upstream file changed or a patch no
+      # longer applies (vendor/prebid-guidance/PIN.toml).
+      - name: Apply the overlays to the pinned guidance
+        run: uv run python scripts/prebid_guidance.py apply
+      - name: Overlay tests on the patched guidance
+        run: uv run pytest tests/e2e/test_prebid_guidance.py -v
+
+  pbs-module:
+    name: Prebid Server ${{ matrix.pbs }} module (JUnit, contract tests)
+    runs-on: ubuntu-24.04 # x86, like the Prebid Server image
+    strategy:
+      fail-fast: false
+      matrix:
+        # The supported release (core.pbs_config.PBS_VERSION, ADR-0020), with the JDK its build needs:
+        # vendor/prebid-guidance/PIN.toml ([pbs_java.builds], overlay O6).
+        include:
+          - pbs: "4.4.0"
+            java: "25"
+    env:
+      FAST_PBS_VERSION: ${{ matrix.pbs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: corretto
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: vendor/prebid-guidance/PIN.toml # the Prebid Server Java release is pinned there
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked --all-packages
+      # The guidance's Dockerfile build stage, natively: the pinned Prebid Server Java tag (refused unless it resolves
+      # to the commit in vendor/prebid-guidance/PIN.toml), the guidance's extra modules and ours, its Maven options.
+      - name: Build Prebid Server Java with the module
+        run: uv run python scripts/pbs_module.py build --pbs-version "$FAST_PBS_VERSION"
+      - name: Module unit tests (JUnit)
+        run: uv run python scripts/pbs_module.py test --pbs-version "$FAST_PBS_VERSION"
+      - name: Contract tests against the jar (no-hook matrix, header isolation, wire fields, impressions)
+        run: uv run pytest tests/pbs -m pbs -v
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pbs-module-reports-${{ matrix.pbs }}
+          path: |
+            build/pbs/*/test-reports
+            /tmp/pytest-of-*/**/pbs.log
+          retention-days: 7
 
   console:
     name: Console (lint, types, tests, build)

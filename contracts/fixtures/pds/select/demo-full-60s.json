@@ -1,0 +1,171 @@
+{
+  "description": "FULL session, 60.06 s break (the break table measured live)",
+  "context": {
+    "pod": {
+      "tier0_deals": [
+        "fast-direct-1"
+      ]
+    },
+    "tracker_base": "https://cdn.example.com/ads/b.gif",
+    "enr": 0
+  },
+  "request": {
+    "v": 1,
+    "decision_id": "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826",
+    "sid": "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d",
+    "pc": "fast-demo-p-a",
+    "evid": "820461826",
+    "dur_ms": 60060,
+    "mode": "FULL",
+    "probe": false,
+    "slots": [
+      {
+        "impid": "s1",
+        "poddur": 60,
+        "rqddurs": [
+          30
+        ]
+      },
+      {
+        "impid": "s2",
+        "poddur": 60,
+        "rqddurs": [
+          30
+        ]
+      }
+    ],
+    "bids": [
+      {
+        "ref": "ownbook-s1-house1",
+        "bidder": "ownbook",
+        "seat": "ownbook",
+        "impid": "s1",
+        "price": 0.01,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "house1",
+        "adomain": [],
+        "cat": [],
+        "cattax": null,
+        "dealid": null,
+        "house": true,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      },
+      {
+        "ref": "ownbook-s1-direct1",
+        "bidder": "ownbook",
+        "seat": "ownbook",
+        "impid": "s1",
+        "price": 8.0,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "direct1",
+        "adomain": [
+          "direct1.example"
+        ],
+        "cat": [],
+        "cattax": null,
+        "dealid": "fast-direct-1",
+        "house": false,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      },
+      {
+        "ref": "ownbook-s2-house2",
+        "bidder": "ownbook",
+        "seat": "ownbook",
+        "impid": "s2",
+        "price": 0.01,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "house2",
+        "adomain": [],
+        "cat": [],
+        "cattax": null,
+        "dealid": null,
+        "house": true,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      },
+      {
+        "ref": "amt-s1-sim1",
+        "bidder": "amt",
+        "seat": "amt",
+        "impid": "s1",
+        "price": 12.5,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "sim1",
+        "adomain": [
+          "brand-a.example"
+        ],
+        "cat": [],
+        "cattax": null,
+        "dealid": null,
+        "house": false,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      },
+      {
+        "ref": "amt-s2-sim2",
+        "bidder": "amt",
+        "seat": "amt",
+        "impid": "s2",
+        "price": 22.5,
+        "dur": 30,
+        "vast_dur_ms": 30030,
+        "crid": "sim2",
+        "adomain": [
+          "brand-b.example"
+        ],
+        "cat": [],
+        "cattax": null,
+        "dealid": null,
+        "house": false,
+        "has_impression": false,
+        "adm_kind": "InLine"
+      }
+    ]
+  },
+  "response": {
+    "v": 1,
+    "pod": [
+      {
+        "impid": "s1",
+        "ref": "ownbook-s1-direct1",
+        "sequence": 1
+      },
+      {
+        "impid": "s2",
+        "ref": "amt-s2-sim2",
+        "sequence": 2
+      }
+    ],
+    "standalone": [
+      {
+        "impid": "s1",
+        "ref": "amt-s1-sim1"
+      },
+      {
+        "impid": "s2",
+        "ref": "ownbook-s2-house2"
+      }
+    ],
+    "trackers": {
+      "ownbook-s1-direct1": [
+        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=direct1&e=impression&enr=0"
+      ],
+      "amt-s2-sim2": [
+        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=sim2&e=impression&enr=0"
+      ],
+      "amt-s1-sim1": [
+        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=sim1&e=impression&enr=0"
+      ],
+      "ownbook-s2-house2": [
+        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=house2&e=impression&enr=0"
+      ]
+    },
+    "reason": "filled"
+  }
+}

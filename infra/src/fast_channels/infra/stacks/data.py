@@ -7,10 +7,15 @@ from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 from fast_channels.core.naming import agentcore_name, source_location_name
+from fast_channels.core.pds.names import Parameter as PdsParameter
+from fast_channels.core.pds.names import parameter_name as pds_parameter
 from fast_channels.infra.config import FastChannelsConfig, Removal
+from fast_channels.infra.constructs.ops import LakeBucket, LedgerStorage
+from fast_channels.infra.constructs.pds import ConfigBucket, PdsTable
 from fast_channels.infra.constructs.storage import GSI1, MediaLibrary, MediaStorage, ReferenceCatalogTable
 from fast_channels.infra.exports import DataExports
 
@@ -31,7 +36,9 @@ MEMORY_PREFERENCE_NAMESPACE: Final = "/users/{actorId}/preferences/"
 
 class DataStack(Stack):
     """Ingest, media and logs buckets with their single bucket policies, the media library and reference catalog
-    tables, and the agent's AgentCore Memory.
+    tables, the agent's AgentCore Memory, the ops module's lake bucket, ledger table and ledger archive
+    (``modules.ops.enabled``), and the Pod Decision Service's table and private config bucket (``modules.pds.enabled``;
+    its service is the Pds stack's).
 
     Memory lives here, not in the Operator stack, so an Operator rollback can never get stuck on a Memory that is
     still ``CREATING`` (agentcore.md §12, gotcha 5). With ``removal: retain`` everything is retained, tables get
@@ -59,6 +66,48 @@ class DataStack(Stack):
         self.catalog = ReferenceCatalogTable(
             self, "Catalog", removal_policy=config.removal_policy, deletion_protection=protect
         )
+        self.lake: LakeBucket | None = None
+        self.ledger: LedgerStorage | None = None
+        if (ops := config.modules.ops).enabled:
+            self.lake = LakeBucket(
+                self,
+                "Lake",
+                prefix=config.prefix,
+                logs_bucket=self.storage.logs_bucket,
+                expiration=Duration.days(ops.lake_retention_days),
+                removal_policy=config.removal_policy,
+            )
+            self.ledger = LedgerStorage(
+                self,
+                "Ledger",
+                prefix=config.prefix,
+                logs_bucket=self.storage.logs_bucket,
+                lock=ops.ledger_lock,
+                retention_days=ops.ledger_retention_days,
+                removal_policy=config.removal_policy,
+            )
+        self.pds_table: PdsTable | None = None
+        self.pds_config: ConfigBucket | None = None
+        if config.modules.pds.enabled:
+            self.pds_table = PdsTable(self, "PdsTable", prefix=config.prefix, removal_policy=config.removal_policy)
+            self.pds_config = ConfigBucket(
+                self, "PdsConfig", logs_bucket=self.storage.logs_bucket, removal_policy=config.removal_policy
+            )
+            if self.lake is None:
+                raise ValueError("modules.pds needs modules.ops (the lake)")
+            # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
+            for parameter, value in (
+                (PdsParameter.CONFIG_BUCKET, self.pds_config.bucket.bucket_name),
+                (PdsParameter.LAKE_BUCKET, self.lake.bucket.bucket_name),
+                (PdsParameter.MEDIA_BUCKET, self.storage.media_bucket.bucket_name),
+            ):
+                ssm.StringParameter(
+                    self,
+                    f"Pds{parameter.name.title().replace('_', '')}Parameter",
+                    parameter_name=pds_parameter(config.prefix, parameter),
+                    string_value=value,
+                    description=f"FAST Channels ({config.prefix}): for the Pds stack",
+                )
         self.memory: agentcore.Memory | None = None
         if config.agent.enabled:
             self.memory = agentcore.Memory(
@@ -107,6 +156,9 @@ class DataStack(Stack):
             catalog_table=table("CatalogTable", self.catalog),
             memory=memory,
             memory_preference_namespace=MEMORY_PREFERENCE_NAMESPACE,
+            lake_bucket=bucket("LakeBucket", self.lake.bucket) if self.lake is not None else None,
+            ledger_table=_with_stream(scope, "LedgerTable", self.ledger.table) if self.ledger is not None else None,
+            ledger_archive=bucket("LedgerArchive", self.ledger.archive) if self.ledger is not None else None,
         )
 
     def _outputs(self) -> None:
@@ -120,8 +172,22 @@ class DataStack(Stack):
         }
         if self.memory is not None:
             outputs["MemoryId"] = self.memory.memory_id
+        if self.lake is not None:
+            outputs["LakeBucketName"] = self.lake.bucket.bucket_name
+        if self.ledger is not None:
+            outputs["LedgerTableName"] = self.ledger.table.table_name
+            outputs["LedgerArchiveBucketName"] = self.ledger.archive.bucket_name
+        if self.pds_table is not None and self.pds_config is not None:
+            outputs["PdsTableName"] = self.pds_table.table_name
+            outputs["PdsConfigBucketName"] = self.pds_config.bucket.bucket_name
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)
+
+
+def _with_stream(scope: Construct, id: str, table: dynamodb.TableV2) -> dynamodb.ITableV2:
+    """``table`` imported with its stream (for an event source in a consumer stack)."""
+    cfn = cast("dynamodb.CfnGlobalTable", table.node.default_child)
+    return dynamodb.TableV2.from_table_attributes(scope, id, table_name=cfn.ref, table_stream_arn=cfn.attr_stream_arn)
 
 
 def _cfn_memory(memory: agentcore.Memory) -> agentcore.CfnMemory:

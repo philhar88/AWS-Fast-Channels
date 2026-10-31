@@ -18,12 +18,12 @@ make help           # every target
 | Target | What it runs |
 |---|---|
 | `make lint` | `ruff format --check`, `ruff check`, console ESLint |
-| `make typecheck` | `mypy` (strict) on `core/src functions/src agent/src infra/src`, then on `scripts tests/e2e`; console `tsc -b` |
+| `make typecheck` | `mypy` (strict) on `core/src functions/src agent/src infra/src`, then on `scripts tests/e2e` and `tests/pbs`; console `tsc -b` |
 | `make test` | `pytest` (core, functions, agent, infra), console Vitest |
 | `make synth` | Console build, then `cdk synth` with cdk-nag; fails on unacknowledged findings |
 | `make check` | All of the above, what CI runs |
-| `make diff`, `make deploy`, `make destroy` | Against your account; `PREFIX=<name>` for a separate copy |
-| `make seed`, `make trace ID=…`, `make eval MODEL=…`, `make model-access` | Operator scripts |
+| `make diff`, `make deploy`, `make destroy` | Against your account; `PREFIX=<name>` for a separate copy, `STAGE=<name>` for a [stage file](docs/operations.md#stages) |
+| `make seed`, `make trace ID=…`, `make eval MODEL=… [TASK=…]`, `make model-access` | Operator scripts |
 
 The console also runs without AWS: `cd console && npm run dev:mock` (see [console/README.md](console/README.md)).
 
@@ -70,8 +70,8 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 
 - Python 3.14 idioms: `match`, `X | Y` unions, `type` aliases, `StrEnum`, f-strings, `pathlib`. Small, pure functions
   where possible; precise docstrings; comments only where they explain *why*.
-- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy core/src functions/src agent/src infra/src` and
-  `MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e` pass.
+- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy core/src functions/src pds/src agent/src infra/src`,
+  `MYPYPATH=scripts:tests/e2e uv run mypy scripts tests/e2e` and `MYPYPATH=tests/pbs uv run mypy tests/pbs` pass.
 - New behaviour has tests. Infrastructure changes have CDK assertions, and cdk-nag findings are fixed or acknowledged
   on the construct that causes them, with a reason.
 - Changing a CloudFormation snapshot is deliberate: `uv run pytest infra/tests/test_snapshots.py --snapshot-update`
@@ -80,20 +80,29 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
 
 | Source | Derived | Regenerate |
 |---|---|---|
-| `fast_channels.core.catalog`, `.ingest`, `.events` | `contracts/*` | `uv run python scripts/generate_contracts.py` |
+| `fast_channels.core.catalog`, `.ingest`, `.events`, `.model_registry`, `.monetization.bundle`, `.pds` (with the hand-written inputs of `contracts/fixtures/pds/`) | `contracts/*` | `uv run python scripts/generate_contracts.py` |
 | `delivery.ROUTES` | `docs/path-contract.json` | `uv run pytest infra/tests/test_delivery.py --snapshot-update` |
 | Tool registry | Tool table in `docs/agent.md` | The snippet in [docs/agent.md](docs/agent.md#tool-reference) |
 | `FastChannelsConfig` | Configuration reference in `docs/operations.md` | The snippet under the tables in [docs/operations.md](docs/operations.md#configuration-reference) |
 | `ladders/*.toml` | The `standard` table, TOML example and multivariant in `docs/encoding.md`, job template snapshot | `uv run pytest core/tests --snapshot-update` |
 | `scripts/render_architecture.py` | `docs/images/architecture.png` | `uv run --group docs python scripts/render_architecture.py` (needs Graphviz) |
 | `scripts/render_brand_assets.py` | `assets/brand/*.png` | `uv run python scripts/render_brand_assets.py` (changes every kit fingerprint) |
+| `scripts/render_brand_assets.py --demo` | `assets/demo/*.png` | `uv run python scripts/render_brand_assets.py --demo` (changes the kit fingerprint of demand demo stages) |
+| `fast_channels.core.pbs_config` | Golden Prebid Server configuration in `core/tests/__snapshots__/test_pbs_config/` | `uv run pytest core/tests/test_pbs_config.py --snapshot-update` |
+| The guidance pin and overlays (`vendor/prebid-guidance/`) | The upstream hashes in `PIN.toml` | See [docs/demand.md](docs/demand.md#the-guidance-and-its-overlays) |
 
 ## Tests
 
 - **Unit and infrastructure tests**: `uv run pytest` (all four packages) and `cd console && npm test`.
 - **Console smoke tests**: `cd console && npx playwright install chromium && npm run test:e2e` (mock mode, strict
   CSP).
+- **Prebid Server module** (demand module, Java 25): `make pbs-test` builds Prebid Server Java 4.4.0 with the
+  fast-ctv module exactly as the image does and runs the module's JUnit tests; `make pbs-contract` then runs the
+  contract tests (marker `pbs`) against that jar with local mocks. The JDK is downloaded and checksum-verified when
+  the `java` on PATH is another version. CI runs both in the `pbs-module` job.
 - **Model conformance**: `make eval MODEL=<bedrock model id>` before proposing a model for `agent.allowed_models`.
+  For a model-registry task, `make eval TASK=<task> MODEL=<id>` writes its eval record to `evals/records/`; commit it
+  with the entry that names it (synth refuses an entry without a passing record).
 - **End-to-end tests** (`tests/e2e`, marker `e2e`) run against a deployed stage: the stack-output contract; an
   upload with a sidecar through MediaConvert to a VOD source; the default ladder's kit as MediaTailor reads it;
   programs published through the tools, then SSAI sessions watching the breaks air with ads from the second break
@@ -103,6 +112,8 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
   [tests/e2e/README.md](tests/e2e/README.md)), or through the manual **End-to-end** workflow
   (`.github/workflows/e2e.yml`, AWS access through an OIDC role), which deploys a throwaway stage, runs the tests and
   destroys it. A run costs a few US dollars. Their offline tests (`-m "not e2e"`) run with `uv run pytest`.
+  The demand module has a leg of its own (`leg: demand`; [docs/demand.md](docs/demand.md#deploy-and-destroy)).
+  `MODULES=a,b` keeps only those modules of a stage on, for `make` and `scripts/prebid_guidance.py`.
 - **Release gate**: a release is tagged only after a green end-to-end run on the release branch.
 
 When you experiment in AWS, use a prefix of your own (`make deploy PREFIX=<you>-exp`) so that your stacks never collide

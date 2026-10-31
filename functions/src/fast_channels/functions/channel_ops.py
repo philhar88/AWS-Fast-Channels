@@ -60,6 +60,34 @@ def error_code(error: ClientError) -> str:
     return str(error.response.get("Error", {}).get("Code", ""))
 
 
+def ignore_missing(operation: Callable[..., Any], **request: Any) -> None:
+    """Call a delete operation; a resource that is already gone counts as deleted."""
+    try:
+        operation(**request)
+    except ClientError as error:
+        if error_code(error) not in MISSING:
+            raise
+
+
+def delete_deliveries(resource_arn: str) -> None:
+    """Delete the deliveries and delivery sources of a resource's vended logs."""
+    logs = aws.client("logs")
+    sources = {
+        source["name"]
+        for page in logs.get_paginator("describe_delivery_sources").paginate()
+        for source in page["deliverySources"]
+        if resource_arn in source.get("resourceArns", [])
+    }
+    if not sources:
+        return
+    for page in logs.get_paginator("describe_deliveries").paginate():
+        for delivery in page["deliveries"]:
+            if delivery["deliverySourceName"] in sources:
+                ignore_missing(logs.delete_delivery, id=delivery["id"])
+    for source in sorted(sources):
+        ignore_missing(logs.delete_delivery_source, name=source)
+
+
 def is_missing(error: ClientError) -> bool:
     """Whether ``error`` says the resource does not exist."""
     return error_code(error) in MISSING

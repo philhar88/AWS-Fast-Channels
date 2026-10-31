@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from fast_channels.core import specs
 from fast_channels.core.ladder import Ladder
+from fast_channels.core.monetization.validators import check_channel_policy
 from fast_channels.core.profiles import profile
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
@@ -601,7 +602,8 @@ def playback_configuration() -> dict[str, Any]:
     }
 
 
-def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: SimpleNamespace) -> None:
+def stub_created(aws_stubs: SimpleNamespace) -> None:
+    """Every call of a successful ``create_channel``."""
     create_preamble(aws_stubs)
     mt, logs = aws_stubs.mt, aws_stubs.logs
     mt.add_response("create_channel", created_channel())
@@ -616,6 +618,10 @@ def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: Si
     mt.add_response("put_channel_policy", {})
     aws_stubs.ddb.add_response("put_item", {})
     no_schedule(aws_stubs.scheduler, AGENT)
+
+
+def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: SimpleNamespace) -> None:
+    stub_created(aws_stubs)
 
     payload = channels.CreateChannelInput(name="fast-agent-kids", outputs=["hls"])
     result = channels.create_channel(payload, CTX)
@@ -654,6 +660,21 @@ def test_create_channel_assembles_channel_playback_logs_and_policy(aws_stubs: Si
     assert "ConditionExpression" in record
     assert result.name == AGENT and result.state == "STOPPED"
     assert result.playback["hls"] == f"https://d111111abcdef8.cloudfront.net/v1/master/1bab6b42/{AGENT}/hls.m3u8"
+
+
+def test_create_channel_admits_siblings_when_the_release_module_is_on(
+    aws_stubs: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The static sibling pattern is set on the new, stopped channel and never changed after (P0-08)."""
+    monkeypatch.setenv("PLAYBACK_CONFIG_TEMPLATE", json.dumps(TEMPLATE | {"sibling_policy": True}))
+    settings.cache_clear()
+    stub_created(aws_stubs)
+
+    channels.create_channel(channels.CreateChannelInput(name="fast-agent-kids", outputs=["hls"]), CTX)
+
+    policy = json.loads(aws_stubs.calls.of("PutChannelPolicy")[0]["Policy"])
+    assert policy["Statement"][0]["Condition"]["ArnLike"] == {"aws:SourceArn": [PC_ARN, f"{PC_ARN}-p-?"]}
+    assert check_channel_policy(policy, channel=AGENT) == []
 
 
 def test_create_channel_rolls_back_when_a_step_fails(aws_stubs: SimpleNamespace) -> None:

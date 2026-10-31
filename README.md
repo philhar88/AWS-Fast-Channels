@@ -130,8 +130,9 @@ program guide.
    hour and stops automatically after four hours. The Channels view plays the channel in an SSAI player, with its ad
    events.
 
-`make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`); see
-[docs/operations.md](docs/operations.md) for configuration and day-two operations.
+`make deploy PREFIX=<name>` deploys an independent copy (`FastChannels-<name>-*`), and `make deploy STAGE=<name>`
+the one a [stage file](docs/operations.md#stages) describes; see [docs/operations.md](docs/operations.md) for
+configuration and day-two operations.
 
 ## Cost
 
@@ -152,6 +153,27 @@ us-east-1 list prices; see [docs/operations.md](docs/operations.md#costs) for ev
 Channels are never started by a deployment, and a started channel stops after `channels.max_runtime_hours` (4 by
 default). With stopped channels an idle deployment costs a few dollars a month (alarms, storage, logs).
 
+## Optional modules
+
+Version 4.0.0 adds optional modules for ad monetization and its operations. Each one is off by default
+(`modules.<name>.enabled` in `cdk.json`), and with every module off a deployment is v3.0.0's.
+
+![The optional modules](docs/images/architecture-modules.png)
+
+| Module | Adds | Needs |
+|---|---|---|
+| `ops` | A lake for Athena, a hash-chained ledger, account and hook alarms, runbooks that record what they would do, kill switches and a probe canary | — |
+| `models` | A per-task model registry: an application inference profile per LLM task, eval-gated models, daily spend caps | — |
+| `demand` | Programmatic demand through the AWS Prebid Server guidance (Prebid Server Java 4.4.0 with the fast-ctv module), an origin rule, a bidder simulator with demo creatives, census-gated scaling and warm-up. Experimental and off by default: an ad server in front, with Prebid Cache | `ops` |
+| `pds` | The Pod Decision Service, a sidecar in each Prebid Server task: what each ad request may share with third parties, which ads fill the pod, and an own book of direct lines and house ads with reservations and delivery | `ops`, `demand` |
+| `release` | The Release Controller for monetized playback configurations: sibling configurations with MediaTailor Functions, a smoke gate, gradual promotion with unattended rollback, origin-secret rotation and ad prefetch | `ops`, `demand`, `pds` |
+| `crawl` | Show-level content metadata (IAB Tech Lab Content Taxonomy 3.1) in ad requests, with an uplift holdout | `pds`, `release` |
+
+[docs/modules.md](docs/modules.md) gives each module's complexity and cost (stacks, IAM roles, cost per hour idle
+and on air, teardown time), what v4.0.0 leaves out, how to turn a module on, its capacity and how it fails safe, and
+the limits that stages share in an account. The demand module costs about $120–150 a month while its Prebid Server
+stack is deployed, even with every channel stopped: destroy throwaway stages right after use.
+
 ## Repository layout
 
 ```
@@ -160,12 +182,17 @@ default). With stopped channels an idle deployment costs a few dollars a month (
 ├── functions/   fast_channels.functions  Lambda handlers: ingest steps, agent tools and registry, custom resources,
 │                                         autopilot
 ├── agent/       fast_channels.agent      AgentCore Runtime app: Strands agent, AG-UI, hooks, skills, evals
+├── pds/         fast_channels.pds        the Pod Decision Service sidecar (modules.pds)
 ├── infra/       fast_channels.infra      CDK app: configuration, constructs, stacks, stage
 ├── console/                              operator console (Vite, React, TypeScript, Cloudscape, hls.js)
-├── contracts/                            catalog OpenAPI, IngestRequest and event JSON schemas (generated)
+├── pbs/fast-ctv/                         the fast-ctv Prebid Server Java module (modules.demand)
+├── vendor/                               the Prebid Server guidance's pin and overlays (modules.demand)
+├── stages/                               named deployments: stage files for STAGE=<name>
+├── evals/                                eval records of the model registry's tasks (modules.models)
+├── contracts/                            catalog OpenAPI, IngestRequest, event and module JSON schemas (generated)
 ├── ladders/                              built-in ladder TOML files (symlink to core package data)
 ├── assets/                               brand stills for slates and house ads, sample catalog
-├── docs/                                 documentation, ADRs, architecture image, CDN path contract
+├── docs/                                 documentation, ADRs, architecture images, CDN path contract
 ├── scripts/                              model access, seeding, tracing, cleanup, model evals, generators
 ├── tests/e2e/                            end-to-end tests against a deployed stage (release gate)
 ├── cdk.json                              CDK app and the fast-channels configuration
@@ -233,9 +260,11 @@ make destroy                       # make destroy PREFIX=<name> for other deploy
 The runtime-resource reaper deletes agent channels, programs, VOD sources, runtime source locations and job templates
 before CloudFormation deletes the stacks. With `removal: retain` data is kept and stacks are termination protected.
 If a teardown is interrupted, `uv run python scripts/cleanup.py` lists the runtime resources that are left and
-`--apply` deletes them; then run `make destroy` again. The account-level
-`FastChannels-AccountBaseline` stack (only with Transaction Search enabled) and the account-shared as-run log group
-are never deleted automatically. Details in [docs/operations.md](docs/operations.md#destroy).
+`--apply` deletes them; then run `make destroy` again. The account-level `FastChannels-AccountBaseline` stack
+(Transaction Search, deployed only by `make account-baseline`) and the account-shared as-run log group are never
+deleted automatically. Details in [docs/operations.md](docs/operations.md#destroy). With the demand module, run
+`make destroy-demand STAGE=<name>` first; [docs/modules.md](docs/modules.md#account-level-limits-and-teardown-residue)
+lists what a teardown leaves behind.
 
 ## Documentation
 
@@ -250,6 +279,8 @@ are never deleted automatically. Details in [docs/operations.md](docs/operations
 | [Integrate your CMS](docs/integrate-your-cms.md) | Catalog contract, OpenAPI Gateway target, ingest contract, events |
 | [Observability](docs/observability.md) | Logging and tracing matrix, correlation contract, trace script, alarms, Transaction Search |
 | [Operations](docs/operations.md) | Configuration reference, deploy and destroy, users, quotas, costs, security, troubleshooting |
+| [Optional modules](docs/modules.md) | The ad-monetization and operations modules: complexity and cost per module, turning them on, capacity, fail-safe behaviour, account-level limits |
+| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md) | The `demand`, `pds`, `release` and `crawl` modules |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |
 | [Decision records](docs/adr/README.md) | Why the architecture is the way it is |
 | [Console](console/README.md), [Agent](agent/README.md) | Component READMEs |

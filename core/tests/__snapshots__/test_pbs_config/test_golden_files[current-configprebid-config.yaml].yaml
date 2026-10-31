@@ -1,0 +1,89 @@
+# Prebid Server configuration of stage fastm, rendered by scripts/prebid_guidance.py render-config
+# (fast_channels.core.pbs_config). Do not edit: the guidance copies prebid-server/current/ over default/ file for file,
+# so this file replaces its default prebid-config.yaml, and a re-render overwrites it.
+status-response: "ok"
+server:
+  http:
+    enabled: true
+    port: 8443
+    server-instances: 2
+  ssl: true
+  jks-path: "${SSL_KEYSTORE_PATH}"
+  jks-password: "${SSL_KEYSTORE_PASS}"
+adapters:
+  appnexus:
+    enabled: false
+  ix:
+    enabled: false
+  openx:
+    enabled: false
+  pubmatic:
+    enabled: false
+  rubicon:
+    enabled: false
+  amt:
+    enabled: true
+  generic:
+    aliases:
+      ownbook:
+        enabled: true
+        endpoint: "http://127.0.0.1:8090/ownbook/openrtb"
+        ortb-version: "ORTB_2_6"
+        meta-info:
+          vendor-id: 0
+hooks:
+  fast-ctv:
+    enabled: true
+    policy-url: "http://127.0.0.1:8090/policy"
+    policy-timeout-ms: 50
+    select-url: "http://127.0.0.1:8090/select"
+    select-timeout-ms: 200
+    tracker-template: "https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
+    house-ads: "[]"
+    pod-min-s: 30
+    pod-max-s: 120
+    log-requests: true
+metrics:
+  logback:
+    enabled: true
+    name: "METRICS"
+    interval: 30
+cache:
+  scheme: "https"
+  host: "${CACHE_HOST}"
+  path: "/cache"
+  query: "uuid="
+settings:
+  enforce-valid-account: false
+  generate-storedrequest-bidrequest-id: true
+  s3:
+    endpoint: "${SETTINGS_S3_ENDPOINT}"
+    bucket: "${SETTINGS_S3_BUCKET}"
+    region: "${SETTINGS_S3_REGION}"
+    accounts-dir: "stored_accounts"
+    stored-imps-dir: "stored_impressions"
+    stored-requests-dir: "stored_requests"
+    stored-responses-dir: "stored_responses"
+  in-memory-cache:
+    cache-size: 10000
+    ttl-seconds: 1200
+    s3-update:
+      refresh-rate: 900000
+      timeout: 30000
+gdpr:
+  default-value: 0
+  vendorlist:
+    v2:
+      cache-dir: "/var/tmp/vendor2"
+    v3:
+      cache-dir: "/var/tmp/vendor3"
+    live:
+      startup-cache-dir: "/var/tmp/vendor-live"
+admin-endpoints:
+  logging-changelevel:
+    enabled: false
+analytics:
+  global:
+    adapters: "psdoaAnalytics"
+  psdoa:
+    enabled: "${LOG_ANALYTICS_ENABLED}"
