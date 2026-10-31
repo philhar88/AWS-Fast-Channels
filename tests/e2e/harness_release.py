@@ -638,7 +638,7 @@ HOOK_WINDOW_S: Final = 5.0
 BREAKS_QUERY: Final = (
     "filter sessionId in [{sessions}] and eventType in ['MAKING_ADS_REQUEST', 'PRE_ADS_REQUEST_HOOK_ERROR', "
     "'PRE_ADS_REQUEST_FUNCTION_ERROR']\n"
-    "| fields @timestamp, sessionId, eventType, adBreakCorrelationId\n"
+    "| fields @timestamp, sessionId, eventType, coalesce(adBreakCorrelationId, prefetchScheduleName) as breakId\n"
     "| limit 10000"
 )
 
@@ -653,14 +653,16 @@ def breaks(stage: Stage, sessions: Sequence[str], start: float, end: float) -> d
     its break, or of the session in the :data:`HOOK_WINDOW_S` before it)."""
     quoted = ", ".join(f"'{s}'" for s in sessions)
     rows = insights(stage, names.log_group(stage.prefix), BREAKS_QUERY.format(sessions=quoted), start, end)
-    errors = [(r["sessionId"], r.get("adBreakCorrelationId"), _epoch(r["@timestamp"])) for r in rows]
+    errors = [(r["sessionId"], r.get("breakId"), _epoch(r["@timestamp"])) for r in rows]
     errors = [e for e, r in zip(errors, rows, strict=True) if r["eventType"] != "MAKING_ADS_REQUEST"]
     found: dict[str, list[tuple[float, bool]]] = {s: [] for s in sessions}
     for row in rows:
         if row["eventType"] != "MAKING_ADS_REQUEST":
             continue
-        session, break_id, at = row["sessionId"], row.get("adBreakCorrelationId"), _epoch(row["@timestamp"])
-        failed = any(s == session and (b == break_id or 0 <= at - t <= HOOK_WINDOW_S) for s, b, t in errors)
+        session, break_id, at = row["sessionId"], row.get("breakId"), _epoch(row["@timestamp"])
+        failed = any(
+            s == session and ((b is not None and b == break_id) or 0 <= at - t <= HOOK_WINDOW_S) for s, b, t in errors
+        )
         found[session].append((at, failed))
     return {s: sorted(v) for s, v in found.items()}
 

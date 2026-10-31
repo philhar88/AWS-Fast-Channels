@@ -522,8 +522,9 @@ def test_the_marker_detector_counts_a_breaks_first_marker_and_alarms_on_two_loss
     template = d.template(d.stage.release)
     filters = {f["FilterName"]: f for f in resources(template, "AWS::Logs::MetricFilter").values()}
     assert filters["AdMarkersFound"]["FilterPattern"] == (
-        '{ ($.eventType = "AD_MARKER_FOUND") && ($.adMarkers != "*,DURATION=*") }'
-    )
+        '{ ($.eventType = "AD_MARKER_FOUND") && ($.adMarkers != "*,DURATION=*") '
+        "&& ($.prefetchScheduleName NOT EXISTS) }"
+    ), "a prefetched break's marker is left out: its request was the retrieval (M3-x5)"
     assert filters["AdsRequests"]["FilterPattern"] == '{ $.eventType = "MAKING_ADS_REQUEST" }'
     alarms = {a["AlarmName"]: a for a in resources(template, "AWS::CloudWatch::Alarm").values()}
     for name in ("fastm-demo-p-a", "fastm-demo-p-b", "fastm-lab-p-b", "fastm-lab-x"):

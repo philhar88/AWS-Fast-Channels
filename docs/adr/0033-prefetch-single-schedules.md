@@ -99,5 +99,11 @@ sibling, Prebid Server 4.4.0.
   pod is the one the other sessions' retrievals made ready (the late joiners of `tests/e2e/test_14_demand_pods.py`).
   First sight on a real-time request is measured in P0-02 and in the same-stage control of the evidence above.
 - The controller writes up to 24 schedules per sibling and channel; the ownership guard exempts the prefetcher.
+- **Log readers key a prefetched break on its schedule.** Its events (the retrieval, the marker, the fill) carry
+  `prefetchScheduleName` and no `adBreakCorrelationId`. The smoke and soak judge group a session's events by
+  `coalesce(adBreakCorrelationId, prefetchScheduleName)`. The silent-loss detector leaves prefetched markers out,
+  because their request was the retrieval: a failed retrieval falls back to a real-time request, which it counts.
+  The hourly log reconciliation (`FILLED_AVAIL`) and the smoke test cover a prefetched break's fill loss (M3-x5,
+  fastm 2026-10-31).
 - A RECURRING fallback for breaks the schedule of record cannot describe is not built.
 - See [release-controller.md](../release-controller.md#prefetch).

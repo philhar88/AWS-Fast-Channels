@@ -43,13 +43,15 @@ WATCH_SECONDS: Final = 780
 QUERY_SECONDS: Final = 240
 _SESSION: Final = re.compile(r"/v1/manifest/[^/]+/[^/]+/(?P<session>[^/]+)/")
 QUERY: Final = (
-    "fields eventType, adBreakCorrelationId as breakId, status as hookStatus\n"
+    "fields eventType, coalesce(adBreakCorrelationId, prefetchScheduleName) as breakId, status as hookStatus\n"
     "| filter sessionId = '{session}'\n"
     '| parse adMarkers /ID="(?<marker>[^"]+)"/\n'
     "| parse adMarkers /(?<completed>,DURATION=)/\n"
     "| limit 10000"
 )
-"""The session's events: a marker's ``EXT-X-DATERANGE`` id (a VOD ``EXT-X-CUE-OUT`` has none: its break id) and
+"""The session's events: their break (``adBreakCorrelationId``, or for a prefetched break, whose events carry none,
+its schedule's ``prefetchScheduleName``: the retrieval, the marker and the fill alike; fastm, 2026-10-31), a marker's
+``EXT-X-DATERANGE`` id (a VOD ``EXT-X-CUE-OUT`` has none: its break id) and
 whether it carries its duration (found again at the break's end), and the hook summaries' ``status``."""
 DECISIONS: Final = "filter record = 'pds.policy' and sid = '{session}'\n| fields evid\n| limit 1000"
 """The breaks (``evid``) of the session's ``/policy`` decision records (``core.pds.records.PolicyRecord``)."""

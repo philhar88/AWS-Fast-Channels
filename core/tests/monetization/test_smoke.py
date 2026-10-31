@@ -54,6 +54,38 @@ def test_a_break_left_out_of_the_logs_passes_on_its_decision_record() -> None:
     assert undecided.failures == ("1 breaks made no ad request", "1 breaks without a decision record")
 
 
+def test_prefetched_breaks_are_judged_by_their_schedule() -> None:
+    """fastm 2026-10-31: a prefetched break's events carry ``prefetchScheduleName`` and no ``adBreakCorrelationId``;
+    the judge's query keys them on it (``coalesce``). Its request is the retrieval, minutes before its marker; only
+    the marker found again with its duration gets a break id."""
+
+    def prefetched(marker: str, schedule: str, *, fill: bool = True) -> list[dict[str, str]]:
+        return [
+            {"eventType": "MAKING_ADS_REQUEST", "breakId": schedule},  # the retrieval
+            {"eventType": "AD_MARKER_FOUND", "marker": marker, "breakId": schedule},
+            *([{"eventType": "FILLED_AVAIL", "breakId": schedule}] if fill else []),
+            {
+                "eventType": "AD_MARKER_FOUND",
+                "marker": marker,
+                "breakId": f"{schedule}-done",
+                "completed": ",DURATION=",
+            },
+        ]
+
+    events = session(prefetched(MARKERS[0], "pf-1664792870"), logged(MARKERS[1], 1))
+    result = verdict(sibling="ch-p-b", session="s", events=events, decisions=EVIDS, breaks=2, seen=MARKERS[:2])
+    assert result.passed and (result.breaks, result.requests, result.filled, result.unlogged) == (2, 2, 2, 0)
+    unfilled = verdict(
+        sibling="ch-p-b",
+        session="s",
+        events=session(prefetched(MARKERS[0], "pf-1", fill=False), prefetched(MARKERS[1], "pf-2")),
+        decisions=EVIDS,
+        breaks=2,
+        seen=MARKERS[:2],
+    )
+    assert unfilled.failures == ("1 breaks were not filled",), "a prefetched break's fill is still judged"
+
+
 def test_a_session_of_unlogged_breaks_fails() -> None:
     result = verdict(sibling="ch-p-b", session="s", events=session(), decisions=EVIDS, breaks=2, seen=MARKERS[:2])
     assert result.failures == ("no break was logged",)
