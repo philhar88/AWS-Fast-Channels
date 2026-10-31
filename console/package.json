@@ -16,9 +16,9 @@
     "screenshots": "SCREENSHOTS=1 playwright test"
   },
   "dependencies": {
-    "@cloudscape-design/chat-components": "^1.0.182",
+    "@cloudscape-design/chat-components": "^1.0.184",
     "@cloudscape-design/collection-hooks": "^1.0.110",
-    "@cloudscape-design/components": "^3.0.1404",
+    "@cloudscape-design/components": "^3.0.1406",
     "@cloudscape-design/design-tokens": "^3.0.116",
     "@cloudscape-design/global-styles": "^1.0.71",
     "hls.js": "1.7.3",
