@@ -1,6 +1,6 @@
 [project]
 name = "fast-channels-pds"
-version = "3.0.0"
+version = "4.0.0"
 description = "The Pod Decision Service: /policy, /select and the own book, a sidecar in each Prebid Server task."
 requires-python = ">=3.14"
 dependencies = [
