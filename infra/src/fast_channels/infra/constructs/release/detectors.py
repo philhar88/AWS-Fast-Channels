@@ -20,7 +20,13 @@ one alarm per configuration fires when, in :data:`LOSSY_MINUTES` of :data:`WINDO
 - **Two lossy minutes.** A session's marker and its request are logged milliseconds apart (P0-20 evidence); one that
   straddles a minute makes that minute lossy and the next one not, so it never alarms alone. Breaks minutes apart
   still alarm at the second lossy break.
-- Prefetch, which requests ads before the marker, is not used by the siblings yet; it would need its own expression.
+- **Prefetched breaks are left out.** A prefetched break's ads are requested minutes before its marker, by the
+  retrieval (ADR-0033), so a per-minute count would call its marker unrequested. Its ``AD_MARKER_FOUND`` names its
+  schedule (``prefetchScheduleName``) and carries no ``adBreakCorrelationId`` (fastm, 2026-10-31): a marker with a
+  schedule had its ads retrieved, and :data:`BREAK_START` leaves it out. A failed retrieval falls back to a real-time
+  request, whose marker has no schedule and is counted. A prefetched break's fill loss stays covered: the hourly
+  reconciliation (:class:`LogReconciler`) counts its ``FILLED_AVAIL``, which it carries, and the smoke test and the
+  soak judge it, by its schedule name.
 
 Per sibling, too, an alarm on the ad decision server's errors (:class:`AdsErrorAlarms`): a route that answers
 every request with an error (a missing stored request, Prebid Server down, the origin gate refusing) plays the slate
@@ -50,8 +56,10 @@ EVENTS: Final = names.MARKER_METRICS
 BREAK_START: Final = logs.FilterPattern.all(
     logs.FilterPattern.string_value("$.eventType", "=", "AD_MARKER_FOUND"),
     logs.FilterPattern.string_value("$.adMarkers", "!=", "*,DURATION=*"),
+    logs.FilterPattern.not_exists("$.prefetchScheduleName"),
 )
-"""A break's first marker: not the ``EXT-X-DATERANGE`` that gained its duration when the break ended."""
+"""A break's first marker: not the ``EXT-X-DATERANGE`` that gained its duration when the break ended, nor a
+prefetched break's (its request was the retrieval, minutes before)."""
 PERIOD: Final = Duration.minutes(1)
 WINDOW_MINUTES: Final = 10
 LOSSY_MINUTES: Final = 2

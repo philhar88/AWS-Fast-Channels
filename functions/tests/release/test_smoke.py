@@ -233,3 +233,8 @@ def test_a_request_that_reached_its_timeout_fails_the_judge(monkeypatch: pytest.
     result = smoke.judge(session, breaks=1, probe=False, bundle_key="release/d/bundle.json", release=4)
     assert result["failures"] == ("PRE_ADS request fastm_pa_lookup_r0004 reached its 1000 ms timeout in 2 minutes",)
     assert not result["passed"] and asked == [("release/d/bundle.json", 4, "fastm-demo-p-b")]
+
+
+def test_the_judges_query_keys_a_prefetched_break_on_its_schedule() -> None:
+    """A prefetched break's events carry ``prefetchScheduleName`` instead of ``adBreakCorrelationId`` (M3-x5)."""
+    assert "coalesce(adBreakCorrelationId, prefetchScheduleName) as breakId" in smoke.QUERY

@@ -5032,7 +5032,7 @@
     "MarkersAdMarkersFound182CC09B": {
       "Properties": {
         "FilterName": "AdMarkersFound",
-        "FilterPattern": "{ ($.eventType = \"AD_MARKER_FOUND\") && ($.adMarkers != \"*,DURATION=*\") }",
+        "FilterPattern": "{ ($.eventType = \"AD_MARKER_FOUND\") && ($.adMarkers != \"*,DURATION=*\") && ($.prefetchScheduleName NOT EXISTS) }",
         "LogGroupName": {
           "Ref": "Logs71AC9AA5"
         },

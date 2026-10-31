@@ -432,6 +432,12 @@ Descoped before the release (the owner, 2026-10-30; each is a two-way door):
   back as the release its candidate runs. A rotation can create a tree again under a new number (`recreated_from`).
   The timed-out check used to read the old number's Functions, the promotion marked the old number, and the
   rollback left the candidate where it was.
+- **Release Controller: prefetched breaks in the logs.** A prefetched break's ADS log events (its retrieval, its
+  marker and its fill) carry `prefetchScheduleName` and no `adBreakCorrelationId`. The smoke and soak judge counted
+  such breaks as unlogged and failed a healthy release on a prefetched sibling. Now they group events by
+  `coalesce(adBreakCorrelationId, prefetchScheduleName)`. The silent-loss detector leaves prefetched markers out:
+  their request was the retrieval, minutes earlier, so with five or more sessions their break minutes would have
+  raised `<sibling>-markers-without-ads-request`. The log reconciliation and the smoke test still cover their fill.
 - **Release Controller: the probe sibling follows the stable release.** Only a channel's first release configured
   `-p-z`, so the canary kept that release's session controls, trees and ADS body. Once the per-length stored
   requests were removed, every probe request got a 400 and the slate. Every promotion and rollback now re-applies

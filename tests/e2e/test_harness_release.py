@@ -109,26 +109,35 @@ def test_a_break_failed_when_its_pre_ads_hook_erred(monkeypatch: pytest.MonkeyPa
             "@timestamp": "2026-10-29 18:00:01.000",
             "sessionId": "s1",
             "eventType": "MAKING_ADS_REQUEST",
-            "adBreakCorrelationId": "b1",
+            "breakId": "b1",
         },
         {"@timestamp": "2026-10-29 18:01:00.500", "sessionId": "s1", "eventType": "PRE_ADS_REQUEST_FUNCTION_ERROR"},
         {
             "@timestamp": "2026-10-29 18:01:01.000",
             "sessionId": "s1",
             "eventType": "MAKING_ADS_REQUEST",
-            "adBreakCorrelationId": "b2",
+            "breakId": "b2",
         },
         {
             "@timestamp": "2026-10-29 18:02:01.000",
             "sessionId": "s2",
             "eventType": "PRE_ADS_REQUEST_HOOK_ERROR",
-            "adBreakCorrelationId": "b3",
+            "breakId": "b3",
         },
         {
             "@timestamp": "2026-10-29 18:02:30.000",
             "sessionId": "s2",
             "eventType": "MAKING_ADS_REQUEST",
-            "adBreakCorrelationId": "b3",
+            "breakId": "b3",
+        },
+        # s3: a hook error with no break id, then two retrievals minutes later: neither is its break (M3-x5)
+        {"@timestamp": "2026-10-29 18:03:00.000", "sessionId": "s3", "eventType": "PRE_ADS_REQUEST_HOOK_ERROR"},
+        {"@timestamp": "2026-10-29 18:05:00.000", "sessionId": "s3", "eventType": "MAKING_ADS_REQUEST"},
+        {
+            "@timestamp": "2026-10-29 18:06:00.000",
+            "sessionId": "s3",
+            "eventType": "MAKING_ADS_REQUEST",
+            "breakId": "pf-7",
         },
     ]
 
@@ -136,7 +145,8 @@ def test_a_break_failed_when_its_pre_ads_hook_erred(monkeypatch: pytest.MonkeyPa
         return rows
 
     monkeypatch.setattr(harness_release, "insights", insights)
-    found = harness_release.breaks(SimpleNamespace(prefix="fastm"), ["s1", "s2"], 0, 1)  # type: ignore[arg-type]
+    found = harness_release.breaks(SimpleNamespace(prefix="fastm"), ["s1", "s2", "s3"], 0, 1)  # type: ignore[arg-type]
     assert [failed for _, failed in found["s1"]] == [False, True]
     assert [failed for _, failed in found["s2"]] == [True]
+    assert [failed for _, failed in found["s3"]] == [False, False], "a missing break id joins nothing"
     assert found["s1"][0][0] == 1793296801.0

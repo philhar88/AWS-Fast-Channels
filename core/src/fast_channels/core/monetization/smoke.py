@@ -110,7 +110,8 @@ def verdict(
     seen: Sequence[str] = (),
     decisions_required: bool = True,
 ) -> SmokeVerdict:
-    """The verdict on a session's log ``events`` (``eventType``; ``breakId``, the ``adBreakCorrelationId``; for a
+    """The verdict on a session's log ``events`` (``eventType``; ``breakId``, the ``adBreakCorrelationId``, or a
+    prefetched break's ``prefetchScheduleName``, which its retrieval, marker and fill carry instead; for a
     marker its ``EXT-X-DATERANGE`` id ``marker`` and ``completed`` when it carries its duration; ``hookStatus``).
 
     Args:
