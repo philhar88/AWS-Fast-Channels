@@ -440,6 +440,24 @@ class ReleaseController(Construct):
             why="the remap of a candidate sibling to its last good tree (R1)",
         )
         promote.allow(["mediatailor:ListFunctions"], ["*"])
+        # The probe sibling follows the stable release (M3-x4): its trees of that release, its configuration and logging
+        promote.allow(
+            ["mediatailor:GetFunction", "mediatailor:PutFunction", "mediatailor:TagResource"],
+            [functions],
+            why="the probe's Function trees of the stable release (<p>_*), never updated once created",
+        )
+        promote.allow(
+            ["mediatailor:ConfigureLogsForPlaybackConfiguration"],
+            siblings,
+            why="the probe sibling's logging, as its release configures it",
+        )
+        stack = Stack.of(self)
+        promote.allow(
+            ["iam:CreateServiceLinkedRole"],
+            [f"arn:{stack.partition}:iam::{stack.account}:role/aws-service-role/mediatailor.amazonaws.com/*"],
+            why="MediaTailor's service-linked role, which logging needs",
+            conditions={"StringEquals": {"iam:AWSServiceName": "mediatailor.amazonaws.com"}},
+        )
         promote.allow(
             ["mediatailor:DescribeChannel"],
             [self._mt("channel", c) for c in self._channels] or ["*"],
@@ -797,6 +815,12 @@ class ReleaseController(Construct):
         promoted = self._invoke(
             "PromoteCandidates", {"step": "promote", "candidates": "{% $plan.candidates %}", **context}, on=promote
         )
+        # The promotion stands when only a probe sibling could not follow it: no fail step marks the release failed.
+        promoted.add_catch(
+            sfn.Fail.jsonata(self, "ProbesNotFollowed", error="ProbeFollowError", cause="{% $states.input.Cause %}"),
+            errors=["ProbeFollowError"],
+            outputs="{% $states.errorOutput %}",
+        )
         promoted.add_catch(failed, outputs="{% $states.errorOutput %}")
         landed = (
             sfn.Choice(self, "PointerLanded?")
@@ -890,5 +914,33 @@ class ReleaseController(Construct):
             threshold=1,
             description="A sibling, its Functions or a monetized channel's policy is not what the Release Controller "
             "applied (see the drift check's log for the paths)",
+            topic=topic,
+        )
+        # A probe that could not follow the stable release (M3-x4), in a promotion (the execution then ends at
+        # ProbesNotFollowed), a rollback, R1 or the probes step: each failure is logged once by the promote function.
+        logs.MetricFilter(
+            self,
+            "ProbeNotFollowed",
+            log_group=self.promote.log_group,
+            filter_name="ProbeNotFollowed",
+            filter_pattern=logs.FilterPattern.string_value("$.message", "=", names.PROBE_NOT_FOLLOWED),
+            metric_namespace=METRICS_NAMESPACE,
+            metric_name="ProbeNotFollowed",
+            metric_value="1",
+            unit=cw.Unit.COUNT,
+        )
+        self.probe_alarm = alarm(
+            self,
+            "ProbeAlarm",
+            name=f"{self._prefix}-release-probe-stale",
+            metric=cw.Metric(
+                namespace=METRICS_NAMESPACE,
+                metric_name="ProbeNotFollowed",
+                statistic=cw.Stats.SUM,
+                period=Duration.minutes(5),
+            ),
+            threshold=1,
+            description="A probe sibling could not be re-applied with its stable sibling's release: it runs an older "
+            "one (see the promote function's log; its probes step catches it up)",
             topic=topic,
         )

@@ -259,6 +259,10 @@ class ReleaseStack(Stack):
             "BundleKey": (self.controller.desired.get_att_string("BundleKey"), "The bundle this deployment rendered"),
             "StateTableName": (self.controller.table.table_name, "The Release Controller's state"),
             "DriftFunction": (self.controller.drift.function.function_name, "The drift check (hourly)"),
+            "PromoteFunction": (
+                self.controller.promote.function.function_name,
+                "Promotion and rollback; its probes step catches the probe siblings up by hand",
+            ),
             "LogReconcilerFunction": (
                 self.reconciler.function.function.function_name,
                 "The siblings' ADS log against MediaTailor's counts (hourly)",

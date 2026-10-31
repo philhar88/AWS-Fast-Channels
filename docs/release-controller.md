@@ -28,7 +28,7 @@ send their ad requests as a templated OpenRTB POST to Prebid Server:
 | Sibling | Role |
 |---|---|
 | `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it) |
-| `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs |
+| `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs. It runs the stable sibling's release, re-applied after every promotion and rollback ([below](#the-probe-follows-the-stable-release)) |
 
 These names, and the controller's IAM grants on `<channel>-p-*`, belong to the channel: the configuration refuses
 an IaC channel named `<channel>-p-...` (with the module on or off, so turning it on cannot collide) and one named
@@ -136,13 +136,37 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
    never all at once). The environment monitors `<prefix>-release-candidate`, a composite alarm over the pair
    siblings' hook and marker alarms: in ALARM, the deployment rolls back. The controller polls the deployment every
    minute and stops it when a candidate's PRE_ADS request [timed out](#timed-out-requests).
-4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, and the
-   Function trees no sibling keeps are deleted.
+4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, the
+   channel's probe is re-applied with the new stable release ([below](#the-probe-follows-the-stable-release)), and
+   the Function trees no sibling keeps are deleted.
 
 A failed smoke or soak, or a rolled-back pointer, runs **R1**: the candidate is remapped to its last good tree
 (a remap reaches live sessions at their next break in about 3 s), the pointer goes back to the stable siblings at
 once, the plans name them, and `release.rollback` is ledgered. The same runbook runs when `<prefix>-release-candidate`
 goes to ALARM outside a promotion: each pair sibling whose hook, Function or marker alarm is in ALARM goes back to its last good tree. `GetManifest.Errors` stops a pointer deployment but remaps nothing: a stopped channel or its origin raises it, not the sibling's Functions.
+
+### The probe follows the stable release
+
+The probe `<channel>-p-z` has only canary sessions. After every promotion and every rollback (R1, in a release or
+outside one), the promote function re-applies it with the release its stable sibling now runs:
+- that release's Function trees of the probe, created if they don't exist;
+- its configuration of the probe: the same session controls, ADS body and avail suppression as the stable sibling,
+  with the probe's own name and `X-Fast-Probe` (house ads only, its decision records flagged);
+- its logging.
+
+`release.probe` is ledgered on `release/<channel>`. The probe keeps no rollback target of its own, so its earlier
+release's trees are deleted once no other sibling keeps them.
+
+If the probe can't be re-applied, the promotion still stands. The execution ends at `ProbesNotFollowed` without
+marking the release failed, and the probe follows at the next promotion or rollback. Every such failure (in a
+promotion, a rollback, R1 or the `probes` step) raises `<prefix>-release-probe-stale`. A stage upgraded since its last
+promotion can catch its probes up by hand:
+
+```bash
+aws lambda invoke --function-name <the Release stack's PromoteFunction output> \
+  --payload '{"step": "probes", "channels": ["<channel>"], "change_id": "probe-catch-up-<date>"}' \
+  --cli-binary-format raw-in-base64-out /dev/stdout
+```
 
 ### Timed-out requests
 
@@ -352,6 +376,7 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-rotation-failed` | An origin-secret rotation failed: the ledger's `rotation.fail` says at which step; run it again |
 | `<prefix>-release-candidate` | Any of the above (but drift) on a pair sibling: rolls a pointer deployment back (AppConfig monitor) and runs R1 |
 | `<sibling>-ads-errors` | More than half of the sibling's ad requests failed in two consecutive 15-minute periods with at least 5 each: `AdDecisionServer.Errors` (non-200, empty or timed-out answers; an empty VAST is not one) against `AdDecisionServer.Latency`'s sample count (one per request, failed or prefetched). A broken route, such as a missing stored request, Prebid Server down or the origin gate refusing, plays the slate and raises nothing else. A mid-break joiner whose remainder is off the 30 s grid is refused with 400, but those requests fall in a break's two minutes, and the next period holds requests that succeed or too few to judge. It is not part of the candidate alarm: a remap or a pointer rollback does not mend the route |
+| `<prefix>-release-probe-stale` | A probe sibling could not be re-applied with its stable sibling's release (the promote function's log says why), so the canary runs an older release: catch it up with the `probes` step ([above](#the-probe-follows-the-stable-release)) |
 | `<prefix>-release-prefetch` | A prefetcher run that failed on a sibling, or a sibling with a RECURRING schedule, in 15 minutes |
 | `<sibling>-real-time-requests` | On a prefetched sibling, more than 50% of at least 20 ad requests in 5 minutes were real time (`RealTimeAdsRequests`: `MAKING_ADS_REQUEST` with no `prefetchScheduleName`). Late joiners and mid-break joiners are real time by design, so a small audience that zaps a lot can raise it alone; it has no actions of its own |
 | `<prefix>-pds-burst-real-time` | The PDS's `<prefix>-pds-policy-fallbacks` and any `<sibling>-real-time-requests` together: MediaTailor asked for every session at the marker at once (a retrieval it did not use, or a break published closer than the retrieval lead), a sub-second herd the tasks' CPU cannot absorb, and those breaks were served SAFE ([ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md#sub-second-herds)). With the PDS and prefetch on |

@@ -60,6 +60,7 @@ from fast_channels.core.monetization.playback import (
 )
 from fast_channels.core.monetization.release import ChannelState
 from fast_channels.core.pbs_config import POD_MIN_SECONDS, POD_SECONDS
+from fast_channels.core.pds.names import sidecar_log_group
 
 pytestmark = pytest.mark.e2e
 
@@ -678,3 +679,74 @@ def test_a_mid_break_joiner_is_filled_for_what_is_left_of_the_break(
     assert filled, f"no FILLED_AVAIL for the {seconds} s remainder: {rows}"
     assert int(filled[0].get("avail.numAds") or 0) >= 1, f"the {seconds} s remainder was not filled: {filled}"
     assert float(filled[0]["avail.filledDuration"]) <= dur_ms / 1000, f"filled past the remainder: {filled}"
+
+
+def test_the_probe_sibling_runs_the_stable_release_and_fills_house_ads(
+    releases: Stage, on_air: dict[str, Any], channel: Channel
+) -> None:
+    """M3-x4: the probe ``-p-z`` follows the stable sibling's release on every promotion and rollback (this run's
+    rollbacks, or the promote function's ``probes`` step on a stage upgraded since). It maps the same session-control
+    tree (the crawl lookup is the pair's only), sends the same ADS body and carries the same avail suppression; its own
+    name and ``X-Fast-Probe`` differ. A canary session on it through a break is filled, with house ads only, and its
+    decision records are flagged."""
+    stage = releases
+    state = channel_state(stage, channel.name)
+    assert state.stable is not None
+    probe_name = f"{channel.name}-p-{ROLE_LETTERS[SiblingRole.PROBE][0]}"
+    release = state.siblings[state.stable].release
+    assert state.siblings[probe_name].release == release, (probe_name, state.siblings[probe_name], release)
+    assert state.history[probe_name] == (release,), "the probe keeps no rollback target of its own"
+    mediatailor = stage.session.client("mediatailor", region_name=stage.region)
+    stable: dict[str, Any] = dict(mediatailor.get_playback_configuration(Name=state.stable))
+    probe: dict[str, Any] = dict(mediatailor.get_playback_configuration(Name=probe_name))
+    assert probe["Tags"]["fast:release"] == stable["Tags"]["fast:release"] == release_tag(release)
+    # the same trees for the hooks it maps: the session controls; the crawl lookup (PRE_ADS) is the pair's only
+    assert (
+        probe["FunctionMapping"]["PRE_SESSION_INITIALIZATION"]
+        == stable["FunctionMapping"]["PRE_SESSION_INITIALIZATION"]
+    )
+    assert probe["FunctionMapping"].items() <= stable["FunctionMapping"].items(), (probe["FunctionMapping"], stable)
+    assert probe["AvailSuppression"] == stable["AvailSuppression"]
+    probe_request = probe["AdDecisionServerConfiguration"]["HttpRequest"]
+    stable_request = stable["AdDecisionServerConfiguration"]["HttpRequest"]
+    assert probe_request["Body"] == stable_request["Body"]
+    assert probe_request["Headers"].get("X-Fast-Probe") == "1" and "X-Fast-Probe" not in stable_request["Headers"]
+    start, length = upcoming_break(stage, channel.name, time.time() + 45)
+    until(datetime.fromtimestamp(start - 30, UTC))
+    viewer = Viewer(probe_name, stage).start()
+    try:
+        until(datetime.fromtimestamp(start + length + 30, UTC))
+    finally:
+        viewer.stop()
+    time.sleep(LOG_DELAY_S)
+    filled = [
+        r
+        for r in insights(
+            stage,
+            names.log_group(stage.prefix),
+            f"filter sessionId = '{viewer.session}' and eventType = 'FILLED_AVAIL'\n"
+            "| fields @timestamp, avail.numAds, avail.filledDuration",
+            start - 60,
+            time.time(),
+        )
+        if logged_at(r["@timestamp"]) < start + length + 5
+    ]
+    print(f"\nprobe {probe_name} on r{release:04d}: {filled}")
+    assert filled and int(filled[0].get("avail.numAds") or 0) >= 1, f"the probe's break was not filled: {filled}"
+    records = [
+        json.loads(r["@message"])
+        for r in insights(
+            stage,
+            sidecar_log_group(stage.prefix),
+            f"fields @message | filter sid = '{viewer.session}' and record in ['pds.policy', 'pds.select']",
+            start - 60,
+            time.time(),
+        )
+    ]
+    policies = [r for r in records if r["record"] == "pds.policy"]
+    selects = [r for r in records if r["record"] == "pds.select" and r["pod"]]
+    assert policies and all(r["probe"] for r in policies), f"the probe's decisions are not flagged: {policies}"
+    assert selects, f"no pod selected for the probe session: {records}"
+    for select in selects:
+        chosen = [b for b in select["bids"] if b["ref"] in select["pod"]]
+        assert chosen and all(b["house"] for b in chosen), f"a probe pod with a paid ad: {select}"

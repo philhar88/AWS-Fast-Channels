@@ -293,8 +293,9 @@ def deliver(configuration: str, arn: str, tags: dict[str, str]) -> list[str]:
     return created
 
 
-def configure(bundle_key: str, sibling_name: str, release: int, change_id: str) -> dict[str, Any]:
-    """Apply the release to one sibling: its configuration (with the current origin secret), logging and logs."""
+def put_sibling(bundle_key: str, sibling_name: str, release: int, change_id: str) -> tuple[dict[str, Any], Any]:
+    """One sibling's configuration of ``release`` (with the current origin secret) and its logging; returns the
+    ``PutPlaybackConfiguration`` request and response. Its vended-log deliveries are :func:`deliver`'s."""
     config = settings()
     config.require("prefix")
     sibling = _sibling(store.bundle(bundle_key), sibling_name)
@@ -306,6 +307,13 @@ def configure(bundle_key: str, sibling_name: str, release: int, change_id: str) 
     mediatailor = aws.client("mediatailor")
     response = mediatailor.put_playback_configuration(**put)
     mediatailor.configure_logs_for_playback_configuration(**logging)
+    return put, response
+
+
+def configure(bundle_key: str, sibling_name: str, release: int, change_id: str) -> dict[str, Any]:
+    """Apply the release to one sibling: its configuration (with the current origin secret), logging and logs."""
+    sibling = _sibling(store.bundle(bundle_key), sibling_name)
+    put, response = put_sibling(bundle_key, sibling_name, release, change_id)
     created = deliver(sibling.name, response["PlaybackConfigurationArn"], put["Tags"])
     logger.info("sibling configured", extra={"sibling": sibling.name, "release": release, "deliveries": created})
     return {

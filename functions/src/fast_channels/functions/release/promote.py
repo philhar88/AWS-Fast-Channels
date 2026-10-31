@@ -6,10 +6,11 @@
   with the stage's strategy. The environment's monitor rolls it back when a pair sibling alarms.
 - ``pointer``: the deployment's state, polled by the state machine.
 - ``promote``: at 100 %, each candidate becomes stable (the old stable sibling idle), its plan is rewritten and the
-  promotion ledgered; the lock is given back.
+  promotion ledgered; the lock is given back. Then the channel's probe sibling follows the stable sibling's release
+  (:func:`follow_probe`).
 - ``rollback`` (R1): each candidate is remapped to its last good tree (a remap reaches live sessions at their next
   break in about 3 s), the pointer goes back to the stable siblings at once, the plans name them, and the rollback is
-  ledgered; the lock is given back.
+  ledgered; the lock is given back. The probe follows the stable sibling again.
 """
 
 import json
@@ -22,10 +23,12 @@ from botocore.exceptions import ClientError
 
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.functions import RELEASE_SUFFIX, FunctionType, Hook, released_id
-from fast_channels.core.monetization.playback import render
+from fast_channels.core.monetization.playback import render, sibling_name
 from fast_channels.core.monetization.release import (
+    PROBE_LETTER,
     ChannelState,
     SiblingRecord,
+    followed,
     kept_releases,
     last_good,
     pointer,
@@ -45,6 +48,11 @@ if TYPE_CHECKING:
     from fast_channels.core.monetization.bundle import MonetizedChannel
 
 logger = Logger()
+
+
+class ProbeFollowError(RuntimeError):
+    """A channel's probe sibling could not be re-applied with its stable sibling's release. The promotion stands: the
+    execution fails after it (``ProbesNotFollowed``), and the probe follows at the next promotion or rollback."""
 
 
 class PointerBusyError(RuntimeError):
@@ -107,6 +115,66 @@ def candidates(bundle_key: str, release: int, siblings: list[str]) -> list[dict[
         if state.siblings[state.stable].release != release:
             found.append({"channel": channel.name, "sibling": state.idle, "stable": state.stable})
     return found
+
+
+def follow_probe(channel: str, change_id: str) -> int | None:
+    """Re-apply ``channel``'s probe sibling (``z``) with its stable sibling's release, if it runs another one.
+
+    The probe is put with that release's configuration of it (house only, ``X-Fast-Probe``, its decision records
+    flagged) and its Function trees, which are created if this is the probe's first time on that release. Only canary
+    sessions play the probe, so this is safe at any time. Returns the release the probe runs, or None for a channel
+    without a stable sibling or a configured probe, or whose stable release has no probe.
+
+    Raises:
+        ProbeFollowError: a call failed (the probe stays on its release; the state is unchanged), or the state changed
+            meanwhile (the next promotion or rollback re-applies it).
+    """
+    state, version = store.channel(channel)
+    probe = sibling_name(channel, PROBE_LETTER)
+    if state is None or state.stable is None or (current := state.siblings.get(probe)) is None:
+        return None
+    target = state.siblings[state.stable].release
+    if current.release == target:
+        return target
+    status = store.status(target)
+    if status is None or not any(s.name == probe for s in store.bundle(status.bundle_key).siblings):
+        logger.warning("the stable release has no probe sibling", extra={"probe": probe, "release": target})
+        return None
+    try:
+        apply.put_functions(status.bundle_key, target, change_id, [probe])
+        apply.put_sibling(status.bundle_key, probe, target, change_id)
+    except (ClientError, ValueError) as error:
+        raise ProbeFollowError(f"{probe}: not re-applied with r{target:04d}: {error}") from error
+    record = SiblingRecord(release=target, digest=status.digest, change_id=change_id, at=_now())
+    try:
+        store.put_channel(followed(state, probe, record), version=version)
+    except store.StaleStateError as error:  # R1 holds no lock: a release may have written the state meanwhile
+        raise ProbeFollowError(f"{probe}: re-applied with r{target:04d}, but its state changed meanwhile") from error
+    apply.ledger(
+        names.channel_chain(channel),
+        "release.probe",
+        channel,
+        correlation_id=change_id,
+        detail={"probe": probe, "release": target, "from": current.release, "stable": state.stable},
+    )
+    logger.info("probe follows the stable sibling", extra={"probe": probe, "release": target, "from": current.release})
+    return target
+
+
+def _follow_probes(channels: set[str], change_id: str, *, strict: bool) -> dict[str, int | None]:
+    """:func:`follow_probe` for each of ``channels``; a failure raises if ``strict`` (after every channel was tried),
+    else is logged (a rollback never fails on its canary)."""
+    followed_to: dict[str, int | None] = {}
+    failures: list[str] = []
+    for channel in sorted(channels):
+        try:
+            followed_to[channel] = follow_probe(channel, change_id)
+        except ProbeFollowError as error:
+            logger.error(names.PROBE_NOT_FOLLOWED, extra={"channel": channel, "error": str(error)})
+            failures.append(str(error))
+    if failures and strict:
+        raise ProbeFollowError("; ".join(failures))
+    return followed_to
 
 
 def on_air(channel: str) -> bool:
@@ -330,9 +398,16 @@ def promote(bundle_key: str, release: int, change_id: str, chosen: list[dict[str
     for number in sorted(numbers or {release}):
         if (previous := store.status(number)) is not None:
             store.put_status(previous.model_copy(update={"status": "PROMOTED", "at": _now()}))
+    failure: ProbeFollowError | None = None
+    try:  # under the lock: no other release or rotation writes the channels' state meanwhile
+        probes = _follow_probes(set(promoted_to), change_id, strict=True)
+    except ProbeFollowError as error:
+        failure = error
     store.unlock(release)
     logger.info("release promoted", extra={"release": release, "stable": promoted_to})
-    return {"release": release, "stable": promoted_to}
+    if failure is not None:
+        raise failure
+    return {"release": release, "stable": promoted_to, "probes": probes}
 
 
 def remap(sibling_name: str, record: SiblingRecord) -> None:
@@ -396,9 +471,10 @@ def rollback(
     for number in sorted(numbers or {release}):
         if (previous := store.status(number)) is not None:
             store.put_status(previous.model_copy(update={"status": "ROLLED_BACK", "at": _now()}))
+    probes = _follow_probes({c["channel"] for c in chosen}, change_id, strict=False)
     store.unlock(release)
     logger.warning("release rolled back", extra={"release": release, "remapped": remapped})
-    return {"release": release, "remapped": remapped, "deployment": deployed["deployment"]}
+    return {"release": release, "remapped": remapped, "deployment": deployed["deployment"], "probes": probes}
 
 
 def collect() -> list[str]:
@@ -469,7 +545,9 @@ def runbook(alarm: str, correlation_id: str) -> dict[str, Any]:
             detail={"runbook": "R1", "alarm": alarm, "sibling": sibling, "release": target},
         )
     logger.warning("runbook R1", extra={"alarm": alarm, "remapped": remapped})
-    return {"remapped": remapped}
+    channels = {name for name, state in states.items() if set(remapped) & {state.stable, state.idle}}
+    probes = _follow_probes(channels, correlation_id, strict=False)
+    return {"remapped": remapped, "probes": probes}
 
 
 def finish(release: int, change_id: str) -> dict[str, Any]:
@@ -523,6 +601,9 @@ STEPS: Final[dict[str, Callable[[dict[str, Any]], dict[str, Any]]]] = {
     "pointer": lambda e: pointer_state(e["deployment"], e.get("bundle_key"), e.get("release"), e.get("candidates")),
     "promote": _promote_and_collect,
     "rollback": lambda e: rollback(e["bundle_key"], e["release"], e["change_id"], e["candidates"], e["reason"]),
+    # By hand: a stage whose probes are on an older release than their stable sibling (one upgraded since its last
+    # promotion) catches them up without a release.
+    "probes": lambda e: {"probes": _follow_probes(set(e["channels"]), e["change_id"], strict=True)},
 }
 
 
