@@ -7,7 +7,7 @@ dependencies = [
     "fast-channels-core",
     # Synth time only: the Gateway tool schemas and Cedar policies are generated from the tool registry.
     "fast-channels-functions",
-    "aws-cdk-lib==2.274.0",
+    "aws-cdk-lib==2.275.0",
     "constructs>=10.8.1,<11",
     "cdk-nag>=3.0.2,<4",
     "pydantic>=2.12,<3",
