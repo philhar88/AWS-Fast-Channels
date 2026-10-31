@@ -5,7 +5,7 @@ description = "AWS Lambda handlers: ingest pipeline steps, agent tools, custom r
 requires-python = ">=3.14"
 dependencies = [
     "fast-channels-core",
-    "aws-lambda-powertools[parser]>=3.36,<4",
+    "aws-lambda-powertools[parser]>=3.37.0,<4",
     # Bundled, so the functions do not depend on the SDK version of the Lambda runtime (Lambda best practices).
     "boto3>=1.42",
     "httpx>=0.28,<1",
