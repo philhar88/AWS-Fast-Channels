@@ -6,13 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-31
+
 Version 4.0.0 is a major release. It adds the optional monetization and operations modules
 ([docs/modules.md](docs/modules.md)): `ops`, `models`, `demand`, `pds`, `release` and `crawl`. With every module
 off a deployment is v3.0.0's, which snapshot tests of every shipped template check. The BREAKING items apply
 whatever the modules.
-
-<!-- Releasing v4.0.0: move the `channels___create_channel` entry from [3.0.0] "Fixed since the first v3.0.0
-tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -->
 
 ### BREAKING
 
@@ -370,7 +369,7 @@ tag" into this release's Fixed section, unless v3.0.0 is re-cut with it first. -
 
 ### Changed
 
-Descoped before the release (the owner, 2026-10-30; each is a two-way door):
+Descoped before the release (each can be added back later):
 
 - **Prebid Server Java 4.4.0 only.** The demand module builds 4.4.0 and nothing else: no release switch, no build or
   CI job for the 3.43.0 the guidance ships.
@@ -385,6 +384,14 @@ Descoped before the release (the owner, 2026-10-30; each is a two-way door):
 
 ### Fixed
 
+- **The agent can create channels again.** `channels___create_channel` failed every time with
+  `ForbiddenException: Cannot create the service-linked role`, and rolled back what it had created. MediaTailor's
+  `ConfigureLogsForChannel` and `ConfigureLogsForPlaybackConfiguration` refuse a caller that may not create
+  MediaTailor's service-linked role, even when `AWSServiceRoleForMediaTailor` exists, and the channels tool role
+  could not. It now may create only that role (`iam:CreateServiceLinkedRole`, condition
+  `iam:AWSServiceName = mediatailor.amazonaws.com`). IaC channels were not affected, because CloudFormation configures
+  their logs with the deploying role. The end-to-end suite now creates and deletes an agent channel
+  (`test_08_agent_channel`).
 - **Demand: the deploy smoke on a stage with nothing on air.** With no channel running, the census gate holds Prebid
   Server at 0 tasks, so `deploy-demand`'s synthetic POSTs met a 503 and the deploy reported a failed smoke. The smoke
   now checks the service first: at a desired count of 0 it sends nothing, prints `smoke skipped: 0 running Prebid
@@ -419,7 +426,7 @@ Descoped before the release (the owner, 2026-10-30; each is a two-way door):
   deployments can exist per account and region (docs/channel-assembly.md).
 - **Demand: several guidance deployments per account and Region.** Overlay O1 now also prefixes the guidance's
   MetricsEtl Glue database (`<prefix>-prebid-server-<region>-metricsetl-database`). The shipped name ignores the
-  stack, so a second stage's guidance (another lane's e2e leg next to `fastm`) failed with `Database already exists`.
+  stack, so a second stage's guidance (an e2e stage next to `fastm`) failed with `Database already exists`.
   It was the only such name in the synthesized templates.
 - **Demand: a redeploy with a new Prebid Server image now runs it.** The guidance takes the image as the default of its
   `ContainerImage` parameter, and `cdk deploy` kept the parameter's previous value, so a changed image (a module change
@@ -597,14 +604,6 @@ end-to-end traceability. v2 deployments are not upgraded in place; see
   actually binds, MediaTailor's Ad Insertion requests, at about 37,000 concurrent viewers per account at 70 % of default
   quotas. Updated: ADR-0007 and ADR-0017 consequences, the operations quota table, and the ad-insertion and
   Channel Assembly references.
-- **The agent can create channels again.** `channels___create_channel` failed every time with
-  `ForbiddenException: Cannot create the service-linked role`, and rolled back what it had created. MediaTailor's
-  `ConfigureLogsForChannel` and `ConfigureLogsForPlaybackConfiguration` refuse a caller that may not create
-  MediaTailor's service-linked role, even when `AWSServiceRoleForMediaTailor` exists, and the channels tool role
-  could not. It now may create only that role (`iam:CreateServiceLinkedRole`, condition
-  `iam:AWSServiceName = mediatailor.amazonaws.com`). IaC channels were not affected, because CloudFormation configures
-  their logs with the deploying role. The end-to-end suite now creates and deletes an agent channel
-  (`test_08_agent_channel`).
 
 ### Known issues
 
@@ -664,6 +663,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/philhar88/AWS-Fast-Channels/releases/tag/v1.0.0

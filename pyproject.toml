@@ -1,6 +1,6 @@
 [project]
 name = "fast-channels"
-version = "3.0.0"
+version = "4.0.0"
 description = "FAST Channels on AWS: a reference architecture for agent-scheduled, ad-supported linear channels."
 readme = "README.md"
 license = "MIT"
