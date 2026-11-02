@@ -21,7 +21,7 @@
     "@cloudscape-design/components": "^3.0.1404",
     "@cloudscape-design/design-tokens": "^3.0.116",
     "@cloudscape-design/global-styles": "^1.0.71",
-    "hls.js": "1.7.3",
+    "hls.js": "1.7.4",
     "oidc-client-ts": "^3.5.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
