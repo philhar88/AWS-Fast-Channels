@@ -2,7 +2,7 @@
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -12,11 +12,17 @@ import pytest
 from fast_channels.core.ledger import CHAIN_ID_PATTERN
 from fast_channels.core.pds.delivery import (
     BUDGET_SHARDS,
+    CDN_LOG_EVERY,
+    CDN_LOG_LAG,
     Beacon,
     Ignored,
+    Source,
     beacon,
     budget_key,
     cap_key,
+    cdn_beacon,
+    cdn_log_query,
+    cdn_log_window,
     chain_id,
     fill_key,
     home_shard,
@@ -149,3 +155,118 @@ def test_a_break_reserves_from_a_stable_shard() -> None:
 def test_ledger_amounts_are_decimal_strings() -> None:
     assert money(Decimal("0.008")) == "0.008000"
     assert money(Decimal(1) / 3) == "0.333333"
+
+
+# The CDN-log source (W-2 1.32).
+
+SCHEDULED = datetime(2026, 11, 5, 20, 0, 13, tzinfo=UTC)
+
+
+def cdn_row(uri: str, **overrides: str | None) -> dict[str, str | None]:
+    """A row of the CDN-log query for a request of ``uri``."""
+    row: dict[str, str | None] = {
+        "timestamp_ms": "1793908801100",  # 2026-11-05T20:00:01.100Z
+        "cs_uri_query": uri.split("?", 1)[1] if "?" in uri else "-",
+        "sc_status": "200",
+        "pc": "fastm-demo-p-a",
+    }
+    return row | overrides
+
+
+def query_hours(query: str) -> tuple[set[str], set[str]]:
+    """The log hours (``yyyy/MM/dd/HH``) and select-record hours a CDN-log query reads."""
+    logs = {
+        "/".join(h)
+        for h in re.findall(r"year = '(\d+)' AND month = '(\d+)' AND day = '(\d+)' AND hour = '(\d+)'", query)
+    }
+    [selects] = re.findall(r"datehour IN \(([^)]*)\)", query)
+    return logs, set(re.findall(r"'([^']+)'", selects))
+
+
+def test_a_cdn_log_row_of_our_tracker_is_the_impression_its_beacon_is() -> None:
+    uri = tracker_url(f"https://{HOST}/ads/b.gif", f"{SID}.1234", "direct1", enr=1)
+    found = cdn_beacon(cdn_row(uri), host=HOST)
+    fired_by_mediatailor = beacon(fired(uri), host=HOST)
+
+    assert found == Beacon(
+        sid=SID,
+        evid="1234",
+        crid="direct1",
+        enr=1,
+        at=datetime(2026, 11, 5, 20, 0, 1, 100000, tzinfo=UTC),
+        configuration="fastm-demo-p-a",
+        status=200,
+        source=Source.CDN_LOG,
+    )
+    assert isinstance(fired_by_mediatailor, Beacon) and fired_by_mediatailor.source is Source.ADS_LOG
+    ads = fired_by_mediatailor
+    assert (found.decision_id, found.crid, found.enr) == (ads.decision_id, ads.crid, ads.enr)
+
+
+@pytest.mark.parametrize(
+    ("row", "why"),
+    [
+        (cdn_row(f"https://{HOST}/ads/b.gif"), Ignored.OTHER_TRACKER),
+        (cdn_row(f"https://{HOST}/ads/b.gif?evt=impression&cr=house-ad-1"), Ignored.OTHER_TRACKER),
+        (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}&c=x&e=impression&enr=0"), Ignored.MALFORMED),
+        (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}.1&c=bad%20crid&e=impression&enr=0"), Ignored.MALFORMED),
+        (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}.1&c=x&e=start&enr=0"), Ignored.OTHER_EVENT),
+        (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}.1&c=x&e=impression&enr=0", timestamp_ms="-"), Ignored.MALFORMED),
+        (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}.1&c=x&e=impression&enr=0", timestamp_ms=None), Ignored.MALFORMED),
+        ({"cs_uri_query": None}, Ignored.OTHER_TRACKER),
+    ],
+)
+def test_cdn_log_rows_that_are_not_an_impression_of_ours_are_ignored(row: dict[str, str | None], why: Ignored) -> None:
+    assert cdn_beacon(row, host=HOST) is why
+
+
+def test_a_cdn_log_row_without_a_status_or_configuration_is_still_the_impression() -> None:
+    uri = tracker_url(f"https://{HOST}/ads/b.gif", f"{SID}.7", "sim1")
+    found = cdn_beacon(cdn_row(uri, sc_status="-", pc=None), host=HOST.upper())
+
+    assert isinstance(found, Beacon) and (found.status, found.configuration) == (None, "")
+
+
+def test_consecutive_runs_read_consecutive_windows_ten_minutes_after_their_files_arrive() -> None:
+    first, second = cdn_log_window(SCHEDULED), cdn_log_window(SCHEDULED + CDN_LOG_EVERY)
+
+    assert first == (SCHEDULED - CDN_LOG_LAG - CDN_LOG_EVERY, SCHEDULED - CDN_LOG_LAG)
+    assert second[0] == first[1]
+    assert cdn_log_window(SCHEDULED.astimezone(timezone(timedelta(hours=1)))) == first
+
+
+def test_the_query_reads_the_windows_files_and_counts_only_ads_a_select_record_placed() -> None:
+    start, end = cdn_log_window(SCHEDULED)
+    query = cdn_log_query(start, end, cdn_table="fastm_pds.cdn_access", select_table="fastm_lake.pds_select")
+
+    assert "FROM fastm_pds.cdn_access" in query and "FROM fastm_lake.pds_select" in query
+    assert "cs_uri_stem = '/ads/b.gif'" in query
+    assert "\"$file_modified_time\" >= from_iso8601_timestamp('2026-11-05T19:45:13.000+00:00')" in query
+    assert "\"$file_modified_time\" < from_iso8601_timestamp('2026-11-05T19:50:13.000+00:00')" in query
+    assert "record = 'pds.select' AND NOT probe" in query
+    assert "json_extract_scalar(bid, '$.outcome') IN ('won', 'standalone')" in query
+    assert "p.decision_id = t.d AND p.crid = t.c" in query
+    logs, selects = query_hours(query)
+    assert logs == {"2026/11/05/17", "2026/11/05/18", "2026/11/05/19"}
+    assert min(selects) == "2026/11/05/16" and max(selects) == "2026/11/05/19" and len(selects) == 4
+
+
+def test_a_log_file_forty_minutes_late_is_read_by_exactly_one_run() -> None:
+    """CloudFront delivers a file about 5 minutes after its requests; this one arrives 45 minutes after."""
+    requested = datetime(2026, 11, 5, 19, 58, 30, tzinfo=UTC)
+    arrived = requested + timedelta(minutes=45)
+    readers = []
+    for n in range(48):  # every run of 4 hours
+        scheduled = datetime(2026, 11, 5, 19, 0, 13, tzinfo=UTC) + n * CDN_LOG_EVERY
+        start, end = cdn_log_window(scheduled)
+        logs, selects = query_hours(cdn_log_query(start, end, cdn_table="c", select_table="s"))
+        if start <= arrived < end:
+            readers.append(scheduled)
+            assert f"{requested:%Y/%m/%d/%H}" in logs  # its requests' hour
+            assert f"{requested - timedelta(minutes=5):%Y/%m/%d/%H}" in selects  # their breaks' select records
+
+    assert readers == [datetime(2026, 11, 5, 20, 55, 13, tzinfo=UTC)]  # window [20:40:13, 20:45:13)
+
+
+def test_a_redriven_run_reads_its_own_window_again() -> None:
+    assert cdn_log_window(SCHEDULED) == cdn_log_window(datetime.fromisoformat("2026-11-05T20:00:13Z"))

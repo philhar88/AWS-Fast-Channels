@@ -250,6 +250,7 @@ class MediaStack(Stack):
             # The Pds stack reads these (it is synthesized only with the guidance's network: no weak references).
             parameters = [
                 (PdsParameter.CONTENT_BASE_URL, content_base_url),
+                (PdsParameter.DISTRIBUTION_ID, self.distribution.distribution_id),
                 (PdsParameter.LADDER_VERSION, default_ladder_version),
             ]
             if self.catalog_contexts is not None:

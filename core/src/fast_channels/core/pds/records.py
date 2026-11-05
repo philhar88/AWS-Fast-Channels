@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from fast_channels.core.pds.delivery import Credit  # noqa: TC001 - pydantic resolves field types at runtime
+from fast_channels.core.pds.delivery import Credit, Source
 from fast_channels.core.pds.models import (
     SCHEMA_VERSION,
     DeviceType,
@@ -181,7 +181,7 @@ def select_record(
 
 
 class DeliveryRecord(BaseModel):
-    """One firing of our impression tracker, as the ADS log recorded it."""
+    """One firing of our impression tracker, as the ADS log or the CDN's log recorded it."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -194,9 +194,10 @@ class DeliveryRecord(BaseModel):
     enr: int
     pc: str = Field(description="The playback configuration that fired it.")
     fired_at: str = Field(description="When MediaTailor fired it (ISO 8601).")
-    status: int | None = Field(description="The tracker's HTTP status as MediaTailor got it.")
+    status: int | None = Field(description="The tracker's HTTP status as MediaTailor (or the CDN) saw it.")
     impression: bool = Field(description="The first firing for (sid, evid, crid): an impression.")
     fill: bool = Field(description="The first impression of the break (sid, evid): a fill.")
     credit: Credit
     line: str | None = Field(description="The own-book line the ad was reserved for.")
     amount: Money | None = Field(description="Its price (cpm / 1000), US dollars.")
+    source: Source = Field(default=Source.ADS_LOG, description="Where the firing was read: the ADS log or the CDN's.")

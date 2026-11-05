@@ -103,7 +103,9 @@ def test_the_pds_stack_reads_the_data_stack_by_parameter_not_by_weak_reference(d
         "/fastm/pds/config-bucket",
         "/fastm/pds/lake-bucket",
         "/fastm/pds/media-bucket",
+        "/fastm/pds/logs-bucket",
         "/fastm/pds/content-base-url",
+        "/fastm/pds/distribution-id",
     }
     plain = deployment(PDS)
     for stack in ("data", "media"):
@@ -135,9 +137,14 @@ def test_the_state_is_the_data_stacks(deployment: GetDeployment) -> None:
     outputs = template.to_json()["Outputs"]
     assert {"PdsTableName", "PdsConfigBucketName"} <= set(outputs)
     parameters = {p["Name"] for p in resources(template, "AWS::SSM::Parameter").values()}
-    assert {"/fastm/pds/config-bucket", "/fastm/pds/lake-bucket", "/fastm/pds/media-bucket"} <= parameters
+    assert {
+        "/fastm/pds/config-bucket",
+        "/fastm/pds/lake-bucket",
+        "/fastm/pds/media-bucket",
+        "/fastm/pds/logs-bucket",
+    } <= parameters
     media = {p["Name"] for p in resources(d.template(d.stage.media), "AWS::SSM::Parameter").values()}
-    assert {"/fastm/pds/content-base-url", "/fastm/pds/ladder-version"} <= media
+    assert {"/fastm/pds/content-base-url", "/fastm/pds/distribution-id", "/fastm/pds/ladder-version"} <= media
     off = deployment({**PDS, "modules.pds.enabled": False})
     assert "PdsTableName" not in off.template(off.stage.data).to_json()["Outputs"]
     off_media = resources(off.template(off.stage.media), "AWS::SSM::Parameter").values()
@@ -191,7 +198,7 @@ def test_the_publisher_runs_on_deploy_and_hourly_with_the_demo_demand(deployment
     assert base.lines == ()
     assert base.breaks_ms == (30030, 60060, 90090, 120120), "the 30.03 s grid of the default ladder"
     schedules = {s["ScheduleExpression"] for s in resources(template, "AWS::Scheduler::Schedule").values()}
-    assert schedules == {"rate(1 hour)", "rate(15 minutes)"}
+    assert schedules == {"rate(1 hour)", "rate(15 minutes)", "rate(5 minutes)"}  # publisher, sweeper, CDN logs
     assert template.find_resources("Custom::Trigger")
     lined = deployment({**PDS, "modules.pds.demo_lines": LINES}, extra=EXTRA)
     _, publisher = function(lined.template(lined.stage.pds), "fast_channels.functions.pds.publisher.handler")
@@ -245,7 +252,7 @@ def test_delivery_reads_the_impression_beacons_of_the_stages_mediatailor_log(dep
     keys = sorted(
         (json.dumps(s["Action"]), s["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"])
         for s in statements(template, name[:-8] + "Role")
-        if "Condition" in s
+        if "ForAllValues:StringLike" in s.get("Condition", {})
     )
     assert keys == [
         ('"dynamodb:PutItem"', ["IMP#*", "FILL#*"]),
@@ -254,6 +261,57 @@ def test_delivery_reads_the_impression_beacons_of_the_stages_mediatailor_log(dep
     ]
     names = {a["AlarmName"] for a in resources(template, "AWS::CloudWatch::Alarm").values()}
     assert {"fastm-pds-delivery-dead-letters", "fastm-pds-sweeper-dead-letters"} <= names
+
+
+def test_delivery_also_reads_our_trackers_requests_in_the_cdns_logs_every_five_minutes(
+    deployment: GetDeployment,
+) -> None:
+    d = deployment(PDS, extra=EXTRA)
+    template = d.template(d.stage.pds)
+    name, delivery = function(template, DELIVERY)
+    [schedule] = [
+        s
+        for s in resources(template, "AWS::Scheduler::Schedule").values()
+        if s["Target"]["Arn"]["Fn::GetAtt"][0] == name
+    ]
+    [database] = [db["DatabaseInput"] for db in resources(template, "AWS::Glue::Database").values()]
+    [table] = [t for t in resources(template, "AWS::Glue::Table").values() if t["TableInput"]["Name"] == "cdn_access"]
+    granted = statements(template, name[:-8] + "Role")
+
+    assert schedule["ScheduleExpression"] == "rate(5 minutes)"
+    assert json.loads(schedule["Target"]["Input"]) == {
+        "source": "cdn_log",
+        "scheduled": "<aws.scheduler.scheduled-time>",
+    }
+    assert "DeadLetterConfig" in schedule["Target"] and delivery["Timeout"] == 180
+    assert (
+        delivery["Environment"]["Variables"].items()
+        >= {
+            "LAKE_WORKGROUP": "fastm-lake",
+            "CDN_LOG_TABLE": "fastm_pds.cdn_access",
+            "SELECT_TABLE": "fastm_lake.pds_select",
+        }.items()
+    )
+    assert database["Name"] == "fastm_pds", "not the lake: the table has the query strings"
+    assert table["DatabaseName"] == {"Ref": next(iter(resources(template, "AWS::Glue::Database")))}
+    storage = table["TableInput"]["StorageDescriptor"]
+    assert [c["Name"] for c in storage["Columns"]] == ["timestamp_ms", "cs_uri_stem", "cs_uri_query", "sc_status"]
+    assert [k["Name"] for k in table["TableInput"]["PartitionKeys"]] == ["year", "month", "day", "hour"]
+    location = json.dumps(table["TableInput"]["Parameters"]["storage.location.template"])
+    assert "AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=" in location
+    assert "year=${year}/month=${month}/day=${day}/hour=${hour}/" in location
+    [athena] = [s for s in granted if "athena:StartQueryExecution" in s["Action"]]
+    assert athena["Resource"] == "arn:aws:athena:us-east-1:123456789012:workgroup/fastm-lake"
+    [glue] = [s for s in granted if "glue:GetTable" in s["Action"]]
+    assert glue["Action"] == ["glue:GetDatabase", "glue:GetTable"]
+    assert {r for r in glue["Resource"] if "table/" in r} == {
+        "arn:aws:glue:us-east-1:123456789012:table/fastm_pds/cdn_access",
+        "arn:aws:glue:us-east-1:123456789012:table/fastm_lake/pds_select",
+    }
+    [objects] = [s for s in granted if s["Action"] == "s3:GetObject"]
+    assert "pds/select/*" in json.dumps(objects["Resource"]) and "CloudFront/DistributionId=" in json.dumps(objects)
+    listing = [s["Condition"]["StringLike"]["s3:prefix"] for s in granted if "s3:ListBucket" in s["Action"]]
+    assert len(listing) == 2 and ["pds/select/*"] in listing
 
 
 def test_the_sweeper_queries_only_the_pending_index(deployment: GetDeployment) -> None:

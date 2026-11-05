@@ -1077,8 +1077,9 @@ class DemandStage:
 
     def check_pds_state(self) -> None:
         """With ``modules.pds.enabled`` the Data and Media stacks must have written the parameters the Pds stack
-        reads (``/<prefix>/pds/*``: its table's and buckets' names, the CDN, the ladder, and with ``modules.crawl``
-        the catalog-context bucket; ``make deploy`` first); without it, a Pds stack left from before is deleted."""
+        reads (``/<prefix>/pds/*``: its table's and buckets' names, the CDN and its distribution, the ladder, and
+        with ``modules.crawl`` the catalog-context bucket; ``make deploy`` first); without it, a Pds stack left from
+        before is deleted."""
         if not self.config.modules.pds.enabled:
             self.delete_stack(self.client("cloudformation"), self.pds_stack)
             return

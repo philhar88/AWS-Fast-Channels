@@ -60,6 +60,14 @@ All notable changes to this project are documented here. The format follows
     when the hook's redeem never landed. `pds.policy` records carry a bound viewer's `vid` and the ticket's `cid`.
 
   The edge rebuild's dropping of `aws.*` is listed as a workaround of `W-2 FR-1`.
+- **Delivery from two sources** (`modules.pds`, W-2 1.32): the vended ADS log can leave out a whole break that
+  MediaTailor filled, so the delivery function also counts our tracker's requests in the CDN's standard logs. Every 5
+  minutes one Athena query reads the log files that arrived 10 to 15 minutes earlier, each file once, and counts only
+  requests whose break's select record placed that ad. A firing that both sources record counts once, by
+  `(sid, evid, crid)`. The metric `CdnLogOnlyImpressions` counts what the ADS log left out, and `pds.delivery`
+  records gain `source`. The query string stays out of the lake, in the PDS's own Glue database `<prefix>_pds`. The
+  Data and Media stacks write two more parameters for the Pds stack, `/<prefix>/pds/logs-bucket` and
+  `/<prefix>/pds/distribution-id`: run `make deploy` before `deploy-demand`.
 
 ## [4.0.0] - 2026-10-31
 

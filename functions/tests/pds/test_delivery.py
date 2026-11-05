@@ -3,8 +3,9 @@
 import base64
 import gzip
 import json
+import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -16,7 +17,17 @@ from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from fast_channels.core.pds.book import Line
-from fast_channels.core.pds.delivery import Credit, State, fill_key, home_shard, impression_key, reservation_key
+from fast_channels.core.pds.delivery import (
+    CDN_LOG_EVERY,
+    Credit,
+    Source,
+    State,
+    fill_key,
+    home_shard,
+    impression_key,
+    reservation_key,
+)
+from fast_channels.core.pds.pod import tracker_url
 from fast_channels.functions import aws
 from fast_channels.functions.pds import delivery, sweeper
 from fast_channels.functions.pds.reservations import Hold, reserve, set_budgets
@@ -86,12 +97,92 @@ def recorded() -> list[dict[str, Any]]:
     return [json.loads(line) for line in FIXTURES.read_text().splitlines()]
 
 
+@dataclass
+class LogFile:
+    """One CloudFront log file: when it arrived, and its rows of our tracker that the select join keeps."""
+
+    arrived: datetime
+    rows: list[dict[str, str]]
+
+
+@dataclass
+class Athena:
+    """An Athena double for the CDN-log query: it returns the rows of the files that arrived in the query's window
+    and whose requests are in the hours it reads, as Athena does with ``$file_modified_time`` and the partitions."""
+
+    files: list[LogFile] = field(default_factory=list)
+    state: str = "SUCCEEDED"
+    queries: list[str] = field(default_factory=list)
+
+    def start_query_execution(self, *, QueryString: str, WorkGroup: str) -> dict[str, str]:  # noqa: N803
+        assert WorkGroup == "fastm-lake"
+        self.queries.append(QueryString)
+        return {"QueryExecutionId": str(len(self.queries))}
+
+    def get_query_execution(self, *, QueryExecutionId: str) -> dict[str, Any]:  # noqa: N803
+        status = {"State": self.state, "StateChangeReason": "boom" if self.state == "FAILED" else None}
+        return {"QueryExecution": {"Status": status, "Statistics": {"DataScannedInBytes": 291}}}
+
+    def get_paginator(self, name: str) -> Any:
+        assert name == "get_query_results"
+        athena = self
+
+        class Pages:
+            def paginate(self, *, QueryExecutionId: str) -> Iterator[dict[str, Any]]:  # noqa: N803
+                rows = athena.rows(athena.queries[int(QueryExecutionId) - 1])
+                header = [{"VarCharValue": name} for name in ("timestamp_ms", "cs_uri_query", "sc_status", "pc")]
+                data = [header] + [[{"VarCharValue": row[name]} for name in row] for row in rows]
+                for n in range(0, len(data), 2):  # two rows a page
+                    yield {"ResultSet": {"Rows": [{"Data": d} for d in data[n : n + 2]]}}
+
+        return Pages()
+
+    def rows(self, query: str) -> list[dict[str, str]]:
+        start, end = (datetime.fromisoformat(t) for t in re.findall(r"from_iso8601_timestamp\('([^']+)'\)", query))
+        hours = set(re.findall(r"year = '(\d+)' AND month = '(\d+)' AND day = '(\d+)' AND hour = '(\d+)'", query))
+        return [
+            row
+            for file in self.files
+            if start <= file.arrived < end
+            for row in file.rows
+            if tuple(f"{requested(row):%Y %m %d %H}".split()) in hours
+        ]
+
+
+def requested(row: dict[str, str]) -> datetime:
+    return datetime.fromtimestamp(int(row["timestamp_ms"]) / 1000, UTC)
+
+
+def cdn_row(decision: str, crid: str, at: datetime) -> dict[str, str]:
+    """Our tracker's request as the CDN logged it (``cs_uri_query`` is the tracker's query string)."""
+    query = tracker_url(f"{CDN}/ads/b.gif", decision, crid).split("?", 1)[1]
+    return {
+        "timestamp_ms": str(int(at.timestamp() * 1000)),
+        "cs_uri_query": query,
+        "sc_status": "200",
+        "pc": "fastm-demo",
+    }
+
+
+def cdn_run(scheduled: datetime) -> dict[str, str]:
+    """The schedule's event for its run at ``scheduled``."""
+    return {"source": "cdn_log", "scheduled": scheduled.isoformat().replace("+00:00", "Z")}
+
+
 @pytest.fixture
-def stage(dynamodb: Tables, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tables]:
+def athena() -> Athena:
+    return Athena()
+
+
+@pytest.fixture
+def stage(dynamodb: Tables, athena: Athena, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tables]:
     monkeypatch.setenv("PDS_TABLE", dynamodb.pds)
     monkeypatch.setenv("LEDGER_TABLE", dynamodb.ledger)
     monkeypatch.setenv("CONTENT_BASE_URL", CDN)
-    monkeypatch.setattr(aws, "client", lambda service: dynamodb.client)
+    monkeypatch.setenv("LAKE_WORKGROUP", "fastm-lake")
+    monkeypatch.setenv("CDN_LOG_TABLE", "fastm_pds.cdn_access")
+    monkeypatch.setenv("SELECT_TABLE", "fastm_lake.pds_select")
+    monkeypatch.setattr(aws, "client", lambda service: athena if service == "athena" else dynamodb.client)
     settings.cache_clear()
     delivery.host.cache_clear()
     set_budgets(dynamodb.client, table=dynamodb.pds, ledger_table=dynamodb.ledger, lines=LINES, now=RESERVED_AT)
@@ -242,3 +333,97 @@ def test_the_sweeper_waits_for_a_backfilling_index(monkeypatch: pytest.MonkeyPat
                 sweeper.sweep("t", "l", now=RESERVED_AT, time_left=lambda: 60_000)
         else:
             assert sweeper.sweep("t", "l", now=RESERVED_AT, time_left=lambda: 60_000) == {"released": 0, "skipped": 0}
+
+
+# The CDN-log runs (W-2 1.32).
+
+FIRED = RESERVED_AT + timedelta(seconds=11)
+"""When MediaTailor fired the trackers of the CDN-log tests (the reservations' breaks)."""
+ON_TIME = FIRED + timedelta(minutes=4)
+"""When CloudFront delivered their log file: about 5 minutes after the requests (seen live)."""
+
+
+def run_at(arrived: datetime) -> datetime:
+    """The scheduled time of the run whose window holds ``arrived`` (runs at :00:13, :05:13, ...)."""
+    first = arrived.replace(minute=0, second=13, microsecond=0) - timedelta(hours=1)
+    return next(
+        first + n * CDN_LOG_EVERY
+        for n in range(48)
+        if first + n * CDN_LOG_EVERY - timedelta(minutes=15)
+        <= arrived
+        < first + n * CDN_LOG_EVERY - timedelta(minutes=10)
+    )
+
+
+def emitted(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"_aws"' in line]
+
+
+def test_a_cdn_log_run_counts_once_what_the_ads_log_left_out(
+    stage: Tables, athena: Athena, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    delivery.handler(subscription(recorded()[:1]), Context())  # the ADS log has direct1 of S1, not direct2 of S2
+    caplog.clear()
+    capsys.readouterr()
+    athena.files.append(
+        LogFile(ON_TIME, [cdn_row(f"{S1}.1234", "direct1", FIRED), cdn_row(f"{S2}.77", "direct2", FIRED)])
+    )
+
+    totals = delivery.handler(cdn_run(run_at(ON_TIME)), Context())
+
+    assert totals == {"beacons": 2, "impressions": 1, "fills": 1, "delivered": 1, "late": 0, "ignored": 0}
+    [metrics] = emitted(capsys)
+    assert (metrics["CdnLogBeacons"], metrics["CdnLogOnlyImpressions"], metrics["Impressions"]) == ([2.0], [1.0], [1.0])
+    logged = [(r["crid"], r["impression"], r["credit"], r["source"], r["pc"]) for r in records(caplog)]
+    assert logged == [
+        ("direct1", False, "repeat", "cdn_log", "fastm-demo"),
+        ("direct2", True, "delivered", "cdn_log", "fastm-demo"),
+    ]
+    item = stage.item(reservation_key(f"{S2}.77", "direct2"))
+    assert item is not None and item["state"]["S"] == State.DELIVERED
+    imp = stage.item(impression_key(f"{S2}.77", "direct2"))
+    assert imp is not None and imp["src"]["S"] == Source.CDN_LOG
+    first = stage.item(impression_key(f"{S1}.1234", "direct1"))
+    assert first is not None and first["src"]["S"] == Source.ADS_LOG
+
+    late_beacon = recorded()[-1]  # the ADS log's direct2 of S2 arrives after all: nothing more
+    again = delivery.handler(subscription([late_beacon]), Context())
+    assert (again["beacons"], again["impressions"], again["delivered"]) == (1, 0, 0)
+    deliveries = [e for e in stage.ledger_entries() if e["action"]["S"] == "money.deliver"]
+    assert len(deliveries) == 2
+
+
+def test_a_log_file_forty_minutes_late_is_counted_once_by_the_run_its_arrival_falls_in(
+    stage: Tables, athena: Athena, caplog: pytest.LogCaptureFixture
+) -> None:
+    late = ON_TIME + timedelta(minutes=40)
+    athena.files += [LogFile(ON_TIME, []), LogFile(late, [cdn_row(f"{S2}.77", "direct2", FIRED)])]
+    runs = [run_at(ON_TIME) + n * CDN_LOG_EVERY for n in range(24)]  # two hours of runs
+
+    counted = [(scheduled, delivery.handler(cdn_run(scheduled), Context())["impressions"]) for scheduled in runs]
+
+    assert [(scheduled, n) for scheduled, n in counted if n] == [(run_at(late), 1)]
+    assert [r["impression"] for r in records(caplog)] == [True]
+    redriven = delivery.handler(cdn_run(run_at(late)), Context())
+    assert (redriven["beacons"], redriven["impressions"], redriven["delivered"]) == (1, 0, 0)
+
+
+def test_a_failed_query_fails_the_run(stage: Tables, athena: Athena) -> None:
+    athena.state = "FAILED"
+
+    with pytest.raises(RuntimeError, match="FAILED: boom"):
+        delivery.handler(cdn_run(run_at(ON_TIME)), Context())
+
+
+def test_a_cdn_log_row_that_is_not_ours_is_skipped(
+    stage: Tables, athena: Athena, caplog: pytest.LogCaptureFixture
+) -> None:
+    broken = cdn_row(f"{S1}.1234", "direct1", FIRED) | {"cs_uri_query": f"d={S1}.1234&e=impression&enr=0"}
+    athena.files.append(LogFile(ON_TIME, [broken]))
+
+    totals = delivery.handler(cdn_run(run_at(ON_TIME)), Context())
+
+    assert (totals["beacons"], totals["ignored"]) == (0, 1)
+    assert [getattr(r, "reason", None) for r in caplog.records if r.getMessage() == "tracker firing ignored"] == [
+        "malformed"
+    ]
