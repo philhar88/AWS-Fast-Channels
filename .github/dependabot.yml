@@ -19,6 +19,11 @@ updates:
     groups:
       cloudscape: { patterns: ["@cloudscape-design/*"] }
       build-tooling: { patterns: ["vite*", "@vitejs/*", "typescript*", "eslint*", "@eslint/*", "typescript-eslint", "vitest", "@playwright/*"] }
+    ignore:
+      # typescript-eslint 8.x supports TypeScript below 6.1 only (its peer range), so a group with TypeScript 7 cannot
+      # install. Lift this once a typescript-eslint release supports TypeScript 7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /pds
     schedule: { interval: weekly, day: monday }
