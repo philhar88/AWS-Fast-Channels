@@ -26,6 +26,7 @@ from fast_channels.infra.constructs.crawl.store import CatalogContextBucket
 from fast_channels.infra.constructs.delivery import CdnAccessLogs, MediaDistribution
 from fast_channels.infra.constructs.encoding import EncodingLadder, IngestPipeline, LadderKit, LadderProvisioner
 from fast_channels.infra.constructs.events import FastEventBus
+from fast_channels.infra.constructs.identity.edge import EdgeRebuild, edge_error_alarm
 from fast_channels.infra.constructs.observability import MediaObservability
 from fast_channels.infra.exports import ChannelExports, MediaExports
 
@@ -88,6 +89,9 @@ class MediaStack(Stack):
         self.catalog_contexts: CatalogContextBucket | None = None
         if config.modules.crawl.enabled:
             self.catalog_contexts = CatalogContextBucket(self, "CatalogContexts", removal_policy=removal)
+        # The identity module's edge rebuild: MediaTailor's session init gets only a valid playback ticket.
+        identity = config.modules.identity.enabled
+        self.edge_rebuild = EdgeRebuild(self, "EdgeRebuild", prefix=prefix) if identity else None
         self.delivery = MediaDistribution(
             self,
             "Delivery",
@@ -96,6 +100,7 @@ class MediaStack(Stack):
             content_domain=config.delivery.content_domain,
             certificate_arn=config.delivery.certificate_arn,
             price_class=_PRICE_CLASSES[config.delivery.price_class],
+            edge_rebuild=self.edge_rebuild.function if self.edge_rebuild else None,
         )
         self.distribution = self.delivery.distribution
         if self.catalog_contexts is not None:
@@ -103,7 +108,12 @@ class MediaStack(Stack):
         self.access_logs: CdnAccessLogs | None = None
         if self.region == CLOUDFRONT_REGION:
             self.access_logs = CdnAccessLogs(
-                self, "CdnAccessLogs", distribution=self.distribution, logs_bucket=data.logs_bucket, name=prefix
+                self,
+                "CdnAccessLogs",
+                distribution=self.distribution,
+                logs_bucket=data.logs_bucket,
+                name=prefix,
+                private=identity,
             )
         content_base_url = self.delivery.content_base_url
 
@@ -205,6 +215,14 @@ class MediaStack(Stack):
             dead_letter_queues={"ingest": self.pipeline.dead_letter_queue},
             census_changes=config.modules.ops.enabled,
         )
+        if identity and self.region == CLOUDFRONT_REGION:  # elsewhere the Edge stack holds the alarm
+            self.observability.alarms[f"{prefix}-identity-edge-errors"] = edge_error_alarm(
+                self,
+                "EdgeRebuildErrors",
+                prefix=prefix,
+                topic=self.observability.topic,
+                name=f"{prefix}-identity-edge-errors",
+            )
         self.exports = MediaExports(
             distribution=self.distribution,
             cdn_base_url=self.delivery.cdn_base_url,

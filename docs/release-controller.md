@@ -27,7 +27,7 @@ send their ad requests as a templated OpenRTB POST to Prebid Server:
 
 | Sibling | Role |
 |---|---|
-| `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it) |
+| `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it). With the `identity` module they are *ticketed*: their PRE_SESSION root redeems the playback ticket before the session controls, and their ad requests carry it (`X-Fast-T`), except on the lab channel ([identity.md](identity.md#the-pre_session-redeem)) |
 | `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs. It runs the stable sibling's release, re-applied after every promotion and rollback ([below](#the-probe-follows-the-stable-release)) |
 
 These names, and the controller's IAM grants on `<channel>-p-*`, belong to the channel: the configuration refuses

@@ -14,12 +14,16 @@ that creates its own user passes its email and password instead. ``ticket_of`` a
 
 import base64
 import json
+import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
-from fast_channels.core.identity.names import Parameter, demo_users_secret, parameter_name
+from fast_channels.core.identity.names import PERSONA_ATTRIBUTE, Parameter, demo_users_secret, parameter_name
 from fast_channels.core.identity.ticket import TICKET
 
 if TYPE_CHECKING:
@@ -54,6 +58,42 @@ def tokens(stage: Stage, email: str, password: str) -> dict[str, str]:
         AuthParameters={"USERNAME": email, "PASSWORD": password},
     )
     return {name: value for name, value in answer["AuthenticationResult"].items() if isinstance(value, str)}
+
+
+@dataclass(frozen=True)
+class SignedIn:
+    """A viewer of the pool, signed in: their ``sub`` (for computing their ``vid``) and tokens."""
+
+    email: str
+    sub: str
+    access_token: str
+    id_token: str
+
+
+@contextmanager
+def viewer(stage: Stage, email: str, *, persona: str) -> Iterator[SignedIn]:
+    """A pool user of the test's own (``email``, ``custom:persona``), signed in with a password as the viewer app
+    does, and deleted afterwards. No email is sent."""
+    cognito = stage.session.client("cognito-idp")
+    pool, password = parameter(stage, Parameter.USER_POOL_ID), f"{secrets.token_urlsafe(18)}aA1!"
+    cognito.admin_create_user(
+        UserPoolId=pool,
+        Username=email,
+        UserAttributes=[
+            {"Name": "email", "Value": email},
+            {"Name": "email_verified", "Value": "true"},
+            {"Name": f"custom:{PERSONA_ATTRIBUTE}", "Value": persona},
+        ],
+        MessageAction="SUPPRESS",
+    )
+    try:
+        cognito.admin_set_user_password(UserPoolId=pool, Username=email, Password=password, Permanent=True)
+        user = cognito.admin_get_user(UserPoolId=pool, Username=email)
+        sub = next(a["Value"] for a in user["UserAttributes"] if a["Name"] == "sub")
+        signed_in = tokens(stage, email, password)
+        yield SignedIn(email, sub, signed_in["AccessToken"], signed_in["IdToken"])
+    finally:
+        cognito.admin_delete_user(UserPoolId=pool, Username=email)
 
 
 def sign_in(stage: Stage, persona: str) -> str:

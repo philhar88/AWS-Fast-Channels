@@ -12,7 +12,7 @@ and MediaTailor's server-side beacon redirects are ``/v1/segment/*`` requests, w
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Final
 
@@ -173,6 +173,8 @@ class Route:
     compress: bool
     methods: Methods
     purpose: str
+    viewer_request: str | None = None
+    """What a viewer-request function on the route does (another CDN must do the same), or None."""
 
     def contract(self) -> dict[str, Any]:
         """CDN-neutral description of the route; without ``forward`` only the cache key reaches the origin."""
@@ -185,6 +187,7 @@ class Route:
             "cache": self.cache.contract(),
             **({"forward": self.forward.contract()} if self.forward else {}),
             "cors": self.cors.value,
+            **({"viewer_request": self.viewer_request} if self.viewer_request else {}),
         }
 
 
@@ -247,12 +250,36 @@ CATALOG_CONTEXT_ROUTE: Final = Route(
 so S3 sees a ``GetObject`` of a key under ``catalog/ctx/``: never the bucket root, never a listing."""
 
 
-def routes(*, catalog_context: bool = False) -> tuple[Route, ...]:
+MEDIATAILOR_PATH: Final = "/v1/*"
+EDGE_REBUILD: Final = (
+    "The identity module's edge rebuild: the query is emptied, an init request (/v1/master/<40 hex>/<configuration>/"
+    "<name>.m3u8, or /v1/dash/…/<name>.mpd) gets back only a single ads.t of 22 URL-safe characters, /v1/session is "
+    "refused (403), a non-canonical init path too (400), and other paths keep their query"
+)
+"""What the ``/v1/*`` route's viewer-request function does with the identity module on
+(``constructs.identity.edge``)."""
+
+
+def _ticketed(route: Route) -> Route:
+    """The ``/v1/*`` route with the identity module: reads only, behind the edge rebuild."""
+    return replace(
+        route,
+        methods=Methods.READ,
+        purpose=(
+            "SSAI sessions: multivariant (/v1/master), media playlists (/v1/manifest, gzip), tracking, ad segment "
+            "redirects (/v1/segment); no explicit session initialization"
+        ),
+        viewer_request=EDGE_REBUILD,
+    )
+
+
+def routes(*, catalog_context: bool = False, ticketed: bool = False) -> tuple[Route, ...]:
     """The routing table of a deployment: :data:`ROUTES`, with the catalog-context route before the default one when
-    the ``crawl`` module is on."""
+    the ``crawl`` module is on, and the ``/v1/*`` route behind the edge rebuild when the ``identity`` module is."""
+    table = tuple(_ticketed(r) if ticketed and r.path == MEDIATAILOR_PATH else r for r in ROUTES)
     if not catalog_context:
-        return ROUTES
-    return (*ROUTES[:-1], CATALOG_CONTEXT_ROUTE, ROUTES[-1])
+        return table
+    return (*table[:-1], CATALOG_CONTEXT_ROUTE, table[-1])
 
 
 def path_contract(*, region: str, media_host: str, table: tuple[Route, ...] = ROUTES) -> dict[str, Any]:
@@ -341,6 +368,8 @@ class MediaDistribution(Construct):
         certificate_arn: ACM certificate in us-east-1 covering ``content_domain``.
         price_class: edge locations to serve from.
         publish_additional_metrics: CloudFront's paid per-distribution metrics (cache hit rate, origin latency).
+        edge_rebuild: the ``identity`` module's viewer-request function; puts the ``/v1/*`` route behind it, reads
+            only (``constructs.identity.edge``).
 
     Attributes:
         distribution: the CloudFront distribution.
@@ -364,8 +393,10 @@ class MediaDistribution(Construct):
         certificate_arn: str | None = None,
         price_class: cf.PriceClass = cf.PriceClass.PRICE_CLASS_ALL,
         publish_additional_metrics: bool = False,
+        edge_rebuild: cf.IFunction | None = None,
     ) -> None:
         super().__init__(scope, id)
+        self.edge_rebuild = edge_rebuild
         if (content_domain is None) != (certificate_arn is None):
             raise ValueError("content_domain and certificate_arn must be given together")
         stack = Stack.of(self)
@@ -388,7 +419,7 @@ class MediaDistribution(Construct):
             server_timing_sampling_rate=100,
         )
         targets = _origins(media_bucket, region=stack.region, catalog_bucket=catalog_bucket)
-        self.routes = routes(catalog_context=catalog_bucket is not None)
+        self.routes = routes(catalog_context=catalog_bucket is not None, ticketed=edge_rebuild is not None)
         behaviours = {route.path: self._behaviour(route, targets) for route in self.routes}
         self.distribution = cf.Distribution(
             self,
@@ -433,6 +464,11 @@ class MediaDistribution(Construct):
             allowed_methods=_ALLOWED_METHODS[route.methods],
             cached_methods=_CACHED_METHODS[route.methods],
             viewer_protocol_policy=cf.ViewerProtocolPolicy.HTTPS_ONLY,
+            function_associations=[
+                cf.FunctionAssociation(function=self.edge_rebuild, event_type=cf.FunctionEventType.VIEWER_REQUEST)
+            ]
+            if route.viewer_request and self.edge_rebuild is not None
+            else None,
         )
 
 
@@ -531,6 +567,9 @@ ACCESS_LOG_FIELDS: Final[tuple[str, ...]] = (
 )
 """Standard logs v2 record fields (``aws logs describe-configuration-templates --service cloudfront``); cookies
 and field-level-encryption fields are left out."""
+VIEWER_ACCESS_LOG_FIELDS: Final = frozenset({"c-ip", "cs-uri-query", "x-forwarded-for"})
+"""The viewer's address and original query: ``cs-uri-query`` is recorded before any edge rewrite, so it holds the
+playback ticket. The lake never reads them, and with the ``identity`` module the delivery leaves them out."""
 S3_SUFFIX_PATH: Final = "{DistributionId}/{yyyy}/{MM}/{dd}/{HH}"
 
 
@@ -549,6 +588,8 @@ class CdnAccessLogs(Construct):
         distribution: the distribution to log.
         logs_bucket: bucket receiving the Parquet objects.
         name: prefix of the delivery source and destination names, unique per account (the deployment prefix).
+        private: leave out :data:`VIEWER_ACCESS_LOG_FIELDS` (the ``identity`` module: the original query holds the
+            playback ticket).
 
     Attributes:
         source: the delivery source.
@@ -563,6 +604,7 @@ class CdnAccessLogs(Construct):
         distribution: cf.IDistribution,
         logs_bucket: s3.IBucket,
         name: str,
+        private: bool = False,
     ) -> None:
         super().__init__(scope, id)
         stack = Stack.of(self)
@@ -587,7 +629,7 @@ class CdnAccessLogs(Construct):
             "S3Delivery",
             source=self.source,
             destination_arn=destination.attr_arn,
-            record_fields=list(ACCESS_LOG_FIELDS),
+            record_fields=[f for f in ACCESS_LOG_FIELDS if not (private and f in VIEWER_ACCESS_LOG_FIELDS)],
             s3_suffix_path=S3_SUFFIX_PATH,
             s3_enable_hive_compatible_path=True,
         )

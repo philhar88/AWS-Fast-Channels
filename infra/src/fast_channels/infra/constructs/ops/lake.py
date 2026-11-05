@@ -35,7 +35,7 @@ from fast_channels.core.mediatailor_logs import (
     MANIFEST_LOG_FIELDS,
 )
 from fast_channels.infra.arns import arn
-from fast_channels.infra.constructs.delivery import ACCESS_LOG_FIELDS
+from fast_channels.infra.constructs.delivery import ACCESS_LOG_FIELDS, VIEWER_ACCESS_LOG_FIELDS
 from fast_channels.infra.constructs.logs import DELIVERY_PRINCIPAL, deliver
 
 __all__ = [
@@ -50,7 +50,7 @@ __all__ = [
     "lake_database_name",
 ]
 
-EXCLUDED_ACCESS_LOG_FIELDS: Final = frozenset({"c-ip", "cs-uri-query", "x-forwarded-for"})
+EXCLUDED_ACCESS_LOG_FIELDS: Final = VIEWER_ACCESS_LOG_FIELDS
 """CloudFront fields the lake's table leaves out: the viewer's address and the original viewer query."""
 
 LEDGER_PREFIX: Final = "ledger/"

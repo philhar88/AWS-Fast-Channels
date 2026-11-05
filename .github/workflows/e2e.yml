@@ -71,17 +71,18 @@ jobs:
         if: always() && !inputs.keep
         run: npx cdk destroy '**' --force -c "fast-channels.prefix=$PREFIX"
 
-  # The demand path (BUILD-PLAN §12.3 e2e-demand): the stage's repository stacks with ops, demand, pds, release and
-  # crawl, the Prebid Server guidance on its own bootstrap, the synthetic edge tests, the release and crawl modules'
-  # tests, then viewers on the channel's stable sibling through MediaTailor, Prebid Server and the Pod Decision Service
-  # (test_14_demand_pods.py); then everything destroyed and inventoried. Costs about US$3-5 per run.
+  # The demand path (BUILD-PLAN §12.3 e2e-demand): the stage's repository stacks with ops, demand, pds, release, crawl
+  # and identity, the Prebid Server guidance on its own bootstrap, the synthetic edge tests, the release, crawl and
+  # identity modules' tests, then viewers on the channel's stable sibling through MediaTailor, Prebid Server and the
+  # Pod Decision Service (test_14_demand_pods.py), and signed-in, replayed and guest sessions
+  # (test_19_identity_session.py); then everything destroyed and inventoried. Costs about US$3-5 per run.
   e2e-demand:
     if: inputs.leg == 'demand'
     runs-on: ubuntu-24.04-arm
     environment: e2e
     timeout-minutes: 240
     env:
-      MODULES: ops,demand,pds,release,crawl
+      MODULES: ops,demand,pds,release,crawl,identity
     steps:
       - name: Check the prefix
         run: |
@@ -110,7 +111,8 @@ jobs:
       - name: Demand tests
         run: >-
           uv run pytest tests/e2e/test_11_demand_edge.py tests/e2e/test_12_release.py tests/e2e/test_13_crawl.py
-          tests/e2e/test_14_demand_pods.py -m e2e --prefix "$PREFIX" -v
+          tests/e2e/test_14_demand_pods.py tests/e2e/test_17_identity.py tests/e2e/test_19_identity_session.py
+          -m e2e --prefix "$PREFIX" -v
       - name: Destroy the demand module
         if: always() && !inputs.keep
         run: make destroy-demand STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"

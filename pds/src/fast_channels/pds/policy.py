@@ -1,12 +1,13 @@
 """``POST /policy``: the patch the fast-ctv Prebid Server module applies before each auction.
 
-The answer comes from ``fast_channels.core.pds.policy.decide`` with the current snapshot (``state.store``): until
-viewer identity exists every session is CONTEXTUAL (a ticket that is missing, malformed or not looked up), probes are
-SAFE, kids configurations KIDS. With the crawl module on, its patch contributor (``functions.crawl.patch``) adds the
-title's ``app.content``. The module waits ``modules.pds.policy_timeout_ms`` for the answer; anything but a 200 with a
-known schema leaves the stored request alone (own book and house, no third party). Before the sidecar has a snapshot
-it answers 503 at once (``http.NO_SNAPSHOT``). Each answer is logged as a ``pds.policy`` decision record, which a
-subscription carries into the lake.
+The answer comes from ``fast_channels.core.pds.policy.decide`` with the current snapshot (``state.store``) and, with
+the identity module, the ticket's binding (``bindings``): a bound viewer's break follows their privacy mode, any
+other session's is CONTEXTUAL with the reason; probes are SAFE, kids configurations KIDS. With the crawl module on,
+its patch contributor (``functions.crawl.patch``) adds the title's ``app.content``. The module waits
+``modules.pds.policy_timeout_ms`` for the answer; anything but a 200 with a known schema leaves the stored request
+alone (own book and house, no third party). Before the sidecar has a snapshot it answers 503 at once
+(``http.NO_SNAPSHOT``). Each answer is logged as a ``pds.policy`` decision record, which a subscription carries into
+the lake; a bound viewer's names them by ``vid``.
 """
 
 import time
@@ -16,11 +17,12 @@ from aws_lambda_powertools import Logger
 from pydantic import ValidationError
 
 from fast_channels.core.pds.models import PolicyRequest
-from fast_channels.core.pds.policy import decide
+from fast_channels.core.pds.policy import ANONYMOUS, decide
 from fast_channels.core.pds.records import policy_record
 from fast_channels.core.pds.snapshot import EMPTY
 from fast_channels.functions.crawl.patch import contributor
 from fast_channels.pds import state
+from fast_channels.pds.bindings import bindings
 from fast_channels.pds.http import INTERNAL, NO_SNAPSHOT, REFUSED, Answer, refused_fields
 from fast_channels.pds.telemetry import counters
 
@@ -61,7 +63,17 @@ def _answer(request: PolicyRequest, started: float) -> Answer:
     if snapshot.version == EMPTY.version:
         counters.add("PolicyNoSnapshot")
         return NO_SNAPSHOT
-    decision = decide(request, snapshot.allow_list, origin_facing=snapshot.networks, contributors=contributors())
+    lookup = bindings()
+    binding = lookup.inputs(request) if lookup is not None else None
+    decision = decide(
+        request,
+        snapshot.allow_list,
+        origin_facing=snapshot.networks,
+        identity=binding.identity if binding else None,
+        viewer=binding.viewer if binding else ANONYMOUS,
+        consent=binding.consent if binding else None,
+        contributors=contributors(),
+    )
     body = decision.response.model_dump_json()
     record = policy_record(request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3))
     logger.info(

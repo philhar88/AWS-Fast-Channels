@@ -60,6 +60,8 @@ class Viewer:
     tier: int | None = None
     gpp: str | None = None
     gpp_sid: tuple[int, ...] = ()
+    persona: str | None = None
+    """The demo persona the viewer signed in as (``custom:persona``), for the persona-aware parts of the PDS."""
 
 
 ANONYMOUS: Final = Viewer()
@@ -183,6 +185,8 @@ class PolicyDecision:
     response: PolicyResponse
     ip_rule: IpRule
     contributions: Contributions
+    viewer: Viewer = ANONYMOUS
+    """The viewer parameters the mode allows: a bound viewer's in FULL and PSEUDONYMOUS, else none."""
 
 
 def decide(
@@ -228,4 +232,4 @@ def decide(
         devicetype=device_type(request.ua),
         app_content=contributions.app_content or None,
     )
-    return PolicyDecision(response, address.rule, contributions)
+    return PolicyDecision(response, address.rule, contributions, resolution.viewer)

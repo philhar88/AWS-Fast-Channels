@@ -1642,6 +1642,14 @@
                 "Type": "string"
               },
               {
+                "Name": "vid",
+                "Type": "string"
+              },
+              {
+                "Name": "cid",
+                "Type": "string"
+              },
+              {
                 "Name": "bidders",
                 "Type": "array<string>"
               },
