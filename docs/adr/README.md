@@ -26,7 +26,7 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0015](0015-pluggable-captioner-elemental-inference.md) | Missing captions come from a pluggable captioner: AWS Elemental Inference smart subtitles | Superseded by 0016 |
 | [0016](0016-plain-hls-ts-avc-aac-basic-tier.md) | Plain HLS MPEG-TS, AVC + AAC muxed, Basic tier | Accepted, amended by 0017 |
 | [0017](0017-ssai-only-frame-accurate-cues-with-esam.md) | SSAI only; frame-accurate ad cues with ESAM | Accepted |
-| [0018](0018-opaque-playback-ticket.md) | Viewer identity through an opaque single-use playback ticket, bound at session init | Proposed: accepted once a signed-in session's `vid` reaches the decision record end to end |
+| [0018](0018-opaque-playback-ticket.md) | Viewer identity through an opaque single-use playback ticket, bound at session init | Accepted |
 | [0019](0019-functions-release-controller-siblings.md) | MediaTailor Functions, the Release Controller, sibling configurations and a static channel-policy pattern | Accepted |
 | [0020](0020-demand-through-the-prebid-server-guidance.md) | Programmatic demand through the AWS Prebid Server guidance | Accepted; its PDS placement superseded and its deployment amended by 0036; 4.4.0 only since 2026-10-30 |
 | [0021](0021-threshold-121-slate-and-constant-session-controls.md) | Threshold 121, the break slate for unfilled time, constant session controls, no PRE_MANIFEST | Accepted |

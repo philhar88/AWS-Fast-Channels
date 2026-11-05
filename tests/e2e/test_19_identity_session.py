@@ -11,7 +11,7 @@ Runs only on a stage with the Identity, Pds and Release stacks and the demand mo
 3. join, through the CDN as a player does: the signed-in viewer with their ticket; a second session with the same
    ticket once the first is bound (a replay); a guest on the plan's own URL; and the late ticket. All of them watch
    the break;
-4. stop the channel, and read each session's ``pds.policy`` records from the sidecar's log.
+4. stop the channel, and read each session's ``pds.policy`` and ``pds.select`` records from the sidecar's log.
 
 The ticket's row then says which session it is bound to, and the records say what every break of every session was.
 """
@@ -37,7 +37,7 @@ from fast_channels.core.identity.vid import viewer_id
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.release import PlaybackPlan
 from fast_channels.core.pds.names import sidecar_log_group
-from fast_channels.core.pds.records import POLICY_RECORD
+from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
 
 pytestmark = pytest.mark.e2e
 
@@ -66,7 +66,10 @@ class Played:
     """By role: ``signed_in``, ``replay``, ``guest``, ``late``."""
     windows: list[Window]
     records: dict[str, list[dict[str, Any]]]
-    """Each role's ``pds.policy`` records."""
+    """Each role's ``pds.policy`` records, as logged: Powertools leaves out a key whose value is null (``vid``, ``cid``
+    of an anonymous break)."""
+    selects: dict[str, list[dict[str, Any]]]
+    """Each role's ``pds.select`` records."""
 
     def row(self) -> dict[str, Any]:
         table = self.stage.session.resource("dynamodb", region_name=self.stage.region).Table(
@@ -117,21 +120,24 @@ def expire(stage: Stage, ticket: str) -> None:
     )
 
 
-def policy_records(stage: Stage, sessions: dict[str, Viewer], since: datetime) -> dict[str, list[dict[str, Any]]]:
-    """Every role's ``pds.policy`` records, read again until each session has one or the timeout passed."""
+def decision_records(
+    stage: Stage, sessions: dict[str, Viewer], since: datetime, record: str
+) -> dict[str, list[dict[str, Any]]]:
+    """Every role's ``record`` lines (``pds.policy``, ``pds.select``), read again until each session has one or the
+    timeout passed."""
     logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms=int(since.timestamp() * 1000))
     roles = {session.sid: role for role, session in sessions.items()}
     found: dict[str, list[dict[str, Any]]] = {}
 
     def complete() -> bool | None:
-        events = logs.events(sidecar_log_group(stage.prefix), record_pattern(POLICY_RECORD, roles))
+        events = logs.events(sidecar_log_group(stage.prefix), record_pattern(record, roles))
         found.clear()
         for event in events:
-            if (record := json_object(event["message"])) is not None:
-                found.setdefault(roles[record["sid"]], []).append(record)
+            if (line := json_object(event["message"])) is not None:
+                found.setdefault(roles[line["sid"]], []).append(line)
         return set(found) == set(sessions) or None
 
-    wait_for(complete, timeout=RECORDS_TIMEOUT_S, interval=15, what="every session's policy records")
+    wait_for(complete, timeout=RECORDS_TIMEOUT_S, interval=15, what=f"every session's {record} records")
     return found
 
 
@@ -190,7 +196,8 @@ def played(
                 configuration=plan.configuration,
                 sessions=sessions,
                 windows=windows,
-                records=policy_records(stage, sessions, joined - timedelta(minutes=1)),
+                records=decision_records(stage, sessions, joined - timedelta(minutes=1), POLICY_RECORD),
+                selects=decision_records(stage, sessions, joined - timedelta(minutes=1), SELECT_RECORD),
             )
         finally:
             table = stage.session.resource("dynamodb", region_name=stage.region).Table(
@@ -217,21 +224,22 @@ def test_the_ticket_is_bound_to_the_first_session_only(played: Played) -> None:
 
 def test_a_replayed_ticket_is_refused(played: Played) -> None:
     records = played.records["replay"]
-    assert records and all((r["reason"], r["mode"], r["vid"]) == ("replay", "CONTEXTUAL", None) for r in records)
+    assert records and all((r["reason"], r["mode"], r.get("vid")) == ("replay", "CONTEXTUAL", None) for r in records)
 
 
 def test_a_guest_and_a_late_ticket_are_contextual(played: Played) -> None:
     for role, reason in (("guest", "missing"), ("late", "expired_or_raced")):
         records = played.records[role]
-        assert records and all((r["reason"], r["mode"], r["vid"]) == (reason, "CONTEXTUAL", None) for r in records), (
+        assert records and all(
+            (r["reason"], r["mode"], r.get("vid")) == (reason, "CONTEXTUAL", None) for r in records
+        ), (
             role,
             records,
         )
 
 
-def test_every_session_got_its_ads(played: Played) -> None:
-    """Anonymous sessions still get a pod: identity never costs a viewer the break."""
-    window = played.windows[0]
-    for role, session in played.sessions.items():
-        ads, _ = session.break_seconds(window.starts, (window.ends - window.starts).total_seconds())
-        assert ads > 0, (role, session.errors[-3:])
+def test_every_session_got_a_pod(played: Played) -> None:
+    """Anonymous sessions still get a pod: identity never costs a viewer the break. (Whether its ads are stitched at
+    their first sight is MediaTailor's creative import, ``test_14``'s concern.)"""
+    for role, selects in played.selects.items():
+        assert selects and all(s.get("pod") and s["filled_ms"] > 0 for s in selects), (role, selects)

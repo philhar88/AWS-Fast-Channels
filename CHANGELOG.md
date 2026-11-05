@@ -14,7 +14,7 @@ All notable changes to this project are documented here. The format follows
   it. 28 ids, from the MediaTailor service-linked-role grant (W-2 1.30) to the AppConfig strategies (W-2 4.7) and
   the guidance overlays (W-11). A test checks that the markers and the rows name the same ids.
 - **The `identity` module (off by default; needs `release`):** signed-in viewers, by single-use playback tickets
-  ([docs/identity.md](docs/identity.md), [ADR-0018](docs/adr/0018-opaque-playback-ticket.md), Proposed). The
+  ([docs/identity.md](docs/identity.md), [ADR-0018](docs/adr/0018-opaque-playback-ticket.md)). The
   `FastChannels-<prefix>-Identity` stack holds:
   - a Cognito viewer pool (Essentials, administrators create users), whose pre-token-generation trigger puts the
     scope `fast/playback` and the claim `fast:persona` in access tokens;

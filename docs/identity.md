@@ -186,7 +186,7 @@ A bound row's `last_seen` is renewed at most every 10 minutes. The sidecar count
 `BindingReplays`, `BindingSelfRedeems` and `BindingErrors` in its metrics.
 
 Each `pds.policy` decision record of a bound viewer's break carries `vid` and the ticket's `cid`; every other record
-has them `null`. The `vid` never reaches Prebid Server or a bidder: the `/policy` answer has no viewer id. The lake
+has them `null` (in the sidecar's log the keys are left out, as Powertools leaves out empty values). The `vid` never reaches Prebid Server or a bidder: the `/policy` answer has no viewer id. The lake
 keeps the records for its retention.
 
 ## Residual risk
