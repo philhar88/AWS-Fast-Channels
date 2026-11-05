@@ -99,6 +99,9 @@ class Published(StrEnum):
     POLICY_LOG_GROUP = "policy-log-group"
     """The log group of the ``pds.policy`` decision records, the sidecar's (with the release module on): the release
     smoke test counts a session's decision records there."""
+    PUBLISHER_FUNCTION = "publisher-function"
+    """The snapshot publisher's name (with the selling module on): the Selling stack's sync function runs it when the
+    booked lines change."""
 
 
 def stack_parameters(*, crawl: bool) -> tuple[Parameter, ...]:

@@ -112,6 +112,12 @@ it costs.
 | `modules.identity.redeem_window_seconds` | int | `120` | From mint to the latest redeem: the player opens the ticket's URL at once, in one session. |
 | `modules.identity.api_rate_limit` | int | `50` | Requests per second the identity API accepts (API Gateway stage throttling, every method). |
 | `modules.identity.api_burst_limit` | int | `100` | Burst of the identity API's throttling. |
+| `modules.selling.enabled` | bool | `false` | Deploy agentic selling: the Prebid Sales Agent as the stage's AdCP seller of record, a sandbox in its testing mode (simulated money), with the AWS reference buyer and governance agents on AgentCore Runtime. A buy that a buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP ([selling.md](selling.md)). |
+| `modules.selling.cpm` | decimal | `14.00` | Fixed price of each channel product, US dollars per 1,000 impressions (simulated). |
+| `modules.selling.creatives` | str[] | `["direct2"]` | Direct demo creatives (`crid`) that booked buys are served with, one per package while its buy runs: the AWS reference buyer sends no creatives. No demo line may serve them; a package left without one is not served. |
+| `modules.selling.publisher_domain` | str | `"fast-channels.example"` | The publisher domain that the seller's products and properties name. |
+| `modules.selling.buyer_model` | str | `"{geo}.anthropic.claude-haiku-5-5"` | Bedrock model of the reference buyer agent (`{geo}` resolved as for the agent; one of `agent.allowed_models`). |
+| `modules.selling.buyer_brand` | str | `"acme-outdoor.example"` | The brand domain that the reference buyer books for (simulated). |
 
 `channels.iac[]`:
 
@@ -333,10 +339,11 @@ make deploy STAGE=fastci PREFIX=fastcipr7    # the same stage under another pref
 uv run python scripts/stage_args.py context fastm   # the CDK arguments a stage becomes
 ```
 
-A missing or malformed stage file stops `make` before any command runs. The repository ships three stages for the
-modules' development, each with every module on: `fastm`, `fastci` (the end-to-end tests' default prefix), and
-`fastciads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
-([docs/demand.md](demand.md#deploy-and-destroy)).
+A missing or malformed stage file stops `make` before any command runs. The repository ships four stages for the
+modules' development. Three have every module on but agentic selling: `fastm`, `fastci` (the end-to-end tests' default
+prefix), and `fastciads`, which is `fastci` with the mock ad server in front of Prebid Server for the ad-server leg
+([docs/demand.md](demand.md#deploy-and-destroy)). The fourth, `fastcisell`, has agentic selling and the modules it
+needs, and no demo lines, so that its booked buys have demo creatives to serve ([docs/selling.md](selling.md)).
 
 Each deployment subscribes to the account's as-run log, which allows five subscriptions, so an account and region
 holds at most five deployments with the default `observability.as_run: per_stage`. The stages read the account's

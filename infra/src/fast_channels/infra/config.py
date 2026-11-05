@@ -809,12 +809,47 @@ class IdentityModule(_Module):
     """Burst of the identity API's throttling."""
 
 
+class SellingModule(_Module):
+    """The agentic-selling module (``modules.selling``; docs/selling.md)."""
+
+    enabled: bool = False
+    """Deploy agentic selling: the Prebid Sales Agent as the stage's AdCP seller of record, a sandbox in its testing
+    mode (simulated money), with the AWS reference buyer and governance agents on AgentCore Runtime. A buy that a
+    buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP."""
+    cpm: Decimal = Field(default=Decimal("14.00"), gt=0)
+    """Fixed price of each channel product, US dollars per 1,000 impressions (simulated)."""
+    creatives: tuple[str, ...] = Field(default=("direct2",), min_length=1)
+    """Direct demo creatives (``crid``) that booked buys are served with, one per package while its buy runs: the
+    AWS reference buyer sends no creatives. No demo line may serve them; a package left without one is not served."""
+    publisher_domain: str = Field(default="fast-channels.example", pattern=_DOMAIN)
+    """The publisher domain that the seller's products and properties name."""
+    buyer_model: str = DEFAULT_MODEL
+    """Bedrock model of the reference buyer agent (``{geo}`` resolved as for the agent; one of
+    ``agent.allowed_models``)."""
+    buyer_brand: str = Field(default="acme-outdoor.example", pattern=_DOMAIN)
+    """The brand domain that the reference buyer books for (simulated)."""
+
+    @field_validator("buyer_model")
+    @classmethod
+    def _resolve_buyer_model(cls, model: str, info: ValidationInfo) -> str:
+        region = (info.context or {}).get("region")
+        return resolve_geo(model, region) if region else model
+
+    @field_validator("creatives")
+    @classmethod
+    def _direct_creatives(cls, creatives: tuple[str, ...]) -> tuple[str, ...]:
+        if unknown := sorted(set(creatives) - set(crids(DemoRole.DIRECT))):
+            raise ValueError(f"not direct demo creatives: {', '.join(unknown)}")
+        return _unique(creatives)
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
     "release": ("ops", "demand", "pds"),
     "crawl": ("pds", "release"),
     "identity": ("release",),
+    "selling": ("pds", "release"),
 }
 """Modules an enabled module builds on."""
 
@@ -835,11 +870,26 @@ class ModulesConfig(_Section):
     release: ReleaseModule = ReleaseModule()
     crawl: CrawlModule = CrawlModule()
     identity: IdentityModule = IdentityModule()
+    selling: SellingModule = SellingModule()
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""
         module: _Module = getattr(self, name)
         return module.enabled
+
+    def _selling_problems(self) -> list[str]:
+        if not self.selling.enabled:
+            return []
+        problems = []
+        if self.demand.mode is not DemandMode.DEMO:
+            problems.append(
+                "selling serves booked buys with the ladder kit's direct demo creatives, which only demand.mode demo "
+                f"encodes; demand.mode is {self.demand.mode}"
+            )
+        served = {crid for line in self.pds.demo_lines for crid in line.creatives}
+        if shared := sorted(set(self.selling.creatives) & served):
+            problems.append(f"selling.creatives {', '.join(shared)}: served by pds.demo_lines (one line per creative)")
+        return problems
 
     @model_validator(mode="after")
     def _needs_met(self) -> Self:
@@ -852,6 +902,7 @@ class ModulesConfig(_Section):
             problems.append(
                 f"demand.ad_server {self.demand.ad_server} needs release: its PRE_ADS auction is a release Function"
             )
+        problems += self._selling_problems()
         if problems:
             raise ValueError("\n".join(problems))
         return self
@@ -983,6 +1034,12 @@ class FastChannelsConfig(_Section):
                 f"{where}.ops.ledger_lock: compliance-mode records cannot be deleted before their retention ends, "
                 "which removal=destroy needs; use governance or removal=retain"
             )
+        if modules.selling.enabled:
+            allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
+            if (model := modules.selling.buyer_model) not in allowed:
+                problems.append(f"{where}.selling.buyer_model: {model!r} is not in agent.allowed_models {allowed}")
+            if not modules.release.channels:
+                problems.append(f"{where}.selling: its products are the monetized channels; release.channels is empty")
         if modules.models.enabled:
             allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
             problems += [

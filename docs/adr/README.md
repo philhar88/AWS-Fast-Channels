@@ -19,7 +19,7 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0008](0008-ad-break-alignment.md) | Ad breaks on segment boundaries; frame-accurate cue points, ESAM when off the segment grid | Accepted, amended by 0016 and 0017 |
 | [0009](0009-jwt-gateway-with-cedar-groups.md) | JWT-authenticated Gateway with Cedar policies per operator group | Accepted |
 | [0010](0010-ag-ui-protocol.md) | AG-UI as the agent ↔ client protocol | Accepted |
-| [0011](0011-runtime-over-harness.md) | AgentCore Runtime (Strands) over the managed Harness | Accepted |
+| [0011](0011-runtime-over-harness.md) | AgentCore Runtime (Strands) over the managed Harness | Accepted, amended by 0024 |
 | [0012](0012-default-model.md) | Claude Haiku 5.5 as the default model, pluggable via a model spec | Accepted, amended by 0029 |
 | [0013](0013-captions-roadmap.md) | Captions are on the roadmap, not in v3.0 | Superseded by 0014, then 0016 |
 | [0014](0014-captions-as-ladder-tracks.md) | Captions are IMSC1 tracks of the ladder: provided, embedded, then generated | Superseded by 0016 |
@@ -32,6 +32,7 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0021](0021-threshold-121-slate-and-constant-session-controls.md) | Threshold 121, the break slate for unfilled time, constant session controls, no PRE_MANIFEST | Accepted |
 | [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Accepted |
 | [0023](0023-machine-principals.md) | Machine principals: the Release Controller promotes and rolls back unattended | Accepted |
+| [0024](0024-agentic-selling-over-adcp.md) | Agentic selling over AdCP: the Prebid Sales Agent as seller of record, A2A on the seller | Accepted |
 | [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Accepted; native 2.6 fields only since 2026-10-30 |
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |

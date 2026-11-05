@@ -422,7 +422,7 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed
 
 
-MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity")
+MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity", "selling")
 RECS = "haiku-5-5-adaptive-8k"
 """The recommender's fixture eval record (``infra/tests/data/evals``)."""
 RECOMMENDER: dict[str, Any] = {
@@ -446,6 +446,26 @@ LINE: dict[str, Any] = {
 
 def modules_on(*names: str) -> dict[str, Any]:
     return {f"modules.{name}.enabled": True for name in names}
+
+
+SELLING: dict[str, Any] = {
+    **modules_on("ops", "demand", "pds", "release", "selling"),
+    "modules.release.channels": ["{prefix}-demo"],
+}
+"""The selling module with what it needs."""
+
+
+def test_selling_needs_pds_and_release(load_config: Load) -> None:
+    message = config_error(load_config, with_shipped(**modules_on("selling")))
+
+    assert "  - fast-channels.modules: selling needs pds and release: enable them" in message
+    assert load_config(with_shipped(**SELLING)).modules.selling.enabled
+
+
+def test_selling_resolves_the_buyers_model(load_config: Load) -> None:
+    selling = load_config(with_shipped(**SELLING), region="us-east-1").modules.selling
+
+    assert (selling.buyer_model, selling.creatives, selling.cpm) == (US_HAIKU, ("direct2",), 14)
 
 
 def test_shipped_modules_are_off_and_at_their_defaults(load_config: Load) -> None:
@@ -578,6 +598,26 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ({"modules.pds.demo_lines": [{**LINE, "creatives": ["sim1"]}]}, "not direct demo creatives: sim1"),
         ({"modules.pds.demo_lines": [{**LINE, "id": f"l{n}"} for n in range(9)]}, "at most 8 items"),
         ({"modules.crawl.holdout_percent": 101}, "less than or equal to 100"),
+        ({"modules.selling.creatives": ["sim1"]}, "modules.selling.creatives: not direct demo creatives: sim1"),
+        ({"modules.selling.creatives": []}, "should have at least 1 item"),
+        ({"modules.selling.cpm": 0}, "greater than 0"),
+        (
+            {**SELLING, "modules.demand.mode": "own_book"},
+            "selling serves booked buys with the ladder kit's direct demo creatives, which only demand.mode demo "
+            "encodes; demand.mode is own_book",
+        ),
+        (
+            {**SELLING, "modules.pds.demo_lines": [{**LINE, "creatives": ["direct2"]}]},
+            "selling.creatives direct2: served by pds.demo_lines (one line per creative)",
+        ),
+        (
+            {**SELLING, "modules.selling.buyer_model": "us.anthropic.claude-opus-5-5"},
+            "fast-channels.modules.selling.buyer_model: 'us.anthropic.claude-opus-5-5' is not in agent.allowed_models",
+        ),
+        (
+            {**SELLING, "modules.release.channels": []},
+            "fast-channels.modules.selling: its products are the monetized channels; release.channels is empty",
+        ),
     ],
 )
 def test_invalid_module_configurations(load_config: Load, overrides: dict[str, Any], expected: str) -> None:

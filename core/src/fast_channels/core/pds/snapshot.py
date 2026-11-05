@@ -111,6 +111,23 @@ class Snapshot(SnapshotBase):
         return Demand(self.demand, self.shed)
 
 
+class PublishedLines(BaseModel):
+    """Lines that another module publishes into the own book, as an object of the config bucket (the selling module's
+    booked buys, ``core.selling``). The publisher adds them to the deployment's lines."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    v: Literal[1] = 1
+    lines: tuple[Line, ...] = ()
+
+
+def with_lines(base: SnapshotBase, published: PublishedLines | None) -> SnapshotBase:
+    """``base`` with the ``published`` lines after its own."""
+    if published is None or not published.lines:
+        return base
+    return base.model_copy(update={"lines": (*base.lines, *published.lines)})
+
+
 EMPTY: Final = Snapshot(version="19700101T000000Z-000000000000", generated_at=datetime(1970, 1, 1, tzinfo=UTC))
 """What a function serves before it has loaded any snapshot."""
 

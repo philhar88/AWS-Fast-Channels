@@ -1,0 +1,31 @@
+# The upstream code that the agentic-selling module's images are built from (docs/selling.md, ADR-0024).
+#
+# build-image.sh clones each repository at `commit` on the stage's arm64 CodeBuild project, refuses it unless HEAD is
+# that commit, and builds it with the upstream Dockerfile, unmodified. Base images that the upstream Dockerfiles name
+# by a floating tag are pulled by the digest below and tagged locally, so every build starts from the same bytes.
+# To move a pin: change the commit (and digest), build on a throwaway stage, and run the selling leg of the
+# end-to-end tests.
+
+# The AdCP 3.1.1 seller of record: adcp-sales-agent 2.0.0 (adcp==6.6.0), MCP and A2A 1.0. Its Dockerfile pins its
+# own base images by digest.
+[seller]
+repository = "https://github.com/prebid/salesagent.git"
+commit = "f92de9b2343987cd8b185d74185af5fbeb98fba5"
+license = "Apache-2.0"
+
+# The AWS reference buyer (A2A runtime) and governance agent. c86178b is upstream main with our fix merged
+# (PR #48: billing on sync_accounts, an opt-in A2A 1.0 seller client).
+[guidance]
+repository = "https://github.com/aws-solutions-library-samples/guidance-for-advertising-agents-on-aws.git"
+commit = "c86178b33e385c45219287fbf29b0591b7888877"
+license = "MIT-0"
+
+[guidance.buyer]
+path = "external-agents/adcp/agents/buyer/reference-buyer/a2a_runtime"
+base = "ghcr.io/astral-sh/uv:python3.10-bookworm-slim"
+digest = "sha256:a041b350d5d9483b538d5af07e9553ee8cbc7fc7fa90c2f7d20d93f18ce9bbd1"
+
+[guidance.governance]
+path = "external-agents/adcp/agents/governance/reference-governance/app/adcpRefGovernance"
+base = "public.ecr.aws/docker/library/python:3.12-slim-trixie"
+digest = "sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54"

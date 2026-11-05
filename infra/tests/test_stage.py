@@ -301,8 +301,12 @@ def shipped_with(overrides: dict[str, str]) -> FastChannelsConfig:
 
 
 def test_shipped_stages() -> None:
-    assert STAGES == stage_args.stage_names() == ["fastci", "fastciads", "fastm"]
+    assert STAGES == stage_args.stage_names() == ["fastci", "fastciads", "fastcisell", "fastm"]
     assert f"^{stage_args.PREFIX.pattern}$" == FastChannelsConfig.model_json_schema()["properties"]["prefix"]["pattern"]
+
+
+SELLING_STAGE = "fastcisell"
+"""The agentic-selling stage (M7): the module and what it needs, with free direct demo creatives (no demo lines)."""
 
 
 @pytest.mark.parametrize("name", STAGES)
@@ -310,7 +314,12 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
     config = shipped_with(stage_overrides(name))
 
     assert config.prefix == name
-    assert all(config.modules.enabled(module) for module in ModulesConfig.model_fields)
+    on = {module for module in ModulesConfig.model_fields if config.modules.enabled(module)}
+    if name == SELLING_STAGE:
+        assert on == {"ops", "demand", "pds", "release", "selling"}
+        assert (config.modules.pds.demo_lines, config.modules.selling.creatives) == ((), ("direct1", "direct2"))
+    else:  # every module but selling, whose creatives their demo lines serve
+        assert on == set(ModulesConfig.model_fields) - {"selling"}
     assert config.modules.release.channels == (f"{name}-demo",)
     assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
     assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day
@@ -367,7 +376,7 @@ def test_a_stage_under_another_prefix_expands_it() -> None:
 @pytest.mark.parametrize(
     ("files", "argv", "expected"),
     [
-        ({}, ["context", "fastz"], "unknown stage 'fastz': the stages are fastci, fastciads, fastm"),
+        ({}, ["context", "fastz"], "unknown stage 'fastz': the stages are fastci, fastciads, fastcisell, fastm"),
         ({}, ["context", "../cdk"], "unknown stage '../cdk'"),
         ({}, ["context", "fastm", "--prefix", "Fast_M"], "--prefix must match"),
         ({"bad": "[1, 2]"}, ["prefix", "bad"], "must hold a JSON object (a partial fast-channels block)"),
