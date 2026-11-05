@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -228,3 +229,37 @@ def test_a_left_out_bid_that_was_not_eligible_keeps_its_outcome() -> None:
     assert decision.outcomes["ownbook-s1-direct1"] is Outcome.FLOOR
     assert "ownbook-s1-direct1" in decision.below_floor
     assert reservations.asked == []
+
+
+FLIGHT = (datetime(2026, 11, 6, tzinfo=UTC), datetime(2026, 11, 13, tzinfo=UTC))
+
+
+@pytest.mark.parametrize(
+    ("update", "now"),
+    [
+        ({"channels": ("fast-other",)}, None),
+        ({"starts": FLIGHT[0], "ends": FLIGHT[1]}, FLIGHT[1]),
+        ({"starts": FLIGHT[0], "ends": FLIGHT[1]}, FLIGHT[0] - timedelta(minutes=1)),
+    ],
+    ids=["other channel", "flight ended", "flight not started"],
+)
+def test_a_line_that_may_not_air_on_the_break_is_left_out_off_target(update: dict[str, Any], now: Any) -> None:
+    request = fixture("demo-full-120s.json")  # pc fast-demo-p-a
+    book = Book(lines=(DIRECT1.model_copy(update=update),))
+    reservations = Reservations()
+
+    decision, reserved = select(request, pod_context(book), book, reserve=reservations, now=now)
+
+    assert "ownbook-s1-direct1" not in refs(decision)
+    assert decision.outcomes["ownbook-s1-direct1"] is Outcome.OFF_TARGET
+    assert (reserved, reservations.asked) == (frozenset(), [])
+
+
+def test_a_line_sold_on_the_breaks_channel_in_its_flight_airs() -> None:
+    request = fixture("demo-full-120s.json")
+    line = DIRECT1.model_copy(update={"channels": ("fast-demo",), "starts": FLIGHT[0], "ends": FLIGHT[1]})
+    book = Book(lines=(line,))
+
+    decision, reserved = select(request, pod_context(book), book, reserve=Reservations(), now=FLIGHT[0])
+
+    assert refs(decision)[0] == "ownbook-s1-direct1" and reserved == frozenset({"direct1"})

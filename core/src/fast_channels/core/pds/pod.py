@@ -89,6 +89,9 @@ class Outcome(StrEnum):
     UNRESERVED = "unreserved"
     """An own-book line ad whose price could not be reserved: no budget left, the session's cap reached
     (``core.pds.selection``)."""
+    OFF_TARGET = "off_target"
+    """An own-book line ad outside its line's flight, or of a line not sold on the break's channel
+    (``core.pds.selection``)."""
 
 
 class PodContext(BaseModel):
