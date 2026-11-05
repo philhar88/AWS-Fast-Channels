@@ -101,6 +101,7 @@ class MediaStack(Stack):
             certificate_arn=config.delivery.certificate_arn,
             price_class=_PRICE_CLASSES[config.delivery.price_class],
             edge_rebuild=self.edge_rebuild.function if self.edge_rebuild else None,
+            tracker=config.modules.demand.enabled,
         )
         self.distribution = self.delivery.distribution
         if self.catalog_contexts is not None:

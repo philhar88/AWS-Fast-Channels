@@ -40,7 +40,7 @@ public final class Fixtures {
     public static final String SID = "0d6a0bd2-5a7e-4c3f-9a1e-2b6f2f0f9c11";
     public static final String EVID = "820461826";
     public static final String DECISION = SID + "." + EVID;
-    public static final String TRACKER = "https://cdn.example/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}";
+    public static final String TRACKER = "https://cdn.example/ads/b/{sid}.{evid}/{crid}/{enr}.gif";
 
     private Fixtures() {
     }
@@ -249,7 +249,7 @@ public final class Fixtures {
      * The Pod Decision Service's tracker of one ad of {@link #DECISION} (content-enrichment arm 1).
      */
     public static String pdsTracker(String crid) {
-        return "https://cdn.example/ads/b.gif?d=" + DECISION + "&c=" + crid + "&e=impression&enr=1";
+        return "https://cdn.example/ads/b/" + DECISION + "/" + crid + "/1.gif";
     }
 
     /**

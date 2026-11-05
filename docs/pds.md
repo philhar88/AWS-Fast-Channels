@@ -162,12 +162,20 @@ The same demand without the simulator (own book only) gives `direct1, house2, ho
 Every ad in the answer gets the PDS's own impression tracker, the CDN's no-store beacon:
 
 ```
-https://<cdn>/ads/b.gif?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>
+https://<cdn>/ads/b/<sid>.<evid>/<crid>/<enr>.gif
 ```
+
+Each segment is percent-encoded. The parameters are in the path because the CDN's access logs keep it: with the
+identity module they leave out the query, which holds the playback ticket. With the demand module the CDN answers
+`/ads/b/*` with a 1x1 GIF (`no-store`) from a viewer-request function, without the origin
+([delivery-and-multi-cdn.md](delivery-and-multi-cdn.md#routing-table)). The fast-ctv module's own tracker, on the
+house fallback, has the same form (`hooks.fast-ctv.tracker-template`).
 
 MediaTailor fires it server-side and logs each firing as a `BEACON_FIRED` event with these parameters, and the CDN
 logs each request of it. Delivery is counted from both: fills deduplicated by `(sid, evid)`, ad impressions by
-`(sid, evid, crid)`, because a pod holds several ads. The counterparty's count is what bills; ours is a seller-side server count. `enr` is the content-enrichment
+`(sid, evid, crid)`, because a pod holds several ads. The former form,
+`https://<cdn>/ads/b.gif?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>`, is still read, because a pod rendered before
+the change can still fire it; both forms of one firing count once. The counterparty's count is what bills; ours is a seller-side server count. `enr` is the content-enrichment
 arm of the break: 1 enriched, 0 in the `crawl-v1` holdout or with the crawl module off
 ([content-enrichment.md](content-enrichment.md#measuring-the-uplift)).
 
@@ -217,21 +225,26 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
 - **Delivery.** A subscription filter on the stage's MediaTailor log group (`/aws/vendedlogs/mediatailor/<prefix>`),
   and with the release module one on the siblings' log group (`<prefix>-pds-delivery-release`,
   [release-controller.md](release-controller.md#the-siblings-logs)), sends the impression beacons (`BEACON_FIRED`, `trackingEvent` impression) to the delivery function. Only our tracker
-  counts: the CDN's host and `/ads/b.gif` with a `d` parameter (the kit's own pod beacons and billing notices have
-  none), fired in the session it names, with the parameters from `beaconInfo.beaconUri`. Fills count once per
+  counts: the CDN's host and `/ads/b/<sid>.<evid>/<crid>/<enr>.gif`, or the former `/ads/b.gif` with a `d`
+  parameter (the kit's own pod beacons and billing notices have none), fired in the session it names, with the
+  parameters from `beaconInfo.beaconUri`. Fills count once per
   `(sid, evid)` and impressions once per `(sid, evid, crid)`, however often MediaTailor fires the beacon. A batch that
   fails is retried, then dead-lettered (`<prefix>-pds-delivery-dead-letters`).
 - **Delivery from the CDN's logs.** The ADS log can leave out a whole break that MediaTailor filled (W-2 1.32), so
   the delivery function also counts our tracker's requests in the CDN's standard logs, the Parquet files in the logs
-  bucket. Every 5 minutes EventBridge Scheduler runs it with its scheduled time `t`, and one Athena query (the lake's
+  bucket, from their path (`cs-uri-stem`). The former form's query is read where the logs have it; with the identity
+  module they do not, and that form counts from the ADS log only. Every 5 minutes EventBridge Scheduler runs it with its scheduled time `t`, and one Athena query (the lake's
   workgroup) reads the files that arrived in `[t-15m, t-10m)` by their S3 time (`$file_modified_time`): every file
   once, however late, as long as it arrives within 2 hours of its requests. Each request goes through the same count
   as a beacon, so whichever source reads a firing first counts it, and the other counts nothing more.
   - **Forged requests.** The tracker is a public URL, so a request counts only when its break's `pds.select` record
     placed that creative (a won or standalone bid): a forged request can name a real ad at most, which counts once.
-  - **Privacy.** The query string is in the table `cdn_access` of the PDS's own Glue database `<prefix>_pds`, which
-    only the delivery function reads. The lake's `cloudfront_access` leaves it out, because it carries session
-    parameters.
+  - **Privacy.** The table `cdn_access`, with the path and, without the identity module, the query, is in the PDS's
+    own Glue database `<prefix>_pds`, which only the delivery function reads. The lake's `cloudfront_access` leaves
+    the query out, because it carries session parameters. It keeps the path, so a tracker request puts its break
+    (`<sid>.<evid>`) and creative in the lake, as the manifest paths already put the session id. No ticket or viewer
+    parameter ever goes in the tracker's path.
+  - **Probes.** A probe's pod is never fired by MediaTailor, and the query leaves out probe breaks.
   - **The reconciliation.** By the time a file is read, the ADS log has delivered its beacons, so what a CDN-log run
     counts is what the ADS log left out: its metric `CdnLogOnlyImpressions`. `CdnLogBeacons` counts the firings it
     read. The records and the `IMP#` and `FILL#` items name their source (`ads_log`, `cdn_log`).

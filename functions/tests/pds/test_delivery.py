@@ -130,7 +130,8 @@ class Athena:
         class Pages:
             def paginate(self, *, QueryExecutionId: str) -> Iterator[dict[str, Any]]:  # noqa: N803
                 rows = athena.rows(athena.queries[int(QueryExecutionId) - 1])
-                header = [{"VarCharValue": name} for name in ("timestamp_ms", "cs_uri_query", "sc_status", "pc")]
+                names = ("timestamp_ms", "cs_uri_stem", "cs_uri_query", "sc_status", "pc")
+                header = [{"VarCharValue": name} for name in names]
                 data = [header] + [[{"VarCharValue": row[name]} for name in row] for row in rows]
                 for n in range(0, len(data), 2):  # two rows a page
                     yield {"ResultSet": {"Rows": [{"Data": d} for d in data[n : n + 2]]}}
@@ -154,11 +155,12 @@ def requested(row: dict[str, str]) -> datetime:
 
 
 def cdn_row(decision: str, crid: str, at: datetime) -> dict[str, str]:
-    """Our tracker's request as the CDN logged it (``cs_uri_query`` is the tracker's query string)."""
-    query = tracker_url(f"{CDN}/ads/b.gif", decision, crid).split("?", 1)[1]
+    """Our tracker's request as the CDN logged it: its path (with the identity module the logs have no query)."""
+    stem = tracker_url(f"{CDN}/ads/b", decision, crid).removeprefix(CDN)
     return {
         "timestamp_ms": str(int(at.timestamp() * 1000)),
-        "cs_uri_query": query,
+        "cs_uri_stem": stem,
+        "cs_uri_query": "-",
         "sc_status": "200",
         "pc": "fastm-demo",
     }
@@ -418,7 +420,7 @@ def test_a_failed_query_fails_the_run(stage: Tables, athena: Athena) -> None:
 def test_a_cdn_log_row_that_is_not_ours_is_skipped(
     stage: Tables, athena: Athena, caplog: pytest.LogCaptureFixture
 ) -> None:
-    broken = cdn_row(f"{S1}.1234", "direct1", FIRED) | {"cs_uri_query": f"d={S1}.1234&e=impression&enr=0"}
+    broken = cdn_row(f"{S1}.1234", "direct1", FIRED) | {"cs_uri_stem": f"/ads/b/{S1}.1234/direct1/2.gif"}
     athena.files.append(LogFile(ON_TIME, [broken]))
 
     totals = delivery.handler(cdn_run(run_at(ON_TIME)), Context())

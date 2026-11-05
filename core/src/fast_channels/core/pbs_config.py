@@ -75,8 +75,14 @@ POLICY_HOOK: Final = "fast-ctv-policy"
 VAST_HOOK: Final = "fast-ctv-vast"
 AUCTION_ENDPOINT: Final = "/openrtb2/auction"
 TRACKER_PATH: Final = "/ads/b.gif"
-TRACKER_QUERY: Final = "d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
-"""Our impression tracker's query; the module fills the placeholders, URL-encoded, for every rendered ad."""
+"""The CDN's no-store beacon object (the kit's VAST pod, the simulator's billing notice; our tracker's former form,
+``?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>``, which delivery still reads)."""
+TRACKER_PREFIX: Final = "/ads/b/"
+"""Our impression tracker: ``/ads/b/<sid>.<evid>/<crid>/<enr>.gif``, each segment percent-encoded. The parameters are
+in the path because the CDN's logs keep it: with the identity module they leave out the query (it holds the playback
+ticket), and delivery counts from those logs too (W-2 1.32). The CDN answers the path with a 1x1 GIF at the edge."""
+TRACKER_PATH_TEMPLATE: Final = TRACKER_PREFIX + "{sid}.{evid}/{crid}/{enr}.gif"
+"""Our tracker's path with the module's placeholders, which it fills percent-encoded for every rendered ad."""
 CONTENT_CATTAX: Final = 9
 """IAB Content Taxonomy 3.1 (AdCOM ``cattax`` 9)."""
 VIDEO_MIMES: Final = ("application/x-mpegURL", "video/mp4")
@@ -233,7 +239,7 @@ class PbsSettings(BaseModel):
     server_instances: int = Field(ge=1)
     """``server.http.server-instances``: one Vert.x event loop per task vCPU."""
     tracker_base_url: str = Field(pattern=r"^https://[a-z0-9.-]+$")
-    """Scheme and host of the stage's CDN, which serves our impression tracker ``/ads/b.gif``."""
+    """Scheme and host of the stage's CDN, which serves our impression tracker (:data:`TRACKER_PREFIX`)."""
     publisher_domain: str
     """Domain in ``source.schain`` (the seller's advertising system)."""
     app_name: str = Field(default="FAST Channels", min_length=1, max_length=100)
@@ -264,7 +270,7 @@ class PbsSettings(BaseModel):
 
     @property
     def tracker_template(self) -> str:
-        return f"{self.tracker_base_url}{TRACKER_PATH}?{TRACKER_QUERY}"
+        return f"{self.tracker_base_url}{TRACKER_PATH_TEMPLATE}"
 
 
 def tracker_host(cdn_base_url: str) -> str:

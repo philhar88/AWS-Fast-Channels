@@ -29,11 +29,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
 from typing import Any, Final
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fast_channels.core.pbs_config import TRACKER_PATH
+from fast_channels.core.pbs_config import TRACKER_PATH, TRACKER_PREFIX
 from fast_channels.core.pds.buckets import bucket
 from fast_channels.core.pds.models import EVID_PATTERN, NAME_PATTERN, SID_PATTERN, decision_id
 from fast_channels.core.pds.pod import TRACKER_EVENT, Outcome
@@ -134,8 +134,8 @@ class Ignored(StrEnum):
     NOT_BEACON = "not_beacon"
     """Another event type, or no beacon URI."""
     OTHER_TRACKER = "other_tracker"
-    """Not our tracker: another host or path (a third party's), or the CDN's beacon without a decision (the kit's
-    own VAST pod, a billing notice)."""
+    """Not our tracker: another host or path (a third party's), or the CDN's beacon object without a decision (the
+    kit's own VAST pod, a billing notice)."""
     MALFORMED = "malformed"
     """Our tracker, with parameters that do not parse."""
     OTHER_EVENT = "other_event"
@@ -174,6 +174,8 @@ class Beacon(BaseModel):
 
 
 _DECISION = re.compile(r"^(?P<sid>[A-Za-z0-9-]{1,64})\.(?P<evid>[0-9]{1,10})$")
+_PATH = re.compile(rf"^{re.escape(TRACKER_PREFIX)}(?P<d>[^/]+)/(?P<c>[^/]+)/(?P<enr>[^/]+)\.gif$")
+"""Our tracker's path: ``/ads/b/<sid>.<evid>/<crid>/<enr>.gif`` (``pbs_config.TRACKER_PREFIX``)."""
 
 
 def _one(query: Mapping[str, list[str]], name: str) -> str | None:
@@ -184,16 +186,22 @@ def _one(query: Mapping[str, list[str]], name: str) -> str | None:
 def _tracker(uri: str, host: str) -> dict[str, str] | Ignored:
     """The parameters of our impression tracker in ``uri``, or why it is not one.
 
-    The CDN's beacon serves other trackers too (the kit's VAST pod, ``?evt=…&cr=…``; the simulator's billing notice,
-    ``?seat=…``): only one with a decision (``d``) is ours.
+    Our tracker is ``/ads/b/<sid>.<evid>/<crid>/<enr>.gif`` (an impression), each segment percent-encoded. Its former
+    form, the CDN's beacon object with ``?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>``, is read too: a pod
+    rendered before the change can still fire it. The beacon object serves other trackers as well (the kit's VAST
+    pod, ``?evt=…&cr=…``; the simulator's billing notice, ``?seat=…``): only one with a decision (``d``) is ours.
     """
     parts = urlsplit(uri)
-    if parts.scheme != "https" or parts.hostname != host.lower() or parts.path != TRACKER_PATH:
+    if parts.scheme != "https" or parts.hostname != host.lower():
         return Ignored.OTHER_TRACKER
-    query = parse_qs(parts.query, keep_blank_values=True)
-    if "d" not in query:
+    values: tuple[str | None, ...]
+    if (path := _PATH.match(parts.path)) is not None:
+        values = (unquote(path["d"]), unquote(path["c"]), TRACKER_EVENT, path["enr"])
+    elif parts.path != TRACKER_PATH or "d" not in (query := parse_qs(parts.query, keep_blank_values=True)):
         return Ignored.OTHER_TRACKER
-    d, crid, kind, enr = (_one(query, name) for name in ("d", "c", "e", "enr"))
+    else:
+        values = tuple(_one(query, name) for name in ("d", "c", "e", "enr"))
+    d, crid, kind, enr = values
     match = _DECISION.match(d or "")
     if match is None or crid is None or kind is None or enr not in {"0", "1"}:
         return Ignored.MALFORMED
@@ -205,8 +213,8 @@ def _tracker(uri: str, host: str) -> dict[str, str] | Ignored:
 def beacon(event: Mapping[str, Any], *, host: str) -> Beacon | Ignored:
     """Our impression in one ADS log event, or why it is not one.
 
-    Our tracker is ``https://<host>/ads/b.gif?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>``, read from
-    ``beaconInfo.beaconUri`` (MediaTailor's copy of the URL it fired); :func:`cdn_beacon` reads the CDN's copy.
+    Our tracker is ``https://<host>/ads/b/<sid>.<evid>/<crid>/<enr>.gif`` (or its former query form, :func:`_tracker`),
+    read from ``beaconInfo.beaconUri`` (MediaTailor's copy of the URL it fired); :func:`cdn_beacon` reads the CDN's.
     """
     info = event.get("beaconInfo")
     if event.get("eventType") != "BEACON_FIRED" or not isinstance(info, Mapping):
@@ -276,9 +284,14 @@ def cdn_log_query(start: datetime, end: datetime, *, cdn_table: str, select_tabl
 
     The tracker is a public URL, so a request counts only when the break's ``pds.select`` record placed the ad of that
     creative (a won or standalone bid, which got our tracker): a forged request names a real ad at most, which counts
-    once. Each row has the request's ``timestamp_ms``, ``cs_uri_query`` and ``sc_status``, and the break's
-    configuration ``pc``. The parameters are matched with regular expressions, which no request can make fail;
-    :func:`cdn_beacon` checks them as :func:`beacon` does.
+    once. Each row has the request's ``timestamp_ms``, ``cs_uri_stem``, ``cs_uri_query`` and ``sc_status``, and the
+    break's configuration ``pc``.
+
+    The parameters come from the path (``/ads/b/<sid>.<evid>/<crid>/<enr>.gif``), or from the former form's query,
+    which the logs leave out with the identity module (that form then counts from the ADS log only). They are matched
+    with regular expressions and compared as logged, not decoded: ``url_decode`` would fail the whole query on a
+    malformed request, and only crids of ``NAME_PATTERN`` can count (:class:`Beacon`), which percent-encoding leaves as
+    they are. :func:`cdn_beacon` checks them as :func:`beacon` does.
 
     Args:
         start, end: the window (:func:`cdn_log_window`), on the files' S3 modification time.
@@ -292,12 +305,14 @@ def cdn_log_query(start: datetime, end: datetime, *, cdn_table: str, select_tabl
     )
     selects = ", ".join(f"'{h:%Y/%m/%d/%H}'" for h in _hours(oldest - SELECT_LOOKBACK, end))
     placed = ", ".join(f"'{outcome.value}'" for outcome in PLACED)
+    path = f"^{TRACKER_PREFIX}([^/]+)/([^/]+)/[^/]+\\.gif$"
     return f"""WITH tracker AS (
-  SELECT timestamp_ms, cs_uri_query, sc_status,
-    regexp_extract(cs_uri_query, '(?:^|&)d=([^&]*)', 1) AS d, regexp_extract(cs_uri_query, '(?:^|&)c=([^&]*)', 1) AS c
+  SELECT timestamp_ms, cs_uri_stem, cs_uri_query, sc_status,
+    coalesce(regexp_extract(cs_uri_stem, '{path}', 1), regexp_extract(cs_uri_query, '(?:^|&)d=([^&]*)', 1)) AS d,
+    coalesce(regexp_extract(cs_uri_stem, '{path}', 2), regexp_extract(cs_uri_query, '(?:^|&)c=([^&]*)', 1)) AS c
   FROM {cdn_table}
   WHERE ({logs})
-    AND cs_uri_stem = '{TRACKER_PATH}'
+    AND (cs_uri_stem LIKE '{TRACKER_PREFIX}%' OR cs_uri_stem = '{TRACKER_PATH}')
     AND "$file_modified_time" >= from_iso8601_timestamp('{_iso(start)}')
     AND "$file_modified_time" < from_iso8601_timestamp('{_iso(end)}')
 ), placed AS (
@@ -306,7 +321,7 @@ def cdn_log_query(start: datetime, end: datetime, *, cdn_table: str, select_tabl
   WHERE datehour IN ({selects}) AND record = 'pds.select' AND NOT probe
     AND json_extract_scalar(bid, '$.outcome') IN ({placed})
 )
-SELECT t.timestamp_ms, t.cs_uri_query, t.sc_status, p.pc
+SELECT t.timestamp_ms, t.cs_uri_stem, t.cs_uri_query, t.sc_status, p.pc
 FROM tracker t JOIN placed p ON p.decision_id = t.d AND p.crid = t.c
 ORDER BY t.timestamp_ms"""  # noqa: S608 - datetimes, constants and the stage's own table names only
 
@@ -314,11 +329,13 @@ ORDER BY t.timestamp_ms"""  # noqa: S608 - datetimes, constants and the stage's 
 def cdn_beacon(row: Mapping[str, str | None], *, host: str) -> Beacon | Ignored:
     """Our impression in one row of :func:`cdn_log_query`, or why it is not one.
 
-    The parameters are read from the request's query string as :func:`beacon` reads them from MediaTailor's copy of
-    the URL; the time is CloudFront's (``timestamp_ms``), the status the one CloudFront answered, and the
-    configuration the break's select record's.
+    The parameters are read from the request's path (or the former form's query) as :func:`beacon` reads them from
+    MediaTailor's copy of the URL; the time is CloudFront's (``timestamp_ms``), the status the one CloudFront answered,
+    and the configuration the break's select record's.
     """
-    found = _tracker(f"https://{host}{TRACKER_PATH}?{row.get('cs_uri_query') or ''}", host)
+    stem = row.get("cs_uri_stem") or TRACKER_PATH
+    query = "" if stem.startswith(TRACKER_PREFIX) else f"?{row.get('cs_uri_query') or ''}"
+    found = _tracker(f"https://{host}{stem}{query}", host)
     if isinstance(found, Ignored):
         return found
     status = row.get("sc_status") or ""

@@ -24,6 +24,12 @@ before any S3 glob.
 | 2 | `/v1/*` | mediatailor-manifests | Managed-CachingDisabled | Managed-AllViewerAndCloudFrontHeaders-2022-06 | preflight | yes | all | SSAI sessions: multivariant (/v1/master), media playlists (/v1/manifest, gzip), POST /v1/session, tracking, ad segment redirects (/v1/segment) |
 | 3 | `*` (default) | media | Managed-CachingOptimizedForUncompressedObjects | Managed-CORS-S3Origin | media | no | read | MPEG-TS content and preconditioned ad segments; ad manifest copies, VAST pods and beacons (/ads); EPG feeds (/epg); content manifests under /assets are denied by the bucket policy |
 
+With `modules.demand`, a route `/ads/b/*` comes before the default one (`TRACKER_ROUTE`): our impression tracker,
+`/ads/b/<sid>.<evid>/<crid>/<enr>.gif`, which MediaTailor fires server-side. A viewer-request CloudFront Function
+answers it with the kit's 1x1 GIF (`image/gif`, `Cache-Control: no-store`) without the origin: the media bucket has
+no such key, and its 403 would make MediaTailor retry. The access logs record the path as the viewer sent it, and
+delivery counts from them ([pds.md](pds.md#trackers)). Another CDN must answer that path the same way.
+
 "read" is `GET`, `HEAD`, `OPTIONS`; "all" adds the methods MediaTailor's explicit session start (`POST`) needs. The
 table is MediaTailor's
 [production CloudFront configuration](https://docs.aws.amazon.com/mediatailor/latest/ug/cf-comprehensive-configuration.html)

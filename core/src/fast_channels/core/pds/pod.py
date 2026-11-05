@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import IntEnum, StrEnum
 from typing import Annotated, Final
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -410,18 +410,18 @@ TRACKER_EVENT: Final = "impression"
 
 
 def tracker_url(base: str, decision: str, crid: str, *, enr: int = 0) -> str:
-    """Our impression tracker for one ad: ``<base>?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>``.
+    """Our impression tracker for one ad: ``<base>/<sid>.<evid>/<crid>/<enr>.gif``, each segment percent-encoded.
 
-    ``base`` is the CDN's no-store beacon (``https://<cdn>/ads/b.gif``). MediaTailor fires it server-side and logs it
-    as ``BEACON_FIRED`` with these parameters, which is how delivery is counted.
+    ``base`` is the tracker's prefix on the CDN (``https://<cdn>/ads/b``, ``pbs_config.TRACKER_PREFIX``), which the
+    CDN answers with a no-store 1x1 GIF. MediaTailor fires it server-side and logs it as ``BEACON_FIRED``, and the
+    CDN logs its path: delivery is counted from both (``core.pds.delivery``).
     """
     parts = urlsplit(base)
-    if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment:
-        raise ValueError(f"tracker base must be an https URL without query or fragment, got {base!r}")
+    if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment or base.endswith("/"):
+        raise ValueError(f"tracker base must be an https URL without query, fragment or trailing slash, got {base!r}")
     if enr not in {0, 1}:
         raise ValueError(f"enr must be 0 or 1, got {enr}")
-    query = urlencode({"d": decision, "c": crid, "e": TRACKER_EVENT, "enr": enr}, quote_via=quote, safe="")
-    return f"{base}?{query}"
+    return f"{base}/{quote(decision, safe='')}/{quote(crid, safe='')}/{enr}.gif"
 
 
 def select_response(

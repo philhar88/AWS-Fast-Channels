@@ -6,7 +6,7 @@
         "fast-direct-1"
       ]
     },
-    "tracker_base": "https://cdn.example.com/ads/b.gif",
+    "tracker_base": "https://cdn.example.com/ads/b",
     "enr": 0
   },
   "request": {
@@ -250,22 +250,22 @@
     ],
     "trackers": {
       "ownbook-s1-direct1": [
-        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=direct1&e=impression&enr=0"
+        "https://cdn.example.com/ads/b/6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826/direct1/0.gif"
       ],
       "amt-s2-sim2": [
-        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=sim2&e=impression&enr=0"
+        "https://cdn.example.com/ads/b/6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826/sim2/0.gif"
       ],
       "amt-s3-sim3": [
-        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=sim3&e=impression&enr=0"
+        "https://cdn.example.com/ads/b/6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826/sim3/0.gif"
       ],
       "ownbook-s4-house2": [
-        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=house2&e=impression&enr=0"
+        "https://cdn.example.com/ads/b/6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826/house2/0.gif"
       ],
       "amt-s1-sim1": [
-        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=sim1&e=impression&enr=0"
+        "https://cdn.example.com/ads/b/6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826/sim1/0.gif"
       ],
       "ownbook-s3-house1": [
-        "https://cdn.example.com/ads/b.gif?d=6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826&c=house1&e=impression&enr=0"
+        "https://cdn.example.com/ads/b/6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d.820461826/house1/0.gif"
       ]
     },
     "reason": "filled"

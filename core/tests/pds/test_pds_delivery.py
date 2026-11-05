@@ -6,10 +6,12 @@ from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
 from fast_channels.core.ledger import CHAIN_ID_PATTERN
+from fast_channels.core.pbs_config import PbsSettings
 from fast_channels.core.pds.delivery import (
     BUDGET_SHARDS,
     CDN_LOG_EVERY,
@@ -78,8 +80,12 @@ def test_the_fixtures_hold_five_firings_of_ours_and_three_of_other_trackers() ->
     ]
 
 
+TRACKER = f"https://{HOST}/ads/b"
+"""Our tracker's prefix on the CDN (``pbs_config.TRACKER_PREFIX``)."""
+
+
 def test_the_tracker_the_pds_renders_is_the_one_it_reads() -> None:
-    uri = tracker_url(f"https://{HOST}/ads/b.gif", f"{SID}.42", "sim3", enr=1)
+    uri = tracker_url(TRACKER, f"{SID}.42", "sim3", enr=1)
     found = beacon(fired(uri), host=HOST.upper())
 
     assert isinstance(found, Beacon)
@@ -164,9 +170,11 @@ SCHEDULED = datetime(2026, 11, 5, 20, 0, 13, tzinfo=UTC)
 
 def cdn_row(uri: str, **overrides: str | None) -> dict[str, str | None]:
     """A row of the CDN-log query for a request of ``uri``."""
+    parts = urlsplit(uri)
     row: dict[str, str | None] = {
         "timestamp_ms": "1793908801100",  # 2026-11-05T20:00:01.100Z
-        "cs_uri_query": uri.split("?", 1)[1] if "?" in uri else "-",
+        "cs_uri_stem": parts.path,
+        "cs_uri_query": parts.query or "-",
         "sc_status": "200",
         "pc": "fastm-demo-p-a",
     }
@@ -184,7 +192,7 @@ def query_hours(query: str) -> tuple[set[str], set[str]]:
 
 
 def test_a_cdn_log_row_of_our_tracker_is_the_impression_its_beacon_is() -> None:
-    uri = tracker_url(f"https://{HOST}/ads/b.gif", f"{SID}.1234", "direct1", enr=1)
+    uri = tracker_url(TRACKER, f"{SID}.1234", "direct1", enr=1)
     found = cdn_beacon(cdn_row(uri), host=HOST)
     fired_by_mediatailor = beacon(fired(uri), host=HOST)
 
@@ -214,6 +222,11 @@ def test_a_cdn_log_row_of_our_tracker_is_the_impression_its_beacon_is() -> None:
         (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}.1&c=x&e=impression&enr=0", timestamp_ms="-"), Ignored.MALFORMED),
         (cdn_row(f"https://{HOST}/ads/b.gif?d={SID}.1&c=x&e=impression&enr=0", timestamp_ms=None), Ignored.MALFORMED),
         ({"cs_uri_query": None}, Ignored.OTHER_TRACKER),
+        (cdn_row(f"https://{HOST}/ads/b/{SID}/x/0.gif"), Ignored.MALFORMED),
+        (cdn_row(f"https://{HOST}/ads/b/{SID}.1/x/2.gif"), Ignored.MALFORMED),
+        (cdn_row(f"https://{HOST}/ads/b/{SID}.1/bad%20crid/0.gif"), Ignored.MALFORMED),
+        (cdn_row(f"https://{HOST}/ads/b/{SID}.1/x/0.png"), Ignored.OTHER_TRACKER),
+        (cdn_row(f"https://{HOST}/ads/b/{SID}.1/0.gif"), Ignored.OTHER_TRACKER),
     ],
 )
 def test_cdn_log_rows_that_are_not_an_impression_of_ours_are_ignored(row: dict[str, str | None], why: Ignored) -> None:
@@ -221,7 +234,7 @@ def test_cdn_log_rows_that_are_not_an_impression_of_ours_are_ignored(row: dict[s
 
 
 def test_a_cdn_log_row_without_a_status_or_configuration_is_still_the_impression() -> None:
-    uri = tracker_url(f"https://{HOST}/ads/b.gif", f"{SID}.7", "sim1")
+    uri = tracker_url(TRACKER, f"{SID}.7", "sim1")
     found = cdn_beacon(cdn_row(uri, sc_status="-", pc=None), host=HOST.upper())
 
     assert isinstance(found, Beacon) and (found.status, found.configuration) == (None, "")
@@ -240,7 +253,8 @@ def test_the_query_reads_the_windows_files_and_counts_only_ads_a_select_record_p
     query = cdn_log_query(start, end, cdn_table="fastm_pds.cdn_access", select_table="fastm_lake.pds_select")
 
     assert "FROM fastm_pds.cdn_access" in query and "FROM fastm_lake.pds_select" in query
-    assert "cs_uri_stem = '/ads/b.gif'" in query
+    assert "(cs_uri_stem LIKE '/ads/b/%' OR cs_uri_stem = '/ads/b.gif')" in query
+    assert "regexp_extract(cs_uri_stem, '^/ads/b/([^/]+)/([^/]+)/[^/]+\\.gif$', 1)" in query
     assert "\"$file_modified_time\" >= from_iso8601_timestamp('2026-11-05T19:45:13.000+00:00')" in query
     assert "\"$file_modified_time\" < from_iso8601_timestamp('2026-11-05T19:50:13.000+00:00')" in query
     assert "record = 'pds.select' AND NOT probe" in query
@@ -270,3 +284,56 @@ def test_a_log_file_forty_minutes_late_is_read_by_exactly_one_run() -> None:
 
 def test_a_redriven_run_reads_its_own_window_again() -> None:
     assert cdn_log_window(SCHEDULED) == cdn_log_window(datetime.fromisoformat("2026-11-05T20:00:13Z"))
+
+
+# The tracker's path form, and the former query form during the transition.
+
+
+def test_the_path_and_the_former_query_form_of_a_firing_are_one_impression() -> None:
+    """A pod rendered before the change still fires the query form: both read as the same ad of the same break, so
+    the dedupe keys count it once."""
+    path = tracker_url(TRACKER, f"{SID}.1234", "direct1", enr=1)
+    query = f"https://{HOST}/ads/b.gif?d={SID}.1234&c=direct1&e=impression&enr=1"
+    found = [beacon(fired(uri), host=HOST) for uri in (path, query)]
+    rows = [cdn_beacon(cdn_row(uri), host=HOST) for uri in (path, query)]
+
+    keys = {(b.decision_id, b.crid, b.enr) for b in (*found, *rows) if isinstance(b, Beacon)}
+    assert keys == {(f"{SID}.1234", "direct1", 1)}
+    assert path == f"{TRACKER}/{SID}.1234/direct1/1.gif"
+
+
+def test_with_the_identity_module_the_logs_have_no_query_and_the_path_still_counts() -> None:
+    path = tracker_url(TRACKER, f"{SID}.9", "sim2")
+    query = f"https://{HOST}/ads/b.gif?d={SID}.9&c=sim2&e=impression&enr=0"
+
+    assert isinstance(cdn_beacon(cdn_row(path, cs_uri_query=None), host=HOST), Beacon)
+    assert cdn_beacon(cdn_row(query, cs_uri_query=None), host=HOST) is Ignored.OTHER_TRACKER
+
+
+def test_the_longest_creative_id_round_trips_through_the_path() -> None:
+    crid = "A-z_0.9" * 9 + "-"  # 64 characters, the most NAME_PATTERN allows
+    uri = tracker_url(TRACKER, f"{'f' * 64}.{2**31 - 1}", crid, enr=1)
+    found = beacon(fired(uri, sessionId="f" * 64), host=HOST)
+
+    assert len(crid) == 64 and len(uri) < 256
+    assert isinstance(found, Beacon) and (found.crid, found.evid, found.enr) == (crid, str(2**31 - 1), 1)
+
+
+def test_an_encoded_path_segment_is_decoded_and_never_splits_the_path() -> None:
+    """``%2F`` is one segment's slash: the ad ``a/b`` is not a name, so it is malformed, not another path."""
+    assert beacon(fired(f"https://{HOST}/ads/b/{SID}.1/a%2Fb/0.gif"), host=HOST) is Ignored.MALFORMED
+    assert beacon(fired(f"https://{HOST}/ads/b/{SID}.1/a/b/0.gif"), host=HOST) is Ignored.OTHER_TRACKER
+
+
+def test_the_module_and_the_pds_render_the_same_path() -> None:
+    template = PbsSettings(
+        prefix="fastm",
+        simulator=True,
+        server_instances=2,
+        tracker_base_url=f"https://{HOST}",
+        publisher_domain="media.example.com",
+    ).tracker_template
+
+    assert template == f"https://{HOST}/ads/b/{{sid}}.{{evid}}/{{crid}}/{{enr}}.gif"
+    rendered = template.format(sid=SID, evid="1234", crid="direct1", enr=0)
+    assert rendered == tracker_url(TRACKER, f"{SID}.1234", "direct1")

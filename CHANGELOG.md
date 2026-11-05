@@ -64,7 +64,9 @@ All notable changes to this project are documented here. The format follows
   MediaTailor filled, so the delivery function also counts our tracker's requests in the CDN's standard logs. Every 5
   minutes one Athena query reads the log files that arrived 10 to 15 minutes earlier, each file once, and counts only
   requests whose break's select record placed that ad. A firing that both sources record counts once, by
-  `(sid, evid, crid)`. The metric `CdnLogOnlyImpressions` counts what the ADS log left out, and `pds.delivery`
+  `(sid, evid, crid)`. Our tracker's parameters move into its path, `/ads/b/<sid>.<evid>/<crid>/<enr>.gif`, which the
+  logs keep with the identity module (they leave out the query): with the demand module the CDN answers `/ads/b/*`
+  with a 1x1 GIF from a CloudFront Function, and the former `/ads/b.gif?d=…` form is still read. The metric `CdnLogOnlyImpressions` counts what the ADS log left out, and `pds.delivery`
   records gain `source`. The query string stays out of the lake, in the PDS's own Glue database `<prefix>_pds`. The
   Data and Media stacks write two more parameters for the Pds stack, `/<prefix>/pds/logs-bucket` and
   `/<prefix>/pds/distribution-id`: run `make deploy` before `deploy-demand`.
