@@ -22,6 +22,7 @@ from fast_channels.infra.stacks.demand import DemandStack
 from fast_channels.infra.stacks.demand_build import DemandBuildStack
 from fast_channels.infra.stacks.demand_edge import DemandEdgeStack
 from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
+from fast_channels.infra.stacks.identity import IdentityStack
 from fast_channels.infra.stacks.media import MediaStack
 from fast_channels.infra.stacks.models import ModelsStack
 from fast_channels.infra.stacks.operator import OperatorStack
@@ -46,7 +47,8 @@ def stage_id(prefix: str) -> str:
 
 class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
-    ``modules.crawl.enabled``, after Media), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
+    ``modules.crawl.enabled``, after Media), Identity (if ``modules.identity.enabled``, after Media), Ops (if
+    ``modules.ops.enabled``, after Data and Media), Edge (in
     us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (the
     account's Transaction Search, only with ``account_baseline``), DemandEdge (in us-east-1) and DemandBuild (if
     ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), Demand
@@ -140,6 +142,11 @@ class FastChannelsStage(Stage):
             )
             self.crawl.add_stack_dependency(self.data)
             self.crawl.add_stack_dependency(self.media)
+
+        self.identity: IdentityStack | None = None
+        if config.modules.identity.enabled:
+            self.identity = IdentityStack(self, "Identity", config=config, **stacks)
+            self.identity.add_stack_dependency(self.media, "The mint reads /<prefix>/release/media-bucket")
 
         self.edge: EdgeStack | None = None
         if env.region != EDGE_REGION:

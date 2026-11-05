@@ -56,6 +56,9 @@
       "enabled": true,
       "pre_ads": true,
       "holdout_percent": 20
+    },
+    "identity": {
+      "enabled": true
     }
   }
 }

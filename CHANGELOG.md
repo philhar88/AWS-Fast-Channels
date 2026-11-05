@@ -13,6 +13,22 @@ All notable changes to this project are documented here. The format follows
   and the page lists each one: the AWS behaviour, our workaround, where it lives and what to delete when AWS fixes
   it. 28 ids, from the MediaTailor service-linked-role grant (W-2 1.30) to the AppConfig strategies (W-2 4.7) and
   the guidance overlays (W-11). A test checks that the markers and the rows name the same ids.
+- **The `identity` module (off by default; needs `release`):** signed-in viewers, by single-use playback tickets
+  ([docs/identity.md](docs/identity.md), [ADR-0018](docs/adr/0018-opaque-playback-ticket.md), Proposed). The
+  `FastChannels-<prefix>-Identity` stack holds:
+  - a Cognito viewer pool (Essentials, administrators create users), whose pre-token-generation trigger puts the
+    scope `fast/playback` and the claim `fast:persona` in access tokens;
+  - `POST /playback`, which takes an access token with that scope (ID tokens are refused) and a channel name. It
+    answers the stable sibling's playback URL with a 22-character opaque ticket `ads.t`, valid for 120 s. The ticket
+    row holds the configuration, the privacy mode, the persona and the viewer id `vid`, a KMS HMAC of the token's
+    issuer and subject; the raw subject is stored nowhere;
+  - `POST /redeem`, one conditional DynamoDB update with no Lambda, which binds a ticket to the first session that
+    redeems it on its own configuration. A replay, an expired or unknown ticket, or another configuration gets a 409.
+
+  `scripts/seed_personas.py` creates the demo personas' viewers and keeps their passwords in Secrets Manager, and
+  `tests/e2e/harness_identity.py` signs them in and mints for other e2e tests. The playback path does not use the
+  tickets yet: the CDN's edge rebuild, the siblings' PRE_SESSION redeem and the PDS's binding check come next. The
+  shipped stages turn the module on.
 
 ## [4.0.0] - 2026-10-31
 

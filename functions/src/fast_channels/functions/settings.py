@@ -140,6 +140,12 @@ class Settings:
     receives each MediaTailor log type, and in which layout."""
     origin_secret_region: str = field(default_factory=lambda: _env("ORIGIN_SECRET_REGION"))
     """Region of the demand origin's secrets (the DemandEdge stack, in us-east-1)."""
+    identity_table: str = field(default_factory=lambda: _env("IDENTITY_TABLE"))
+    """The identity module's ticket table (``<prefix>-identity``)."""
+    vid_key: str = field(default_factory=lambda: _env("VID_KEY"))
+    """ARN of the identity module's KMS HMAC key, which the ``vid`` is computed with."""
+    redeem_window_ms: int = field(default_factory=lambda: int(_env("REDEEM_WINDOW_MS") or 0))
+    """``modules.identity.redeem_window_seconds`` in milliseconds: from mint to the latest redeem of a ticket."""
 
     @property
     def app(self) -> str:

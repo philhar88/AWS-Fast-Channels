@@ -108,6 +108,10 @@ it costs.
 | `modules.crawl.pre_ads` | bool | `true` | Map the cached PRE_ADS lookup on the monetized playback configurations. |
 | `modules.crawl.holdout_percent` | int | `20` | Share of session-breaks that get no enrichment, the uplift measurement's control arm. |
 | `modules.crawl.publisher_domain` | str or null | `null` | Your domain (e.g. `example.com`), named as the registry of your catalog's content ids in the catalog context objects and in OpenRTB `content.data[].cids`; unset, the content id travels in `content.id` only. |
+| `modules.identity.enabled` | bool | `false` | Deploy viewer identity: a Cognito viewer pool; `POST /playback`, which mints a single-use playback ticket for a signed-in viewer's play; and `POST /redeem`, which binds the ticket to the one session that opens it (docs/identity.md). |
+| `modules.identity.redeem_window_seconds` | int | `120` | From mint to the latest redeem: the player opens the ticket's URL at once, in one session. |
+| `modules.identity.api_rate_limit` | int | `50` | Requests per second the identity API accepts (API Gateway stage throttling, every method). |
+| `modules.identity.api_burst_limit` | int | `100` | Burst of the identity API's throttling. |
 
 `channels.iac[]`:
 

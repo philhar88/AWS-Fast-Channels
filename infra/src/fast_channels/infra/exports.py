@@ -12,6 +12,7 @@ from aws_cdk import Fn, Token
 from aws_cdk import aws_appconfig as appconfig
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_cloudfront as cloudfront
+from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_events as events
 from aws_cdk import aws_s3 as s3
@@ -138,6 +139,22 @@ class ModelsExports:
 
     profiles: Mapping[str, TaskProfile]
     """Each task's profile, by task name."""
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityExports:
+    """What the viewer app's stack consumes from the Identity stack (``IdentityStack.exports``)."""
+
+    user_pool: cognito.IUserPool
+    user_pool_id: str
+    user_pool_client_id: str
+    """The viewer app client: public, no secret, SRP and password sign-in."""
+    resource_server: cognito.IUserPoolResourceServer
+    playback_scope: str
+    """``fast/playback``: the scope ``POST /playback`` requires of an access token."""
+    playback_api_url: str
+    """The identity API's stage URL (``https://…/v1/``); ``POST <url>playback`` mints a ticket."""
+    region: str
 
 
 def channel_playback(cdn_base_url: str, channel: ChannelExports) -> dict[str, str]:

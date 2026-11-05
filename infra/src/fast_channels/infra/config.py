@@ -794,11 +794,27 @@ class CrawlModule(_Module):
     objects and in OpenRTB ``content.data[].cids``; unset, the content id travels in ``content.id`` only."""
 
 
+class IdentityModule(_Module):
+    """The viewer-identity module (``modules.identity``; ADR-0018)."""
+
+    enabled: bool = False
+    """Deploy viewer identity: a Cognito viewer pool; ``POST /playback``, which mints a single-use playback ticket for
+    a signed-in viewer's play; and ``POST /redeem``, which binds the ticket to the one session that opens it
+    (docs/identity.md)."""
+    redeem_window_seconds: int = Field(default=120, ge=30, le=600)
+    """From mint to the latest redeem: the player opens the ticket's URL at once, in one session."""
+    api_rate_limit: int = Field(default=50, ge=1, le=10_000)
+    """Requests per second the identity API accepts (API Gateway stage throttling, every method)."""
+    api_burst_limit: int = Field(default=100, ge=1, le=5_000)
+    """Burst of the identity API's throttling."""
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
     "release": ("ops", "demand", "pds"),
     "crawl": ("pds", "release"),
+    "identity": ("release",),
 }
 """Modules an enabled module builds on."""
 
@@ -818,6 +834,7 @@ class ModulesConfig(_Section):
     pds: PdsModule = PdsModule()
     release: ReleaseModule = ReleaseModule()
     crawl: CrawlModule = CrawlModule()
+    identity: IdentityModule = IdentityModule()
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""
