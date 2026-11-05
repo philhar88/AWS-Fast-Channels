@@ -13,18 +13,23 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
-from _demand import PREBID_CONTAINER
-from harness import Player, TransientResponseError
+from _demand import PREBID_CONTAINER, prebid_log_group
+from _stack import Module, Stage
+from harness import Player, TransientResponseError, wait_for
 from playback import Segment, Splice, media_segments, splices
 
+from fast_channels.core.demand import simulator_function, warmup_project
 from fast_channels.core.demo_demand import DemoIndex
 from fast_channels.core.manifests import parse_multivariant
 from fast_channels.core.pds.book import Creative, house_creatives
 from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
+
+if TYPE_CHECKING:
+    from harness_demand import DemandEdge
 
 type IpAddress = IPv4Address | IPv6Address
 
@@ -52,6 +57,8 @@ LOGGED: Final = "@logged_ms"
 places the record in the auction of one of MediaTailor's requests (:meth:`Break.auctions`)."""
 CLOCK_SLACK: Final = timedelta(seconds=1)
 """How much earlier than MediaTailor's ``MAKING_ADS_REQUEST`` an auction's records may be logged."""
+READY_TIMEOUT_S: Final = 1500
+"""Census lag (up to about 4.5 minutes), then Prebid Server's scale-out (about 3) and warm-up (about 3), with room."""
 
 
 # --- the viewer's address ------------------------------------------------------------------------------------------
@@ -560,3 +567,76 @@ def log_gaps(found: Iterable[Break], played: Collection[tuple[str, str]]) -> set
 def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:
     """The share of ``sessions`` with at least one known ADS log gap."""
     return len({sid for sid, _ in gaps} & set(sessions)) / len(sessions) if sessions else 0.0
+
+
+# --- the run's log groups and Prebid Server's readiness (the demand smokes') ---------------------------------------
+
+
+@dataclass(frozen=True)
+class Sources:
+    """The log groups of one run."""
+
+    ads: str
+    policy: str
+    select: str
+    delivery: str
+    pbs: str
+    simulator: str
+
+    @classmethod
+    def of(cls, stage: Stage, edge: DemandEdge) -> Sources:
+        functions = stage.session.client("lambda", region_name=stage.region)
+
+        def group(output: str) -> str:
+            configuration = functions.get_function_configuration(FunctionName=stage.output(Module.PDS, output))
+            return str(configuration["LoggingConfig"]["LogGroup"])
+
+        decisions = stage.output(Module.PDS, "DecisionLogGroup")  # the sidecar's (ADR-0036)
+
+        ecs = stage.session.client("ecs", region_name=stage.region)
+        [service] = ecs.describe_services(cluster=edge.cluster, services=[edge.service])["services"]
+        definition = ecs.describe_task_definition(taskDefinition=service["taskDefinition"])["taskDefinition"]
+        pbs = prebid_log_group(definition)
+        assert pbs, f"no Prebid Server container log group in {service['taskDefinition']}"
+        return cls(
+            ads=stage.output(Module.RELEASE, "SiblingLogGroup"),
+            policy=decisions,
+            select=decisions,
+            delivery=group("DeliveryFunction"),
+            pbs=pbs,
+            simulator=f"/aws/lambda/{simulator_function(stage.prefix)}",
+        )
+
+
+def wait_until_ready(stage: Stage, edge: DemandEdge) -> set[str]:
+    """Until Prebid Server runs and every running task's warm-up succeeded; the running tasks' images. The PDS is a
+    sidecar of those tasks, healthy before Prebid Server starts (ADR-0036): nothing of its own to wait for."""
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+    last: dict[str, Any] = {}
+
+    def ready() -> set[str] | None:
+        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        last.update(tasks=len(tasks), warmups=sorted(warmed.values()))
+        if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
+            raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
+        warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
+        return set(tasks.values()) if warm else None
+
+    started = time.monotonic()
+    images = wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
+    print(f"ready {time.monotonic() - started:.0f} s after the ingest: {last}")
+    return images
+
+
+def objects(logs: Logs, group: str, pattern: str) -> list[dict[str, Any]]:
+    """The JSON objects of the matching events of ``group``, with when each was logged (:data:`LOGGED`)."""
+    return [
+        found | {LOGGED: event["timestamp"]}
+        for event in logs.events(group, pattern)
+        if (found := json_object(str(event["message"])))
+    ]
+
+
+def milliseconds(moment: datetime) -> int:
+    return int(moment.timestamp() * 1000)
