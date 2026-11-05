@@ -155,6 +155,7 @@ def program_requests(
     return requests
 
 
+# OPTIMIZATION(aws): W-2 1.3 a policy change breaks a running channel's sessions: one static pattern, never edited
 SIBLING_PATTERN: Final = "-p-?"
 """Appended to a channel's playback configuration ARN, the ``ArnLike`` pattern of its sibling configurations
 ``<channel>-p-<s>`` (the release module): ``?`` is exactly one character, so no other channel's sibling and no longer

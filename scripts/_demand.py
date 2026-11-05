@@ -743,6 +743,7 @@ class DemandStage:
             # The guidance takes its image as the default of a CloudFormation parameter (ContainerImage); cdk deploy
             # would keep a parameter's previous value, so a redeploy with a new image left the old one running. Every
             # parameter we set is passed on each deploy (deploy_guidance), the others keep their defaults.
+            # OPTIMIZATION(aws): W-11 the guidance's deploy keeps the previous image: drop when it is fixed
             "--no-previous-parameters",
             "-c",
             f"stackPrefix={self.prefix}",
@@ -845,6 +846,7 @@ class DemandStage:
             "ECSTaskMinCapacity": str(demand.tasks.min),
             "ECSTaskMaxCapacity": str(demand.tasks.max),
             # Its reporter logs every request header, the ticket and the origin secret too (tests/pbs)
+            # OPTIMIZATION(aws): W-11 the guidance's analytics logs every request header (the secret)
             "EnableLogAnalytics": "false",
             "ExtraWafRuleGroupArn": rule_group,
             **self.simulator_endpoint(image),

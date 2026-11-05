@@ -16,6 +16,7 @@ from fast_channels.infra.constructs.models.profiles import INVOKE_ACTIONS, TASK_
 
 COUNTER_PREFIX: Final = "COUNTER#"
 """Counter items are ``COUNTER#<task>#<UTC day>`` (``fast_channels.agent.caps``)."""
+# OPTIMIZATION(aws): W-2 4.11 Budgets actions reject DAILY budgets: a MONTHLY one at 31 days; delete when fixed
 BUDGET_DAYS: Final = 31
 """AWS Budgets actions refuse daily budgets ("AWS Budgets Actions don't support daily granularity budget for now",
 measured 2026-10-29), so a task's budget is monthly at this many days of its daily cap."""

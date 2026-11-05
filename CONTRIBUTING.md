@@ -76,6 +76,10 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`
   on the construct that causes them, with a reason.
 - Changing a CloudFormation snapshot is deliberate: `uv run pytest infra/tests/test_snapshots.py --snapshot-update`
   and review the diff.
+- A workaround for AWS product behaviour (a defect or an undocumented limit) is marked where it lives,
+  `OPTIMIZATION(aws): <id> <why>` (`OPTIMIZATION(oss)` for an open-source dependency), and has a row in
+  [docs/workarounds.md](docs/workarounds.md) saying what to delete when it is fixed; `tests/e2e/test_workarounds.py`
+  checks that the markers and the rows agree. Our own misconfiguration gets a fix, not a marker.
 - One source of truth per concept: when you change one of these, regenerate what derives from it in the same PR.
 
 | Source | Derived | Regenerate |

@@ -715,6 +715,7 @@ class ReleaseStrategy(StrEnum):
     LARGE = "large"
 
 
+# OPTIMIZATION(aws): W-2 1.1 prefetch also prepares creatives (NEW_CREATIVE skips): it stays for herd shaping
 class ReleasePrefetch(_Section):
     """Ad prefetch on the monetized siblings (``modules.release.prefetch``; DESIGN §10)."""
 

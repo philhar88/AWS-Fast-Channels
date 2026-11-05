@@ -99,6 +99,7 @@ def warmup_buildspec(*, prefix: str, cloudfront_domain: str, cluster_arn: str, t
     }
 
 
+# OPTIMIZATION(aws): W-11 the guidance does not warm a new Prebid Server task (P0-21): we replay auctions
 class WarmUp(Construct):
     """The warm-up project and the rule that starts it for every new Prebid Server task.
 

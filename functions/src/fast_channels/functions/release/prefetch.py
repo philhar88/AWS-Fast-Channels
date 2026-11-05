@@ -89,6 +89,7 @@ def existing(configuration: str) -> list[dict[str, Any]]:
         item
         for page in aws.client("mediatailor")
         .get_paginator("list_prefetch_schedules")
+        # OPTIMIZATION(aws): W-2 2.16 without ScheduleType=ALL the list hides RECURRING schedules (undocumented default)
         .paginate(PlaybackConfigurationName=configuration, ScheduleType="ALL")
         for item in page.get("Items", [])
     ]

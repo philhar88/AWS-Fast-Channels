@@ -9,6 +9,7 @@ vended logs, logs every session it finds and publishes their number as ``ZeroAds
 ``v_zero_ads_sessions`` answers the same question per day with Athena.
 """
 
+# OPTIMIZATION(aws): W-2 FR-1 detects ad-free sessions a public endpoint allows: retire with the feature
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final

@@ -75,6 +75,7 @@ class ReleasePointer(Construct):
             final_bake_time_in_minutes=rollout.final_bake_time_in_minutes,
             replicate_to="NONE",
         )
+        # OPTIMIZATION(aws): W-2 4.7 AllAtOnce bakes 10 minutes under monitors: our 0-minute, no-bake strategy instead
         self.at_once = appconfig.CfnDeploymentStrategy(
             self,
             "AtOnce",

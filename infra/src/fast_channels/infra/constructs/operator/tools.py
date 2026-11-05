@@ -38,6 +38,7 @@ _TABLE_READ: Final = ("GetItem", "BatchGetItem", "Query", "Scan", "ConditionChec
 _TABLE_WRITE: Final = ("PutItem", "UpdateItem", "DeleteItem", "BatchWriteItem")
 _CHANNELS: Final = "every channel of the deployment is named <prefix>-* (config validation)"
 MEDIATAILOR_SERVICE: Final = "mediatailor.amazonaws.com"
+# OPTIMIZATION(aws): W-2 1.30 ConfigureLogs* create the SLR as the caller: drop the grants that use this when fixed
 MEDIATAILOR_SLR: Final = f"aws-service-role/{MEDIATAILOR_SERVICE}/AWSServiceRoleForMediaTailor"
 """Path and name of MediaTailor's service-linked role, which writes channel and playback configuration logs."""
 _DESCRIPTIONS: Final = {
@@ -309,6 +310,7 @@ class AgentTools(Construct):
             [agent_configurations],
             why=owned,
         )
+        # OPTIMIZATION(aws): W-2 1.30 delete this grant when ConfigureLogs* stop creating an existing SLR as the caller
         # ConfigureLogsForChannel and ConfigureLogsForPlaybackConfiguration refuse a caller that may not create
         # MediaTailor's service-linked role, even when the role exists ("Cannot create the service-linked role ...
         # add the iam:CreateServiceLinkedRole permission"); MediaTailor writes the logs with that role.

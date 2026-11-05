@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Workarounds to remove** ([docs/workarounds.md](docs/workarounds.md)): every place the code works around AWS
+  product behaviour is marked `OPTIMIZATION(aws): <id>` (and `OPTIMIZATION(oss)` for an open-source dependency),
+  and the page lists each one: the AWS behaviour, our workaround, where it lives and what to delete when AWS fixes
+  it. 28 ids, from the MediaTailor service-linked-role grant (W-2 1.30) to the AppConfig strategies (W-2 4.7) and
+  the guidance overlays (W-11). A test checks that the markers and the rows name the same ids.
+
 ## [4.0.0] - 2026-10-31
 
 Version 4.0.0 is a major release. It adds the optional monetization and operations modules

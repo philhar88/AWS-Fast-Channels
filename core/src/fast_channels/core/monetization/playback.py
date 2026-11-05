@@ -39,6 +39,7 @@ VOD_MAXIMUM_MS: Final = 6000
 PBS_AUCTION_PATH: Final = "/openrtb2/auction"
 ADS_QUERY: Final = "evid=[scte.event_id]&upid=[scte.segmentation_upid]&dur=[session.avail_duration_ms]"
 """Join keys in ``MAKING_ADS_REQUEST.adsRequestUrl``; never the ticket (P0-05)."""
+# OPTIMIZATION(aws): W-2 1.22 values are not JSON-escaped, and an invalid body (1.23) skips the call silently
 BODY_VARIABLES: Final = frozenset({"session.uuid", "session.avail_duration_secs", "scte.event_id"})
 """The only variables the POST body may use: MediaTailor generates them, so they cannot hold a quote."""
 
@@ -55,6 +56,7 @@ AD_SERVER_TARGETING: Final = ("hb_pb", "hb_uuid", "hb_bidder")
 """The Prebid targeting an ad-server sibling's PRE_ADS auction commits to ``player_params.<key>`` for its ADS URL
 (M8-09); the only player parameters an ADS URL may carry."""
 TICKET_TEMPLATE: Final = "{{player_params.t}}"
+# OPTIMIZATION(aws): W-2 1.25 these events log the ticket header in plain text: never on a ticketed sibling
 TICKET_LOG_EVENTS: Final = frozenset({"RAW_ADS_REQUEST", "PRE_SESSION_INIT_FUNCTION_COMPLETED"})
 """Opt-in log events that carry the ticket; never enabled on a configuration that forwards one (DESIGN §5.7)."""
 
