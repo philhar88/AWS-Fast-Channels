@@ -147,6 +147,8 @@ def test_decide_identity() -> None:
         request(t=TICKET), DEMAND, origin_facing=(), identity=Reason.BOUND, viewer=VIEWER, consent=Consent.PSEUDONYMOUS
     )
     assert bound.response.mode is Mode.PSEUDONYMOUS
+    assert bound.viewer == VIEWER  # what /select's ad load reads (the viewer id)
+    assert decide(request(t=TICKET), DEMAND, origin_facing=()).viewer.vid is None
     kids = decide(request(), DEMAND, origin_facing=(), kids_channel=True).response
     assert (kids.mode, kids.regs.coppa, kids.bidders) == (Mode.KIDS, 1, {})
     probe = decide(request(probe=True, pc="fast-demo-p-z"), DEMAND, origin_facing=()).response

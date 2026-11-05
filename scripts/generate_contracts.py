@@ -14,6 +14,9 @@ targets: every schema is inline, optional fields drop their ``null`` branch, and
 Prebid Server module (requests as the PDS accepts them, responses as it writes them). The examples under
 ``fixtures/pds/<call>/`` are shared with the module's tests: their ``description``, ``context`` and ``request`` are
 written by hand, and their ``response`` is what the PDS rules answer, regenerated here.
+
+``personas.json`` is the demo's persona list (``fast_channels.core.personas``), which the seed script and the viewer
+app read, and ``personas.schema.json`` its schema.
 """
 
 import argparse
@@ -36,6 +39,7 @@ from fast_channels.core.monetization.bundle import Bundle
 from fast_channels.core.pds.models import PolicyRequest, PolicyResponse, SelectRequest, SelectResponse
 from fast_channels.core.pds.pod import PodContext, select_pod, select_response
 from fast_channels.core.pds.policy import Demand, decide
+from fast_channels.core.personas import PERSONA_LIST, PersonaList
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -376,6 +380,8 @@ def render() -> dict[str, str]:
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),
         "pds-policy.schema.json": as_json(pds_policy_schema()),
         "pds-select.schema.json": as_json(pds_select_schema()),
+        "personas.schema.json": as_json({"$schema": JSON_SCHEMA, **PersonaList.model_json_schema()}),
+        "personas.json": as_json(PERSONA_LIST.model_dump(mode="json")),
         **{name: as_json(document) for name, document in pds_fixtures().items()},
     }
 

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from botocore.exceptions import ClientError
 
+from fast_channels.core.adload import AdLoadPolicy
 from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.models import SelectResponse
 from fast_channels.core.pds.snapshot import EMPTY, Snapshot, SnapshotBase, build
@@ -39,14 +40,22 @@ DIRECT1 = Line(
 )
 
 
-def snapshot_of(*lines: Line, breaks: tuple[int, ...] = (30030, 60060, 90090, 120120)) -> Snapshot:
+LIGHT = AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))
+
+
+def snapshot_of(
+    *lines: Line,
+    breaks: tuple[int, ...] = (30030, 60060, 90090, 120120),
+    ad_load: dict[str, AdLoadPolicy] | None = None,
+) -> Snapshot:
     creatives = tuple(
         Creative(crid=crid, creative_id=f"demo-{crid}", hls_uri=f"{CDN}/{crid}.m3u8", duration_ms=30030)
         for line in lines
         for crid in line.creatives
     )
     own = Book(lines=lines, creatives=creatives)
-    return build(SnapshotBase(lines=lines, breaks_ms=breaks), own=own, now=NOW)
+    base = SnapshotBase(lines=lines, breaks_ms=breaks, ad_load=ad_load or {"light": LIGHT})
+    return build(base, own=own, now=NOW)
 
 
 class Store:
@@ -332,3 +341,73 @@ def test_without_a_snapshot_the_answer_is_an_immediate_503(
     assert elapsed_ms < 20, "far inside the module's wait"
     assert stubbed == []
     assert records(caplog) == []
+
+
+class Tiered:
+    """The sidecar's hand-off, as if ``/policy`` had bound these sessions' viewers: tier by session id."""
+
+    def __init__(self, tiers: dict[str, str]) -> None:
+        self.tiers = tiers
+        self.asked: list[tuple[str, object, bool]] = []
+
+    def tier(self, decision_id: str, mode: object, *, probe: bool) -> str | None:
+        self.asked.append((decision_id, mode, probe))
+        return self.tiers.get(decision_id.split(".", maxsplit=1)[0])
+
+
+DANA_SID = "0d4a1b2c-3d4e-4f5a-8b6c-7d8e9f0a1b2c"
+BEN_SID = "1e5b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d"
+
+
+def session(sid: str, **fields: Any) -> dict[str, Any]:
+    evid = request()["evid"]
+    return request(sid=sid, decision_id=f"{sid}.{evid}", **fields)
+
+
+def test_two_tiers_in_one_break_get_their_own_pods(
+    stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Dana (light: one ad above $20) and Ben (the holdout: the control plan) in the same 120 s break."""
+    hand = Tiered({DANA_SID: "light", BEN_SID: "holdout"})
+    monkeypatch.setattr(select, "viewers", lambda: hand)
+
+    dana = SelectResponse.model_validate_json(ask(json.dumps(session(DANA_SID))).body)
+    ben = SelectResponse.model_validate_json(ask(json.dumps(session(BEN_SID))).body)
+
+    assert [ad.ref for ad in dana.pod] == ["amt-s3-sim3"]
+    assert [ad.ref for ad in ben.pod] == ["ownbook-s1-direct1", "amt-s2-sim2", "amt-s3-sim3", "ownbook-s4-house2"]
+    assert len(stubbed) == 1, "only Ben's pod holds a line ad to reserve"
+    dana_record, ben_record = records(caplog)
+    assert (dana_record["tier"], dana_record["ad_load"]) == (
+        "light",
+        {"policy": "light", "reason": "tier", "max_ads": 1, "bar_cpm": 20.0, "slots": 4},
+    )
+    assert (ben_record["tier"], ben_record["ad_load"]) == (
+        "holdout",
+        {"policy": "standard", "reason": "control", "max_ads": None, "bar_cpm": 0.0, "slots": 4},
+    )
+    outcomes = {bid["ref"]: bid["outcome"] for bid in dana_record["bids"]}
+    assert outcomes["amt-s2-sim2"] == "ad_load"
+    assert {outcomes[r] for r in ("ownbook-s1-direct1", "amt-s1-sim1", "amt-s4-sim4")} == {"below_bar"}
+    assert hand.asked[0] == (f"{DANA_SID}.{request()['evid']}", "FULL", False)
+
+
+def test_a_break_whose_tier_leaves_nothing_gets_one_ad(
+    stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(select, "viewers", lambda: Tiered({DANA_SID: "light"}))
+    cheap = [b for b in session(DANA_SID)["bids"] if b["price"] < 20]
+
+    answer = SelectResponse.model_validate_json(ask(json.dumps(session(DANA_SID, bids=cheap))).body)
+
+    assert [ad.ref for ad in answer.pod] == ["ownbook-s1-direct1"]  # the control plan's first ad
+    [record] = records(caplog)
+    assert record["ad_load"]["reason"] == "min_load"
+
+
+@pytest.mark.usefixtures("stubbed")
+def test_without_a_tier_every_break_is_the_control_plan(caplog: pytest.LogCaptureFixture) -> None:
+    answer = SelectResponse.model_validate_json(ask(json.dumps(request())).body)
+    assert len(answer.pod) == 4
+    [record] = records(caplog)
+    assert (record["tier"], record["ad_load"]["reason"]) == (None, "control")

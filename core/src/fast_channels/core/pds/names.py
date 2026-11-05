@@ -81,6 +81,10 @@ def decision_table(record: str) -> str:
     return f"pds_{record}"
 
 
+AD_LOAD_VIEW: Final = "v_ad_load_kpis"
+"""The lake view of the ad load by tier (``infra``'s ``constructs.pds.adload_kpis``)."""
+
+
 class Parameter(StrEnum):
     """The SSM parameters ``/<prefix>/pds/<name>`` the Data and Media stacks write for the Pds stack.
 

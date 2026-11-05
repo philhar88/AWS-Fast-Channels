@@ -7,7 +7,8 @@ its patch contributor (``functions.crawl.patch``) adds the title's ``app.content
 ``modules.pds.policy_timeout_ms`` for the answer; anything but a 200 with a known schema leaves the stored request
 alone (own book and house, no third party). Before the sidecar has a snapshot it answers 503 at once
 (``http.NO_SNAPSHOT``). Each answer is logged as a ``pds.policy`` decision record, which a subscription carries into
-the lake; a bound viewer's names them by ``vid``.
+the lake; a bound viewer's names them by ``vid``. A FULL or PSEUDONYMOUS break's bound viewer is handed to the
+break's ``/select``, whose ad load follows their tier (``viewers``).
 """
 
 import time
@@ -25,6 +26,7 @@ from fast_channels.pds import state
 from fast_channels.pds.bindings import bindings
 from fast_channels.pds.http import INTERNAL, NO_SNAPSHOT, REFUSED, Answer, refused_fields
 from fast_channels.pds.telemetry import counters
+from fast_channels.pds.viewers import viewers
 
 if TYPE_CHECKING:
     from fast_channels.core.pds.contributors import PatchContributor
@@ -74,6 +76,7 @@ def _answer(request: PolicyRequest, started: float) -> Answer:
         consent=binding.consent if binding else None,
         contributors=contributors(),
     )
+    viewers().note(request.decision_id, decision)
     body = decision.response.model_dump_json()
     record = policy_record(request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3))
     logger.info(

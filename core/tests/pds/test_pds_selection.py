@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from fast_channels.core.adload import AdLoadPolicy
 from fast_channels.core.pds.book import Book, Line
 from fast_channels.core.pds.models import SelectRequest
 from fast_channels.core.pds.pod import Outcome, scheduled_ms, select_pod
@@ -165,6 +166,22 @@ def test_the_context_is_the_books() -> None:
 
     assert (rules.tier0_deals, rules.floor_cpm, rules.scheduled_ms) == (frozenset({"fast-direct-1"}), 2, 60060)
     assert rules.recent_crids == frozenset() and rules.kids_approved == frozenset()
+    assert rules.ad_load.is_control
+    light = AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))
+    assert pod_context(BOOK, ad_load=light).ad_load == light
+
+
+def test_a_tier_that_turns_the_line_away_reserves_nothing() -> None:
+    request = fixture("demo-full-120s.json")
+    asked: list[object] = []
+
+    def reserve(wanted: object) -> frozenset[str]:
+        asked.append(wanted)
+        return frozenset()
+
+    rules = pod_context(BOOK, ad_load=AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20)))
+    decision, reserved = select(request, rules, BOOK, reserve=reserve)
+    assert ([ad.crid for ad in decision.pod], reserved, asked) == (["sim3"], frozenset(), [])
 
 
 def test_an_own_book_ad_of_no_known_line_is_left_out() -> None:

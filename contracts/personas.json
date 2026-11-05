@@ -1,0 +1,131 @@
+{
+  "v": 1,
+  "personas": [
+    {
+      "id": "dana",
+      "name": "Dana Reyes",
+      "bio": "Designer in Austin who binges sci-fi, then fantasy and documentaries, five nights a week.",
+      "mode": "FULL",
+      "value": "high",
+      "tolerance": "low",
+      "tier": "light",
+      "sign_in": "user",
+      "email": "dana@personas.example.com",
+      "account": null,
+      "genres": [
+        "sci-fi",
+        "action",
+        "fantasy"
+      ]
+    },
+    {
+      "id": "ben",
+      "name": "Ben Okafor",
+      "bio": "Dana's twin: the same habits, pinned to the holdout so the demo shows the full pod beside hers.",
+      "mode": "FULL",
+      "value": "high",
+      "tolerance": "low",
+      "tier": "holdout",
+      "sign_in": "user",
+      "email": "ben@personas.example.com",
+      "account": null,
+      "genres": [
+        "sci-fi",
+        "action",
+        "fantasy"
+      ]
+    },
+    {
+      "id": "marcus",
+      "name": "Marcus Hale",
+      "bio": "Retired engineer who watches documentaries and classic comedy every weekday evening.",
+      "mode": "FULL",
+      "value": "high",
+      "tolerance": "high",
+      "tier": "standard",
+      "sign_in": "user",
+      "email": "marcus@personas.example.com",
+      "account": null,
+      "genres": [
+        "live-action",
+        "action"
+      ]
+    },
+    {
+      "id": "luis",
+      "name": "Luis Moreno",
+      "bio": "Freelancer who keeps animation and comedy on in the background through the working day.",
+      "mode": "PSEUDONYMOUS",
+      "value": "low",
+      "tolerance": "high",
+      "tier": "standard",
+      "sign_in": "user",
+      "email": "luis@personas.example.com",
+      "account": null,
+      "genres": [
+        "animation",
+        "surreal"
+      ]
+    },
+    {
+      "id": "priya",
+      "name": "Priya Shah",
+      "bio": "Nurse in San Jose who watches an hour of drama in the evening; she opts out of sale and sharing live.",
+      "mode": "PSEUDONYMOUS",
+      "value": "mid",
+      "tolerance": "medium",
+      "tier": "standard",
+      "sign_in": "user",
+      "email": "priya@personas.example.com",
+      "account": null,
+      "genres": [
+        "fantasy",
+        "adventure"
+      ]
+    },
+    {
+      "id": "sam",
+      "name": "Sam Lee",
+      "bio": "Student in his first week, on a phone in the daytime: sensitive to ads, but his breaks are worth little.",
+      "mode": "FULL",
+      "value": "low",
+      "tolerance": "low",
+      "tier": "standard",
+      "sign_in": "user",
+      "email": "sam@personas.example.com",
+      "account": null,
+      "genres": [
+        "animation",
+        "sci-fi"
+      ]
+    },
+    {
+      "id": "mia",
+      "name": "Mia",
+      "bio": "Eight, on the kids profile of Marcus's account: kids animation on weekend mornings.",
+      "mode": "KIDS",
+      "value": null,
+      "tolerance": null,
+      "tier": null,
+      "sign_in": "kids_profile",
+      "email": null,
+      "account": "marcus",
+      "genres": [
+        "animation"
+      ]
+    },
+    {
+      "id": "guest",
+      "name": "Guest",
+      "bio": "A drive-by viewer who never signs in (the Jonas preset: in the EU, with no consent given).",
+      "mode": "CONTEXTUAL",
+      "value": null,
+      "tolerance": null,
+      "tier": null,
+      "sign_in": "guest",
+      "email": null,
+      "account": null,
+      "genres": []
+    }
+  ]
+}

@@ -24,7 +24,8 @@ def by_sid(spec: Sidecar) -> dict[str, dict[str, object]]:
 
 
 def test_the_grants_are_the_hot_path_functions_and_no_more() -> None:
-    """The snapshot object; the budget shards' reads; the reservations' writes; the ledger's pds/* chains."""
+    """The snapshot object; the budget shards' and viewer profiles' reads; the reservations' writes; the ledger's
+    pds/* chains."""
     granted = by_sid(sidecar(**ARGS))
 
     assert granted == {
@@ -40,6 +41,13 @@ def test_the_grants_are_the_hot_path_functions_and_no_more() -> None:
             "Action": "dynamodb:BatchGetItem",
             "Resource": TABLE,
             "Condition": {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["BUDGET#*"]}},
+        },
+        "PdsViewerProfiles": {
+            "Sid": "PdsViewerProfiles",
+            "Effect": "Allow",
+            "Action": "dynamodb:GetItem",
+            "Resource": TABLE,
+            "Condition": {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["VIEWER#*"]}},
         },
         "PdsReservations": {
             "Sid": "PdsReservations",

@@ -2237,7 +2237,7 @@
             "PDS_CONFIG_BUCKET": {
               "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
-            "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\",\"lines\":[],\"breaks_ms\":[30030,60060,90090,120120]}",
+            "PDS_SNAPSHOT_BASE": "{\"demand\":{\"amt\":{\"placementId\":\"fastm-demo\"}},\"shed\":[],\"floor_cpm\":\"0\",\"lines\":[],\"breaks_ms\":[30030,60060,90090,120120],\"ad_load\":{\"light\":{\"max_ads\":1,\"bar_cpm\":\"20\"}}}",
             "PDS_TABLE": "fastm-pds",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "pds.publisher"
@@ -2282,7 +2282,7 @@
       },
       "Type": "AWS::Lambda::Function"
     },
-    "PublisherFunctionCurrentVersion0CCBEA063be1fc3fc255c43313f0c6e64a524696": {
+    "PublisherFunctionCurrentVersion0CCBEA060df67127079e7bdc82d61efbf8d51802": {
       "Metadata": {
         "aws:cdk:do-not-refactor": true
       },
@@ -2604,7 +2604,7 @@
       "Properties": {
         "ExecuteOnHandlerChange": true,
         "HandlerArn": {
-          "Ref": "PublisherFunctionCurrentVersion0CCBEA063be1fc3fc255c43313f0c6e64a524696"
+          "Ref": "PublisherFunctionCurrentVersion0CCBEA060df67127079e7bdc82d61efbf8d51802"
         },
         "InvocationType": "RequestResponse",
         "ServiceToken": {
@@ -3139,6 +3139,14 @@
               {
                 "Name": "reserved",
                 "Type": "array<string>"
+              },
+              {
+                "Name": "tier",
+                "Type": "string"
+              },
+              {
+                "Name": "ad_load",
+                "Type": "string"
               },
               {
                 "Name": "timestamp",

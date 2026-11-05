@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from functools import cached_property
 from ipaddress import IPv4Network, IPv6Network, ip_network
-from typing import Any, Final, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -26,6 +26,7 @@ from pydantic import (
     model_validator,
 )
 
+from fast_channels.core.adload import TIER_PATTERN, AdLoadPolicy
 from fast_channels.core.pds.book import Book, Creative, Line
 from fast_channels.core.pds.policy import Demand
 from fast_channels.core.pds.xff import IpNetwork, origin_facing_networks
@@ -59,6 +60,9 @@ class SnapshotBase(BaseModel):
     lines: tuple[Line, ...] = Field(default=(), description="The own book's direct lines.")
     breaks_ms: tuple[int, ...] = Field(
         default=(), description="The break lengths of the schedule of record (the default ladder's 30.03 s grid)."
+    )
+    ad_load: dict[Annotated[str, Field(pattern=TIER_PATTERN)], AdLoadPolicy] = Field(
+        default_factory=dict, description="The ad load of each tier (``modules.pds.ad_load``); others: control."
     )
 
     @field_serializer("shed")

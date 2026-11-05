@@ -125,10 +125,11 @@ one with neither "Mobile" nor a tablet token, which many TV boxes send.
 | Step | Rule |
 |---|---|
 | Eligibility | Own book only in SAFE, KIDS, or when the module applied no policy; in KIDS only house ads and creatives approved for children; house ads only on probe sessions. A house ad is an own-book bid marked house: the mark from any other bidder is ignored. Usable VAST (InLine or Wrapper) with a known duration; a declared `dur` must agree with it (rounded half up) and a missing one is taken from it; the slot must accept it (`rqddurs`). A `crid`, and an `adomain` unless it is a house ad. No creative the session saw in its recent breaks. At or above the floor, except house ads (fillers) and tier-0 lines (contracted) |
-| Value | Tier-0 lines first (sponsorships, guaranteed lines, PG deals). Then paid bids by accepted net value, `price / 1000 × accept_ratio(bidder) − c_ins` with `c_ins` = $0.0005 per insertion, which must beat the slot's ad-load price λ (0 until the ad-load model exists, `fast_channels.core.adload`). House ads fill the rest; they are never sold |
-| Placement | Each bid stays in its own imp's slot. Best candidates first; one is placed if its slot is free, it repeats no creative, advertiser domain or IAB category already in the pod (across bidders; house ads only never repeat a creative), and Σ `dur` ≤ `poddur` and Σ VAST durations ≤ the break still hold |
+| Value | Tier-0 lines first (sponsorships, guaranteed lines, PG deals). Then paid bids by accepted net value, `price / 1000 × accept_ratio(bidder) − c_ins` with `c_ins` = $0.0005 per insertion. Where the viewer's tier prices ad load (λ > 0, [Ad load by tier](#ad-load-by-tier)), every sold ad, tier-0 lines included, must beat λ, and house ads do not fill. House ads fill the rest; they are never sold |
+| Placement | Each bid stays in its own imp's slot. Best candidates first; one is placed if its slot is free, it repeats no creative, advertiser domain or IAB category already in the pod (across bidders; house ads only never repeat a creative), Σ `dur` ≤ `poddur` and Σ VAST durations ≤ the break still hold, and the pod holds fewer ads than the tier's `max_ads` (else the bid's outcome is `ad_load`) |
 | Standalones | Per winner, the best remaining candidate of the same slot and duration. MediaTailor's ad buffet plays it in that slot if the winner fails, for example a creative it has not transcoded yet. The pod stays within the break even if every winner that has a standalone fails |
 | Leftover | Slots nothing fills are not returned. Channel Assembly's break slate plays them; at a personalization threshold of 121 s MediaTailor keeps the partial pod |
+| Minimum load | A tier never empties a pod: when its rules leave nothing, the pod is the control plan's, with at most one ad (`ad_load.reason` `min_load`) |
 | Short avails | An avail under 30 s (the tail of a break a session joined late) gets an empty pod |
 
 The break is the duration MediaTailor requested, with one exception: a prefetch retrieval carries the duration rounded
@@ -156,6 +157,37 @@ Worked example (the demo demand, one FULL session, a 120.12 s break; `contracts/
 
 The same demand without the simulator (own book only) gives `direct1, house2, house1` and the slate for the last
 30.03 s. Every bid's outcome (`won`, `standalone`, or why not) goes into the decision record.
+
+## Ad load by tier
+
+Each signed-in viewer can have a profile that names an ad-load tier, and each tier a policy (ADR-0037,
+`fast_channels.core.adload`). It is the simple form of DESIGN §16's rule, the one the λ hook was built for: a
+high-value viewer gets fewer ads, and only higher bids win them.
+
+| Part | What it is |
+|---|---|
+| Profile | The item `VIEWER#<vid>` / `PROFILE` of the PDS table: the persona and the tier. It is keyed by the viewer id the binding resolves (a keyed hash of the identity provider's subject), never by the subject. The demo's seed script writes it from `contracts/personas.json` (`fast_channels.functions.pds.profiles.put_profile`) |
+| Policy | `modules.pds.ad_load.<tier>`: `max_ads`, the most ads in one break (sold or house; the rest is the channel's slate), and `bar_cpm`, the accepted CPM a sold ad must beat. The PDS turns the bar into λ = `bar_cpm / 1000 − c_ins` for every slot, so a sold ad runs exactly when `price × accept_ratio > bar_cpm`. λ is at most λ_cap, $20 CPM-equivalent, so `bar_cpm` is at most $20.50. The default is the demo's `light` tier: one ad, above $20 |
+| Who follows it | FULL and PSEUDONYMOUS breaks with a bound viewer. KIDS, SAFE and CONTEXTUAL breaks, probes, breaks served without the `/policy` patch, viewers without a profile, and the tiers `standard` and `holdout` keep the control plan: every slot, at the market floor |
+| Path | `/policy` resolves the binding, notes the bound viewer under the break's `decision_id` and starts reading their tier on a reader thread while the auction runs. `/select` takes it back and waits at most 20 ms. A tier is kept 5 minutes per viewer. A read that fails or is late gives no tier: the control plan (`TierReadErrors`, `TierReadsLate`) |
+| Wire | The tier and the bar never leave the PDS: not the ticket, the bid request, MediaTailor's session state or a header. Bid requests are the same for every tier, and a bid under a tier's bar is still recorded (`below_bar`), so forgone revenue can be counted |
+
+On the demo's prices (the simulator's $12.50, $22.50 and $35, the direct lines' $8 and $6), a `light` viewer's
+120.12 s break holds one ad, `sim3` at $35, and 90.09 s of slate. Another viewer in the same break gets the four-ad pod
+of the worked example above. Tier-0 lines are held to the bar too: λ is what one more ad costs the viewer, whoever
+pays, and a guaranteed line delivers on the other tiers.
+
+The lake view `v_ad_load_kpis` counts, by hour, configuration, tier and the policy applied: breaks, slots, ads per
+break, sold ads, fill, the average and lowest winning CPM, the bids the tier turned away (`below_bar`, `ad_load`)
+and their value (an upper bound on the revenue forgone), impressions, revenue and eCPM.
+
+```sql
+SELECT tier, policy, reason, sum(breaks) AS breaks, avg(ads_per_break) AS ads_per_break,
+  avg(winning_cpm_avg) AS winning_cpm, sum(turned_away_usd) AS turned_away_usd
+FROM "<prefix>_lake".v_ad_load_kpis
+WHERE datehour >= '2026/11/05/00'
+GROUP BY tier, policy, reason
+```
 
 ## Trackers
 
@@ -270,13 +302,15 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
   otherwise `null`), the bidders added, the device type, the viewer-IP rule's outcome, the catalog context's
   length, the patch contributors applied or skipped and their record fields, latency;
 - **`pds.select`**: the break and its budget, every bid at or above the floor with its outcome (bids below it are
-  counted), the pod, the standalones, the filled duration, latency;
+  counted), the pod, the standalones, the filled duration, the viewer's tier (`tier`) and the ad load applied
+  (`ad_load`: `policy`, `reason` `control`, `exempt`, `tier` or `min_load`, `max_ads`, `bar_cpm`, `slots`), latency;
 - **`pds.delivery`**: the break and the creative, the configuration that fired it, when, the tracker's HTTP status,
   what it did to the reservation (`delivered`, `late`, `unreserved` for a house or third-party ad, `repeat`) with
   the line and its price, whether it was the first firing seen for the ad (`impression`) and for the break
   (`fill`), and where it was read (`source`: `ads_log` or `cdn_log`). A failed batch is retried, so count fills and impressions as distinct keys rather than by the flags.
 
-Records never hold the ticket, the viewer's address, User-Agent or headers, or the catalog context itself.
+Records never hold the ticket, the viewer's address, User-Agent or headers, the catalog context itself, or the
+viewer's persona.
 
 ## Buckets
 
@@ -305,7 +339,7 @@ call on the task's loopback. Its code is the workspace member `pds` (`fast_chann
 | `/policy` | Answers with `decide()` and the current snapshot, and logs one `pds.policy` decision record |
 | `/select` | Answers with the pod rules on the current snapshot. It reserves the pod's line ads (`TransactWriteItems` on `BUDGET#`, `CAP#` and `RES#` items and the ledger's `pds/*` chains) on a DynamoDB client with 100 ms timeouts and one attempt, through the VPC's DynamoDB gateway endpoint, which the budget view's reads every 5 s keep connected; no reservation starts after 50 ms. It puts our tracker on every ad and logs one `pds.select` decision record (with the crids reserved) |
 | `/ownbook/openrtb` | Reads the snapshot and the lines' budget shards (`BatchGetItem` on `BUDGET#*` only), and logs one line per request with the imps, durations and bids |
-| Metrics and stats | In the `FastChannels` namespace, by `service` (`pds`), emitted every minute: `PolicyDecisions` (by `mode`), `PolicyNoViewerIp`, `PolicyNoSnapshot`, `PolicyRefused` (a 400), `PolicyErrors` (a 500); `SelectDecisions` (by `reason`), `LineAdsReserved`, `LineAdsRefused` (by `reason`: `budget`, `cap`, `conflict`), `ReservationErrors`, `ReservationsTooLate`, `SelectNoSnapshot`, `SelectRefused`, `SelectErrors`; `OwnBookBids`, `OwnBookRefused`, `OwnBookErrors`; `Shed` (by endpoint); `LoopLagMaxMs`. Each minute a `pds stats` line per task gives each endpoint's latency (count, p50, p99, max), the reservations' and the budget reads' DynamoDB round trips, the pool's queue wait, the event loop's lag, the process's CPU share of one vCPU and its peak memory |
+| Metrics and stats | In the `FastChannels` namespace, by `service` (`pds`), emitted every minute: `PolicyDecisions` (by `mode`), `PolicyNoViewerIp`, `PolicyNoSnapshot`, `PolicyRefused` (a 400), `PolicyErrors` (a 500); `SelectDecisions` (by `reason`), `AdLoadDecisions` (by `reason`), `TierReadsLate`, `TierReadErrors`, `LineAdsReserved`, `LineAdsRefused` (by `reason`: `budget`, `cap`, `conflict`), `ReservationErrors`, `ReservationsTooLate`, `SelectNoSnapshot`, `SelectRefused`, `SelectErrors`; `OwnBookBids`, `OwnBookRefused`, `OwnBookErrors`; `Shed` (by endpoint); `LoopLagMaxMs`. Each minute a `pds stats` line per task gives each endpoint's latency (count, p50, p99, max), the reservations' and the budget reads' DynamoDB round trips, the pool's queue wait, the event loop's lag, the process's CPU share of one vCPU and its peak memory |
 | Image | `<prefix>-pds:<context hash>`: the package and its locked dependencies for x86 with deterministic bytecode, on a digest-pinned `python:3.14-slim`, run as uid 1000 on a read-only root filesystem, restarted in place if it exits. Built by the stage's x86 CodeBuild project (`deploy-demand`, `build-image`) |
 | Grants | On the task role, which Prebid Server's container shares: `s3:GetObject` on the snapshot; `dynamodb:BatchGetItem` on `BUDGET#*`, `UpdateItem` on `BUDGET#*` and `CAP#*`, `PutItem` on `RES#*`; `PutItem` on the ledger's `pds/*` chains; with `modules.crawl`, listing and reading the catalog-context objects (`core.pds.sidecar`). The S3 reads also join the guidance VPC's S3 gateway endpoint policy |
 | Delivery function | On the subscription to the MediaTailor log group, and every 5 minutes on the CDN's logs (EventBridge Scheduler, Athena). It writes `IMP#`, `FILL#`, the reservations and budget shards, and appends to the ledger's `pds/*` chains; metrics `Impressions`, `Fills`, `LineAdsDelivered`, `LateDeliveries`, and for the CDN's logs `CdnLogBeacons` and `CdnLogOnlyImpressions`. It reads only the lake's workgroup, the table `<prefix>_pds.cdn_access` and the `pds.select` records. Its records go to the lake as `pds_delivery` |

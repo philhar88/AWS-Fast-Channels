@@ -26,6 +26,7 @@ from fast_channels.infra.constructs.pds import (
     ReleaseSweeper,
     SnapshotPublisher,
 )
+from fast_channels.infra.constructs.pds.adload_kpis import AD_LOAD_KPIS
 from fast_channels.infra.constructs.pds.alarms import ModuleAlarms
 
 if TYPE_CHECKING:
@@ -36,13 +37,14 @@ if TYPE_CHECKING:
 
 
 def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
-    """What the deployment puts in the snapshot: the break lengths of the default ladder's grid and, in demo mode, the
-    guidance's bidder simulator as the demand and the synthetic direct lines (``modules.pds.demo_lines``) in the own
-    book."""
+    """What the deployment puts in the snapshot: the break lengths of the default ladder's grid, the tiers' ad load
+    (``modules.pds.ad_load``) and, in demo mode, the guidance's bidder simulator as the demand and the synthetic
+    direct lines (``modules.pds.demo_lines``) in the own book."""
     grid = config.ladder(config.ladders.default).grid
     breaks_ms = tuple(grid.gop_exact(gops) for gops in BREAK_SLATE_GOPS)
+    ad_load = config.modules.pds.ad_load
     if config.modules.demand.mode is not DemandMode.DEMO:
-        return SnapshotBase(breaks_ms=breaks_ms)
+        return SnapshotBase(breaks_ms=breaks_ms, ad_load=ad_load)
     lines = tuple(
         Line(
             id=line.id,
@@ -57,7 +59,7 @@ def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
         )
         for line in config.modules.pds.demo_lines
     )
-    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines, breaks_ms=breaks_ms)
+    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines, breaks_ms=breaks_ms, ad_load=ad_load)
 
 
 class PdsStack(Stack):
@@ -217,6 +219,10 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        # The ad load by tier, a view over the select and delivery records.
+        self.ad_load_kpis = view_table(self, "AdLoadKpis", AD_LOAD_KPIS, database_name=lake_database_name(prefix))
+        for records in (self.select_records, self.delivery_records):
+            self.ad_load_kpis.node.add_dependency(records.table)
         self.crawl_kpis = None
         if crawl.enabled:
             # The crawl module's KPIs, a view over the three tables of decision records.

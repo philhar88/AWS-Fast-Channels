@@ -3,6 +3,7 @@ from decimal import Decimal
 from ipaddress import ip_network
 from typing import Any
 
+from fast_channels.core.adload import AdLoad, AdLoadPolicy, AdLoadReason
 from fast_channels.core.pds.contributors import Contribution
 from fast_channels.core.pds.models import AdmKind, Bid, Mode, PolicyRequest, SelectRequest
 from fast_channels.core.pds.pod import Outcome, PodContext, select_pod
@@ -122,6 +123,46 @@ def test_select_record_keeps_every_bid_at_or_above_the_floor() -> None:
     ]
     assert json.loads(record.model_dump_json())["bids"][1]["price"] == 12.5  # a number, not a string
     assert decision.outcomes["cheap"] is Outcome.FLOOR
+    assert (dumped["tier"], dumped["ad_load"]) == (
+        None,
+        {"policy": "standard", "reason": "control", "max_ads": None, "bar_cpm": 0.0, "slots": 2},
+    )
+
+
+def _tiered_request(*bids: Bid) -> SelectRequest:
+    return SelectRequest(
+        v=1,
+        decision_id="s-1.77",
+        sid="s-1",
+        pc="fast-demo-p-a",
+        evid="77",
+        dur_ms=60060,
+        mode=Mode.FULL,
+        slots=[{"impid": "s1", "poddur": 60, "rqddurs": [30]}, {"impid": "s2", "poddur": 60, "rqddurs": [30]}],
+        bids=list(bids),
+    )
+
+
+LIGHT = AdLoad("light", AdLoadReason.TIER, AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20)))
+
+
+def test_select_record_holds_the_tier_and_the_ad_load() -> None:
+    request = _tiered_request(_bid("rich", price=Decimal(35)), _bid("also", impid="s2", price=Decimal(25)))
+    decision = select_pod(request, PodContext(ad_load=LIGHT.rules))
+    dumped = select_record(request, decision, latency_ms=1.0, tier="light", ad_load=LIGHT).model_dump(mode="json")
+    assert (dumped["tier"], dumped["ad_load"], dumped["pod"]) == (
+        "light",
+        {"policy": "light", "reason": "tier", "max_ads": 1, "bar_cpm": 20.0, "slots": 2},
+        ["rich"],
+    )
+    assert [(b["ref"], b["outcome"]) for b in dumped["bids"]] == [("rich", "won"), ("also", "ad_load")]
+
+
+def test_select_record_names_the_minimum_load() -> None:
+    request = _tiered_request(_bid("cheap", price=Decimal(5)))
+    decision = select_pod(request, PodContext(ad_load=LIGHT.rules))
+    record = select_record(request, decision, latency_ms=1.0, tier="light", ad_load=LIGHT)
+    assert (record.pod, record.ad_load.reason, record.ad_load.max_ads) == (["cheap"], AdLoadReason.MIN_LOAD, 1)
 
 
 def test_bids_under_the_floor_are_counted_whatever_else_rejected_them() -> None:

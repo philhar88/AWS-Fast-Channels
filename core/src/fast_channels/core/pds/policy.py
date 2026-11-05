@@ -57,7 +57,9 @@ class Viewer:
     vid: str | None = None
     cid: str | None = None
     arm: str | None = None
-    tier: int | None = None
+    tier: str | None = None
+    """The viewer's ad-load tier. The binding never carries it: the PDS reads it from the viewer's profile
+    (``core.pds.viewers``) for ``/select``."""
     gpp: str | None = None
     gpp_sid: tuple[int, ...] = ()
     persona: str | None = None
