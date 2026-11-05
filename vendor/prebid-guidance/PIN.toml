@@ -35,6 +35,7 @@ sha256 = "1d89b4194f20ee513f4dd9fc2aadd038de3c713c37fd444d77566b3da7b0ee65"
 url = "https://corretto.aws/downloads/resources/25.0.5.0.10/amazon-corretto-25.0.5.0.10-linux-aarch64.tar.gz"
 sha256 = "8dc8e5379959c0814e99785b53657c35800b74950fc9fa39738d26153b62ef6c"
 
+# OPTIMIZATION(aws): W-11 each overlay works around the guidance (names, WAF, simulator, JDK): drop as it ships
 # Applied in this order. `files` are copied from this directory into the checkout (repository-relative source =
 # checkout-relative destination).
 [[overlays]]

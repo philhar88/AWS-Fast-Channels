@@ -56,7 +56,9 @@ def delete_prefetch_schedules(configuration: str) -> int:
     names = [
         item["Name"]
         for page in mediatailor.get_paginator("list_prefetch_schedules").paginate(
-            PlaybackConfigurationName=configuration, ScheduleType="ALL"
+            # OPTIMIZATION(aws): W-2 2.16 without ScheduleType=ALL the list hides RECURRING schedules
+            PlaybackConfigurationName=configuration,
+            ScheduleType="ALL",
         )
         for item in page.get("Items", [])
     ]

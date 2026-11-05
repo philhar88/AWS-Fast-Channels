@@ -34,6 +34,7 @@ SIMULATOR_ENVIRONMENT: Final = {
 WHY: Final = "The demo's bidder simulator: simulated bids for an internal load balancer only Prebid Server reaches"
 
 
+# OPTIMIZATION(aws): W-11 the guidance's simulator stack needs its own VPC and NAT gateways: a Lambda instead
 class LambdaSimulator(Construct):
     """The simulator function, its internal load balancer and its record.
 

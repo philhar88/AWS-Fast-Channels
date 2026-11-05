@@ -36,6 +36,7 @@ __all__ = [
 ]
 
 QUOTA_ALARM_RATIO: Final = 0.8
+# OPTIMIZATION(aws): W-2 3.8 no Service Quotas usage metric: we sum Requests against the default quota (FR-10)
 AD_INSERTION_REQUESTS_PER_SECOND: Final = 10_000
 """MediaTailor's account quota of ad insertion requests per second (``L-32FBC51C``, default); it has no usage metric,
 so the alarm sums every playback configuration's ``Requests``."""
@@ -143,6 +144,7 @@ class ConfigurationAlarms(Construct):
                 )
 
 
+# OPTIMIZATION(aws): W-2 FR-1 a failed PRE_SESSION keeps player-set aws.*: retire with authenticated sessions
 class ZeroAdsDetector(Construct):
     """Every hour, ``fast_channels.functions.ops.zero_ads_sessions`` counts the sessions that saw at least three
     breaks without an ad request; the alarm ``<prefix>-<name>`` fires on any.

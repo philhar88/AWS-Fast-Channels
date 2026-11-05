@@ -102,6 +102,7 @@ class Prefetcher(Construct):
             why="The channels' programs, which their schedules name",
         )
         self.function.allow(
+            # OPTIMIZATION(aws): W-2 2.32 ListPrefetchSchedules authorizes on prefetchSchedule/*: narrow when corrected
             ["mediatailor:ListPrefetchSchedules"],
             [f"{base}:prefetchSchedule/*"],
             why="ListPrefetchSchedules authorizes on prefetchSchedule/* whatever configuration it names (seen live)",

@@ -21,6 +21,7 @@ side, so an avail logged across a minute boundary is not a false shortfall. Avai
 delivery from the trackers' own logs (runbook in docs/release-controller.md).
 """
 
+# OPTIMIZATION(aws): W-2 1.32 the vended ADS log can leave out a filled break: delete this module when fixed
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final

@@ -58,6 +58,7 @@ __all__ = [
 GUARD: Final = "Custom::ChannelGuard"
 ENDPOINT: Final = "Custom::ChannelEndpoint"
 LIFECYCLE: Final = "Custom::ChannelLifecycle"
+# OPTIMIZATION(aws): W-2 1.3 a channel-policy change is not session-safe on a running channel
 GUARDED: Final = ("Spec", "SiblingPattern")
 """Guard properties that mirror what an update would change on the channel: its settings, and the sibling pattern of
 its channel policy (absent unless the release module monetizes the channel)."""

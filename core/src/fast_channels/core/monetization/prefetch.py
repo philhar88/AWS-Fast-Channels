@@ -181,6 +181,7 @@ def schedule_request(
             MATCHED_ON: str(item.event_id),
             "scte.segmentation_upid": item.upid,
             "session.avail_duration_ms": str(item.duration_ms),
+            # OPTIMIZATION(aws): W-2 1.12 SINGLE prefetch rounds avail_duration_ms, so the seconds are sent too
             "session.avail_duration_secs": str(round(item.duration_ms / 1000)),
         },
     }

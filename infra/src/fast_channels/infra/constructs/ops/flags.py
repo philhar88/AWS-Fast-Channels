@@ -81,6 +81,7 @@ class OpsAppConfig(Construct):
             deletion_protection_check=appconfig.DeletionProtectionCheck.BYPASS,
         )
 
+    # OPTIMIZATION(aws): W-2 4.7 AllAtOnce bakes 10 minutes under monitors: our 0-minute, no-bake strategy instead
     def _at_once(self, prefix: str) -> appconfig.IDeploymentStrategy:
         """All at once and no bake, so no monitor can roll it back."""
         return appconfig.DeploymentStrategy(
@@ -103,6 +104,7 @@ class OpsAppConfig(Construct):
             description="AWS AppConfig: read the alarms that roll a release pointer deployment back",
             assumed_by=iam.ServicePrincipal("appconfig.amazonaws.com"),
         )
+        # OPTIMIZATION(aws): W-2 4.13 a denied DescribeAlarms looks like a missing composite alarm: scope when fixed
         # AppConfig calls DescribeAlarms by name, which returns metric alarms only, then without a filter, which needs
         # "*": with the alarm's ARN alone it finds no composite alarm and rolls every deployment of the environment
         # back ("The following CloudWatch monitors do not exist", fastm 2026-10-29).

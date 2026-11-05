@@ -272,6 +272,7 @@ class ReleaseController(Construct):
         )
         self.promote.allow(["cloudwatch:DescribeAlarms"], ["*"])
         for reader in (self.promote, self.smoke):
+            # OPTIMIZATION(aws): W-2 2.28 the latency check's grant: delete when step timeouts count as errors
             # the candidates' PRE_ADS request latency (Function.Latency) against their timeouts in the release's bundle
             reader.allow(["cloudwatch:GetMetricStatistics"], ["*"])
         self.smoke.allow(["s3:GetObject"], [self.bucket.arn_for_objects("release/*")], why="the bundles")
@@ -383,6 +384,7 @@ class ReleaseController(Construct):
             siblings,
             why="the monetized channels' siblings (<channel>-p-*)",
         )
+        # OPTIMIZATION(aws): W-2 1.30 delete this grant when ConfigureLogs* stop creating an existing SLR as the caller
         # ConfigureLogsForPlaybackConfiguration refuses a caller that may not create MediaTailor's service-linked
         # role, even when the role exists ("Cannot create the service-linked role ... add the
         # iam:CreateServiceLinkedRole permission", observed on fastm 2026-10-29).
@@ -452,6 +454,7 @@ class ReleaseController(Construct):
             why="the probe sibling's logging, as its release configures it",
         )
         stack = Stack.of(self)
+        # OPTIMIZATION(aws): W-2 1.30 delete this grant when ConfigureLogs* stop creating an existing SLR as the caller
         promote.allow(
             ["iam:CreateServiceLinkedRole"],
             [f"arn:{stack.partition}:iam::{stack.account}:role/aws-service-role/mediatailor.amazonaws.com/*"],
@@ -511,6 +514,7 @@ class ReleaseController(Construct):
 
     def _grant_pointer(self, pointer: PointerSettings) -> None:
         application = f"application/{pointer.application}"
+        # OPTIMIZATION(aws): W-2 4.14 AppConfig checks undocumented application and environment ARNs
         # AppConfig authorizes CreateHostedConfigurationVersion on the application's ARN too ("not authorized ... on
         # resource: arn:aws:appconfig:<region>:<account>:application/<id>", fastm 2026-10-29).
         self.promote.allow(
@@ -565,6 +569,7 @@ class ReleaseController(Construct):
             "controller's",
         )
         reaper.allow(
+            # OPTIMIZATION(aws): W-2 2.32 ListPrefetchSchedules authorizes on prefetchSchedule/*: narrow when corrected
             ["mediatailor:ListPrefetchSchedules"],
             [self._mt("prefetchSchedule", "*")],
             why="the siblings' prefetch schedules, deleted before the siblings; ListPrefetchSchedules authorizes on "
