@@ -11,13 +11,16 @@ import pytest
 from botocore.exceptions import ClientError
 
 from fast_channels.core.adload import AdLoadPolicy
+from fast_channels.core.identity.binding import PolicyInputs
 from fast_channels.core.pds.book import Book, Creative, Line
-from fast_channels.core.pds.models import SelectResponse
+from fast_channels.core.pds.models import Reason, SelectResponse
+from fast_channels.core.pds.policy import Consent, Viewer
 from fast_channels.core.pds.snapshot import EMPTY, Snapshot, SnapshotBase, build
 from fast_channels.functions.pds.budget import Budgets
 from fast_channels.functions.pds.reservations import Refusal, Reservation, set_budgets
 from fast_channels.functions.settings import settings
-from fast_channels.pds import select, state
+from fast_channels.pds import policy, select, state
+from fast_channels.pds.viewers import Handoff, Tiers, Viewers
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -411,3 +414,46 @@ def test_without_a_tier_every_break_is_the_control_plan(caplog: pytest.LogCaptur
     assert len(answer.pod) == 4
     [record] = records(caplog)
     assert (record["tier"], record["ad_load"]["reason"]) == (None, "control")
+
+
+DANA_VID = "0123456789abcdef0123456789abcdef"
+
+
+def test_a_bound_viewers_tier_goes_from_policy_to_select(
+    stubbed: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The sidecar's own path: /policy binds the ticket, notes the viewer and reads their tier while the auction runs;
+    the break's /select applies it."""
+    reads: list[str] = []
+
+    def read(vid: str) -> str | None:
+        reads.append(vid)
+        return "light"
+
+    class Bound:
+        def inputs(self, request: Any) -> PolicyInputs:
+            return PolicyInputs(Reason.BOUND, Viewer(vid=DANA_VID, cid="c1"), Consent.PSEUDONYMOUS)
+
+    known = Viewers(Handoff(), Tiers(read))
+    monkeypatch.setattr(policy, "viewers", lambda: known)
+    monkeypatch.setattr(select, "viewers", lambda: known)
+    monkeypatch.setattr(policy, "bindings", Bound)
+    store = Store(snapshot_of(DIRECT1))
+    monkeypatch.setattr(policy, "store", lambda: store)
+    asked = session(DANA_SID, mode="PSEUDONYMOUS")
+    question = {
+        "v": 1,
+        "t": "AbCdEfGhIjKlMnOpQrStUv",
+        "sid": asked["sid"],
+        "pc": asked["pc"],
+        "evid": asked["evid"],
+        "dur_ms": asked["dur_ms"],
+    }
+
+    assert policy.answer(json.dumps(question).encode(), time.perf_counter()).status == 200
+    answer = SelectResponse.model_validate_json(ask(json.dumps(asked)).body)
+
+    assert [ad.ref for ad in answer.pod] == ["amt-s3-sim3"]
+    assert reads == [DANA_VID]
+    [record] = records(caplog)
+    assert (record["tier"], record["ad_load"]["reason"]) == ("light", "tier")
