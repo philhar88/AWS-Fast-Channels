@@ -117,7 +117,9 @@ class IdentityApi(Construct):
             rest_api_name=api_name(prefix),
             description=f"FAST Channels ({prefix}): playback tickets for signed-in viewers",
             endpoint_types=[apigw.EndpointType.REGIONAL],
-            cloud_watch_role=False,  # execution logging needs an account-wide role: access logs only
+            # A REST API logs through the account's API Gateway CloudWatch role (one per account and Region). A stack
+            # must not take that setting over, so access logs need it set already (docs/identity.md#logs).
+            cloud_watch_role=False,
             deploy_options=apigw.StageOptions(
                 stage_name=STAGE,
                 throttling_rate_limit=rate_limit,

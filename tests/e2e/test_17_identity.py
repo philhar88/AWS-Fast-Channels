@@ -15,11 +15,13 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
 import seed_personas
 from _stack import MODULE_OUTPUT_KEYS, Module, Stage
+from botocore.exceptions import ClientError
 from harness_identity import claims, mint, parameter, sign_in, ticket_of, tokens
 
 from fast_channels.core.identity.names import PERSONA_CLAIM, PLAYBACK_SCOPE, Parameter
@@ -223,6 +225,30 @@ def test_an_unknown_channel_or_a_bad_body_is_a_400(identity: Identity, viewer: V
     ):
         response = identity.mint(viewer.access_token, body)
         assert (response.status_code, response.json()["error"]) == (400, error), response.text
+
+
+def test_the_access_log_holds_no_address_or_ticket(identity: Identity, viewer: Viewer, plan: dict[str, Any]) -> None:
+    """Only with the account's API Gateway CloudWatch role (docs/identity.md#logs): without it nothing is logged."""
+    session = identity.stage.session
+    role = session.client("apigateway").get_account().get("cloudwatchRoleArn")
+    try:
+        assert role and session.client("iam").get_role(RoleName=role.rsplit("/", 1)[-1])
+    except AssertionError, ClientError:
+        pytest.skip("the account has no valid API Gateway CloudWatch role, so the API writes no access log")
+    api = urlsplit(identity.outputs["PlaybackApiUrl"]).netloc.split(".")[0]
+    destination = session.client("apigateway").get_stage(restApiId=api, stageName="v1")["accessLogSettings"]
+    group = destination["destinationArn"].split(":log-group:")[-1].removesuffix(":*")
+    started = int(time.time() * 1000)
+    ticket = ticket_of(identity.mint(viewer.access_token, {"channel": plan["channel"]}).json()["url"])
+    messages: list[str] = []
+    for _ in range(24):  # access logs arrive within about a minute
+        page = session.client("logs").filter_log_events(logGroupName=group, startTime=started)
+        messages = [event["message"] for event in page["events"]]
+        if any('"/playback"' in message for message in messages):
+            break
+        time.sleep(5)
+    assert messages, f"no access log in {group} after 2 minutes"
+    assert not [m for m in messages if ticket in m or viewer.sub in m or re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", m)]
 
 
 def test_a_seeded_persona_signs_in_and_mints_through_the_harness(identity: Identity, plan: dict[str, Any]) -> None:

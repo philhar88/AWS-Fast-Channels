@@ -141,6 +141,19 @@ To sign a persona in from a script or a test, read the secret, take the client i
 - The mint logs the correlation id, the channel and the configuration. It never logs the ticket, the `vid` or a claim.
 - The API's access log holds the request id, time, method, path, status and latencies. It holds no address, header,
   body or claim.
+- **The access log needs the account's API Gateway CloudWatch role.** A REST API writes its logs through one role
+  per account and Region, the API Gateway account setting `cloudwatchRoleArn`. The stack does not set it, because
+  that would take the setting over from every other REST API in the account. Without the role, or when it names a
+  role that no longer exists, the deployment succeeds and the API serves requests, but it writes no access log.
+  Check it before you rely on the log:
+
+  ```sh
+  aws apigateway get-account --query cloudwatchRoleArn       # a role that exists, trusted by apigateway.amazonaws.com
+  ```
+
+  To set it, create a role that `apigateway.amazonaws.com` may assume, with the managed policy
+  `AmazonAPIGatewayPushToCloudWatchLogs`, and run `aws apigateway update-account --patch-operations
+  op=replace,path=/cloudwatchRoleArn,value=<role ARN>`. This is an account-wide change.
 
 ## Cost
 
