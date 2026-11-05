@@ -235,10 +235,11 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
   - **The reconciliation.** By the time a file is read, the ADS log has delivered its beacons, so what a CDN-log run
     counts is what the ADS log left out: its metric `CdnLogOnlyImpressions`. `CdnLogBeacons` counts the firings it
     read. The records and the `IMP#` and `FILL#` items name their source (`ads_log`, `cdn_log`).
-  - **Cost.** One Athena query per run, 288 a day. The CDN side reads only the window's files (Athena skips the
-    others by `$file_modified_time`; about 300 bytes of a 5-minute file at the demo's traffic). The select side reads
-    about 4 hours of `pds.select` records, which grows with the breaks served. A stage with the demo's traffic scans
-    well under Athena's 10 MB minimum per query, so it pays the minimum: about $0.015 a day ($5 per TB).
+  - **Cost.** One Athena query per run, 288 a day. The CDN side reads only the window's files: Athena skips the
+    others by `$file_modified_time`, so a 5-minute file costs about 400 bytes. The select side reads about 4 hours of
+    `pds.select` records (JSON, read whole), which grows with the breaks served and the warm-ups' probes (7,500 per
+    new task). Measured on a demo stage, a run scans 0.5 to 1.1 MB, under Athena's 10 MB minimum per query. So a stage
+    pays the minimum: about $0.015 a day ($5 per TB).
   - **Limits.** A file that arrives more than 2 hours after its requests, or whose breaks' select records are not in
     the lake, is not counted. A run that fails is retried and then dead-lettered, and a redriven run reads its own
     window again.
