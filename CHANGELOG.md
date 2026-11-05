@@ -37,6 +37,16 @@ All notable changes to this project are documented here. The format follows
   four. The fast-ctv module adds no bidder to a warm request and keeps only the stored-response ones, and the render
   refuses an adapter the new zero-recorder contract gate (`tests/pbs/test_warmup.py`) has not covered: one that built
   more than one request would be called for real. See [docs/demand.md](docs/demand.md#scaling-the-census-gate-dayparts-and-warm-up).
+- **Agentic selling (`modules.selling`, off by default; [docs/selling.md](docs/selling.md),
+  [ADR-0024](docs/adr/0024-agentic-selling-over-adcp.md)).** The Prebid Sales Agent (AdCP 3.1.1, MCP and A2A 1.0) is
+  the stage's seller of record, a testing-mode sandbox in the guidance's VPC. The AWS reference buyer and governance
+  agents run on AgentCore Runtime from pinned upstream images. A buy that the buyer agent books becomes a direct line
+  of the PDS own book (budget, flight, CPM, brand, the product's channel), is reserved, counted and written to the
+  ledger like any line, and its delivery is reported back over AdCP. The stage `fastcisell` runs it, and
+  `tests/e2e/test_21_selling.py` proves it end to end.
+- **Own-book lines with flights and channels.** A line may carry a flight (`starts`, `ends`), which the own book
+  honours, and the channels it is sold on, which `/select` honours (the new outcome `off_target`). Lines without them
+  serialize, and hash, as before.
 
 ## [4.0.0] - 2026-10-31
 

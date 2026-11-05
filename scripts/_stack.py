@@ -48,6 +48,7 @@ class Module(StrEnum):
     PDS = "Pds"
     CRAWL = "Crawl"
     IDENTITY = "Identity"
+    SELLING = "Selling"
 
 
 type StackKind = Plane | Module

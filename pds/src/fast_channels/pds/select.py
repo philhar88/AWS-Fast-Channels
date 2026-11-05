@@ -148,7 +148,9 @@ def _answer(request: SelectRequest, started: float) -> Answer:
     rules = pod_context(
         snapshot.book, floor_cpm=snapshot.floor_cpm, scheduled=scheduled_ms(request.dur_ms, snapshot.breaks_ms)
     )
-    decision, reserved = select(request, rules, snapshot.book, reserve=_reserver(request, started))
+    decision, reserved = select(
+        request, rules, snapshot.book, reserve=_reserver(request, started), now=datetime.now(UTC)
+    )
     enr = arm(request.sid, request.evid, settings().crawl_holdout_percent)
     body = select_response(request, decision, tracker_base=base, enr=enr).model_dump_json()
     record = select_record(

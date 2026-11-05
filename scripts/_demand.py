@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
+import _selling
 import httpx
 import stage_args
 from botocore.exceptions import ClientError
@@ -56,6 +57,8 @@ from fast_channels.core.pds import names as pds_names
 from fast_channels.core.pds.book import house_creatives
 from fast_channels.core.pds.sidecar import CONTEXT as SIDECAR_CONTEXT
 from fast_channels.core.pds.sidecar import Sidecar, sidecar
+from fast_channels.core.selling import names as selling_names
+from fast_channels.core.selling.names import CONTEXT as SELLING_CONTEXT
 from fast_channels.core.specs import vast_key
 
 if TYPE_CHECKING:
@@ -879,15 +882,30 @@ class DemandStage:
     def release_stack(self) -> str:
         return release_names.stack_name(self.stage_id)
 
+    @property
+    def selling_stack(self) -> str:
+        return f"{self.stage_id}-Selling"
+
     def beside_stacks(self) -> list[str]:
-        """The repository's stacks that need the guidance's network, in deploy order: Demand, then Pds and Release
-        if their modules are on (the release bundle names the guidance's CloudFront domain)."""
+        """The repository's stacks that need the guidance's network, in deploy order: Demand, then Pds, Release and
+        Selling if their modules are on (the release bundle names the guidance's CloudFront domain; the seller runs
+        in the guidance's VPC)."""
         modules = self.config.modules
         return (
             [f"{self.stage_id}/Demand"]
             + ([f"{self.stage_id}/Pds"] if modules.pds.enabled else [])
             + ([f"{self.stage_id}/Release"] if modules.release.enabled else [])
+            + ([f"{self.stage_id}/Selling"] if modules.selling.enabled else [])
         )
+
+    def selling_context(self) -> list[str]:
+        """With ``modules.selling.enabled``, the Selling stack's context (its images, built now); without it, a
+        Selling stack left from before is deleted."""
+        if not self.config.modules.selling.enabled:
+            self.delete_stack(self.client("cloudformation"), self.selling_stack)
+            return []
+        context = _selling.selling_context(self, context_digest)
+        return ["-c", f"{SELLING_CONTEXT}={context.model_dump_json()}"]
 
     def media_outputs(self) -> dict[str, str] | None:
         """The Data and Media stacks' outputs, or None when the stage has no Media stack (a demand-only stage)."""
@@ -1037,6 +1055,7 @@ class DemandStage:
         network = self.network(key)
         self.check_pds_state()
         self.check_release_state()
+        selling = self.selling_context()
         log(f"deploying {', '.join(self.beside_stacks())}")
         run(
             [
@@ -1049,6 +1068,7 @@ class DemandStage:
                 *self.repository_context(),
                 "-c",
                 f"{NETWORK_CONTEXT}={network.model_dump_json()}",
+                *selling,
             ],
             env=self.cdk_environment(),
             stream=True,
@@ -1592,6 +1612,7 @@ class DemandStage:
         record.write_text(json.dumps(retained.__dict__, indent=2))
         cloudformation = self.client("cloudformation")
         for stack in (
+            self.selling_stack,
             self.release_stack,
             self.pds_stack,
             self.demand_stack,
@@ -1672,6 +1693,7 @@ class DemandStage:
         residue = []
         cloudformation = self.client("cloudformation")
         for stack in (
+            self.selling_stack,
             self.release_stack,
             self.pds_stack,
             self.demand_stack,
@@ -1695,7 +1717,10 @@ class DemandStage:
             for page in tagging.get_paginator("get_resources").paginate(
                 TagFilters=[
                     {"Key": "fast:app", "Values": [self.prefix]},
-                    {"Key": names.MODULE_TAG, "Values": [names.MODULE, pds_names.MODULE, release_names.MODULE]},
+                    {
+                        "Key": names.MODULE_TAG,
+                        "Values": [names.MODULE, pds_names.MODULE, release_names.MODULE, selling_names.MODULE],
+                    },
                 ]
             ):
                 residue += [
@@ -1720,6 +1745,7 @@ class DemandStage:
                 residue += [f"log group {g['logGroupName']}" for g in page["logGroups"]]
         if self.parameters():
             residue.append(f"parameters under {names.parameter_path(self.prefix)}")
+        residue += _selling.residue(self)
         return sorted(set(residue))
 
     def gone(self, arn: str, region: str) -> bool:

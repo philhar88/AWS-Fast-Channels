@@ -9,7 +9,11 @@ floor, the own book's lines) plus:
   demo creatives (``ads/<ladder>/demo/creatives.json``), from the media bucket. The default ladder is read from
   ``/<prefix>/pds/ladder-version`` (the Media stack's) at every run, so a new ladder is bid within the hour.
 
-It runs when the stack deploys and every hour (AWS changes its ranges without notice; the origin-facing ones rarely).
+With the selling module, the lines of the buys booked over AdCP (``PDS_BOOKED_LINES_KEY`` in the config bucket, which
+its sync function writes) follow the deployment's.
+
+It runs when the stack deploys and every hour (AWS changes its ranges without notice; the origin-facing ones rarely),
+and, with the selling module, whenever the booked lines change.
 An unchanged snapshot is not written again. When ip-ranges.json cannot be read, or holds no origin-facing network, the
 networks of the current snapshot are kept; when the kit cannot be read, its creatives are.
 
@@ -30,12 +34,14 @@ from fast_channels.core.pds.book import Book, Creative, book, house_creatives
 from fast_channels.core.pds.names import Parameter, parameter_name
 from fast_channels.core.pds.snapshot import (
     SNAPSHOT_KEY,
+    PublishedLines,
     Snapshot,
     SnapshotBase,
     build,
     digest,
     from_ip_ranges,
     history_key,
+    with_lines,
 )
 from fast_channels.core.pds.xff import origin_facing_networks
 from fast_channels.core.specs import vast_key
@@ -80,6 +86,22 @@ def current(bucket: str) -> Snapshot | None:
     except ValidationError:
         logger.warning("the published snapshot is not valid; it is replaced")
         return None
+
+
+def published_lines(bucket: str, key: str) -> PublishedLines | None:
+    """The lines another module published under ``key`` (None until it has).
+
+    Raises:
+        ClientError: the object cannot be read.
+        pydantic.ValidationError: it is not a valid document: the run fails and the published snapshot stays.
+    """
+    try:
+        body = _read(bucket, key)
+    except ClientError as error:
+        if error.response["Error"]["Code"] in {"NoSuchKey", "404"}:
+            return None
+        raise
+    return PublishedLines.model_validate_json(body)
 
 
 def _read(bucket: str, key: str) -> bytes:
@@ -163,6 +185,8 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     config = settings()
     config.require("pds_config_bucket", "pds_snapshot_base", "prefix", "media_bucket", "pds_table", "ledger_table")
     base = SnapshotBase.model_validate_json(config.pds_snapshot_base)
+    if config.pds_booked_lines_key:
+        base = with_lines(base, published_lines(config.pds_config_bucket, config.pds_booked_lines_key))
     now = datetime.now(UTC)
     snapshot, written = publish(
         config.pds_config_bucket,

@@ -7,6 +7,7 @@ FAST Channels v3.0.0 airs channels with preconditioned house ads. The optional m
 - show-level metadata in ad requests;
 - a release process for monetized playback configurations, with ad prefetch;
 - a per-task model registry;
+- agentic selling over AdCP: a buyer agent books the own book (v4.1.0, [selling.md](selling.md));
 - the operations they need: a lake, a hash-chained ledger, detectors, runbooks and a probe.
 
 Since v4.0.0, `identity` adds signed-in viewers, whose single-use playback tickets carry who they are to the decision
@@ -38,6 +39,7 @@ a deployment is v3.0.0's, which snapshot tests of every shipped template check (
 | `release` | The Release Controller for monetized playback configurations. Each monetized channel gets sibling configurations with MediaTailor Functions, deployed one release at a time: a smoke gate, then gradual promotion with unattended rollback. A viewer who joins during a break gets ads for the rest of it (`AFTER_LIVE_EDGE` with `PARTIAL_AVAIL`). It also handles the origin-secret rotation, ad prefetch with one SINGLE schedule per upcoming break, Function caches declared by scope, drift and log-reconciliation checks, and an ownership guard on every other role | `ops`, `demand`, `pds` | With `make deploy-demand`: `…-Release` | Media: each monetized channel admits its sibling configurations (`<channel>-p-?`), and the stopped lab channel `<prefix>-lab`. Every stack: the `ReleaseGuard` policy | [release-controller.md](release-controller.md); [ADR-0019](adr/0019-functions-release-controller-siblings.md), [0021](adr/0021-threshold-121-slate-and-constant-session-controls.md), [0023](adr/0023-machine-principals.md), [0033](adr/0033-prefetch-single-schedules.md), [0034](adr/0034-every-function-request-cached-by-scope.md) |
 | `crawl` | Show-level content metadata in ad requests. It keeps a catalog context object per title (title, series, IAB Content Taxonomy 3.1 genre and category, rating, language, producer). A cached PRE_ADS lookup by the break's UPID reads it, and OpenRTB 2.6 `app.content` carries it, with an uplift holdout | `pds`, `release` | `FastChannels-<prefix>-Crawl` (the context publisher) | Release: the PRE_ADS lookup in the bundle. Pds: the `app.content` patch | [content-enrichment.md](content-enrichment.md); [ADR-0031](adr/0031-show-level-content-metadata.md) |
 | `identity` | Signed-in viewers. A Cognito viewer pool; `POST /playback`, which mints a single-use opaque ticket for a monetized channel's stable sibling; and `POST /redeem`, which binds a ticket to one session. The viewer id is a KMS HMAC of the token's subject. The playback path does not use the tickets yet | `release` | `FastChannels-<prefix>-Identity` | — | [identity.md](identity.md); [ADR-0018](adr/0018-opaque-playback-ticket.md) |
+| `selling` | Agentic selling over AdCP, a sandbox. The Prebid Sales Agent (AdCP 3.1.1, MCP and A2A 1.0) is the stage's seller of record, with one product per monetized channel. The AWS reference buyer and governance agents run on AgentCore Runtime. A buy that the buyer agent books becomes a direct line of the own book (budget, flight, CPM, brand, channel), and its delivery goes back to the buyer over AdCP | `pds`, `release`; `demand.mode: demo` | With `make deploy-demand`: `FastChannels-<prefix>-Selling` beside the guidance | DemandBuild: the images' repositories and an arm64 build project. Pds: the publisher adds the booked lines | [selling.md](selling.md); [ADR-0024](adr/0024-agentic-selling-over-adcp.md) |
 
 ## Complexity and cost per module
 
@@ -54,6 +56,7 @@ teardown times are the median stack deletions of the development stages in Octob
 | `release` | `ops`, `demand`, `pds` | Release; changes Media, Ops, Pds, and every stack's `ReleaseGuard` | about 21 | about $0.01: its KMS key ($1 a month), 38 alarms on `fastm` ($3.80 a month), the hourly checks | cents: the prefetcher every 5 minutes, the smoke test's probe sessions | Release 2 min, after its reaper, in `make destroy-demand` |
 | `crawl` | `pds`, `release` | Crawl; changes Release and Pds | 2 | $0: one alarm | $0 | Crawl 2 min, in `make destroy` |
 | `identity` | `release` | Identity | 3 | under $0.01: its KMS key ($1 a month) | cents per thousand plays: a mint, a KMS MAC and a redeem each | Identity, in `make destroy`, with the pool's users |
+| `selling` | `pds`, `release` | Selling; changes DemandBuild and Pds | about 12 | about $0.08 ($60 a month): the seller's task, its database and its internal load balancer; its KMS key and secrets | the buyer agent's Bedrock tokens and AgentCore Runtime time per booking | Selling, in `make destroy-demand` (it takes 16 minutes to create: the CloudFront VPC origin takes 10) |
 | Ad server (experimental) | `demand`, `release` | The `mock` ad server in Demand; the Prebid Cache function's concurrency in the guidance | a few | about $0.17 ($124 a month) while enabled | — | with `demand` |
 
 With every module on, a stage holds about 145 IAM roles, against 45 for v3.0.0's three stacks. With the guidance
@@ -100,13 +103,14 @@ make deploy-demand STAGE=fastm              # with demand: the guidance, Demand,
 make seed STAGE=fastm SEED_ARGS="--wait --yes"
 ```
 
-The repository ships three stages with every module on:
+The repository ships four stages:
 
-- `fastm`, for development;
-- `fastci`, for the end-to-end tests;
-- `fastciads`, which is `fastci` with the experimental `mock` ad server.
+- `fastm`, for development, with every module on but `selling`;
+- `fastci`, for the end-to-end tests, the same;
+- `fastciads`, which is `fastci` with the experimental `mock` ad server;
+- `fastcisell`, with `selling` and the modules it needs, and no demo lines (their creatives serve booked buys).
 
-All three use the shared as-run router ([below](#account-level-limits-and-teardown-residue)).
+All four use the shared as-run router ([below](#account-level-limits-and-teardown-residue)).
 
 Points to know before turning a module on:
 
@@ -150,7 +154,7 @@ DemandEdge (us-east-1), DemandBuild         (demand; no dependency)
    Cache function its provisioned concurrency.
 4. The SSM contract `/<prefix>/demand/*`.
 5. The rendered Prebid Server configuration: what differs is uploaded and read back.
-6. Demand, then Pds, then Release.
+6. Demand, then Pds, then Release, then Selling (its images are built first, on an arm64 project).
 7. One run of each census gate.
 8. The smoke test.
 
@@ -159,7 +163,7 @@ See [demand.md](demand.md#deploy-and-destroy) for the details.
 Destroy in reverse:
 
 ```bash
-make destroy-demand STAGE=fastm   # Release, Pds, Demand, the guidance and what it retains, DemandEdge/-Build
+make destroy-demand STAGE=fastm   # Selling, Release, Pds, Demand, the guidance and what it retains, DemandEdge/-Build
 make destroy STAGE=fastm          # the repository's stacks
 uv run python scripts/ledger_verify.py purge --prefix fastm --apply   # with ops: the Object-Locked ledger archive
 ```
@@ -230,6 +234,8 @@ operations signal, never air time.
 | `crawl` | The PRE_ADS lookup cannot read a title's context object | The break is requested without the metadata: the lookup fails open |
 | `identity` | A viewer is not signed in, or `POST /playback` fails | The viewer app plays the plan's anonymous URL, whose sessions are CONTEXTUAL |
 | `identity` | A ticket is replayed by another session, expired, unknown or for another configuration | `POST /redeem` answers 409 and leaves the row as it was. The session stays anonymous |
+| `selling` | The seller, its bridge or the sync function is down | No new buy becomes a line, and the delivery the buyer reads stops advancing. Lines already published keep serving through the snapshot until their flight ends |
+| `selling` | A package cannot be served (no fixed USD CPM, no budget, no free demo creative) | It gets no line, and the bridge logs why (`unserved`). The buy stays booked at the seller |
 | `models` | The SSM entry is missing, invalid or names another model or profile | The agent runs on its entry as deployed and logs a warning |
 | `models` | A task's day reaches its `daily_cap_usd` | Runs and model calls are refused with `MODEL_CAP_REACHED`, and the alert topic is told once that day. The cap is a breaker against a runaway, about ten times expected use |
 | `models` | The spend counter is unreachable | Calls go ahead and the agent logs a warning |
@@ -256,6 +262,7 @@ These are us-east-1 list prices, rounded. Lines marked *measured* come from runs
 | `release` | Its KMS key ($1 a month); its alarms and composite alarm; the hourly drift check and log reconciliation; AppConfig; cents of state machines | The prefetcher's runs every 5 minutes while a monetized channel runs; the smoke test's probe sessions for each release |
 | `crawl` | One alarm ($0.10 a month). The publisher's runs, S3 objects and CloudFront requests cost well under a cent at demo scale (*measured*) | The same, plus the cached PRE_ADS lookup's requests |
 | `identity` | Its KMS key ($1 a month). The viewer pool is free up to 10,000 monthly active users (Essentials) | Per play: one mint (Lambda, a KMS `GenerateMac` at $0.03 per 10,000, a DynamoDB write) and one redeem (API Gateway and a DynamoDB update) |
+| `selling` | About $60 a month while deployed: the seller's Fargate task (1 vCPU, 2 GB, arm64, about $0.04 an hour), its `db.t4g.micro` database ($0.016 an hour and 20 GB), its internal load balancer ($0.0225 an hour), the governance agent's KMS key ($1 a month) and three secrets | Per booking, the buyer agent's Bedrock tokens and AgentCore Runtime time (one turn of about 30 seconds with Claude Haiku 5.5) |
 
 *Measured* runs:
 

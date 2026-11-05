@@ -1,5 +1,6 @@
 """The own book (M2-03): the kit's house ads and the direct lines, bid per imp."""
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -18,6 +19,7 @@ from fast_channels.core.pds.book import (
     Line,
     bids,
     book,
+    channel_of,
     deal_id,
     house_creatives,
     response,
@@ -221,3 +223,57 @@ def test_a_creatives_seconds_round_half_up() -> None:
         return Creative(crid="c", creative_id="c", hls_uri=f"{CDN}/c.m3u8", duration_ms=ms).seconds
 
     assert (seconds(30030), seconds(29500), seconds(29499), seconds(15015)) == (30, 30, 29, 15)
+
+
+FLIGHT = (datetime(2026, 11, 6, tzinfo=UTC), datetime(2026, 11, 13, tzinfo=UTC))
+
+
+def test_a_line_is_bid_inside_its_flight_only() -> None:
+    starts, ends = FLIGHT
+    line = DIRECT2.model_copy(update={"starts": starts, "ends": ends})
+    flighted = book((line,), ladder_version=LADDER, house=(), index=INDEX)
+
+    def crids(now: datetime | None) -> list[str]:
+        return [b["crid"] for b in bids(request([30]), flighted, now=now)]
+
+    assert crids(starts - timedelta(seconds=1)) == []
+    assert crids(starts) == crids(ends - timedelta(seconds=1)) == ["direct2"]
+    assert crids(ends) == []
+    assert crids(None) == ["direct2"], "without a time, flights are not checked"
+
+
+def test_a_flight_must_end_after_it_starts() -> None:
+    starts, _ = FLIGHT
+    with pytest.raises(ValidationError, match="ends before it starts"):
+        Line.model_validate({**DIRECT2.model_dump(), "starts": starts, "ends": starts})
+
+
+@pytest.mark.parametrize(
+    ("configuration", "channel"),
+    [
+        ("fastm-demo-p-a", "fastm-demo"),
+        ("fastm-demo-p-z", "fastm-demo"),
+        ("fastm-demo", "fastm-demo"),
+        ("fastm-p-ab", "fastm-p-ab"),
+    ],
+)
+def test_the_channel_of_a_configuration_is_its_siblings_channel(configuration: str, channel: str) -> None:
+    assert channel_of(configuration) == channel
+
+
+def test_a_line_serves_its_channels_in_its_flight() -> None:
+    starts, ends = FLIGHT
+    line = DIRECT2.model_copy(update={"channels": ("fastm-demo",), "starts": starts, "ends": ends})
+
+    assert line.serves("fastm-demo-p-a", starts)
+    assert not line.serves("fastm-other-p-a", starts)
+    assert not line.serves("fastm-demo-p-a", ends)
+    assert DIRECT2.serves("anything-p-b", ends), "a line without channels or flight serves every break"
+
+
+def test_unset_flight_and_channels_stay_out_of_the_snapshot() -> None:
+    fields = {"id", "advertiser", "adomain", "cat", "creatives", "cpm", "budget", "per_session", "tier0"}
+    assert set(DIRECT2.model_dump(mode="json")) == fields
+    starts, ends = FLIGHT
+    flighted = DIRECT2.model_copy(update={"starts": starts, "ends": ends, "channels": ("fastm-demo",)})
+    assert Line.model_validate_json(flighted.model_dump_json()) == flighted

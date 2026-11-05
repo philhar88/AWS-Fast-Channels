@@ -6,8 +6,10 @@ imp it bids every house ad, and every creative of each line with budget left, wh
 
 - **house ads** (the ladder kit's) bid the sentinel price :data:`HOUSE_PRICE`, so any paid bid wins, and carry
   ``ext.fast.house: true``. They are the publisher's own fillers and are never sold, so they carry no ``adomain``;
-- **lines** bid their CPM with ``ext.fast.line``. A tier-0 line (sold as guaranteed) bids with its deal id
-  (:func:`deal_id`); the snapshot lists those among the tier-0 deals, so the pod rules place it first.
+- **lines** bid their CPM with ``ext.fast.line``, inside their flight. A tier-0 line (sold as guaranteed) bids with
+  its deal id (:func:`deal_id`); the snapshot lists those among the tier-0 deals, so the pod rules place it first.
+  A line sold on some channels only (``channels``) is bid on every request, which names no channel, and ``/select``
+  leaves it out of other channels' pods (``core.pds.selection``).
 
 Each ``adm`` is an inline VAST 4.2 ad of a creative preconditioned on the stage's default ladder (``ads/<ladder>/…`` on
 the CDN). It carries no impression, and the bid no ``burl``: Prebid Server sends bidders neither the session nor the
@@ -17,11 +19,12 @@ bidding a line once its budget is reserved.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Final, Self
 from xml.etree import ElementTree as ET
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from fast_channels.core.demo_demand import DemoIndex, vast_ad
 from fast_channels.core.pds.models import NAME_PATTERN, OWN_BOOK, Money
@@ -33,11 +36,20 @@ AD_SYSTEM: Final = "fast-channels own book"
 VAST_NS: Final = "{http://www.iab.com/VAST}"
 """The kit's VAST pod (``ads/<ladder>/vast.xml``) is in the VAST namespace."""
 LINE_ID_PATTERN: Final = r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$"
+SIBLING_INFIX: Final = "-p-"
+"""A monetized channel's playback configurations are its siblings ``<channel>-p-<letter>``."""
 
 
 def deal_id(line: str) -> str:
     """The deal id of a tier-0 line's bids."""
     return f"fast-{line}"
+
+
+def channel_of(configuration: str) -> str:
+    """The channel a playback configuration serves: ``<channel>`` for a sibling ``<channel>-p-<letter>``, else the
+    configuration's own name (an IaC channel's configuration is named after it)."""
+    head, infix, letter = configuration.rpartition(SIBLING_INFIX)
+    return head if head and infix and len(letter) == 1 else configuration
 
 
 class Creative(BaseModel):
@@ -73,11 +85,38 @@ class Line(BaseModel):
     budget: Money
     per_session: int | None = Field(default=None, ge=1, description="Most impressions per playback session.")
     tier0: bool = False
+    # Left out of the snapshot when unset, so a snapshot of lines without them reads (and hashes) as before.
+    starts: AwareDatetime | None = Field(
+        default=None, exclude_if=lambda value: value is None, description="Start of its flight; none: started."
+    )
+    ends: AwareDatetime | None = Field(
+        default=None, exclude_if=lambda value: value is None, description="End of its flight (exclusive)."
+    )
+    channels: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="The channels it is sold on; none: every monetized channel of the stage.",
+    )
+
+    @model_validator(mode="after")
+    def _flight(self) -> Self:
+        if self.starts is not None and self.ends is not None and self.ends <= self.starts:
+            raise ValueError(f"line {self.id}: its flight ends before it starts")
+        return self
 
     @property
     def insertion(self) -> Decimal:
         """What one impression costs the line: ``cpm / 1000``."""
         return self.cpm / 1000
+
+    def in_flight(self, now: datetime) -> bool:
+        """Whether ``now`` is inside the line's flight."""
+        return (self.starts is None or self.starts <= now) and (self.ends is None or now < self.ends)
+
+    def serves(self, configuration: str, now: datetime) -> bool:
+        """Whether the line may air on a break of ``configuration`` at ``now``: in its flight, on a channel it is
+        sold on."""
+        return self.in_flight(now) and (not self.channels or channel_of(configuration) in self.channels)
 
 
 class Book(BaseModel):
@@ -220,16 +259,21 @@ def _bid(imp: Imp, creative: Creative, price: Decimal, ext: Mapping[str, Any]) -
     }
 
 
-def bids(request: BidRequest, own: Book, *, exhausted: Iterable[str] = ()) -> list[dict[str, Any]]:
+def bids(
+    request: BidRequest, own: Book, *, exhausted: Iterable[str] = (), now: datetime | None = None
+) -> list[dict[str, Any]]:
     """The own book's bids for every imp of ``request``: its house ads, then the creatives of each line with budget
-    left, that fit the imp.
+    left and in its flight, that fit the imp.
 
     Args:
         request: the OpenRTB request that Prebid Server sent the ``ownbook`` alias.
         own: the snapshot's own book.
         exhausted: lines whose budget is reserved (not bid).
+        now: the time of the request, for the lines' flights (None: flights are not checked).
     """
-    spent = frozenset(exhausted)
+    spent = frozenset(exhausted) | frozenset(
+        line.id for line in own.lines if now is not None and not line.in_flight(now)
+    )
     creatives = {creative.crid: creative for creative in own.creatives}
     placed: list[dict[str, Any]] = []
     for imp in request.imp:
@@ -253,9 +297,11 @@ def bids(request: BidRequest, own: Book, *, exhausted: Iterable[str] = ()) -> li
     return placed
 
 
-def response(request: BidRequest, own: Book, *, exhausted: Iterable[str] = ()) -> dict[str, Any] | None:
+def response(
+    request: BidRequest, own: Book, *, exhausted: Iterable[str] = (), now: datetime | None = None
+) -> dict[str, Any] | None:
     """The OpenRTB response, or None for no bid (HTTP 204)."""
-    placed = bids(request, own, exhausted=exhausted)
+    placed = bids(request, own, exhausted=exhausted, now=now)
     if not placed:
         return None
     return {"id": request.id, "cur": "USD", "seatbid": [{"seat": OWN_BOOK, "bid": placed}]}
