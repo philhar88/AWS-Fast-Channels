@@ -1,5 +1,6 @@
 package org.prebid.server.hooks.modules.fast.ctv.v1;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.iab.openrtb.request.BidRequest;
 import io.vertx.core.Future;
 import io.vertx.core.http.HttpMethod;
@@ -194,6 +195,50 @@ public class FastCtvPolicyHookTest {
         assertThat(((ModuleContext) result.moduleContext()).refused()).isTrue();
         verify(httpClient, never()).request(any(), anyString(), any(), anyString(), anyLong(), anyLong());
         assertThat(MAPPER.readTree(log.getFirst()).path("refused").asText()).isEqualTo("pod_s 29 outside 30-120 s");
+    }
+
+    @Test
+    public void aWarmRequestGainsNoBidderAndKeepsOnlyItsStoredResponseOnes() throws Exception {
+        answer(Future.succeededFuture(HttpClientResponse.of(200, null,
+                policyAnswer("CONTEXTUAL", "amt", "echo26").toString())));
+        final BidRequest stored = warmPod();
+
+        final InvocationResult<AuctionRequestPayload> result = call(stored, "");
+
+        final BidRequest auctioned = result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(stored)).bidRequest();
+        assertThat(auctioned.getImp()).singleElement().satisfies(imp -> {
+            assertThat(imp.getExt().at("/prebid/bidder/amt").isMissingNode()).as("its stored response").isFalse();
+            assertThat(imp.getExt().at("/prebid/bidder/echo26").isMissingNode()).as("no stored response").isTrue();
+            assertThat(imp.getExt().at("/prebid/bidder/appnexus").isMissingNode()).as("named, no response").isTrue();
+        });
+        assertThat(MAPPER.readTree(log.getFirst()).path("warm").asBoolean()).isTrue();
+    }
+
+    @Test
+    public void aWarmRequestWithoutAnAnswerStillKeepsOnlyItsStoredResponseBidders() {
+        answer(Future.failedFuture(new TimeoutException()));
+        final BidRequest stored = warmPod();
+
+        final InvocationResult<AuctionRequestPayload> result = call(stored, "");
+
+        assertThat(result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(stored)).bidRequest().getImp())
+                .singleElement().satisfies(imp ->
+                        assertThat(imp.getExt().at("/prebid/bidder/appnexus").isMissingNode()).isTrue());
+    }
+
+    /** The warm stored request: {@code ext.fast.warm}, one slot naming amt (answered from a stored response) and
+     * appnexus (not). */
+    private static BidRequest warmPod() {
+        final BidRequest pod = storedPod("30");
+        ((ObjectNode) pod.getExt().getProperty(PodShape.EXT)).put("warm", true);
+        return pod.toBuilder().imp(pod.getImp().stream().map(imp -> {
+            final ObjectNode ext = imp.getExt().deepCopy();
+            final ObjectNode prebid = (ObjectNode) ext.get("prebid");
+            ((ObjectNode) prebid.get("bidder")).putObject("amt").put("placementId", "fastm-demo");
+            ((ObjectNode) prebid.get("bidder")).putObject("appnexus");
+            prebid.putArray("storedbidresponse").addObject().put("bidder", "amt").put("id", "warm-amt");
+            return imp.toBuilder().ext(ext).build();
+        }).toList()).build();
     }
 
     /** The one stored request, merged with MediaTailor's body: a template slot, {@code slot_s} and {@code pod_s}. */
