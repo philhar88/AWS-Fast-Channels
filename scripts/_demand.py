@@ -1760,6 +1760,10 @@ class DemandStage:
                     return self.ec2_gone(arn, region)
                 case "ecs":
                     return self.ecs_gone(arn, region)
+                case "cognito-idp":  # the selling module's token issuer: the index outlives a deleted pool
+                    pool = arn.rsplit("/", 1)[1]
+                    self.client("cognito-idp", region).describe_user_pool(UserPoolId=pool)
+                    return False
         except ClientError:
             return True
         return False
