@@ -673,6 +673,19 @@ def test_a_deleted_nat_gateway_is_not_residue(stage: _demand.DemandStage, stub: 
     assert stage.gone(arn, REGION)
 
 
+def test_a_deleted_user_pool_is_not_residue(stage: _demand.DemandStage, stub: Any) -> None:
+    """The tagging index keeps listing a deleted Cognito pool (the selling module's, seen on fastcii)."""
+    cognito = stub("cognito-idp")
+    arn = "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_abc"
+    cognito.add_client_error(
+        "describe_user_pool", "ResourceNotFoundException", expected_params={"UserPoolId": "us-east-1_abc"}
+    )
+    cognito.add_response("describe_user_pool", {"UserPool": {"Id": "us-east-1_abc"}}, {"UserPoolId": "us-east-1_abc"})
+
+    assert stage.gone(arn, REGION)
+    assert not stage.gone(arn, REGION)
+
+
 def test_cli_refuses_a_stage_without_demand(capsys: pytest.CaptureFixture[str]) -> None:
     assert prebid_guidance.main(["inventory", "--prefix", "fastcix"]) == 1
     assert "modules.demand is off" in capsys.readouterr().err
