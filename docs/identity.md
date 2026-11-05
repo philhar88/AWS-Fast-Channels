@@ -209,6 +209,9 @@ Each persona becomes the user `<id>@personas.example.com` with `custom:persona=<
 guest and kids profiles get no user. The passwords are in the Secrets Manager secret `<prefix>/identity/demo-users`,
 as `{"<persona>": {"email": ..., "password": ...}}`; a re-run keeps them. The script prints each persona's `vid`.
 
+No stack owns the secret: run `--delete` before `make destroy`, or the secret outlives the stage. `make destroy`
+schedules the vid key for deletion (7 days); deployed again, the prefix gets a new key, and every `vid` changes.
+
 To sign a persona in from a script or a test, read the secret, take the client id from the SSM parameter
 `/<prefix>/identity/client-id`, and call Cognito `InitiateAuth` with `USER_PASSWORD_AUTH`. Send the result's
 `AccessToken`.
