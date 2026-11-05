@@ -14,7 +14,10 @@ A quarter of the replay, and :data:`WARM_SEQUENTIAL_PER_TARGET` requests per hea
 before it, name the warm stored request (``pbs_config.warm_body``, W-12): its slot answers every configured
 third-party adapter from a stored bid response, so the new task creates each adapter's metric keys without calling a
 partner. Sent one at a time, the first warm requests create the keys before any concurrent auction can race on them
-(Prebid Server Java creates them without a lock); the load balancer spreads sequential requests over the targets.
+(Prebid Server Java creates them without a lock); the load balancer spreads sequential requests over the targets,
+two or more each. A task's first warm request can answer 400 (seen live): Prebid Server reads a stored bid response
+from S3 on every request, uncached, within the 100 ms stored-request timeout, and a new task's first S3 read can take
+longer. Its next one creates the keys.
 """
 
 import json

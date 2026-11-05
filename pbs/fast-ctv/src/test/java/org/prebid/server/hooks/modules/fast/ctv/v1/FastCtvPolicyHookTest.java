@@ -226,6 +226,39 @@ public class FastCtvPolicyHookTest {
                         assertThat(imp.getExt().at("/prebid/bidder/appnexus").isMissingNode()).isTrue());
     }
 
+    @Test
+    public void aWarmRequestThatReachesTheUpdateAsAnotherRequestIsReshapedAndCutTheSameWay() throws Exception {
+        answer(Future.succeededFuture(HttpClientResponse.of(200, null,
+                policyAnswer("CONTEXTUAL", "amt", "echo26").toString())));
+        final BidRequest stored = warmPod();
+        final BidRequest other = warmPod(); // not the request the hook saw: the update shapes and patches it again
+
+        final InvocationResult<AuctionRequestPayload> result = call(stored, "");
+
+        final BidRequest auctioned = result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(other)).bidRequest();
+        assertThat(auctioned).isNotSameAs(other);
+        assertThat(auctioned.getImp()).singleElement().satisfies(imp -> {
+            assertThat(imp.getExt().at("/prebid/bidder/amt").isMissingNode()).as("its stored response").isFalse();
+            assertThat(imp.getExt().at("/prebid/bidder/echo26").isMissingNode()).as("no stored response").isTrue();
+            assertThat(imp.getExt().at("/prebid/bidder/appnexus").isMissingNode()).as("named, no response").isTrue();
+        });
+    }
+
+    @Test
+    public void aWarmRequestWithoutAnAnswerThatReachesTheUpdateAsAnotherRequestIsCutTheSameWay() {
+        answer(Future.failedFuture(new TimeoutException()));
+        final BidRequest stored = warmPod();
+        final BidRequest other = warmPod();
+
+        final InvocationResult<AuctionRequestPayload> result = call(stored, "");
+
+        assertThat(result.payloadUpdate().apply(AuctionRequestPayloadImpl.of(other)).bidRequest().getImp())
+                .singleElement().satisfies(imp -> {
+                    assertThat(imp.getExt().at("/prebid/bidder/amt").isMissingNode()).isFalse();
+                    assertThat(imp.getExt().at("/prebid/bidder/appnexus").isMissingNode()).isTrue();
+                });
+    }
+
     /** The warm stored request: {@code ext.fast.warm}, one slot naming amt (answered from a stored response) and
      * appnexus (not). */
     private static BidRequest warmPod() {

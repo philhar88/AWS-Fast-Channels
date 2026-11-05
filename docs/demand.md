@@ -249,7 +249,10 @@ bidders. Prebid Server uses a stored bid response only for an adapter that build
 more, it calls the real bidder. So `pbs_config` refuses at render any configured adapter that the zero-recorder gate
 has not covered (`WARM_VETTED_ADAPTERS`). That gate, `tests/pbs/test_warmup.py`, runs a fresh Prebid Server with
 every adapter endpoint at a local recorder: warm probes must reach no recorder and create the adapters' keys
-(`adapter_amt_requests_type_openrtb2_web`).
+(`adapter_amt_requests_type_openrtb2_web`). A task's first warm request can answer 400: Prebid Server reads a stored
+bid response from S3 on every request (it caches stored requests, not responses) within the 100 ms stored-request
+timeout, and a new task's first S3 read can take longer. Each target gets at least two sequential warm requests, so
+the next one creates the keys.
 
 `scripts/prebid_guidance.py herd --rate 400 --seconds 6` replays a break herd with the warm-up project and prints
 vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s on 2 tasks.

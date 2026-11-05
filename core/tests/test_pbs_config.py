@@ -6,6 +6,7 @@ Prebid Server loads shows up as a reviewed diff.
 
 import json
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -27,6 +28,7 @@ from fast_channels.core.pbs_config import (
     SHIPPED_ADAPTERS,
     SIMULATOR,
     VAST_HOOK,
+    WARM_FIELD,
     WARM_STORED_REQUEST,
     HouseAd,
     PbsSettings,
@@ -144,6 +146,15 @@ def test_the_warm_stored_request_answers_each_adapter_from_a_stored_bid_response
         k: v for k, v in plain.items() if k not in {"id", "imp", "ext"}
     }
     assert warm_body() == {"ext": {"prebid": {"storedrequest": {"id": "fast-warm"}}, "fast": {"pod_s": "30"}}}
+
+
+def test_the_module_reads_the_warm_mark_the_stored_request_sets() -> None:
+    """The fast-ctv module's ``WarmUp.FIELD`` is ``WARM_FIELD`` (``tests/pbs/test_warmup.py`` checks the module's
+    ``warm`` log line too)."""
+    module = Path(__file__).parents[2] / "pbs/fast-ctv/src/main/java/org/prebid/server/hooks/modules/fast/ctv/core"
+    field = re.search(r'public static final String FIELD = "([^"]+)";', (module / "WarmUp.java").read_text())
+
+    assert field is not None and field[1] == WARM_FIELD == "warm"
 
 
 def test_the_stored_bid_response_is_one_video_bid_for_the_warm_slot() -> None:
