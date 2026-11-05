@@ -203,6 +203,8 @@ def test_render_config_writes_the_stage_configuration(tmp_path: Path) -> None:
             "stored_accounts/fastm.json",
             "stored_requests/fast-pod.json",
             "stored_requests/fast-pod-kids.json",
+            "stored_requests/fast-warm.json",
+            "stored_responses/warm-amt.json",
         ]
     )
     config = (out / "current-config/prebid-config.yaml").read_text()

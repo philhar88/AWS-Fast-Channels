@@ -9,6 +9,15 @@ checks and ECS replaces it. It then replays MediaTailor's POST through the guida
 gets about that rate) for ``WARMUP_SECONDS``, with origin secret A. Every request is a probe (``X-Fast-Probe: 1``)
 without a ticket, so the Pod Decision Service answers own-book and house only: no partner sees the replay. The load
 generator is vegeta, pinned and checksum-verified.
+
+A quarter of the replay, and :data:`WARM_SEQUENTIAL_PER_TARGET` requests per healthy target sent one after another
+before it, name the warm stored request (``pbs_config.warm_body``, W-12): its slot answers every configured
+third-party adapter from a stored bid response, so the new task creates each adapter's metric keys without calling a
+partner. Sent one at a time, the first warm requests create the keys before any concurrent auction can race on them
+(Prebid Server Java creates them without a lock); the load balancer spreads sequential requests over the targets,
+two or more each. A task's first warm request can answer 400 (seen live): Prebid Server reads a stored bid response
+from S3 on every request, uncached, within the 100 ms stored-request timeout, and a new task's first S3 read can take
+longer. Its next one creates the keys.
 """
 
 import json
@@ -31,12 +40,16 @@ from fast_channels.core.demand import (
     origin_secret,
     warmup_project,
 )
-from fast_channels.core.pbs_config import POD_MAX_SECONDS, auction_body
+from fast_channels.core.pbs_config import POD_MAX_SECONDS, SLOT_SECONDS, auction_body, warm_body
 from fast_channels.infra import nag
 from fast_channels.infra.grants import allow
 
 EDGE_REGION: Final = "us-east-1"
 """Where the origin secrets live (DemandEdge)."""
+WARM_SEQUENTIAL_PER_TARGET: Final = 2
+"""Warm requests sent one after another, per healthy target (plus 2), before the parallel replay (W-12)."""
+WARM_SHARE: Final = 4
+"""One replay request in this many names the warm stored request; the rest are plain probes."""
 
 
 def warmup_buildspec(*, prefix: str, cloudfront_domain: str, cluster_arn: str, target_group_arn: str) -> dict[str, Any]:
@@ -47,6 +60,14 @@ def warmup_buildspec(*, prefix: str, cloudfront_domain: str, cluster_arn: str, t
     longest = POD_MAX_SECONDS
     query = f"evid=1&upid=warmup&dur={longest * 1001}"
     body = json.dumps(auction_body(longest), separators=(",", ":"))
+    warm = json.dumps(warm_body(), separators=(",", ":"))
+    warm_query = f"evid=1&upid=warmup&dur={SLOT_SECONDS * 1001}"
+    headers = (
+        f'echo "{ORIGIN_HEADER}: $SECRET"; echo "Content-Type: application/json"; echo "X-Fast-Probe: 1"; '
+        f'echo "X-Fast-Sid: warmup-$CODEBUILD_BUILD_NUMBER"; echo "X-Fast-Pc: {prefix}-warmup"; '
+    )
+    plain_target = '{ echo "POST https://' + cloudfront_domain + "/openrtb2/auction?" + query + '"; ' + headers
+    warm_target = '{ echo "POST https://' + cloudfront_domain + "/openrtb2/auction?" + warm_query + '"; ' + headers
     return {
         "version": "0.2",
         "env": {"shell": "bash"},
@@ -85,10 +106,21 @@ def warmup_buildspec(*, prefix: str, cloudfront_domain: str, cluster_arn: str, t
                     f"SECRET=$(aws secretsmanager get-secret-value --region {EDGE_REGION} "
                     f"--secret-id {origin_secret(prefix, 'a')} --query SecretString --output text)",
                     f"printf '%s' '{body}' > body.json",
-                    '{ echo "POST https://' + cloudfront_domain + "/openrtb2/auction?" + query + '"; '
-                    f'echo "{ORIGIN_HEADER}: $SECRET"; echo "Content-Type: application/json"; '
-                    'echo "X-Fast-Probe: 1"; echo "X-Fast-Sid: warmup-$CODEBUILD_BUILD_NUMBER"; '
-                    f'echo "X-Fast-Pc: {prefix}-warmup"; echo "@body.json"; }} > targets.txt',
+                    f"printf '%s' '{warm}' > warm.json",
+                    # OPTIMIZATION(oss): W-12 the warm requests first, one at a time: PBS-Java races on new metric keys
+                    'if [ "${SKIP:-0}" != 1 ]; then '
+                    f"for i in $(seq 1 $(( {WARM_SEQUENTIAL_PER_TARGET} * (HEALTHY > 0 ? HEALTHY : 1) + 2 ))); do "
+                    f'curl -s -o /dev/null -w "warm %{{http_code}}\\n" -X POST '
+                    f'"https://{cloudfront_domain}/openrtb2/auction?{warm_query}" -H "{ORIGIN_HEADER}: $SECRET" '
+                    '-H "Content-Type: application/json" -H "X-Fast-Probe: 1" '
+                    f'-H "X-Fast-Sid: warmup-$CODEBUILD_BUILD_NUMBER" -H "X-Fast-Pc: {prefix}-warmup" '
+                    "--data @warm.json; done; fi",
+                    "{ "
+                    + warm_target
+                    + 'echo "@warm.json"; echo; }; '
+                    + f"for i in $(seq 2 {WARM_SHARE}); do "
+                    + plain_target
+                    + 'echo "@body.json"; echo; }; done; } > targets.txt',
                     'if [ "${SKIP:-0}" != 1 ]; then ./vegeta attack -targets=targets.txt -rate=${RATE}/s '
                     f"-duration=${{SECONDS_TO_RUN:-{WARMUP_SECONDS}}}s -timeout=5s > results.bin && "
                     "./vegeta report results.bin && "

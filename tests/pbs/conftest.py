@@ -35,6 +35,7 @@ def _launch(
     *,
     module: bool,
     analytics: bool = False,
+    fresh: bool = False,
 ) -> Iterator[Pbs]:
     try:
         jar = find_jar(jar_name)
@@ -42,7 +43,10 @@ def _launch(
         pytest.skip(str(missing))
     out = tmp_path_factory.mktemp(jar_name.removesuffix(".jar"))
     port = free_port()
-    yield from start(jar, local_config(mocks, out, port=port, module=module, analytics=analytics), port, mocks)
+    metrics = free_port() if fresh else None
+    config = local_config(mocks, out, port=port, module=module, analytics=analytics, prometheus_port=metrics)
+    url = f"http://127.0.0.1:{metrics}/metrics" if metrics else None
+    yield from start(jar, config, port, mocks, warm_up=not fresh, metrics_url=url)
 
 
 @pytest.fixture(scope="session")
@@ -61,6 +65,12 @@ def pbs_module_disabled(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory) 
 def pbs_analytics(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pbs]:
     """The module's jar with the guidance's log analytics reporter on (``EnableLogAnalytics``, off in every stage)."""
     yield from _launch(mocks, tmp_path_factory, "prebid-server.jar", module=True, analytics=True)
+
+
+@pytest.fixture(scope="session")
+def pbs_fresh(mocks: Mocks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pbs]:
+    """The module's jar, module on, with no auction yet (the replay a new task would get) and Prometheus on."""
+    yield from _launch(mocks, tmp_path_factory, "prebid-server.jar", module=True, fresh=True)
 
 
 @pytest.fixture(scope="session")

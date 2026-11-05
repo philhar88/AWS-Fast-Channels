@@ -12,6 +12,7 @@ import org.prebid.server.hooks.modules.fast.ctv.core.PolicyClient;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyDecision;
 import org.prebid.server.hooks.modules.fast.ctv.core.PolicyPatch;
 import org.prebid.server.hooks.modules.fast.ctv.core.Signals;
+import org.prebid.server.hooks.modules.fast.ctv.core.WarmUp;
 import org.prebid.server.hooks.v1.InvocationAction;
 import org.prebid.server.hooks.v1.InvocationResult;
 import org.prebid.server.hooks.v1.InvocationStatus;
@@ -29,6 +30,9 @@ import java.util.function.Consumer;
  * Builds the break's pod from the stored request and the break's length ({@link PodShape}), then asks the Pod
  * Decision Service's {@code /policy} what this break may use, and applies the answer's patch ({@link PolicyPatch}):
  * third-party bidders, regulations, device, content, user data and deals.
+ * <p>
+ * The warm-up's stored request ({@link WarmUp}) gains no bidder from the answer, and keeps only the own book and the
+ * bidders its slots answer from stored bid responses, so no warm-up ever reaches a partner (W-12).
  * <p>
  * A pod {@link PodShape} refuses (no usable length) rejects the auction without asking: {@link FastCtvVastHook}
  * answers an empty VAST, and the break airs the slate.
@@ -93,9 +97,10 @@ public class FastCtvPolicyHook implements ProcessedAuctionRequestHook {
         if (patch == null || !patch.changesRequest()) {
             return unchanged(decision, original, shaped);
         }
+        final boolean warm = WarmUp.isWarm(shaped);
         final BidRequest patched;
         try {
-            patched = patch.apply(shaped.request(), mapper);
+            patched = restricted(patch.apply(shaped.request(), mapper), warm);
         } catch (RuntimeException e) {
             return unchanged(new PolicyDecision(null, "POLICY_NOT_APPLICABLE " + e.getClass().getSimpleName(),
                     decision.latencyMs()), original, shaped);
@@ -104,7 +109,8 @@ public class FastCtvPolicyHook implements ProcessedAuctionRequestHook {
                 .status(InvocationStatus.success)
                 .action(InvocationAction.update)
                 .payloadUpdate(initial -> AuctionRequestPayloadImpl.of(initial.bidRequest() == original
-                        ? patched : patch.apply(shape.apply(initial.bidRequest()).request(), mapper)))
+                        ? patched : restricted(patch.apply(shape.apply(initial.bidRequest()).request(), mapper),
+                        warm)))
                 .moduleContext(new ModuleContext(decision, shaped))
                 .build();
     }
@@ -120,11 +126,17 @@ public class FastCtvPolicyHook implements ProcessedAuctionRequestHook {
         if (!shaped.shaped()) {
             return builder.action(InvocationAction.no_action).build();
         }
-        final BidRequest pod = shaped.request();
+        final boolean warm = WarmUp.isWarm(shaped);
+        final BidRequest pod = restricted(shaped.request(), warm);
         return builder.action(InvocationAction.update)
                 .payloadUpdate(initial -> AuctionRequestPayloadImpl.of(initial.bidRequest() == original
-                        ? pod : shape.apply(initial.bidRequest()).request()))
+                        ? pod : restricted(shape.apply(initial.bidRequest()).request(), warm)))
                 .build();
+    }
+
+    /** A warm request cut to the own book and its stored-response bidders; any other request as it is. */
+    private static BidRequest restricted(BidRequest request, boolean warm) {
+        return warm ? WarmUp.restrict(request) : request;
     }
 
     /**
@@ -144,6 +156,7 @@ public class FastCtvPolicyHook implements ProcessedAuctionRequestHook {
                 .put("fv", signals.fv())
                 .put("evid", signals.evid())
                 .put("probe", signals.probe())
+                .put("warm", WarmUp.isWarm(shaped))
                 .put("ctx_len", signals.ctxLength())
                 .put("ua_len", signals.userAgent().length())
                 .put("imps", request.getImp().size());

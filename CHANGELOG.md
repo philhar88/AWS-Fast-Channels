@@ -29,6 +29,14 @@ All notable changes to this project are documented here. The format follows
   `tests/e2e/harness_identity.py` signs them in and mints for other e2e tests. The playback path does not use the
   tickets yet: the CDN's edge rebuild, the siblings' PRE_SESSION redeem and the PDS's binding check come next. The
   shipped stages turn the module on.
+- **Demand: the warm-up creates every adapter's metric keys without calling a partner** (W-12). Prebid Server Java
+  creates an adapter's metric keys without a lock, and the first concurrent auctions on a new task could fail with an
+  HTTP 500; a probe gets no partner, so the warm-up never created them. A new stored request, `fast-warm`, names
+  every configured third-party adapter and answers each from a stored bid response (`stored_responses/warm-<adapter>`).
+  The warm-up sends it one request at a time first (two per healthy target, plus two), then as one replay request in
+  four. The fast-ctv module adds no bidder to a warm request and keeps only the stored-response ones, and the render
+  refuses an adapter the new zero-recorder contract gate (`tests/pbs/test_warmup.py`) has not covered: one that built
+  more than one request would be called for real. See [docs/demand.md](docs/demand.md#scaling-the-census-gate-dayparts-and-warm-up).
 
 ## [4.0.0] - 2026-10-31
 
