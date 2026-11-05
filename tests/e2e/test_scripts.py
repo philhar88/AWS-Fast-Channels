@@ -44,6 +44,7 @@ def script(name: str) -> ModuleType:
 
 
 trace, seed, cleanup = script("trace"), script("seed_sample_content"), script("cleanup")
+personas = script("seed_personas")
 
 
 def session() -> boto3.Session:
@@ -786,3 +787,29 @@ def test_the_deadline_counts_down() -> None:
     deadline = cleanup.Deadline(60)
     assert 0 < deadline.get_remaining_time_in_millis() <= 60_000
     assert cleanup.Deadline(-1).get_remaining_time_in_millis() == 0
+
+
+def test_seed_personas_takes_the_contracts_signed_in_personas(tmp_path: Path) -> None:
+    """``contracts/personas.json``: only ``sign_in: user`` personas get a pool user (not the guest or a kids profile);
+    the email defaults to ``<id>@personas.example.com``."""
+    contract = tmp_path / "personas.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "personas": [
+                    {"id": "dana", "email": "dana@personas.example.com", "sign_in": "user"},
+                    {"id": "ben", "sign_in": "user"},
+                    {"id": "mia", "sign_in": "kids_profile", "account": "marcus"},
+                    {"id": "sam"},
+                    {"id": "guest", "sign_in": "guest"},
+                ]
+            }
+        )
+    )
+    assert personas.contract_personas(contract) == [
+        {"id": "dana", "email": "dana@personas.example.com"},
+        {"id": "ben", "email": "ben@personas.example.com"},
+    ]
+    assert personas.contract_personas(tmp_path / "missing.json") == []
+    secret = personas.password()
+    assert len(secret) >= 12 and any(c.isupper() for c in secret) and any(c.isdigit() for c in secret)

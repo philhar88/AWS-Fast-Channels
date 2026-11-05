@@ -422,7 +422,7 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed
 
 
-MODULES = ("ops", "models", "demand", "pds", "release", "crawl")
+MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity")
 RECS = "haiku-5-5-adaptive-8k"
 """The recommender's fixture eval record (``infra/tests/data/evals``)."""
 RECOMMENDER: dict[str, Any] = {

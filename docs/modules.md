@@ -9,6 +9,9 @@ FAST Channels v3.0.0 airs channels with preconditioned house ads. The optional m
 - a per-task model registry;
 - the operations they need: a lake, a hash-chained ledger, detectors, runbooks and a probe.
 
+Since v4.0.0, `identity` adds signed-in viewers, whose single-use playback tickets carry who they are to the decision
+service (unreleased).
+
 ![The optional modules around one monetized channel; the experimental ad-server chain is dashed](images/architecture-modules.png)
 
 Every module is off by default, behind `modules.<name>.enabled` in [`cdk.json`](../cdk.json). With every module off
@@ -34,6 +37,7 @@ a deployment is v3.0.0's, which snapshot tests of every shipped template check (
 | `pds` | The Pod Decision Service. Per break, it decides what Prebid Server may ask third parties (bidders, regulations, device fields) and which ads make up the pod. It also runs the own book (house ads and direct lines with budgets), reservations, delivery from our impression tracker, and a decision record per call into the lake | `ops`, `demand` | With `make deploy-demand`: a sidecar in each Prebid Server task, and `…-Pds` beside the guidance | Data: the table `<prefix>-pds`, a private config bucket and their names in SSM | [pds.md](pds.md); [ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md), [0022](adr/0022-delivery-states-billing-and-the-hash-chained-ledger.md) |
 | `release` | The Release Controller for monetized playback configurations. Each monetized channel gets sibling configurations with MediaTailor Functions, deployed one release at a time: a smoke gate, then gradual promotion with unattended rollback. A viewer who joins during a break gets ads for the rest of it (`AFTER_LIVE_EDGE` with `PARTIAL_AVAIL`). It also handles the origin-secret rotation, ad prefetch with one SINGLE schedule per upcoming break, Function caches declared by scope, drift and log-reconciliation checks, and an ownership guard on every other role | `ops`, `demand`, `pds` | With `make deploy-demand`: `…-Release` | Media: each monetized channel admits its sibling configurations (`<channel>-p-?`), and the stopped lab channel `<prefix>-lab`. Every stack: the `ReleaseGuard` policy | [release-controller.md](release-controller.md); [ADR-0019](adr/0019-functions-release-controller-siblings.md), [0021](adr/0021-threshold-121-slate-and-constant-session-controls.md), [0023](adr/0023-machine-principals.md), [0033](adr/0033-prefetch-single-schedules.md), [0034](adr/0034-every-function-request-cached-by-scope.md) |
 | `crawl` | Show-level content metadata in ad requests. It keeps a catalog context object per title (title, series, IAB Content Taxonomy 3.1 genre and category, rating, language, producer). A cached PRE_ADS lookup by the break's UPID reads it, and OpenRTB 2.6 `app.content` carries it, with an uplift holdout | `pds`, `release` | `FastChannels-<prefix>-Crawl` (the context publisher) | Release: the PRE_ADS lookup in the bundle. Pds: the `app.content` patch | [content-enrichment.md](content-enrichment.md); [ADR-0031](adr/0031-show-level-content-metadata.md) |
+| `identity` | Signed-in viewers. A Cognito viewer pool; `POST /playback`, which mints a single-use opaque ticket for a monetized channel's stable sibling; and `POST /redeem`, which binds a ticket to one session. The viewer id is a KMS HMAC of the token's subject. The playback path does not use the tickets yet | `release` | `FastChannels-<prefix>-Identity` | — | [identity.md](identity.md); [ADR-0018](adr/0018-opaque-playback-ticket.md) |
 
 ## Complexity and cost per module
 
@@ -49,6 +53,7 @@ teardown times are the median stack deletions of the development stages in Octob
 | `pds` | `ops`, `demand` | Pds; a sidecar in each Prebid Server task; changes Data | about 12 | under $0.01: the hourly publisher, the sweeper, alarms, the table on demand | $0: it runs in the demand module's tasks | Pds 6 min (at worst 17), in `make destroy-demand` |
 | `release` | `ops`, `demand`, `pds` | Release; changes Media, Ops, Pds, and every stack's `ReleaseGuard` | about 21 | about $0.01: its KMS key ($1 a month), 38 alarms on `fastm` ($3.80 a month), the hourly checks | cents: the prefetcher every 5 minutes, the smoke test's probe sessions | Release 2 min, after its reaper, in `make destroy-demand` |
 | `crawl` | `pds`, `release` | Crawl; changes Release and Pds | 2 | $0: one alarm | $0 | Crawl 2 min, in `make destroy` |
+| `identity` | `release` | Identity | 3 | under $0.01: its KMS key ($1 a month) | cents per thousand plays: a mint, a KMS MAC and a redeem each | Identity, in `make destroy`, with the pool's users |
 | Ad server (experimental) | `demand`, `release` | The `mock` ad server in Demand; the Prebid Cache function's concurrency in the guidance | a few | about $0.17 ($124 a month) while enabled | — | with `demand` |
 
 With every module on, a stage holds about 145 IAM roles, against 45 for v3.0.0's three stacks. With the guidance
@@ -131,6 +136,7 @@ Points to know before turning a module on:
 ```
 Data → Media → Ops                          (ops)
      → Media → Crawl                        (crawl)
+     → Identity                             (identity)
 Models → Operator                           (models; Operator also after Data and Media)
 DemandEdge (us-east-1), DemandBuild         (demand; no dependency)
 ```
@@ -222,6 +228,8 @@ operations signal, never air time.
 | `release` | An origin-secret rotation fails part-way | Both of the gate's values stay admitted, so the siblings keep sending one it accepts. `<prefix>-release-rotation-failed` notifies the alert topic |
 | `crawl` | The publisher cannot use a catalog item | It logs the error, counts it in `ContextsInvalid` and leaves the title's object as it was. A trigger that still fails after its retries goes to a dead-letter queue, whose alarm `<prefix>-crawl-publisher-dead-letters` notifies the alert topic |
 | `crawl` | The PRE_ADS lookup cannot read a title's context object | The break is requested without the metadata: the lookup fails open |
+| `identity` | A viewer is not signed in, or `POST /playback` fails | The viewer app plays the plan's anonymous URL, whose sessions are CONTEXTUAL |
+| `identity` | A ticket is replayed by another session, expired, unknown or for another configuration | `POST /redeem` answers 409 and leaves the row as it was. The session stays anonymous |
 | `models` | The SSM entry is missing, invalid or names another model or profile | The agent runs on its entry as deployed and logs a warning |
 | `models` | A task's day reaches its `daily_cap_usd` | Runs and model calls are refused with `MODEL_CAP_REACHED`, and the alert topic is told once that day. The cap is a breaker against a runaway, about ten times expected use |
 | `models` | The spend counter is unreachable | Calls go ahead and the agent logs a warning |
@@ -247,6 +255,7 @@ These are us-east-1 list prices, rounded. Lines marked *measured* come from runs
 | `pds` | The table and buckets on demand; the snapshot publisher, delivery and sweeper functions; its alarms | Nothing beyond the Prebid Server tasks: the service runs in them (ADR-0036) |
 | `release` | Its KMS key ($1 a month); its alarms and composite alarm; the hourly drift check and log reconciliation; AppConfig; cents of state machines | The prefetcher's runs every 5 minutes while a monetized channel runs; the smoke test's probe sessions for each release |
 | `crawl` | One alarm ($0.10 a month). The publisher's runs, S3 objects and CloudFront requests cost well under a cent at demo scale (*measured*) | The same, plus the cached PRE_ADS lookup's requests |
+| `identity` | Its KMS key ($1 a month). The viewer pool is free up to 10,000 monthly active users (Essentials) | Per play: one mint (Lambda, a KMS `GenerateMac` at $0.03 per 10,000, a DynamoDB write) and one redeem (API Gateway and a DynamoDB update) |
 
 *Measured* runs:
 

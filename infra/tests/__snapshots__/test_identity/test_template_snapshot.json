@@ -1,0 +1,1430 @@
+{
+  "Description": "FAST Channels (fastm): viewer identity",
+  "Outputs": {
+    "ApiEndpoint1541504C": {
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "ApiCD79AAA0"
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix"
+            },
+            "/",
+            {
+              "Ref": "ApiDeploymentStagev1149A6FAE"
+            },
+            "/"
+          ]
+        ]
+      }
+    },
+    "IdentityTable": {
+      "Description": "The ticket table (T#<t>)",
+      "Value": {
+        "Ref": "Tickets83B11BB2"
+      }
+    },
+    "PlaybackApiUrl": {
+      "Description": "POST <url>playback mints a playback ticket",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "ApiCD79AAA0"
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix"
+            },
+            "/",
+            {
+              "Ref": "ApiDeploymentStagev1149A6FAE"
+            },
+            "/"
+          ]
+        ]
+      }
+    },
+    "RedeemUrl": {
+      "Description": "The PRE_SESSION Function's redeem",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "ApiCD79AAA0"
+            },
+            ".execute-api.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix"
+            },
+            "/",
+            {
+              "Ref": "ApiDeploymentStagev1149A6FAE"
+            },
+            "/redeem"
+          ]
+        ]
+      }
+    },
+    "Region": {
+      "Description": "Where the pool and the API are",
+      "Value": "us-east-1"
+    },
+    "UserPoolClientId": {
+      "Description": "The viewer app client (public: SRP and password sign-in)",
+      "Value": {
+        "Ref": "ViewersUsersViewers1CA6121B"
+      }
+    },
+    "UserPoolId": {
+      "Description": "The viewer pool",
+      "Value": {
+        "Ref": "ViewersUsers6A1E0F7D"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/release/media-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "ApiAccessLogs50B185DB": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ApiCD79AAA0": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): playback tickets for signed-in viewers",
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL"
+          ]
+        },
+        "Name": "fastm-identity",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::ApiGateway::RestApi"
+    },
+    "ApiDefault4xxA2E3124E": {
+      "Properties": {
+        "ResponseParameters": {
+          "gatewayresponse.header.Access-Control-Allow-Origin": "'*'"
+        },
+        "ResponseType": "DEFAULT_4XX",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::GatewayResponse"
+    },
+    "ApiDefault5xxDA9DDB15": {
+      "Properties": {
+        "ResponseParameters": {
+          "gatewayresponse.header.Access-Control-Allow-Origin": "'*'"
+        },
+        "ResponseType": "DEFAULT_5XX",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::GatewayResponse"
+    },
+    "ApiDeploymentFE1E7282c8d9bba8a1397aa2ad69d68b0fb47a2e": {
+      "DependsOn": [
+        "ApiplaybackOPTIONSE56F125F",
+        "ApiplaybackPOSTE4BD60DA",
+        "Apiplayback138C8201",
+        "ApiredeemPOST85796901",
+        "ApiredeemDC52A65C",
+        "ApiDefault4xxA2E3124E",
+        "ApiDefault5xxDA9DDB15",
+        "ApiRedeemBody1E2019B1",
+        "ApiRedeemBodyValidator0F933F02",
+        "ApiViewersFD090360"
+      ],
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true
+      },
+      "Properties": {
+        "Description": "FAST Channels (fastm): playback tickets for signed-in viewers",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Deployment"
+    },
+    "ApiDeploymentStagev1149A6FAE": {
+      "Properties": {
+        "AccessLogSetting": {
+          "DestinationArn": {
+            "Fn::GetAtt": [
+              "ApiAccessLogs50B185DB",
+              "Arn"
+            ]
+          },
+          "Format": "{\"requestId\": \"$context.requestId\", \"time\": \"$context.requestTimeEpoch\", \"method\": \"$context.httpMethod\", \"resource\": \"$context.resourcePath\", \"status\": \"$context.status\", \"latencyMs\": \"$context.responseLatency\", \"integrationLatencyMs\": \"$context.integration.latency\", \"error\": \"$context.error.messageString\", \"authorizerError\": \"$context.authorizer.error\"}"
+        },
+        "DeploymentId": {
+          "Ref": "ApiDeploymentFE1E7282c8d9bba8a1397aa2ad69d68b0fb47a2e"
+        },
+        "MethodSettings": [
+          {
+            "DataTraceEnabled": false,
+            "HttpMethod": "*",
+            "ResourcePath": "/*",
+            "ThrottlingBurstLimit": 100,
+            "ThrottlingRateLimit": 50
+          }
+        ],
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        },
+        "StageName": "v1",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingEnabled": true
+      },
+      "Type": "AWS::ApiGateway::Stage"
+    },
+    "ApiRedeemBody1E2019B1": {
+      "Properties": {
+        "ContentType": "application/json",
+        "Name": "RedeemBody",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        },
+        "Schema": {
+          "$schema": "http://json-schema.org/draft-04/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "pc": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "sid": {
+              "pattern": "^[A-Za-z0-9-]{1,64}$",
+              "type": "string"
+            },
+            "t": {
+              "pattern": "^[A-Za-z0-9_-]{22}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "t",
+            "sid",
+            "pc"
+          ],
+          "type": "object"
+        }
+      },
+      "Type": "AWS::ApiGateway::Model"
+    },
+    "ApiRedeemBodyValidator0F933F02": {
+      "Properties": {
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        },
+        "ValidateRequestBody": true
+      },
+      "Type": "AWS::ApiGateway::RequestValidator"
+    },
+    "ApiRedeemRoleDefaultPolicy46B4E5E6": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "dynamodb:UpdateItem",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Tickets83B11BB2",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ApiRedeemRoleDefaultPolicy46B4E5E6",
+        "Roles": [
+          {
+            "Ref": "ApiRedeemRoleEF6D86EE"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ApiRedeemRoleEF6D86EE": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "apigateway.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ApiViewersFD090360": {
+      "Properties": {
+        "IdentitySource": "method.request.header.Authorization",
+        "Name": "fastm-viewers",
+        "ProviderARNs": [
+          {
+            "Fn::GetAtt": [
+              "ViewersUsers6A1E0F7D",
+              "Arn"
+            ]
+          }
+        ],
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        },
+        "Type": "COGNITO_USER_POOLS"
+      },
+      "Type": "AWS::ApiGateway::Authorizer"
+    },
+    "Apiplayback138C8201": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiCD79AAA0",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "playback",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Resource"
+    },
+    "ApiplaybackOPTIONSE56F125F": {
+      "Properties": {
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "HttpMethod": "OPTIONS",
+        "Integration": {
+          "IntegrationResponses": [
+            {
+              "ResponseParameters": {
+                "method.response.header.Access-Control-Allow-Headers": "'Authorization,Content-Type'",
+                "method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              },
+              "StatusCode": "204"
+            }
+          ],
+          "RequestTemplates": {
+            "application/json": "{ statusCode: 200 }"
+          },
+          "Type": "MOCK"
+        },
+        "MethodResponses": [
+          {
+            "ResponseParameters": {
+              "method.response.header.Access-Control-Allow-Headers": true,
+              "method.response.header.Access-Control-Allow-Methods": true,
+              "method.response.header.Access-Control-Allow-Origin": true
+            },
+            "StatusCode": "204"
+          }
+        ],
+        "ResourceId": {
+          "Ref": "Apiplayback138C8201"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiplaybackPOSTApiPermissionFastChannelsfastmIdentityApi5A0A1A60POSTplayback0DB4CBD4": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              },
+              "/POST/playback"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiplaybackPOSTApiPermissionTestFastChannelsfastmIdentityApi5A0A1A60POSTplaybackEA1D8887": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/test-invoke-stage/POST/playback"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiplaybackPOSTE4BD60DA": {
+      "Properties": {
+        "AuthorizationScopes": [
+          "fast/playback"
+        ],
+        "AuthorizationType": "COGNITO_USER_POOLS",
+        "AuthorizerId": {
+          "Ref": "ApiViewersFD090360"
+        },
+        "HttpMethod": "POST",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "MintD94A12BF",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "ResourceId": {
+          "Ref": "Apiplayback138C8201"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiredeemDC52A65C": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiCD79AAA0",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "redeem",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Resource"
+    },
+    "ApiredeemPOST85796901": {
+      "Properties": {
+        "AuthorizationType": "NONE",
+        "HttpMethod": "POST",
+        "Integration": {
+          "Credentials": {
+            "Fn::GetAtt": [
+              "ApiRedeemRoleEF6D86EE",
+              "Arn"
+            ]
+          },
+          "IntegrationHttpMethod": "POST",
+          "IntegrationResponses": [
+            {
+              "ResponseTemplates": {
+                "application/json": "{\"ok\": true}"
+              },
+              "StatusCode": "200"
+            },
+            {
+              "ResponseTemplates": {
+                "application/json": "{\"ok\": false}"
+              },
+              "SelectionPattern": "4\\d{2}",
+              "StatusCode": "409"
+            },
+            {
+              "ResponseTemplates": {
+                "application/json": "{\"ok\": false}"
+              },
+              "SelectionPattern": "5\\d{2}",
+              "StatusCode": "502"
+            }
+          ],
+          "PassthroughBehavior": "NEVER",
+          "RequestTemplates": {
+            "application/json": {
+              "Fn::Join": [
+                "",
+                [
+                  "#set($b = $input.path('$'))\n{\n  \"TableName\": \"",
+                  {
+                    "Ref": "Tickets83B11BB2"
+                  },
+                  "\",\n  \"Key\": {\n    \"pk\": {\n      \"S\": \"T#$util.escapeJavaScript($b.t)\"\n    }\n  },\n  \"UpdateExpression\": \"SET redeemedBy = :sid, bound_at = if_not_exists(bound_at, :now), last_seen = :now\",\n  \"ConditionExpression\": \"attribute_exists(pk) AND pc = :pc AND ((attribute_not_exists(redeemedBy) AND redeem_by > :now) OR redeemedBy = :sid)\",\n  \"ExpressionAttributeValues\": {\n    \":sid\": {\n      \"S\": \"$util.escapeJavaScript($b.sid)\"\n    },\n    \":pc\": {\n      \"S\": \"$util.escapeJavaScript($b.pc)\"\n    },\n    \":now\": {\n      \"N\": \"$context.requestTimeEpoch\"\n    }\n  }\n}"
+                ]
+              ]
+            }
+          },
+          "Type": "AWS",
+          "Uri": "arn:aws:apigateway:us-east-1:dynamodb:action/UpdateItem"
+        },
+        "MethodResponses": [
+          {
+            "StatusCode": "200"
+          },
+          {
+            "StatusCode": "409"
+          },
+          {
+            "StatusCode": "502"
+          }
+        ],
+        "RequestModels": {
+          "application/json": {
+            "Ref": "ApiRedeemBody1E2019B1"
+          }
+        },
+        "RequestValidatorId": {
+          "Ref": "ApiRedeemBodyValidator0F933F02"
+        },
+        "ResourceId": {
+          "Ref": "ApiredeemDC52A65C"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "MintD94A12BF": {
+      "DependsOn": [
+        "MintRoleDefaultPolicyC977110A",
+        "MintRole82435920"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "POST /playback: a signed-in viewer's single-use playback ticket",
+        "Environment": {
+          "Variables": {
+            "FAST_PREFIX": "fastm",
+            "IDENTITY_TABLE": {
+              "Ref": "Tickets83B11BB2"
+            },
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "identity.mint",
+            "REDEEM_WINDOW_MS": "120000",
+            "RELEASE_CHANNELS": "fastm-demo",
+            "VID_KEY": {
+              "Fn::GetAtt": [
+                "VidKey4C77E6BD",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "Handler": "fast_channels.functions.identity.mint.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "MintLogsC2F5CA59"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 512,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "MintRole82435920",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 10,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "MintLogsC2F5CA59": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "MintRole82435920": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "MintRoleDefaultPolicyC977110A": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "MintLogsC2F5CA59",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmreleasemediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/plan/playback/*.json"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:PutItem",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "Tickets83B11BB2",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "kms:GenerateMac",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "VidKey4C77E6BD",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "MintRoleDefaultPolicyC977110A",
+        "Roles": [
+          {
+            "Ref": "MintRole82435920"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ParameterClientId62C9C0F2": {
+      "Properties": {
+        "Description": "Identity module: client-id",
+        "Name": "/fastm/identity/client-id",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Ref": "ViewersUsersViewers1CA6121B"
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterE2EClientIdF112733D": {
+      "Properties": {
+        "Description": "Identity module: e2e-client-id",
+        "Name": "/fastm/identity/e2e-client-id",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Ref": "ViewersUsersViewers1CA6121B"
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterIssuerBDC3F723": {
+      "Properties": {
+        "Description": "Identity module: issuer",
+        "Name": "/fastm/identity/issuer",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Fn::Join": [
+            "",
+            [
+              "https://cognito-idp.us-east-1.",
+              {
+                "Ref": "AWS::URLSuffix"
+              },
+              "/",
+              {
+                "Ref": "ViewersUsers6A1E0F7D"
+              }
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterPlaybackUrl611BEC18": {
+      "Properties": {
+        "Description": "Identity module: playback-url",
+        "Name": "/fastm/identity/playback-url",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Fn::Join": [
+            "",
+            [
+              "https://",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              ".execute-api.us-east-1.",
+              {
+                "Ref": "AWS::URLSuffix"
+              },
+              "/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              },
+              "/playback"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterRedeemUrlA7D7D608": {
+      "Properties": {
+        "Description": "Identity module: redeem-url",
+        "Name": "/fastm/identity/redeem-url",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Fn::Join": [
+            "",
+            [
+              "https://",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              ".execute-api.us-east-1.",
+              {
+                "Ref": "AWS::URLSuffix"
+              },
+              "/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              },
+              "/redeem"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterTableB33FAE39": {
+      "Properties": {
+        "Description": "Identity module: table",
+        "Name": "/fastm/identity/table",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Ref": "Tickets83B11BB2"
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterUserPoolId95CD004C": {
+      "Properties": {
+        "Description": "Identity module: user-pool-id",
+        "Name": "/fastm/identity/user-pool-id",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Ref": "ViewersUsers6A1E0F7D"
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ParameterVidKey9F25F17A": {
+      "Properties": {
+        "Description": "Identity module: vid-key",
+        "Name": "/fastm/identity/vid-key",
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "VidKey4C77E6BD",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::SSM::Parameter"
+    },
+    "ReleaseGuard3432AE9F": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): only the Release Controller changes monetization",
+        "Path": "/",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "mediatailor:CreatePrefetchSchedule",
+                "mediatailor:DeleteFunction",
+                "mediatailor:DeletePlaybackConfiguration",
+                "mediatailor:DeletePrefetchSchedule",
+                "mediatailor:PutChannelPolicy",
+                "mediatailor:PutFunction",
+                "mediatailor:PutPlaybackConfiguration"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab",
+                "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-lab-p-*/*"
+              ],
+              "Sid": "OnlyTheReleaseControllerChangesMonetization"
+            },
+            {
+              "Action": [
+                "logs:CreateExportTask",
+                "logs:DisassociateKmsKey",
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:PutSubscriptionFilter",
+                "logs:StartLiveTail",
+                "logs:StartQuery"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release",
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release:*"
+              ],
+              "Sid": "OnlyNamedReadersReadTheSiblingsLogs"
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::IAM::ManagedPolicy"
+    },
+    "Tickets83B11BB2": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          }
+        ],
+        "Replicas": [
+          {
+            "PointInTimeRecoverySpecification": {
+              "PointInTimeRecoveryEnabled": true
+            },
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fastm"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "TableName": "fastm-identity",
+        "TimeToLiveSpecification": {
+          "AttributeName": "ttl",
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "VidKey4C77E6BD": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "FAST Channels (fastm): the viewer id, HMAC(iss|sub)",
+        "KeyPolicy": {
+          "Statement": [
+            {
+              "Action": "kms:*",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::123456789012:root"
+              },
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "KeySpec": "HMAC_256",
+        "KeyUsage": "GENERATE_VERIFY_MAC",
+        "PendingWindowInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::KMS::Key",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "VidKeyAlias5376AED2": {
+      "Properties": {
+        "AliasName": "alias/fastm-identity-vid",
+        "TargetKeyId": {
+          "Fn::GetAtt": [
+            "VidKey4C77E6BD",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::KMS::Alias"
+    },
+    "ViewersPreToken667F728A": {
+      "DependsOn": [
+        "ViewersPreTokenRoleDefaultPolicy61FF38D0",
+        "ViewersPreTokenRole815EB898"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Viewer pool: adds fast/playback and the persona to access tokens",
+        "Environment": {
+          "Variables": {
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "identity.pre_token"
+          }
+        },
+        "Handler": "fast_channels.functions.identity.pre_token.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ViewersPreTokenLogsA409120E"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ViewersPreTokenRole815EB898",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 5,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ViewersPreTokenLogsA409120E": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ViewersPreTokenRole815EB898": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ViewersPreTokenRoleDefaultPolicy61FF38D0": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ViewersPreTokenLogsA409120E",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ViewersPreTokenRoleDefaultPolicy61FF38D0",
+        "Roles": [
+          {
+            "Ref": "ViewersPreTokenRole815EB898"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ViewersUsers6A1E0F7D": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AccountRecoverySetting": {
+          "RecoveryMechanisms": [
+            {
+              "Name": "admin_only",
+              "Priority": 1
+            }
+          ]
+        },
+        "AdminCreateUserConfig": {
+          "AllowAdminCreateUserOnly": true
+        },
+        "AutoVerifiedAttributes": [
+          "email"
+        ],
+        "DeletionProtection": "INACTIVE",
+        "EmailVerificationMessage": "The verification code to your new account is {####}",
+        "EmailVerificationSubject": "Verify your new account",
+        "LambdaConfig": {
+          "PreTokenGenerationConfig": {
+            "LambdaArn": {
+              "Fn::GetAtt": [
+                "ViewersPreToken667F728A",
+                "Arn"
+              ]
+            },
+            "LambdaVersion": "V2_0"
+          }
+        },
+        "MfaConfiguration": "OFF",
+        "Policies": {
+          "PasswordPolicy": {
+            "MinimumLength": 12,
+            "RequireLowercase": true,
+            "RequireNumbers": true,
+            "RequireSymbols": true,
+            "RequireUppercase": true
+          }
+        },
+        "Schema": [
+          {
+            "Mutable": false,
+            "Name": "email",
+            "Required": true
+          },
+          {
+            "AttributeDataType": "String",
+            "Mutable": true,
+            "Name": "persona",
+            "StringAttributeConstraints": {
+              "MaxLength": "32",
+              "MinLength": "1"
+            }
+          }
+        ],
+        "SmsVerificationMessage": "The verification code to your new account is {####}",
+        "UserPoolName": "fastm-viewers",
+        "UserPoolTags": {
+          "fast:app": "fastm",
+          "fast:owner": "iac"
+        },
+        "UserPoolTier": "ESSENTIALS",
+        "UsernameAttributes": [
+          "email"
+        ],
+        "VerificationMessageTemplate": {
+          "DefaultEmailOption": "CONFIRM_WITH_CODE",
+          "EmailMessage": "The verification code to your new account is {####}",
+          "EmailSubject": "Verify your new account",
+          "SmsMessage": "The verification code to your new account is {####}"
+        }
+      },
+      "Type": "AWS::Cognito::UserPool",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ViewersUsersPlaybackE3B3024C": {
+      "Properties": {
+        "Identifier": "fast",
+        "Name": "fast",
+        "Scopes": [
+          {
+            "ScopeDescription": "Mint a playback ticket for the signed-in viewer",
+            "ScopeName": "playback"
+          }
+        ],
+        "UserPoolId": {
+          "Ref": "ViewersUsers6A1E0F7D"
+        }
+      },
+      "Type": "AWS::Cognito::UserPoolResourceServer"
+    },
+    "ViewersUsersPreTokenGenerationConfigCognitoF8F58D53": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ViewersPreToken667F728A",
+            "Arn"
+          ]
+        },
+        "Principal": "cognito-idp.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "ViewersUsers6A1E0F7D",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ViewersUsersViewers1CA6121B": {
+      "Properties": {
+        "AccessTokenValidity": 60,
+        "AllowedOAuthFlows": [
+          "implicit",
+          "code"
+        ],
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "AllowedOAuthScopes": [
+          "profile",
+          "phone",
+          "email",
+          "openid",
+          "aws.cognito.signin.user.admin"
+        ],
+        "CallbackURLs": [
+          "https://example.com"
+        ],
+        "EnableTokenRevocation": true,
+        "ExplicitAuthFlows": [
+          "ALLOW_USER_PASSWORD_AUTH",
+          "ALLOW_USER_SRP_AUTH",
+          "ALLOW_REFRESH_TOKEN_AUTH"
+        ],
+        "GenerateSecret": false,
+        "IdTokenValidity": 60,
+        "PreventUserExistenceErrors": "ENABLED",
+        "ReadAttributes": [
+          "custom:persona",
+          "email",
+          "email_verified"
+        ],
+        "RefreshTokenValidity": 720,
+        "SupportedIdentityProviders": [
+          "COGNITO"
+        ],
+        "TokenValidityUnits": {
+          "AccessToken": "minutes",
+          "IdToken": "minutes",
+          "RefreshToken": "minutes"
+        },
+        "UserPoolId": {
+          "Ref": "ViewersUsers6A1E0F7D"
+        },
+        "WriteAttributes": []
+      },
+      "Type": "AWS::Cognito::UserPoolClient"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}
