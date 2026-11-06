@@ -42,6 +42,7 @@ WATCH_SECONDS: Final = 780
 """One invocation's share of a session (its function times out at 15 minutes)."""
 QUERY_SECONDS: Final = 240
 _SESSION: Final = re.compile(r"/v1/manifest/[^/]+/[^/]+/(?P<session>[^/]+)/")
+# OPTIMIZATION(aws): W-2 1.11 key breaks on coalesce(adBreakCorrelationId, prefetchScheduleName), first marker only
 QUERY: Final = (
     "fields eventType, coalesce(adBreakCorrelationId, prefetchScheduleName) as breakId, status as hookStatus\n"
     "| filter sessionId = '{session}'\n"

@@ -13,18 +13,28 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
-from _demand import PREBID_CONTAINER
-from harness import Player, TransientResponseError
-from playback import Segment, Splice, media_segments, splices
+from _demand import PREBID_CONTAINER, prebid_log_group
+from _stack import Module, Stage
+from harness import Player, TransientResponseError, wait_for
+from playback import Segment, Splice, Window, media_segments, splices
 
+from fast_channels.core.demand import simulator_function, warmup_project
 from fast_channels.core.demo_demand import DemoIndex
 from fast_channels.core.manifests import parse_multivariant
+from fast_channels.core.monetization import names
+from fast_channels.core.monetization.prefetch import event_id_of
+from fast_channels.core.monetization.release import PlaybackPlan
+from fast_channels.core.pds import names as pds_names
 from fast_channels.core.pds.book import Creative, house_creatives
 from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
+from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot
+
+if TYPE_CHECKING:
+    from harness_demand import DemandEdge
 
 type IpAddress = IPv4Address | IPv6Address
 
@@ -40,6 +50,9 @@ POLL_SECONDS: Final = 3.5
 _SESSION_ID: Final = re.compile(r"/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/")
 _MODULE_MESSAGE: Final = re.compile(r'"message":\s*"(\{.*\})"')
 ADS_EVENTS: Final = frozenset({"MAKING_ADS_REQUEST", "VAST_RESPONSE", "FILLED_AVAIL"})
+GAP_SESSION_SHARE: Final = 1 / 5
+"""At most this share of a run's sessions may have a known ADS log gap (:func:`log_gaps`): W-2 1.32 was seen in one
+session of seven. More is not that defect's rate, and fails the run."""
 """The ADS log events of a break answered and stitched."""
 FIRST_SIGHT: Final = frozenset({"NEW_CREATIVE", "IMPORT_IN_PROGRESS"})
 """MediaTailor's skip reasons for a creative it has not imported yet: ``NEW_CREATIVE`` the first time it sees it (it
@@ -49,6 +62,8 @@ LOGGED: Final = "@logged_ms"
 places the record in the auction of one of MediaTailor's requests (:meth:`Break.auctions`)."""
 CLOCK_SLACK: Final = timedelta(seconds=1)
 """How much earlier than MediaTailor's ``MAKING_ADS_REQUEST`` an auction's records may be logged."""
+READY_TIMEOUT_S: Final = 1500
+"""Census lag (up to about 4.5 minutes), then Prebid Server's scale-out (about 3) and warm-up (about 3), with room."""
 
 
 # --- the viewer's address ------------------------------------------------------------------------------------------
@@ -97,11 +112,16 @@ class Viewer:
 
     @classmethod
     def join(cls, player: Player, url: str) -> Viewer:
-        """A new session on the playback URL ``url``."""
-        response = player.get(url)
+        """A new session on the playback URL ``url`` (a transient error is retried: not for a ticketed URL, whose
+        ticket binds the first session; see :meth:`of`)."""
+        return cls.of(player, player.get(url))
+
+    @classmethod
+    def of(cls, player: Player, response: httpx.Response) -> Viewer:
+        """The session whose multivariant playlist ``response`` is."""
         variants = parse_multivariant(response.text)
         if not variants:
-            raise AssertionError(f"{url} lists no variants: {response.text[:300]}")
+            raise AssertionError(f"{response.url} lists no variants: {response.text[:300]}")
         variant = urljoin(str(response.url), min(variants, key=lambda v: v.bandwidth).uri)
         if (sid := session_id(variant)) is None:
             raise AssertionError(f"no MediaTailor session id in {variant}")
@@ -477,27 +497,51 @@ class Break:
         return reconcile(pod, standalones, stitched, skipped)
 
 
+def break_of(event: Mapping[str, Any]) -> str | None:
+    """The ``evid`` an ADS event names: its prefetch schedule's (``pf-<evid>``), else its ad request URL's."""
+    named = event_id_of(str(event.get("prefetchScheduleName") or ""))
+    return str(named) if named is not None else evid(event.get("adsRequestUrl"))
+
+
 def breaks(
     ads_events: Iterable[Mapping[str, Any]],
     records: Iterable[Mapping[str, Any]],
     pod_lines: Iterable[Mapping[str, Any]],
 ) -> dict[tuple[str, str], Break]:
-    """Every break by (session id, ``evid``): its ADS events (those that carry the ad request URL, and the others of
-    the same ``requestId``: ``VAST_RESPONSE`` carries none), the PDS's policy and select records, and the module's
-    ``fast-ctv-pod`` lines."""
+    """Every break by (session id, ``evid``): its ADS events, the PDS's policy and select records, and the module's
+    ``fast-ctv-pod`` lines.
+
+    An ADS event belongs to the break its prefetch schedule names (``prefetchScheduleName``, ``pf-<evid>``), else to
+    the break of its ad request URL, else to that of the latest event of the same ``requestId`` before it (or of the
+    first one after it). Both orders are MediaTailor's as seen live (2026-11-06):
+
+    - one ``requestId`` covers everything a single playlist request set off, which can be two breaks: a break's
+      ``FILLED_AVAIL`` and, milliseconds later, the next break's prefetch retrieval;
+    - a break filled from its prefetch retrieval can log ``FILLED_AVAIL`` with the previous break's ad request URL;
+      its schedule name is the break's own.
+    """
     found: dict[tuple[str, str], Break] = {}
 
     def at(sid: str, event_id: str) -> Break:
         return found.setdefault((sid, event_id), Break(sid, event_id))
 
     events = [event for event in ads_events if event.get("eventType") != "BEACON_FIRED"]
-    requests: dict[str, tuple[str, str]] = {}
+    by_request: dict[str, list[Mapping[str, Any]]] = {}
     for event in events:
-        if (sid := event.get("sessionId")) and (event_id := evid(event.get("adsRequestUrl"))) is not None:
-            requests.setdefault(str(event.get("requestId") or id(event)), (str(sid), event_id))
-    for event in events:
-        if (key := requests.get(str(event.get("requestId") or id(event)))) is not None:
-            at(*key).events.append(dict(event))
+        by_request.setdefault(str(event.get("requestId") or id(event)), []).append(event)
+    for request in by_request.values():
+        group = sorted(request, key=timestamp)
+        keys = [
+            (str(sid), event_id)
+            if (sid := event.get("sessionId")) and (event_id := break_of(event)) is not None
+            else None
+            for event in group
+        ]
+        latest = next((key for key in keys if key is not None), None)
+        for event, key in zip(group, keys, strict=True):
+            latest = key or latest
+            if latest is not None:
+                at(*latest).events.append(dict(event))
     for record in records:
         if record.get("record") == POLICY_RECORD:
             at(str(record["sid"]), str(record["evid"])).policy.append(dict(record))
@@ -535,3 +579,167 @@ def warmups(codebuild: Any, project: str, tasks: Collection[str]) -> dict[str, s
         if task is not None and task in tasks and task not in status:
             status[str(task)] = str(build["buildStatus"])
     return status
+
+
+def logged_whole(found: Break) -> bool:
+    """Whether the ADS log has the break whole: MediaTailor's request, its VAST response and the ``FILLED_AVAIL``
+    (:data:`ADS_EVENTS`), and a request for every auction the PDS decided (one ``pds.policy`` record each)."""
+    return set(found.event_types) >= ADS_EVENTS and len(found.requests) >= len(found.policy)
+
+
+# OPTIMIZATION(aws): W-2 1.32 the vended ADS log can leave out events of a break MediaTailor filled
+def log_gaps(found: Iterable[Break], played: Collection[tuple[str, str]]) -> set[tuple[str, str]]:
+    """The session-breaks, ``(sid, evid)``, that the ADS log left incomplete although the PDS decided them (its policy
+    and select records) and our tracker shows them played (``played``: the breaks of our tracker's firings and
+    ``pds.delivery`` impressions, from either log). They are W-2 1.32's known gaps: the checks that read the ADS log
+    skip them, and a break with no decision, or one our tracker never fired for, still fails."""
+    return {
+        (b.sid, b.evid) for b in found if b.policy and b.select and (b.sid, b.evid) in played and not logged_whole(b)
+    }
+
+
+# OPTIMIZATION(aws): W-2 1.33 MediaTailor skips a prefetched break silently: drop this tolerance with the fix
+def unserved_prefetches(found: Iterable[Break]) -> set[tuple[str, str]]:
+    """The session-breaks, ``(sid, evid)``, of W-2 1.33's known gap: MediaTailor retrieved the break ahead (a
+    ``MAKING_ADS_REQUEST`` of its prefetch schedule), then neither filled it from the retrieval nor asked in real
+    time: no real-time request and no ``FILLED_AVAIL`` at all (fastcid 2026-11-06, 3 of 33 sessions; the release
+    module's ``<prefix>-release-unserved-breaks`` alarm counts them). The checks that expect a break's ads skip them,
+    below :data:`GAP_SESSION_SHARE` of the sessions, and print each one."""
+    return {
+        (b.sid, b.evid)
+        for b in found
+        if b.requests and all(request.prefetch is not None for request in b.requests) and b.filled is None
+    }
+
+
+RETRIEVAL_AHEAD: Final = timedelta(minutes=3)
+"""How far ahead of its break a prefetch retrieval happens at most (its window opens 150 s before the break)."""
+
+
+def read_unserved_prefetches(stage: Stage, sids: Collection[str], since: datetime) -> dict[tuple[str, str], Break]:
+    """:func:`unserved_prefetches` of the sessions ``sids`` since ``since``, read from the siblings' ADS log, each
+    printed. Read it once the sessions have stopped: the log trails by seconds."""
+    logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms=milliseconds(since))
+    group = stage.output(Module.RELEASE, "SiblingLogGroup")
+    events = [json_object(str(e["message"])) for e in logs.events(group, f"{{ {any_of('sessionId', sids)} }}")]
+    found = breaks([e for e in events if e is not None], [], [])
+    gaps = {key: found[key] for key in sorted(unserved_prefetches(found.values()))}
+    for (sid, evid), item in gaps.items():
+        print(
+            f"W-2 1.33 known gap: session {sid} break {evid} retrieved at {item.requested_at:%H:%M:%S} by "
+            f"{[r.prefetch for r in item.requests]}, then neither filled from it nor requested in real time"
+        )
+    return gaps
+
+
+def retrieved_for(item: Break, window: Window) -> bool:
+    """Whether ``item``'s retrieval was for the break airing in ``window`` (it came within :data:`RETRIEVAL_AHEAD`
+    before the window)."""
+    at = item.requested_at
+    return at is not None and window.starts - RETRIEVAL_AHEAD <= at <= window.starts
+
+
+def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:
+    """The share of ``sessions`` with at least one known ADS log gap."""
+    return len({sid for sid, _ in gaps} & set(sessions)) / len(sessions) if sessions else 0.0
+
+
+# --- the run's log groups and Prebid Server's readiness (the demand smokes') ---------------------------------------
+
+
+@dataclass(frozen=True)
+class Sources:
+    """The log groups of one run."""
+
+    ads: str
+    policy: str
+    select: str
+    delivery: str
+    pbs: str
+    simulator: str
+
+    @classmethod
+    def of(cls, stage: Stage, edge: DemandEdge) -> Sources:
+        functions = stage.session.client("lambda", region_name=stage.region)
+
+        def group(output: str) -> str:
+            configuration = functions.get_function_configuration(FunctionName=stage.output(Module.PDS, output))
+            return str(configuration["LoggingConfig"]["LogGroup"])
+
+        decisions = stage.output(Module.PDS, "DecisionLogGroup")  # the sidecar's (ADR-0036)
+
+        ecs = stage.session.client("ecs", region_name=stage.region)
+        [service] = ecs.describe_services(cluster=edge.cluster, services=[edge.service])["services"]
+        definition = ecs.describe_task_definition(taskDefinition=service["taskDefinition"])["taskDefinition"]
+        pbs = prebid_log_group(definition)
+        assert pbs, f"no Prebid Server container log group in {service['taskDefinition']}"
+        return cls(
+            ads=stage.output(Module.RELEASE, "SiblingLogGroup"),
+            policy=decisions,
+            select=decisions,
+            delivery=group("DeliveryFunction"),
+            pbs=pbs,
+            simulator=f"/aws/lambda/{simulator_function(stage.prefix)}",
+        )
+
+
+def wait_until_ready(stage: Stage, edge: DemandEdge) -> set[str]:
+    """Until Prebid Server runs and every running task's warm-up succeeded; the running tasks' images. The PDS is a
+    sidecar of those tasks, healthy before Prebid Server starts (ADR-0036): nothing of its own to wait for."""
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+    last: dict[str, Any] = {}
+
+    def ready() -> set[str] | None:
+        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        last.update(tasks=len(tasks), warmups=sorted(warmed.values()))
+        if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
+            raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
+        warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
+        return set(tasks.values()) if warm else None
+
+    started = time.monotonic()
+    images = wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
+    print(f"ready {time.monotonic() - started:.0f} s after the ingest: {last}")
+    return images
+
+
+def objects(logs: Logs, group: str, pattern: str) -> list[dict[str, Any]]:
+    """The JSON objects of the matching events of ``group``, with when each was logged (:data:`LOGGED`)."""
+    return [
+        found | {LOGGED: event["timestamp"]}
+        for event in logs.events(group, pattern)
+        if (found := json_object(str(event["message"])))
+    ]
+
+
+def milliseconds(moment: datetime) -> int:
+    return int(moment.timestamp() * 1000)
+
+
+def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
+    """The channel's playback plan, read through the CDN as a player reads it."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
+    with ipv4_client(timeout=10.0) as http:
+        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
+    response.raise_for_status()
+    return PlaybackPlan.model_validate_json(response.text)
+
+
+def line_creatives(stage: Stage, channel: str) -> dict[str, str]:
+    """The own book's line creatives that ``/select`` can place on ``channel`` now, as the stage's PDS snapshot holds
+    them: each crid's line id. The demo lines of ``modules.pds.demo_lines``, and with ``modules.selling`` every booked
+    buy in its flight and sold on the channel."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    name = pds_names.parameter_name(stage.prefix, pds_names.Parameter.CONFIG_BUCKET)
+    bucket = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+    body = stage.session.client("s3", region_name=stage.region).get_object(Bucket=bucket, Key=SNAPSHOT_KEY)["Body"]
+    snapshot = Snapshot.model_validate_json(body.read())
+    now = datetime.now(UTC)
+    return {
+        crid: line.id
+        for line in snapshot.lines
+        if line.in_flight(now) and (not line.channels or channel in line.channels)
+        for crid in line.creatives
+    }

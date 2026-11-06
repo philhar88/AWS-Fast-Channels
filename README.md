@@ -168,6 +168,7 @@ Version 4.0.0 adds optional modules for ad monetization and its operations. Each
 | `pds` | The Pod Decision Service, a sidecar in each Prebid Server task: what each ad request may share with third parties, which ads fill the pod, and an own book of direct lines and house ads with reservations and delivery | `ops`, `demand` |
 | `release` | The Release Controller for monetized playback configurations: sibling configurations with MediaTailor Functions, a smoke gate, gradual promotion with unattended rollback, origin-secret rotation and ad prefetch | `ops`, `demand`, `pds` |
 | `crawl` | Show-level content metadata (IAB Tech Lab Content Taxonomy 3.1) in ad requests, with an uplift holdout | `pds`, `release` |
+| `identity` (unreleased) | Signed-in viewers: a Cognito viewer pool and single-use opaque playback tickets, bound to one session each | `release` |
 
 [docs/modules.md](docs/modules.md) gives each module's complexity and cost (stacks, IAM roles, cost per hour idle
 and on air, teardown time), what v4.0.0 leaves out, how to turn a module on, its capacity and how it fails safe, and
@@ -280,7 +281,9 @@ lists what a teardown leaves behind.
 | [Observability](docs/observability.md) | Logging and tracing matrix, correlation contract, trace script, alarms, Transaction Search |
 | [Operations](docs/operations.md) | Configuration reference, deploy and destroy, users, quotas, costs, security, troubleshooting |
 | [Optional modules](docs/modules.md) | The ad-monetization and operations modules: complexity and cost per module, turning them on, capacity, fail-safe behaviour, account-level limits |
-| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md) | The `demand`, `pds`, `release` and `crawl` modules |
+| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md), [Viewer identity](docs/identity.md) | The `demand`, `pds`, `release`, `crawl` and `identity` modules |
+| [Workarounds to remove](docs/workarounds.md) | The AWS product behaviour we work around, where each workaround lives and what to delete when AWS fixes it |
+| [Reference viewer](docs/viewer.md) | The `viewer` module: demo personas, a rail of recommended channels, ticketed playback and the "why these ads" panel; its 10-minute demo script |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |
 | [Decision records](docs/adr/README.md) | Why the architecture is the way it is |
 | [Console](console/README.md), [Agent](agent/README.md) | Component READMEs |

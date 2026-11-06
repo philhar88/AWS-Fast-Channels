@@ -11,6 +11,7 @@ import httpx
 import pytest
 from harness import Player
 from harness_pods import Ad, Creatives, reconcile
+from playback import Window
 
 from fast_channels.core.demo_demand import demo_index
 from fast_channels.core.pds.book import Creative
@@ -466,6 +467,52 @@ def test_a_break_filled_from_its_retrieval_airs_the_retrieval() -> None:
     assert joined.rendered() == (["direct1"], ["sim1"])
 
 
+def test_one_request_id_for_two_breaks_files_each_event_under_its_own_break() -> None:
+    """MediaTailor gave one requestId to a 30 s break's FILLED_AVAIL and, 80 ms later, the next break's prefetch
+    retrieval (seen live, 2026-11-06): each event goes to the break its URL names, a URL-less one to the latest
+    before it."""
+    short = "https://pbs.example/openrtb2/auction?evid=7&dur=30000"
+    retrieval = "https://pbs.example/openrtb2/auction?evid=8&dur=120000"
+    events = [
+        ads_event("AD_MARKER_FOUND", "q1", "2026-11-06T01:06:42.546Z"),
+        ads_event("FILLED_AVAIL", "q1", "2026-11-06T01:06:42.714Z", adsRequestUrl=short),
+        ads_event("MAKING_ADS_REQUEST", "q1", "2026-11-06T01:06:42.793Z", adsRequestUrl=retrieval),
+        ads_event("RAW_ADS_RESPONSE", "q1", "2026-11-06T01:06:42.945Z", adsRequestUrl=retrieval),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T01:06:42.949Z"),
+    ]
+
+    found = pods.breaks(events, [], [])
+
+    assert {key: found[key].event_types for key in found} == {
+        (SID, "7"): ["AD_MARKER_FOUND", "FILLED_AVAIL"],
+        (SID, "8"): ["MAKING_ADS_REQUEST", "RAW_ADS_RESPONSE", "VAST_RESPONSE"],
+    }
+
+
+def test_a_prefetched_fill_goes_to_its_schedules_break_whatever_its_url_says() -> None:
+    """A break filled from its prefetch retrieval logged FILLED_AVAIL with the previous break's ad request URL (seen
+    live, 2026-11-06); its schedule name, pf-<evid>, is the break's own, and so is its marker's."""
+    stale = "https://pbs.example/openrtb2/auction?evid=7&dur=30000"
+    retrieval = "https://pbs.example/openrtb2/auction?evid=8&dur=120000"
+    events = [
+        ads_event(
+            "MAKING_ADS_REQUEST", "q1", "2026-11-06T03:37:24.001Z", adsRequestUrl=retrieval, prefetchScheduleName="pf-8"
+        ),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T03:37:24.084Z", prefetchScheduleName="pf-8"),
+        ads_event("AD_MARKER_FOUND", "q2", "2026-11-06T03:39:04.670Z", prefetchScheduleName="pf-8"),
+        ads_event("FILLED_AVAIL", "q2", "2026-11-06T03:39:05.295Z", adsRequestUrl=stale, prefetchScheduleName="pf-8"),
+        ads_event("FILLED_AVAIL", "q3", "2026-11-06T03:40:00.000Z", adsRequestUrl=stale),  # real time: its URL's
+    ]
+
+    found = pods.breaks(events, [], [])
+
+    assert {key: found[key].event_types for key in found} == {
+        (SID, "8"): ["MAKING_ADS_REQUEST", "VAST_RESPONSE", "AD_MARKER_FOUND", "FILLED_AVAIL"],
+        (SID, "7"): ["FILLED_AVAIL"],
+    }
+    assert pods.break_of({"prefetchScheduleName": "not-ours", "adsRequestUrl": stale}) == "7"
+
+
 def test_an_auction_holds_what_was_logged_from_just_before_its_request_until_the_next() -> None:
     events = [
         ads_event(
@@ -565,3 +612,60 @@ def test_creatives_are_read_from_the_media_bucket() -> None:
     s3 = Fake(get_object=lambda Bucket, Key: {"Body": Body(objects[Key])})  # noqa: N803 - boto3's argument names
     known = Creatives.read(s3, "media", index_key="ads/s/demo/creatives.json", vast_key="ads/s/vast.xml")
     assert known.by_id == {"sim1-std-1234": "sim1", "h1-std-1234": "house1"}
+
+
+def test_a_decided_and_played_break_the_ads_log_left_incomplete_is_a_known_gap() -> None:
+    """W-2 1.32, seen live: a session's break-1 ``FILLED_AVAIL`` and its break-2 retrieval's request were not logged."""
+    url = "https://pbs.example/openrtb2/auction?evid=7&dur=30030"
+    whole = [
+        ads_event("MAKING_ADS_REQUEST", "q1", "2026-11-06T00:27:25.0Z", adsRequestUrl=url),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T00:27:25.2Z"),
+        ads_event("FILLED_AVAIL", "q1", "2026-11-06T00:29:55.9Z", adsRequestUrl=url, avail={}),
+    ]
+    at = logged_at("2026-11-06T00:27:25.1Z")
+    decided = [{"record": "pds.policy", "sid": SID, "evid": e} | at for e in ("7", "8", "9")]
+    decided += [select_record(e) | at for e in ("7", "8")]
+    found = pods.breaks(whole[:2], decided, [])  # 7: no FILLED_AVAIL; 8: no request at all; 9: no select record
+    other = pods.breaks(whole, decided[:1] + decided[3:4], [])  # 7, logged whole
+
+    assert pods.log_gaps(found.values(), played={(SID, "7"), (SID, "8"), (SID, "9")}) == {(SID, "7"), (SID, "8")}
+    assert pods.log_gaps(found.values(), played={(SID, "8")}) == {(SID, "8")}, "a break our tracker never fired for"
+    assert pods.log_gaps(other.values(), played={(SID, "7")}) == set(), "logged whole: no gap"
+    assert pods.logged_whole(other[SID, "7"]) and not pods.logged_whole(found[SID, "7"])
+
+
+def test_the_gap_share_is_of_sessions_not_breaks() -> None:
+    gaps = {("s1", "7"), ("s1", "8"), ("s2", "7")}
+
+    assert pods.gap_share(gaps, {"s1", "s2", "s3", "s4", "s5", "s6", "s7"}) == 2 / 7
+    assert pods.gap_share(gaps, set()) == 0.0
+    assert pods.gap_share({("s1", "7")}, {f"s{n}" for n in range(1, 8)}) <= pods.GAP_SESSION_SHARE
+
+
+def _ads_event(at: datetime, sid: str, kind: str, request: str, **fields: Any) -> dict[str, Any]:
+    stamp = at.isoformat().replace("+00:00", "Z")
+    return {"eventTimestamp": stamp, "sessionId": sid, "eventType": kind, "requestId": request, **fields}
+
+
+def test_a_retrieved_break_neither_filled_nor_requested_is_the_known_unserved_gap() -> None:
+    """fastcid leg B (2026-11-06): 876e6c26 and ca1f00b7 retrieved pf-1183716241 alike; at the break ca1f00b7 filled
+    from it, 876e6c26 neither filled nor asked in real time. A session that fell back to a real-time request (and
+    filled) is served, and so is one that filled from its retrieval."""
+    url = "https://pbs.example/openrtb2/auction?evid=1183716241&upid=e2e-pattern&dur=120000"
+    schedule = {"prefetchScheduleName": "pf-1183716241"}
+    retrieval = datetime(2026, 11, 6, 9, 33, 18, tzinfo=UTC)
+    at_break = retrieval + timedelta(minutes=2)
+    events = [
+        _ads_event(retrieval, "876e6c26", "MAKING_ADS_REQUEST", "r1", adsRequestUrl=url, **schedule),
+        _ads_event(retrieval, "ca1f00b7", "MAKING_ADS_REQUEST", "r2", adsRequestUrl=url, **schedule),
+        _ads_event(at_break, "ca1f00b7", "FILLED_AVAIL", "r3", **schedule),
+        _ads_event(retrieval, "8537b4a3", "MAKING_ADS_REQUEST", "r4", adsRequestUrl=url, **schedule),
+        _ads_event(at_break, "8537b4a3", "MAKING_ADS_REQUEST", "r5", adsRequestUrl=url),
+        _ads_event(at_break + timedelta(seconds=1), "8537b4a3", "FILLED_AVAIL", "r5", adsRequestUrl=url),
+    ]
+    found = pods.breaks(events, [], [])
+    assert pods.unserved_prefetches(found.values()) == {("876e6c26", "1183716241")}
+    window = Window(retrieval + timedelta(seconds=97), retrieval + timedelta(seconds=217))
+    assert pods.retrieved_for(found["876e6c26", "1183716241"], window)
+    later = Window(window.starts + timedelta(minutes=5), window.ends + timedelta(minutes=5))
+    assert not pods.retrieved_for(found["876e6c26", "1183716241"], later)

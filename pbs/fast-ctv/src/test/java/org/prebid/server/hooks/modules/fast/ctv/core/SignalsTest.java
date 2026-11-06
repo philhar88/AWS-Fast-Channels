@@ -106,7 +106,11 @@ public class SignalsTest {
                 "https://cdn.example/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}");
 
         assertThat(tracker.impression("s 1", "42", "a&b", 1))
-                .isEqualTo("https://cdn.example/ads/b.gif?d=s+1.42&c=a%26b&e=impression&enr=1");
+                .isEqualTo("https://cdn.example/ads/b.gif?d=s%201.42&c=a%26b&e=impression&enr=1");
+        final TrackerTemplate path = new TrackerTemplate("https://cdn.example/ads/b/{sid}.{evid}/{crid}/{enr}.gif");
+        assertThat(path.impression("s1", "42", "a/b c+d", 0))
+                .as("each value one path segment: a slash, a space and a plus are encoded")
+                .isEqualTo("https://cdn.example/ads/b/s1.42/a%2Fb%20c%2Bd/0.gif");
         assertThatThrownBy(() -> new TrackerTemplate("https://cdn.example/ads/b.gif?d={sid}"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new TrackerTemplate("ftp://cdn.example/{crid}"))

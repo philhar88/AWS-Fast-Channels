@@ -1,4 +1,5 @@
 # Local backend config for `npm run dev` against a deployed stack (see README).
 public/config.json
+public-viewer/config.json
 test-results/
 playwright-report/

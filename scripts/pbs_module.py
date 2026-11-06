@@ -46,9 +46,9 @@ FIXTURES: Final = REPO / "contracts" / "fixtures" / "pds"
 MODULE_PACKAGE: Final = "org.prebid.server.hooks.modules.fast.ctv"
 MODULE_CLASSES: Final = "BOOT-INF/classes/org/prebid/server/hooks/modules/fast/"
 MAVEN_VERSION: Final = "3.9.11"
-MAVEN_URL: Final = (
-    f"https://archive.apache.org/dist/maven/maven-3/{MAVEN_VERSION}/binaries/apache-maven-{MAVEN_VERSION}-bin.tar.gz"
-)
+MAVEN_URL: Final = f"https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/{MAVEN_VERSION}/apache-maven-{MAVEN_VERSION}-bin.tar.gz"
+"""Maven Central's copy of the release, the same file as the Apache archive's (the SHA-512 below is checked). The
+Apache archive is a single slow mirror that CI could not reach."""
 MAVEN_SHA512: Final = (
     "bcfe4fe305c962ace56ac7b5fc7a08b87d5abd8b7e89027ab251069faebee516"
     "b0ded8961445d6d91ec1985dfe30f8153268843c89aa392733d1a3ec956c9978"

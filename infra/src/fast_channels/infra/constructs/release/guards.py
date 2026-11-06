@@ -33,10 +33,12 @@ DENIED_ACTIONS: Final = (
     "mediatailor:DeleteFunction",
     "mediatailor:CreatePrefetchSchedule",
     "mediatailor:DeletePrefetchSchedule",
+    # OPTIMIZATION(aws): W-2 1.3 releases never edit a channel policy (not session-safe while the channel runs)
     "mediatailor:PutChannelPolicy",
 )
 
 
+# OPTIMIZATION(aws): W-2 4.12 KMS on a log group does not gate readers: we deny the reads by IAM instead
 LOG_READ_ACTIONS: Final = (
     "logs:GetLogEvents",
     "logs:FilterLogEvents",

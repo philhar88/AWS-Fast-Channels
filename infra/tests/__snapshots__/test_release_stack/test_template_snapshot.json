@@ -7831,7 +7831,8 @@
           "Variables": {
             "ADS_LOG_GROUP": "/aws/vendedlogs/mediatailor/fastm-release",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
-            "POWERTOOLS_SERVICE_NAME": "ops.release_zero_ads_sessions"
+            "POWERTOOLS_SERVICE_NAME": "ops.release_zero_ads_sessions",
+            "UNSERVED_BREAKS": "true"
           }
         },
         "Handler": "fast_channels.functions.ops.zero_ads_sessions.handler",
@@ -8091,6 +8092,47 @@
         ]
       },
       "Type": "AWS::IAM::Role"
+    },
+    "ZeroAdsUnservedAlarm92060AA0": {
+      "Properties": {
+        "AlarmActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "AlarmDescription": "A break's first marker got neither its prefetched ads nor a real-time ad request (W-2 1.33; runbook: MediaTailor skipped a prefetched break, AWS case). The detector's log names each session and marker time; UnservedBreaks has a series per ConfigurationName",
+        "AlarmName": "fastm-release-unserved-breaks",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "service",
+            "Value": "ops.release_zero_ads_sessions"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "UnservedBreaks",
+        "Namespace": "FastChannels",
+        "OKActions": [
+          "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
+        ],
+        "Period": 3600,
+        "Statistic": "Sum",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "release"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      },
+      "Type": "AWS::CloudWatch::Alarm"
     }
   },
   "Rules": {

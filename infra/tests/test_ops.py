@@ -274,8 +274,28 @@ def test_v_breaks_keys_breaks_by_scte_event_id() -> None:
     assert breaks.columns[0] == ("evid", "bigint")
     assert "url_extract_parameter(adsrequesturl, 'evid')" in breaks.sql
     # Each source is aggregated by evid before the join, so fills are never multiplied by marker sightings.
-    assert breaks.sql.count("GROUP BY") == 3
+    assert breaks.sql.count("GROUP BY") == 6
     assert "FROM seen s LEFT JOIN marked m ON m.evid = s.evid LEFT JOIN requested q ON q.evid = s.evid" in breaks.sql
+    assert "LEFT JOIN avails a ON a.evid = s.evid" in breaks.sql
+
+
+@pytest.mark.parametrize("name", ["v_breaks", "v_fill_by_pc"])
+def test_a_filled_avail_counts_for_the_break_its_own_url_names(name: str) -> None:
+    """MediaTailor gives one requestId to everything a playlist request set off: a break's FILLED_AVAIL and, 80 ms
+    later, the next break's prefetch retrieval (seen live, 2026-11-06). Joined by requestId alone, that fill would
+    count for the next break (``tests/e2e/test_08_ops.py`` runs both views on Athena with that shape)."""
+    [view] = [v for v in VIEWS if v.name == name]
+    sql = " ".join(view.sql.split())
+
+    assert "f.request_id = r.request_id" not in sql and "ON f.request_id" not in sql
+    assert 'FROM "{db}"."mediatailor_ads" WHERE eventtype = \'FILLED_AVAIL\'' in sql
+    assert "coalesce(f.evid, max_by(r.evid, r.at)) AS evid" in sql, "its own evid, else its request's"
+    own = (
+        "coalesce(TRY_CAST(regexp_extract(prefetchschedulename, '^pf-([0-9]{{1,10}})$', 1) AS bigint), "
+        "TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint)) AS evid"
+    )
+    assert sql.count(own) == 2, "requests and fills: the prefetch schedule's break first, a stale URL second"
+    assert "ON f.evid IS NULL AND r.request_id = f.request_id AND r.session_id = f.session_id AND r.at <= f.at" in sql
 
 
 def test_appconfig_application_and_environment(ops: Any) -> None:

@@ -3,10 +3,11 @@
 
 from fast_channels.infra.constructs.pds.config_bucket import ConfigBucket, SnapshotPublisher
 from fast_channels.infra.constructs.pds.decisions import DecisionLog
-from fast_channels.infra.constructs.pds.delivery import DeliveryCounter, ReleaseSweeper
+from fast_channels.infra.constructs.pds.delivery import CdnAccessTable, DeliveryCounter, ReleaseSweeper
 from fast_channels.infra.constructs.pds.tables import PdsTable
 
 __all__ = [
+    "CdnAccessTable",
     "ConfigBucket",
     "DecisionLog",
     "DeliveryCounter",

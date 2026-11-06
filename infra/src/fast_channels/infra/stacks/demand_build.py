@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Any
 from aws_cdk import CfnOutput, Stack, Tags
 
 from fast_channels.core.demand import MODULE, MODULE_TAG
+from fast_channels.core.selling import names as selling_names
 from fast_channels.infra.constructs.demand.guidance_bootstrap import GuidanceExecutionPolicy
 from fast_channels.infra.constructs.demand.image_build import ImageBuild
+from fast_channels.infra.constructs.selling.image_build import SellingImageBuild
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -15,8 +17,9 @@ if TYPE_CHECKING:
 
 
 class DemandBuildStack(Stack):
-    """The Prebid Server image repository (and with ``modules.pds`` the sidecar's) and their x86 build project, and
-    the CloudFormation execution policy of the guidance's dedicated CDK bootstrap.
+    """The Prebid Server image repository (and with ``modules.pds`` the sidecar's) and their x86 build project, the
+    CloudFormation execution policy of the guidance's dedicated CDK bootstrap, and with ``modules.selling`` the
+    agentic-selling images' repositories and their arm64 build project.
 
     Deployed before the bootstrap (which takes ``GuidanceExecutionPolicyArn``) and before the guidance (which runs
     the image in ``ImageRepositoryUri``). It takes no references from other stacks.
@@ -54,5 +57,24 @@ class DemandBuildStack(Stack):
                 self.image.pds_repository.repository_uri,
                 "ECR repository of the PDS sidecar's images",
             )
+        self.selling = None
+        if config.modules.selling.enabled:
+            self.selling = SellingImageBuild(
+                self,
+                "SellingImage",
+                prefix=config.prefix,
+                removal_policy=config.removal_policy,
+                log_retention=config.observability.log_retention,
+            )
+            Tags.of(self.selling).add(selling_names.MODULE_TAG, selling_names.MODULE, priority=200)
+            outputs["SellingImageBuildProject"] = (
+                self.selling.project.project_name,
+                "arm64 CodeBuild project that builds the agentic-selling images",
+            )
+            for image, repository in self.selling.repositories.items():
+                outputs[f"{image.value.capitalize()}ImageRepositoryUri"] = (
+                    repository.repository_uri,
+                    f"ECR repository of the {image.value} images (agentic selling)",
+                )
         for key, (value, description) in outputs.items():
             CfnOutput(self, key, value=value, description=description)

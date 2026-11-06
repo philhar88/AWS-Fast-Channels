@@ -36,6 +36,7 @@ __all__ = [
 ]
 
 QUOTA_ALARM_RATIO: Final = 0.8
+# OPTIMIZATION(aws): W-2 3.8 no Service Quotas usage metric: we sum Requests against the default quota (FR-10)
 AD_INSERTION_REQUESTS_PER_SECOND: Final = 10_000
 """MediaTailor's account quota of ad insertion requests per second (``L-32FBC51C``, default); it has no usage metric,
 so the alarm sums every playback configuration's ``Requests``."""
@@ -143,6 +144,7 @@ class ConfigurationAlarms(Construct):
                 )
 
 
+# OPTIMIZATION(aws): W-2 FR-1 a failed PRE_SESSION keeps player-set aws.*: retire with authenticated sessions
 class ZeroAdsDetector(Construct):
     """Every hour, ``fast_channels.functions.ops.zero_ads_sessions`` counts the sessions that saw at least three
     breaks without an ad request; the alarm ``<prefix>-<name>`` fires on any.
@@ -154,9 +156,11 @@ class ZeroAdsDetector(Construct):
         log_retention: retention of the function's logs.
         removal_policy: what happens to them when the stack is deleted.
         name: the alarm's name after the prefix, and the detector's metric dimension (``service``).
+        unserved_breaks: also count unserved breaks (a break's first marker with neither its prefetch nor a real-time
+            request), with an alarm ``<prefix>-<unserved_breaks>`` on any: the release module's siblings.
 
     Attributes:
-        function: the detector. alarm: its alarm.
+        function: the detector. alarm: its alarm. unserved_alarm: the unserved breaks' alarm, or None.
     """
 
     def __init__(
@@ -170,6 +174,7 @@ class ZeroAdsDetector(Construct):
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         name: str = "zero-ads-sessions",
+        unserved_breaks: str | None = None,
     ) -> None:
         super().__init__(scope, id)
         service = f"ops.{name.replace('-', '_')}"
@@ -178,7 +183,11 @@ class ZeroAdsDetector(Construct):
             "Detector",
             handler="fast_channels.functions.ops.zero_ads_sessions.handler",
             description="Count the sessions that saw ad breaks without requesting ads (hourly)",
-            environment={"ADS_LOG_GROUP": ads_log_group, "POWERTOOLS_SERVICE_NAME": service},
+            environment={
+                "ADS_LOG_GROUP": ads_log_group,
+                "POWERTOOLS_SERVICE_NAME": service,
+                **({"UNSERVED_BREAKS": "true"} if unserved_breaks else {}),
+            },
             timeout=Duration.minutes(5),
             memory_size=256,
             log_retention=log_retention,
@@ -215,6 +224,26 @@ class ZeroAdsDetector(Construct):
             "direct caller (see the detector's log for the session ids)",
             topic=topic,
         )
+        self.unserved_alarm: cw.Alarm | None = None
+        if unserved_breaks:
+            # OPTIMIZATION(aws): W-2 1.33 MediaTailor skips a prefetched break silently: delete with the fix
+            self.unserved_alarm = alarm(
+                self,
+                "UnservedAlarm",
+                name=f"{prefix}-{unserved_breaks}",
+                metric=cw.Metric(
+                    namespace=METRICS_NAMESPACE,
+                    metric_name="UnservedBreaks",
+                    dimensions_map={"service": service},
+                    statistic=cw.Stats.SUM,
+                    period=Duration.hours(1),
+                ),
+                threshold=1,
+                description="A break's first marker got neither its prefetched ads nor a real-time ad request (W-2 "
+                "1.33; runbook: MediaTailor skipped a prefetched break, AWS case). The detector's log names each "
+                "session and marker time; UnservedBreaks has a series per ConfigurationName",
+                topic=topic,
+            )
 
 
 class AlertsPoller(Construct):

@@ -209,10 +209,11 @@ adding; filter on the partition keys to keep scans small.
 | `mediatailor_ads` | Copies of every IaC playback configuration's ad decision server logs, JSON under `mediatailor/ads/`, without `requestHeaders` and `rawAdsRequest` | `datehour` (`yyyy/MM/dd/HH`, UTC) |
 | `mediatailor_manifest` | The same for the manifest service logs, under `mediatailor/manifest/`, without `mediaTailorPath`, `input` and `http` | `datehour` |
 | `v_breaks` | One row per aired break by SCTE-35 event id (`evid`): UPID, channel, the ad marker's `START-DATE`, the first ADS request, configurations, sessions, ADS requests, filled avails and seconds | — |
-| `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate | — |
+| `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate. An event counts for the break its prefetch schedule names (`pf-<evid>`), else the one its own ad request URL names (a fill with neither, for its request's), never by `requestId` alone: a fill from a retrieval can carry the previous break's URL, and MediaTailor can give one `requestId` to a break's fill and the next break's prefetch retrieval | — |
 | `v_zero_ads_sessions` | Sessions that saw at least three ad breaks and made no ad request, with the day, configuration and first and last break | — |
 | `ledger` | The ledger's archived records ([below](#ledger)) | `day` (`yyyy/MM/dd`) |
 | `pds_policy`, `pds_select`, `pds_delivery` | With `pds`: the Pod Decision Service's decision records, one row per call or tracker firing, with `decision_id`, `sid`, `evid` and `pc` ([pds.md](pds.md#decision-records)). Filter on `record = 'pds.<kind>'`: the objects hold an empty line between records | `datehour` |
+| `v_ad_load_kpis` | With `pds`: breaks, ads per break, fill, winning and turned-away prices, impressions and revenue by hour, playback configuration, viewer tier and the policy applied ([pds.md](pds.md#ad-load-by-tier)) | — |
 | `v_crawl_kpis` | With `crawl`: coverage, bids, fill and price by hour, playback configuration and holdout arm ([content-enrichment.md](content-enrichment.md#measuring-the-uplift)) | — |
 
 Column names are the log fields in lower case (`eventtype`, `adsrequesturl`, `cs_uri_stem`, `cmcd_session_id`).
@@ -220,7 +221,9 @@ Nested log objects (`avail`, `vastresponse`, `beaconinfo`) are JSON text: read t
 excluded fields never reach the lake: the ADS request headers hold the viewer's address and user agent (and, on
 monetized configurations, header secrets and the playback ticket), the manifest fields hold the viewer's request path
 and query and the session-initialization hook's HTTP exchange, and `cs-uri-query` records the viewer's original
-query, before any edge rewrite. The CloudWatch Logs copies of the same logs are v3.0's (`/aws/vendedlogs/mediatailor/<prefix>`).
+query, before any edge rewrite. `cs_uri_stem` stays: the manifest paths carry the session id, and with the demand
+module our tracker's path carries the break and the creative (`/ads/b/<sid>.<evid>/<crid>/<enr>.gif`,
+[pds.md](pds.md#trackers)), never a ticket or a viewer parameter. The CloudWatch Logs copies of the same logs are v3.0's (`/aws/vendedlogs/mediatailor/<prefix>`).
 
 ```sql
 SELECT evid, upid, started_at, sessions, ads_requests, filled_avails, filled_seconds

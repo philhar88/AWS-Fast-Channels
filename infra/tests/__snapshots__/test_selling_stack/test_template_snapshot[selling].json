@@ -1,0 +1,2914 @@
+{
+  "Description": "FAST Channels (fastm): agentic selling",
+  "Outputs": {
+    "BuyerRuntimeArn": {
+      "Description": "The AWS reference buyer (A2A, SigV4 inbound)",
+      "Value": {
+        "Fn::GetAtt": [
+          "AgentsBuyerD3B31DF9",
+          "AgentRuntimeArn"
+        ]
+      }
+    },
+    "BuyerSessionsTable": {
+      "Description": "The buyer's recorded tool calls",
+      "Value": {
+        "Ref": "AgentsBuyerSessionsDA424B28"
+      }
+    },
+    "BuyerTokenSecret": {
+      "Description": "The reference buyer's bearer token at the seller",
+      "Value": {
+        "Ref": "SellerBuyerToken13A5C6B7"
+      }
+    },
+    "GovernanceRuntimeArn": {
+      "Description": "The reference governance agent (MCP)",
+      "Value": {
+        "Fn::GetAtt": [
+          "AgentsGovernance4E3C4466",
+          "AgentRuntimeArn"
+        ]
+      }
+    },
+    "GovernanceUrl": {
+      "Description": "The governance agent's MCP endpoint (Cognito JWT inbound)",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://bedrock-agentcore.us-east-1.",
+            {
+              "Ref": "AWS::URLSuffix"
+            },
+            "/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123456789012%3Aruntime%2F",
+            {
+              "Fn::GetAtt": [
+                "AgentsGovernance4E3C4466",
+                "AgentRuntimeId"
+              ]
+            },
+            "/invocations?qualifier=DEFAULT"
+          ]
+        ]
+      }
+    },
+    "SellerLogGroup": {
+      "Description": "The seller's and its bridge's container logs",
+      "Value": "fastm-seller"
+    },
+    "SellerUrl": {
+      "Description": "The AdCP seller (MCP /mcp/, A2A /a2a, /.well-known/agent-card.json)",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Fn::GetAtt": [
+                "SellerDistribution66ED7378",
+                "DomainName"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "SyncFunction": {
+      "Description": "Booked buys to own-book lines, delivery back",
+      "Value": {
+        "Ref": "Sync20A72D4C"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/config-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdspublisherfunctionC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/publisher-function",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "AWS679f53fac002430cb0da5b7982bd22872D164C4C": {
+      "DependsOn": [
+        "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleDefaultPolicyD28E1A5E",
+        "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2"
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Handler": "index.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287Logs13ED5862"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 120,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "AWS679f53fac002430cb0da5b7982bd2287Logs13ED5862": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2": {
+      "DependsOn": [
+        "AWS679f53fac002430cb0da5b7982bd2287Logs13ED5862"
+      ],
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          },
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleDefaultPolicyD28E1A5E": {
+      "DependsOn": [
+        "AWS679f53fac002430cb0da5b7982bd2287Logs13ED5862"
+      ],
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleDefaultPolicyD28E1A5E",
+        "Roles": [
+          {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AgentsBuyerD3B31DF9": {
+      "DependsOn": [
+        "AgentsBuyerExecutionRoleDefaultPolicy7B7DF22D",
+        "AgentsBuyerExecutionRole71633311"
+      ],
+      "Properties": {
+        "AgentRuntimeArtifact": {
+          "ContainerConfiguration": {
+            "ContainerUri": {
+              "Fn::Join": [
+                "",
+                [
+                  "123456789012.dkr.ecr.us-east-1.",
+                  {
+                    "Ref": "AWS::URLSuffix"
+                  },
+                  "/fastm-buyer:0123456789abcdef"
+                ]
+              ]
+            }
+          }
+        },
+        "AgentRuntimeName": "fastm_buyer",
+        "Description": "AWS reference buyer (AdCP buyer agent, A2A)",
+        "EnvironmentVariables": {
+          "AGENTS_JSON": "[{\"id\": \"buyer-a2a\", \"name\": \"AdCP Buyer Agent (A2A)\", \"kind\": \"buyer\", \"url\": \"https://buyer.fastm.fast-channels.invalid/a2a\", \"auth_type\": \"cognito_bearer\", \"origin\": \"internal\"}]",
+          "AWS_REGION": "us-east-1",
+          "BEDROCK_MODEL_ID": "us.anthropic.claude-haiku-5-5",
+          "BUYER_BRAND_DOMAIN": "acme-outdoor.example",
+          "DEFAULT_SELLER_AGENT_ID": "fast-seller",
+          "FAST_SELLER_TOKEN": {
+            "Fn::Join": [
+              "",
+              [
+                "{{resolve:secretsmanager:",
+                {
+                  "Ref": "SellerBuyerToken13A5C6B7"
+                },
+                ":SecretString:::}}"
+              ]
+            ]
+          },
+          "GOVERNANCE_AGENTS_JSON": {
+            "Fn::Join": [
+              "",
+              [
+                "[{\"id\":\"fast-governance\",\"name\":\"FAST Channels governance (fastm, AWS reference governance agent)\",\"url\":\"https://bedrock-agentcore.us-east-1.",
+                {
+                  "Ref": "AWS::URLSuffix"
+                },
+                "/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123456789012%3Aruntime%2F",
+                {
+                  "Fn::GetAtt": [
+                    "AgentsGovernance4E3C4466",
+                    "AgentRuntimeId"
+                  ]
+                },
+                "/invocations?qualifier=DEFAULT\",\"transport\":\"mcp\",\"auth_type\":\"m2m_oauth\",\"client_id\":\"",
+                {
+                  "Ref": "AgentsCallersBuyerEF12641A"
+                },
+                "\",\"client_secret\":\"",
+                {
+                  "Fn::GetAtt": [
+                    "AgentsCallersBuyerDescribeCognitoUserPoolClient1DAD25E0",
+                    "UserPoolClient.ClientSecret"
+                  ]
+                },
+                "\",\"token_url\":\"https://",
+                {
+                  "Ref": "AgentsCallersTokens6047CA53"
+                },
+                ".auth.us-east-1.amazoncognito.com/oauth2/token\",\"scope\":\"fastm-governance/check\"}]"
+              ]
+            ]
+          },
+          "SELLER_AGENTS_JSON": {
+            "Fn::Join": [
+              "",
+              [
+                "[{\"id\":\"fast-seller\",\"name\":\"FAST Channels seller (fastm, Prebid Sales Agent, A2A 1.0)\",\"url\":\"https://",
+                {
+                  "Fn::GetAtt": [
+                    "SellerDistribution66ED7378",
+                    "DomainName"
+                  ]
+                },
+                "/a2a\",\"transport\":\"a2a\",\"a2a_version\":\"1.0\",\"auth_type\":\"static_bearer\",\"auth_token_env\":\"FAST_SELLER_TOKEN\",\"agent_url\":\"https://",
+                {
+                  "Fn::GetAtt": [
+                    "SellerDistribution66ED7378",
+                    "DomainName"
+                  ]
+                },
+                "/a2a\"}]"
+              ]
+            ]
+          },
+          "SESSIONS_TABLE_NAME": {
+            "Ref": "AgentsBuyerSessionsDA424B28"
+          }
+        },
+        "LifecycleConfiguration": {},
+        "NetworkConfiguration": {
+          "NetworkMode": "PUBLIC"
+        },
+        "ProtocolConfiguration": "A2A",
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "AgentsBuyerExecutionRole71633311",
+            "Arn"
+          ]
+        },
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:module": "selling",
+          "fast:owner": "iac"
+        }
+      },
+      "Type": "AWS::BedrockAgentCore::Runtime"
+    },
+    "AgentsBuyerExecutionRole71633311": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/fastm_buyer*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "bedrock-agentcore.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "Execution role for Bedrock Agent Core Runtime",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "MaxSessionDuration": 28800,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AgentsBuyerExecutionRoleDefaultPolicy7B7DF22D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:DescribeLogStreams"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*",
+              "Sid": "LogGroupAccess"
+            },
+            {
+              "Action": "logs:DescribeLogGroups",
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:*",
+              "Sid": "DescribeLogGroups"
+            },
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+              "Sid": "LogStreamAccess"
+            },
+            {
+              "Action": [
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "XRayAccess"
+            },
+            {
+              "Action": "cloudwatch:PutMetricData",
+              "Condition": {
+                "StringEquals": {
+                  "cloudwatch:namespace": "bedrock-agentcore"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "CloudWatchMetrics"
+            },
+            {
+              "Action": [
+                "bedrock-agentcore:GetWorkloadAccessToken",
+                "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:bedrock-agentcore:us-east-1:123456789012:workload-identity-directory/default",
+                "arn:aws:bedrock-agentcore:us-east-1:123456789012:workload-identity-directory/default/workload-identity/*"
+              ],
+              "Sid": "GetAgentAccessToken"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:Query",
+                "dynamodb:UpdateItem"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "AgentsBuyerSessionsDA424B28",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "AgentsBuyerSessionsDA424B28",
+                          "Arn"
+                        ]
+                      },
+                      "/index/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-5-5"
+            },
+            {
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-5-5"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5"
+            },
+            {
+              "Action": [
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ecr:us-east-1:123456789012:repository/fastm-buyer"
+            },
+            {
+              "Action": "ecr:GetAuthorizationToken",
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AgentsBuyerExecutionRoleDefaultPolicy7B7DF22D",
+        "Roles": [
+          {
+            "Ref": "AgentsBuyerExecutionRole71633311"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AgentsBuyerLogs2EDF4FCF": {
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Join": [
+            "",
+            [
+              "/aws/bedrock-agentcore/runtimes/",
+              {
+                "Fn::GetAtt": [
+                  "AgentsBuyerD3B31DF9",
+                  "AgentRuntimeId"
+                ]
+              },
+              "-DEFAULT"
+            ]
+          ]
+        },
+        "RemovalPolicy": "destroy",
+        "RetentionInDays": 7,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "Custom::LogRetention"
+    },
+    "AgentsBuyerSessionsDA424B28": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "sk",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "gsi1pk",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "gsi1sk",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "gsi1",
+            "KeySchema": [
+              {
+                "AttributeName": "gsi1pk",
+                "KeyType": "HASH"
+              },
+              {
+                "AttributeName": "gsi1sk",
+                "KeyType": "RANGE"
+              }
+            ],
+            "Projection": {
+              "ProjectionType": "ALL"
+            }
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "sk",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Replicas": [
+          {
+            "GlobalSecondaryIndexes": [
+              {
+                "IndexName": "gsi1"
+              }
+            ],
+            "PointInTimeRecoverySpecification": {
+              "PointInTimeRecoveryEnabled": true
+            },
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fastm"
+              },
+              {
+                "Key": "fast:module",
+                "Value": "selling"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "TableName": "fastm-buyer-sessions"
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AgentsCallers09F9885A": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AccountRecoverySetting": {
+          "RecoveryMechanisms": [
+            {
+              "Name": "verified_phone_number",
+              "Priority": 1
+            },
+            {
+              "Name": "verified_email",
+              "Priority": 2
+            }
+          ]
+        },
+        "AdminCreateUserConfig": {
+          "AllowAdminCreateUserOnly": true
+        },
+        "DeletionProtection": "INACTIVE",
+        "EmailVerificationMessage": "The verification code to your new account is {####}",
+        "EmailVerificationSubject": "Verify your new account",
+        "SmsVerificationMessage": "The verification code to your new account is {####}",
+        "UserPoolTags": {
+          "fast:app": "fastm",
+          "fast:module": "selling",
+          "fast:owner": "iac"
+        },
+        "UserPoolTier": "ESSENTIALS",
+        "VerificationMessageTemplate": {
+          "DefaultEmailOption": "CONFIRM_WITH_CODE",
+          "EmailMessage": "The verification code to your new account is {####}",
+          "EmailSubject": "Verify your new account",
+          "SmsMessage": "The verification code to your new account is {####}"
+        }
+      },
+      "Type": "AWS::Cognito::UserPool",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AgentsCallersBuyerDescribeCognitoUserPoolClient1DAD25E0": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "AgentsCallersBuyerDescribeCognitoUserPoolClientCustomResourcePolicyE8768468"
+      ],
+      "Properties": {
+        "Create": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"region\":\"us-east-1\",\"service\":\"CognitoIdentityServiceProvider\",\"action\":\"describeUserPoolClient\",\"parameters\":{\"UserPoolId\":\"",
+              {
+                "Ref": "AgentsCallers09F9885A"
+              },
+              "\",\"ClientId\":\"",
+              {
+                "Ref": "AgentsCallersBuyerEF12641A"
+              },
+              "\"},\"physicalResourceId\":{\"id\":\"",
+              {
+                "Ref": "AgentsCallersBuyerEF12641A"
+              },
+              "\"},\"logApiResponseData\":false}"
+            ]
+          ]
+        },
+        "InstallLatestAwsSdk": false,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd22872D164C4C",
+            "Arn"
+          ]
+        },
+        "Update": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"region\":\"us-east-1\",\"service\":\"CognitoIdentityServiceProvider\",\"action\":\"describeUserPoolClient\",\"parameters\":{\"UserPoolId\":\"",
+              {
+                "Ref": "AgentsCallers09F9885A"
+              },
+              "\",\"ClientId\":\"",
+              {
+                "Ref": "AgentsCallersBuyerEF12641A"
+              },
+              "\"},\"physicalResourceId\":{\"id\":\"",
+              {
+                "Ref": "AgentsCallersBuyerEF12641A"
+              },
+              "\"},\"logApiResponseData\":false}"
+            ]
+          ]
+        }
+      },
+      "Type": "Custom::DescribeCognitoUserPoolClient",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AgentsCallersBuyerDescribeCognitoUserPoolClientCustomResourcePolicyE8768468": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "cognito-idp:DescribeUserPoolClient",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AgentsCallers09F9885A",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AgentsCallersBuyerDescribeCognitoUserPoolClientCustomResourcePolicyE8768468",
+        "Roles": [
+          {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AgentsCallersBuyerEF12641A": {
+      "Properties": {
+        "AccessTokenValidity": 60,
+        "AllowedOAuthFlows": [
+          "client_credentials"
+        ],
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "AllowedOAuthScopes": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                {
+                  "Ref": "AgentsCallersGovernanceABF0F2BC"
+                },
+                "/check"
+              ]
+            ]
+          }
+        ],
+        "EnableTokenRevocation": true,
+        "GenerateSecret": true,
+        "PreventUserExistenceErrors": "ENABLED",
+        "SupportedIdentityProviders": [
+          "COGNITO"
+        ],
+        "TokenValidityUnits": {
+          "AccessToken": "minutes"
+        },
+        "UserPoolId": {
+          "Ref": "AgentsCallers09F9885A"
+        }
+      },
+      "Type": "AWS::Cognito::UserPoolClient"
+    },
+    "AgentsCallersGovernanceABF0F2BC": {
+      "Properties": {
+        "Identifier": "fastm-governance",
+        "Name": "fastm-governance",
+        "Scopes": [
+          {
+            "ScopeDescription": "Check spend against a plan",
+            "ScopeName": "check"
+          }
+        ],
+        "UserPoolId": {
+          "Ref": "AgentsCallers09F9885A"
+        }
+      },
+      "Type": "AWS::Cognito::UserPoolResourceServer"
+    },
+    "AgentsCallersTokens6047CA53": {
+      "Properties": {
+        "Domain": "fastm-selling-123456789012",
+        "UserPoolId": {
+          "Ref": "AgentsCallers09F9885A"
+        }
+      },
+      "Type": "AWS::Cognito::UserPoolDomain"
+    },
+    "AgentsGovernance4E3C4466": {
+      "DependsOn": [
+        "AgentsGovernanceExecutionRoleDefaultPolicy74247910",
+        "AgentsGovernanceExecutionRoleF43EC4C0"
+      ],
+      "Properties": {
+        "AgentRuntimeArtifact": {
+          "ContainerConfiguration": {
+            "ContainerUri": {
+              "Fn::Join": [
+                "",
+                [
+                  "123456789012.dkr.ecr.us-east-1.",
+                  {
+                    "Ref": "AWS::URLSuffix"
+                  },
+                  "/fastm-governance:0123456789abcdef"
+                ]
+              ]
+            }
+          }
+        },
+        "AgentRuntimeName": "fastm_governance",
+        "AuthorizerConfiguration": {
+          "CustomJWTAuthorizer": {
+            "AllowedClients": [
+              {
+                "Ref": "AgentsCallersBuyerEF12641A"
+              }
+            ],
+            "DiscoveryUrl": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://cognito-idp.us-east-1.amazonaws.com/",
+                  {
+                    "Ref": "AgentsCallers09F9885A"
+                  },
+                  "/.well-known/openid-configuration"
+                ]
+              ]
+            }
+          }
+        },
+        "Description": "AWS reference governance agent (AdCP campaign governance, MCP)",
+        "EnvironmentVariables": {
+          "AWS_REGION": "us-east-1",
+          "GOVERNANCE_AGENT_URL": "https://governance.fastm.fast-channels.invalid/mcp",
+          "GOVERNANCE_MODE": "enforce",
+          "GOVERNANCE_SIGNING_ALG": "ecdsa-p256-sha256",
+          "GOVERNANCE_SIGNING_KID": "fastm-governance-1",
+          "GOVERNANCE_SIGNING_KMS_KEY_ID": "alias/fastm-governance-signing",
+          "STATE_TABLE_NAME": {
+            "Ref": "AgentsGovernanceStateA76D4F42"
+          }
+        },
+        "LifecycleConfiguration": {},
+        "NetworkConfiguration": {
+          "NetworkMode": "PUBLIC"
+        },
+        "ProtocolConfiguration": "MCP",
+        "RequestHeaderConfiguration": {
+          "RequestHeaderAllowlist": [
+            "Authorization"
+          ]
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "AgentsGovernanceExecutionRoleF43EC4C0",
+            "Arn"
+          ]
+        },
+        "Tags": {
+          "fast:app": "fastm",
+          "fast:module": "selling",
+          "fast:owner": "iac"
+        }
+      },
+      "Type": "AWS::BedrockAgentCore::Runtime"
+    },
+    "AgentsGovernanceExecutionRoleDefaultPolicy74247910": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:DescribeLogStreams"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*",
+              "Sid": "LogGroupAccess"
+            },
+            {
+              "Action": "logs:DescribeLogGroups",
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:*",
+              "Sid": "DescribeLogGroups"
+            },
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+              "Sid": "LogStreamAccess"
+            },
+            {
+              "Action": [
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "XRayAccess"
+            },
+            {
+              "Action": "cloudwatch:PutMetricData",
+              "Condition": {
+                "StringEquals": {
+                  "cloudwatch:namespace": "bedrock-agentcore"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "*",
+              "Sid": "CloudWatchMetrics"
+            },
+            {
+              "Action": [
+                "bedrock-agentcore:GetWorkloadAccessToken",
+                "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:bedrock-agentcore:us-east-1:123456789012:workload-identity-directory/default",
+                "arn:aws:bedrock-agentcore:us-east-1:123456789012:workload-identity-directory/default/workload-identity/*"
+              ],
+              "Sid": "GetAgentAccessToken"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:Query",
+                "dynamodb:UpdateItem"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AgentsGovernanceStateA76D4F42",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "kms:GetPublicKey",
+                "kms:Sign"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "AgentsSigningKeyE21CE04A",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ecr:us-east-1:123456789012:repository/fastm-governance"
+            },
+            {
+              "Action": "ecr:GetAuthorizationToken",
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "AgentsGovernanceExecutionRoleDefaultPolicy74247910",
+        "Roles": [
+          {
+            "Ref": "AgentsGovernanceExecutionRoleF43EC4C0"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "AgentsGovernanceExecutionRoleF43EC4C0": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/fastm_governance*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "bedrock-agentcore.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "Execution role for Bedrock Agent Core Runtime",
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "MaxSessionDuration": 28800,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "AgentsGovernanceLogs7DEC82EB": {
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Join": [
+            "",
+            [
+              "/aws/bedrock-agentcore/runtimes/",
+              {
+                "Fn::GetAtt": [
+                  "AgentsGovernance4E3C4466",
+                  "AgentRuntimeId"
+                ]
+              },
+              "-DEFAULT"
+            ]
+          ]
+        },
+        "RemovalPolicy": "destroy",
+        "RetentionInDays": 7,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "Custom::LogRetention"
+    },
+    "AgentsGovernanceStateA76D4F42": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "PK",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "SK",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "PK",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "SK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "Replicas": [
+          {
+            "PointInTimeRecoverySpecification": {
+              "PointInTimeRecoveryEnabled": true
+            },
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fastm"
+              },
+              {
+                "Key": "fast:module",
+                "Value": "selling"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "TableName": "fastm-governance-state",
+        "TimeToLiveSpecification": {
+          "AttributeName": "expires_at",
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "AgentsSigningKeyAliasD91FDBC4": {
+      "Properties": {
+        "AliasName": "alias/fastm-governance-signing",
+        "TargetKeyId": {
+          "Fn::GetAtt": [
+            "AgentsSigningKeyE21CE04A",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::KMS::Alias"
+    },
+    "AgentsSigningKeyE21CE04A": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "ES256 key of the governance agent's governance_context tokens",
+        "KeyPolicy": {
+          "Statement": [
+            {
+              "Action": "kms:*",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::123456789012:root"
+              },
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "KeySpec": "ECC_NIST_P256",
+        "KeyUsage": "SIGN_VERIFY",
+        "PendingWindowInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::KMS::Key",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "FastChannelsfastmSellingSellerDatabaseSecretD9C5098Ad321368f3139e0a1d2b89fc2c4b77f73": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Generated by the CDK for stack: ",
+              {
+                "Ref": "AWS::StackName"
+              }
+            ]
+          ]
+        },
+        "GenerateSecretString": {
+          "ExcludeCharacters": " !\"#$%&'()*+,/:;<=>?@[\\]^`{|}~",
+          "GenerateStringKey": "password",
+          "PasswordLength": 30,
+          "SecretStringTemplate": "{\"username\":\"salesagent\"}"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A": {
+      "DependsOn": [
+        "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB",
+        "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB"
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Handler": "index.handler",
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aResourceLogs0841D090"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 900
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aResourceLogs0841D090": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          },
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:DeleteRetentionPolicy",
+                "logs:PutRetentionPolicy"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": "logs:DeleteLogGroup",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:logs:us-east-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/",
+                      {
+                        "Fn::GetAtt": [
+                          "AgentsBuyerD3B31DF9",
+                          "AgentRuntimeId"
+                        ]
+                      },
+                      "-DEFAULT:*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:logs:us-east-1:123456789012:log-group:/aws/bedrock-agentcore/runtimes/",
+                      {
+                        "Fn::GetAtt": [
+                          "AgentsGovernance4E3C4466",
+                          "AgentRuntimeId"
+                        ]
+                      },
+                      "-DEFAULT:*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB",
+        "Roles": [
+          {
+            "Ref": "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ReleaseGuard3432AE9F": {
+      "Properties": {
+        "Description": "FAST Channels (fastm): only the Release Controller changes monetization",
+        "Path": "/",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "mediatailor:CreatePrefetchSchedule",
+                "mediatailor:DeleteFunction",
+                "mediatailor:DeletePlaybackConfiguration",
+                "mediatailor:DeletePrefetchSchedule",
+                "mediatailor:PutChannelPolicy",
+                "mediatailor:PutFunction",
+                "mediatailor:PutPlaybackConfiguration"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-demo",
+                "arn:aws:mediatailor:us-east-1:123456789012:channel/fastm-lab",
+                "arn:aws:mediatailor:us-east-1:123456789012:function/fastm_*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-demo-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:playbackConfiguration/fastm-lab-p-*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-demo-p-*/*",
+                "arn:aws:mediatailor:us-east-1:123456789012:prefetchSchedule/fastm-lab-p-*/*"
+              ],
+              "Sid": "OnlyTheReleaseControllerChangesMonetization"
+            },
+            {
+              "Action": [
+                "logs:CreateExportTask",
+                "logs:DisassociateKmsKey",
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents",
+                "logs:PutSubscriptionFilter",
+                "logs:StartLiveTail",
+                "logs:StartQuery"
+              ],
+              "Effect": "Deny",
+              "Resource": [
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release",
+                "arn:aws:logs:us-east-1:123456789012:log-group:/aws/vendedlogs/mediatailor/fastm-release:*"
+              ],
+              "Sid": "OnlyNamedReadersReadTheSiblingsLogs"
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::IAM::ManagedPolicy"
+    },
+    "SellerBuyerToken13A5C6B7": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Bearer token of the seller's principal for the AWS reference buyer",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "PasswordLength": 48
+        },
+        "Name": "fastm-seller-buyer-token",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SellerClusterE9F3AFFF": {
+      "Properties": {
+        "ClusterName": "fastm-seller",
+        "ClusterSettings": [
+          {
+            "Name": "containerInsights",
+            "Value": "disabled"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::ECS::Cluster"
+    },
+    "SellerDatabase7FC5101F": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AllocatedStorage": "20",
+        "BackupRetentionPeriod": 0,
+        "CopyTagsToSnapshot": true,
+        "DBInstanceClass": "db.t4g.micro",
+        "DBInstanceIdentifier": "fastm-seller",
+        "DBName": "salesagent",
+        "DBSubnetGroupName": {
+          "Ref": "SellerDatabaseSubnetGroup2D8153F9"
+        },
+        "DeleteAutomatedBackups": true,
+        "DeletionProtection": false,
+        "Engine": "postgres",
+        "EngineVersion": "17",
+        "MasterUserPassword": {
+          "Fn::Join": [
+            "",
+            [
+              "{{resolve:secretsmanager:",
+              {
+                "Ref": "FastChannelsfastmSellingSellerDatabaseSecretD9C5098Ad321368f3139e0a1d2b89fc2c4b77f73"
+              },
+              ":SecretString:password::}}"
+            ]
+          ]
+        },
+        "MasterUsername": "salesagent",
+        "MultiAZ": false,
+        "PubliclyAccessible": false,
+        "StorageEncrypted": true,
+        "StorageType": "gp3",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VPCSecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "SellerDatabaseSecurityGroupA6079882",
+              "GroupId"
+            ]
+          }
+        ]
+      },
+      "Type": "AWS::RDS::DBInstance",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SellerDatabaseSecretAttachmentBDDE0506": {
+      "Properties": {
+        "SecretId": {
+          "Ref": "FastChannelsfastmSellingSellerDatabaseSecretD9C5098Ad321368f3139e0a1d2b89fc2c4b77f73"
+        },
+        "TargetId": {
+          "Ref": "SellerDatabase7FC5101F"
+        },
+        "TargetType": "AWS::RDS::DBInstance"
+      },
+      "Type": "AWS::SecretsManager::SecretTargetAttachment"
+    },
+    "SellerDatabaseSecurityGroupA6079882": {
+      "Properties": {
+        "GroupDescription": "Security group for Database database",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VpcId": "vpc-0123456789abcdef0"
+      },
+      "Type": "AWS::EC2::SecurityGroup"
+    },
+    "SellerDatabaseSecurityGroupfromFastChannelsfastmSellingSellerServiceSecurityGroup3C7617F1IndirectPortE4CE239E": {
+      "Properties": {
+        "Description": "The seller tasks",
+        "FromPort": {
+          "Fn::GetAtt": [
+            "SellerDatabase7FC5101F",
+            "Endpoint.Port"
+          ]
+        },
+        "GroupId": {
+          "Fn::GetAtt": [
+            "SellerDatabaseSecurityGroupA6079882",
+            "GroupId"
+          ]
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "SellerServiceSecurityGroup6970AB5B",
+            "GroupId"
+          ]
+        },
+        "ToPort": {
+          "Fn::GetAtt": [
+            "SellerDatabase7FC5101F",
+            "Endpoint.Port"
+          ]
+        }
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress"
+    },
+    "SellerDatabaseSubnetGroup2D8153F9": {
+      "Properties": {
+        "DBSubnetGroupDescription": "Subnet group for Database database",
+        "SubnetIds": [
+          "subnet-0aaaaaaaaaaaaaaa1",
+          "subnet-0bbbbbbbbbbbbbbb2"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::RDS::DBSubnetGroup"
+    },
+    "SellerDistribution66ED7378": {
+      "Properties": {
+        "DistributionConfig": {
+          "Comment": "fastm-seller: the AdCP seller (MCP /mcp/, A2A /a2a)",
+          "DefaultCacheBehavior": {
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "PATCH",
+              "POST",
+              "DELETE"
+            ],
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "Compress": false,
+            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+            "TargetOriginId": "FastChannelsfastmSellingSellerDistributionOrigin11E1947B4",
+            "ViewerProtocolPolicy": "https-only"
+          },
+          "Enabled": true,
+          "HttpVersion": "http2",
+          "IPV6Enabled": false,
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "SellerLoadBalancer1E8ED861",
+                  "DNSName"
+                ]
+              },
+              "Id": "FastChannelsfastmSellingSellerDistributionOrigin11E1947B4",
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "Fly-Forwarded-Proto",
+                  "HeaderValue": "https"
+                }
+              ],
+              "VpcOriginConfig": {
+                "OriginReadTimeout": 60,
+                "VpcOriginId": {
+                  "Fn::GetAtt": [
+                    "SellerDistributionOrigin1VpcOrigin32738DAB",
+                    "Id"
+                  ]
+                }
+              }
+            }
+          ],
+          "PriceClass": "PriceClass_100"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::CloudFront::Distribution"
+    },
+    "SellerDistributionOrigin1VpcOrigin32738DAB": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VpcOriginEndpointConfig": {
+          "Arn": {
+            "Ref": "SellerLoadBalancer1E8ED861"
+          },
+          "HTTPPort": 80,
+          "Name": "FastChannelsfastmSellingSellDistributionOrigin1VpcOrigin721C870F",
+          "OriginProtocolPolicy": "http-only",
+          "OriginSSLProtocols": [
+            "TLSv1.2"
+          ]
+        }
+      },
+      "Type": "AWS::CloudFront::VpcOrigin"
+    },
+    "SellerLoadBalancer1E8ED861": {
+      "Properties": {
+        "LoadBalancerAttributes": [
+          {
+            "Key": "deletion_protection.enabled",
+            "Value": "false"
+          },
+          {
+            "Key": "idle_timeout.timeout_seconds",
+            "Value": "300"
+          },
+          {
+            "Key": "routing.http.drop_invalid_header_fields.enabled",
+            "Value": "true"
+          }
+        ],
+        "Name": "fastm-seller",
+        "Scheme": "internal",
+        "SecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "SellerLoadBalancerSecurityGroup046A3971",
+              "GroupId"
+            ]
+          }
+        ],
+        "Subnets": [
+          "subnet-0aaaaaaaaaaaaaaa1",
+          "subnet-0bbbbbbbbbbbbbbb2"
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Type": "application"
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    },
+    "SellerLoadBalancerHttp4E8006E2": {
+      "Properties": {
+        "DefaultActions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "SellerLoadBalancerHttpSellerGroupFC0F2F22"
+            },
+            "Type": "forward"
+          }
+        ],
+        "LoadBalancerArn": {
+          "Ref": "SellerLoadBalancer1E8ED861"
+        },
+        "Port": 80,
+        "Protocol": "HTTP",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::Listener"
+    },
+    "SellerLoadBalancerHttpSellerGroupFC0F2F22": {
+      "Properties": {
+        "HealthCheckIntervalSeconds": 15,
+        "HealthCheckPath": "/health",
+        "HealthyThresholdCount": 2,
+        "Port": 8000,
+        "Protocol": "HTTP",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "10"
+          },
+          {
+            "Key": "stickiness.enabled",
+            "Value": "false"
+          }
+        ],
+        "TargetType": "ip",
+        "VpcId": "vpc-0123456789abcdef0"
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup"
+    },
+    "SellerLoadBalancerSecurityGroup046A3971": {
+      "Properties": {
+        "GroupDescription": "Automatically created Security Group for ELB FastChannelsfastmSellingSellerLoadBalancer799BC884",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VpcId": "vpc-0123456789abcdef0"
+      },
+      "Type": "AWS::EC2::SecurityGroup"
+    },
+    "SellerLoadBalancerSecurityGroupfrompl3b927c5280AF0AEAAE": {
+      "Properties": {
+        "Description": "CloudFront VPC origin (origin-facing prefix list)",
+        "FromPort": 80,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "SellerLoadBalancerSecurityGroup046A3971",
+            "GroupId"
+          ]
+        },
+        "IpProtocol": "tcp",
+        "SourcePrefixListId": "pl-3b927c52",
+        "ToPort": 80
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress"
+    },
+    "SellerLoadBalancerSecurityGrouptoFastChannelsfastmSellingSellerServiceSecurityGroup3C7617F18000F5FCA182": {
+      "Properties": {
+        "Description": "Load balancer to target",
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": [
+            "SellerServiceSecurityGroup6970AB5B",
+            "GroupId"
+          ]
+        },
+        "FromPort": 8000,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "SellerLoadBalancerSecurityGroup046A3971",
+            "GroupId"
+          ]
+        },
+        "IpProtocol": "tcp",
+        "ToPort": 8000
+      },
+      "Type": "AWS::EC2::SecurityGroupEgress"
+    },
+    "SellerLogsA285B386": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "fastm-seller",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SellerSeedC63686D2": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Seed of the seller's own keys (Fernet, Flask, signing-key KEK), derived in its container",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "PasswordLength": 64
+        },
+        "Name": "fastm-seller-seed",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SellerService142C7DD2": {
+      "DependsOn": [
+        "SellerLoadBalancerHttp4E8006E2",
+        "SellerLoadBalancerHttpSellerGroupFC0F2F22",
+        "SellerTaskTaskRoleDefaultPolicyF746E283",
+        "SellerTaskTaskRoleF1F18EC5"
+      ],
+      "Properties": {
+        "Cluster": {
+          "Ref": "SellerClusterE9F3AFFF"
+        },
+        "DeploymentConfiguration": {
+          "DeploymentCircuitBreaker": {
+            "Enable": true,
+            "Rollback": false
+          },
+          "MaximumPercent": 100,
+          "MinimumHealthyPercent": 0
+        },
+        "DesiredCount": 1,
+        "EnableECSManagedTags": false,
+        "HealthCheckGracePeriodSeconds": 300,
+        "LaunchType": "FARGATE",
+        "LoadBalancers": [
+          {
+            "ContainerName": "app",
+            "ContainerPort": 8000,
+            "TargetGroupArn": {
+              "Ref": "SellerLoadBalancerHttpSellerGroupFC0F2F22"
+            }
+          }
+        ],
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "AssignPublicIp": "DISABLED",
+            "SecurityGroups": [
+              {
+                "Fn::GetAtt": [
+                  "SellerServiceSecurityGroup6970AB5B",
+                  "GroupId"
+                ]
+              }
+            ],
+            "Subnets": [
+              "subnet-0aaaaaaaaaaaaaaa1",
+              "subnet-0bbbbbbbbbbbbbbb2"
+            ]
+          }
+        },
+        "ServiceName": "fastm-seller",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TaskDefinition": {
+          "Ref": "SellerTask5B448E96"
+        }
+      },
+      "Type": "AWS::ECS::Service"
+    },
+    "SellerServiceSecurityGroup6970AB5B": {
+      "DependsOn": [
+        "SellerTaskTaskRoleDefaultPolicyF746E283",
+        "SellerTaskTaskRoleF1F18EC5"
+      ],
+      "Properties": {
+        "GroupDescription": "FastChannels-fastm/Selling/Seller/Service/SecurityGroup",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VpcId": "vpc-0123456789abcdef0"
+      },
+      "Type": "AWS::EC2::SecurityGroup"
+    },
+    "SellerServiceSecurityGroupfromFastChannelsfastmSellingSellerLoadBalancerSecurityGroup9E39517680005C524F52": {
+      "DependsOn": [
+        "SellerTaskTaskRoleDefaultPolicyF746E283",
+        "SellerTaskTaskRoleF1F18EC5"
+      ],
+      "Properties": {
+        "Description": "Load balancer to target",
+        "FromPort": 8000,
+        "GroupId": {
+          "Fn::GetAtt": [
+            "SellerServiceSecurityGroup6970AB5B",
+            "GroupId"
+          ]
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "SellerLoadBalancerSecurityGroup046A3971",
+            "GroupId"
+          ]
+        },
+        "ToPort": 8000
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress"
+    },
+    "SellerTask5B448E96": {
+      "Properties": {
+        "ContainerDefinitions": [
+          {
+            "Command": [
+              "serve"
+            ],
+            "Environment": [
+              {
+                "Name": "ENVIRONMENT",
+                "Value": "production"
+              },
+              {
+                "Name": "ADCP_TESTING",
+                "Value": "true"
+              },
+              {
+                "Name": "ADCP_MULTI_TENANT",
+                "Value": "true"
+              },
+              {
+                "Name": "SALES_AGENT_DOMAIN",
+                "Value": "fastm.fast-channels.invalid"
+              },
+              {
+                "Name": "CREATIVE_AGENT_URL",
+                "Value": "https://creative-agent.fastm.fast-channels.invalid"
+              },
+              {
+                "Name": "SKIP_CRON",
+                "Value": "true"
+              },
+              {
+                "Name": "SUPPORT_EMAIL",
+                "Value": "operator@fast-channels.example"
+              },
+              {
+                "Name": "DB_HOST",
+                "Value": {
+                  "Fn::GetAtt": [
+                    "SellerDatabase7FC5101F",
+                    "Endpoint.Address"
+                  ]
+                }
+              },
+              {
+                "Name": "DB_PORT",
+                "Value": {
+                  "Fn::GetAtt": [
+                    "SellerDatabase7FC5101F",
+                    "Endpoint.Port"
+                  ]
+                }
+              },
+              {
+                "Name": "DB_NAME",
+                "Value": "salesagent"
+              },
+              {
+                "Name": "DB_USER",
+                "Value": "salesagent"
+              },
+              {
+                "Name": "DB_SSLMODE",
+                "Value": "require"
+              },
+              {
+                "Name": "AWS_REGION",
+                "Value": "us-east-1"
+              },
+              {
+                "Name": "AWS_DEFAULT_REGION",
+                "Value": "us-east-1"
+              }
+            ],
+            "Essential": true,
+            "HealthCheck": {
+              "Command": [
+                "CMD-SHELL",
+                "curl -fsS http://localhost:8000/health || exit 1"
+              ],
+              "Interval": 30,
+              "Retries": 3,
+              "StartPeriod": 300,
+              "Timeout": 5
+            },
+            "Image": {
+              "Fn::Join": [
+                "",
+                [
+                  "123456789012.dkr.ecr.us-east-1.",
+                  {
+                    "Ref": "AWS::URLSuffix"
+                  },
+                  "/fastm-seller:0123456789abcdef"
+                ]
+              ]
+            },
+            "LogConfiguration": {
+              "LogDriver": "awslogs",
+              "Options": {
+                "awslogs-group": {
+                  "Ref": "SellerLogsA285B386"
+                },
+                "awslogs-region": "us-east-1",
+                "awslogs-stream-prefix": "app"
+              }
+            },
+            "Name": "app",
+            "PortMappings": [
+              {
+                "ContainerPort": 8000,
+                "Protocol": "tcp"
+              }
+            ],
+            "Secrets": [
+              {
+                "Name": "DB_PASSWORD",
+                "ValueFrom": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Ref": "SellerDatabaseSecretAttachmentBDDE0506"
+                      },
+                      ":password::"
+                    ]
+                  ]
+                }
+              },
+              {
+                "Name": "FAST_SECRET_SEED",
+                "ValueFrom": {
+                  "Ref": "SellerSeedC63686D2"
+                }
+              }
+            ]
+          },
+          {
+            "Command": [
+              "bridge"
+            ],
+            "DependsOn": [
+              {
+                "Condition": "HEALTHY",
+                "ContainerName": "app"
+              }
+            ],
+            "Environment": [
+              {
+                "Name": "ENVIRONMENT",
+                "Value": "production"
+              },
+              {
+                "Name": "ADCP_TESTING",
+                "Value": "true"
+              },
+              {
+                "Name": "ADCP_MULTI_TENANT",
+                "Value": "true"
+              },
+              {
+                "Name": "SALES_AGENT_DOMAIN",
+                "Value": "fastm.fast-channels.invalid"
+              },
+              {
+                "Name": "CREATIVE_AGENT_URL",
+                "Value": "https://creative-agent.fastm.fast-channels.invalid"
+              },
+              {
+                "Name": "SKIP_CRON",
+                "Value": "true"
+              },
+              {
+                "Name": "SUPPORT_EMAIL",
+                "Value": "operator@fast-channels.example"
+              },
+              {
+                "Name": "DB_HOST",
+                "Value": {
+                  "Fn::GetAtt": [
+                    "SellerDatabase7FC5101F",
+                    "Endpoint.Address"
+                  ]
+                }
+              },
+              {
+                "Name": "DB_PORT",
+                "Value": {
+                  "Fn::GetAtt": [
+                    "SellerDatabase7FC5101F",
+                    "Endpoint.Port"
+                  ]
+                }
+              },
+              {
+                "Name": "DB_NAME",
+                "Value": "salesagent"
+              },
+              {
+                "Name": "DB_USER",
+                "Value": "salesagent"
+              },
+              {
+                "Name": "DB_SSLMODE",
+                "Value": "require"
+              },
+              {
+                "Name": "AWS_REGION",
+                "Value": "us-east-1"
+              },
+              {
+                "Name": "AWS_DEFAULT_REGION",
+                "Value": "us-east-1"
+              },
+              {
+                "Name": "FAST_TENANT",
+                "Value": "fast"
+              },
+              {
+                "Name": "FAST_SELLER_HOST",
+                "Value": {
+                  "Fn::GetAtt": [
+                    "SellerDistribution66ED7378",
+                    "DomainName"
+                  ]
+                }
+              },
+              {
+                "Name": "FAST_BUYER_PRINCIPAL",
+                "Value": "reference-buyer"
+              },
+              {
+                "Name": "FAST_PUBLISHER_DOMAIN",
+                "Value": "fast-channels.example"
+              },
+              {
+                "Name": "FAST_SYNC_FUNCTION",
+                "Value": {
+                  "Ref": "Sync20A72D4C"
+                }
+              }
+            ],
+            "Essential": false,
+            "Image": {
+              "Fn::Join": [
+                "",
+                [
+                  "123456789012.dkr.ecr.us-east-1.",
+                  {
+                    "Ref": "AWS::URLSuffix"
+                  },
+                  "/fastm-seller:0123456789abcdef"
+                ]
+              ]
+            },
+            "LogConfiguration": {
+              "LogDriver": "awslogs",
+              "Options": {
+                "awslogs-group": {
+                  "Ref": "SellerLogsA285B386"
+                },
+                "awslogs-region": "us-east-1",
+                "awslogs-stream-prefix": "bridge"
+              }
+            },
+            "Name": "bridge",
+            "RestartPolicy": {
+              "Enabled": true,
+              "RestartAttemptPeriod": 60
+            },
+            "Secrets": [
+              {
+                "Name": "DB_PASSWORD",
+                "ValueFrom": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Ref": "SellerDatabaseSecretAttachmentBDDE0506"
+                      },
+                      ":password::"
+                    ]
+                  ]
+                }
+              },
+              {
+                "Name": "FAST_SECRET_SEED",
+                "ValueFrom": {
+                  "Ref": "SellerSeedC63686D2"
+                }
+              },
+              {
+                "Name": "FAST_BUYER_TOKEN",
+                "ValueFrom": {
+                  "Ref": "SellerBuyerToken13A5C6B7"
+                }
+              }
+            ]
+          }
+        ],
+        "Cpu": "1024",
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": [
+            "SellerTaskExecutionRoleA868D617",
+            "Arn"
+          ]
+        },
+        "Family": "fastm-seller",
+        "Memory": "2048",
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": [
+          "FARGATE"
+        ],
+        "RuntimePlatform": {
+          "CpuArchitecture": "ARM64",
+          "OperatingSystemFamily": "LINUX"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TaskRoleArn": {
+          "Fn::GetAtt": [
+            "SellerTaskTaskRoleF1F18EC5",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::ECS::TaskDefinition"
+    },
+    "SellerTaskExecutionRoleA868D617": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SellerTaskExecutionRoleDefaultPolicyCF8092E1": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:ecr:us-east-1:123456789012:repository/fastm-seller"
+            },
+            {
+              "Action": "ecr:GetAuthorizationToken",
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SellerLogsA285B386",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:GetSecretValue"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Ref": "SellerBuyerToken13A5C6B7"
+                },
+                {
+                  "Ref": "SellerDatabaseSecretAttachmentBDDE0506"
+                },
+                {
+                  "Ref": "SellerSeedC63686D2"
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SellerTaskExecutionRoleDefaultPolicyCF8092E1",
+        "Roles": [
+          {
+            "Ref": "SellerTaskExecutionRoleA868D617"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "SellerTaskTaskRoleDefaultPolicyF746E283": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Sync20A72D4C",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "Sync20A72D4C",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SellerTaskTaskRoleDefaultPolicyF746E283",
+        "Roles": [
+          {
+            "Ref": "SellerTaskTaskRoleF1F18EC5"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "SellerTaskTaskRoleF1F18EC5": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "Sync20A72D4C": {
+      "DependsOn": [
+        "SyncRoleDefaultPolicyC92F0522",
+        "SyncRole17D2A083"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Selling: booked AdCP buys to own-book lines, products from the catalog, delivery back",
+        "Environment": {
+          "Variables": {
+            "CATALOG_TABLE": "FastChannels-fastm-Data-Catalog",
+            "FAST_PREFIX": "fastm",
+            "PDS_BOOKED_LINES_KEY": "lines/booked.json",
+            "PDS_CONFIG_BUCKET": {
+              "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "PDS_PUBLISHER_FUNCTION": {
+              "Ref": "SsmParameterValuefastmpdspublisherfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "PDS_TABLE": "fastm-pds",
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "selling.sync",
+            "SELLING_PRODUCTS": "{\"channels\":[\"fastm-demo\"],\"breaks_ms\":[30030,60060,90090,120120],\"cpm\":\"40\",\"publisher_domain\":\"fast-channels.example\",\"creatives\":[\"direct2\"]}"
+          }
+        },
+        "Handler": "fast_channels.functions.selling.sync.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "SyncLogs28E2F86F"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 256,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "SyncRole17D2A083",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 30,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "SyncLogs28E2F86F": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "SyncRole17D2A083": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Ref": "ReleaseGuard3432AE9F"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "selling"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "SyncRoleDefaultPolicyC92F0522": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "SyncLogs28E2F86F",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/lines/booked.json"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:Scan",
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/FastChannels-fastm-Data-Catalog"
+            },
+            {
+              "Action": "dynamodb:BatchGetItem",
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "BUDGET#adcp-*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds"
+            },
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:lambda:us-east-1:123456789012:function:",
+                    {
+                      "Ref": "SsmParameterValuefastmpdspublisherfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    }
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "SyncRoleDefaultPolicyC92F0522",
+        "Roles": [
+          {
+            "Ref": "SyncRole17D2A083"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

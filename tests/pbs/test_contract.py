@@ -49,7 +49,7 @@ NATIVE_FIELDS = ("genres", "gtax", "realtime", "firstbroadcast")
 
 def tracker(crid: str, enr: int) -> str:
     """Our impression tracker of ``crid`` in the contract auctions' break."""
-    return f"https://cdn.example/ads/b.gif?d={DECISION}&c={crid}&e=impression&enr={enr}"
+    return f"https://cdn.example/ads/b/{DECISION}/{crid}/{enr}.gif"
 
 
 def third_party_calls(mocks: Mocks, pbs: Pbs, ticket: str, **kwargs: Any) -> tuple[httpx.Response, int]:

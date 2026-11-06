@@ -1,7 +1,8 @@
 # 0022 — Delivery states, counterparty billing, and the hash-chained ledger
 
 **Status:** Accepted (the ledger with the ops module, the delivery states and counterparty billing with the Pod
-Decision Service's own book).
+Decision Service's own book). Amended on 2026-11-05: delivery is also counted from the CDN's logs, because the ADS
+log can leave out a filled break (W-2 1.32; see "Counting").
 
 ## Context
 
@@ -54,7 +55,10 @@ hour) or more than once. The buyer's own count, not ours, is what an insertion o
   and a reservation without its ledger entry cannot exist. A repeated `/select` of the same break reserves nothing
   more: a reservation is keyed by the break (`<sid>.<evid>`) and the creative.
 - **Counting.** Fills count once per `(sid, evid)` and impressions once per `(sid, evid, crid)`, from
-  `beaconInfo.beaconUri` (not CloudFront's logs), and only for our tracker fired in the session it names.
+  `beaconInfo.beaconUri`, and only for our tracker fired in the session it names. The amendment of 2026-11-05 adds
+  the CDN's logs of the tracker's requests as a second source, with the same keys, so a firing that both record
+  counts once. A CDN request counts only when its break's select record placed that ad, because the tracker is a
+  public URL ([docs/pds.md](../pds.md#reservations-and-delivery)).
 - **Money events.** Every change of a line's money is a ledger entry in its chain `pds/line/<id>`: `money.budget`,
   `money.reserve`, `money.deliver` and `money.release`, amounts as decimal strings.
 - **Billing.** Our count is a seller-side server count, reported as such, not as an accredited measurement. The

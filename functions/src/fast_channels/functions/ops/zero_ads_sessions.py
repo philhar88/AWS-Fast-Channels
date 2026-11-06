@@ -1,25 +1,44 @@
-"""Find playback sessions that saw at least three ad breaks but made no ad request (ops module, hourly).
+"""Find playback sessions that saw at least three ad breaks but made no ad request, and, on the release module's
+siblings, breaks that no ad request served (ops module, hourly).
 
-A viewer who forces the session-initialization hook to fail can still pass ``aws.availSuppression*`` and watch
-without ads; such a session sees the breaks' ad markers (``AD_MARKER_FOUND``) but makes no ``MAKING_ADS_REQUEST``.
-This is the detection of that abuse, and it is incomplete by design (a short session, or one that leaves before its
-third break, is not found). An EventBridge Scheduler schedule invokes this function every hour with its scheduled
-time; it runs :data:`QUERY` with CloudWatch Logs Insights over the hour before, over the deployment's MediaTailor
-vended logs, logs every session it finds and publishes their number as ``ZeroAdsSessions``. The lake's view
-``v_zero_ads_sessions`` answers the same question per day with Athena.
+**Zero-ad sessions.** A viewer who forces the session-initialization hook to fail can still pass
+``aws.availSuppression*`` and watch without ads; such a session sees the breaks' ad markers (``AD_MARKER_FOUND``) but
+makes no ``MAKING_ADS_REQUEST``. This is the detection of that abuse, and it is incomplete by design (a short session,
+or one that leaves before its third break, is not found).
+
+**Unserved breaks** (``UNSERVED_BREAKS``). MediaTailor logs a break's start marker (``AD_MARKER_FOUND`` without
+``,DURATION=``) each time a session meets it, sometimes several times a break: a sighting it fills from the
+retrieval names the ``prefetchScheduleName``, and a later sighting may ask again in real time and replace the pod,
+or do nothing (fastcid 2026-11-06). A break is counted once per session, by its ``DATERANGE`` ID: it is served when
+any of its sightings is followed by a real-time ``MAKING_ADS_REQUEST`` or a ``FILLED_AVAIL`` of the session within
+:data:`SERVED_WITHIN`, or names its prefetch schedule. On prefetching siblings MediaTailor sometimes serves none of
+them, with no event at all (W-2 1.33, fastcid 2026-11-06: 3 of 33 sessions, their partners on the same breaks
+filled, every marker inside its schedule's consumption window). The silent-loss detector cannot see one: it alarms on
+a minute's ratio over at least five markers.
+
+An EventBridge Scheduler schedule invokes this function every hour with its scheduled time; it runs the queries with
+CloudWatch Logs Insights over the hour before, over the MediaTailor vended logs it is given, logs every session and
+break it finds, and publishes ``ZeroAdsSessions`` and ``UnservedBreaks`` (with a ``ConfigurationName`` series per
+sibling). The lake's view ``v_zero_ads_sessions`` answers the first question per day with Athena.
 """
 
+# OPTIMIZATION(aws): W-2 FR-1 detects ad-free sessions a public endpoint allows: retire with the feature
+import re
 import time
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
-from aws_lambda_powertools import Logger, Metrics
+from aws_lambda_powertools import Logger, Metrics, single_metric
 from aws_lambda_powertools.metrics import MetricUnit
 
 from fast_channels.functions import aws
 from fast_channels.functions.settings import settings
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from aws_lambda_powertools.utilities.typing import LambdaContext
 
 MIN_BREAKS: Final = 3
@@ -34,6 +53,30 @@ QUERY: Final = (
     "| limit 1000"
 )
 """Sessions with at least :data:`MIN_BREAKS` distinct ad markers (``DATERANGE`` IDs) and no ad request."""
+ROWS_LIMIT: Final = 10_000
+"""Logs Insights returns at most this many rows: a window that reaches it is read again in halves."""
+UNSERVED_QUERY: Final = (
+    "fields @timestamp, sessionId, originId, eventType, prefetchScheduleName, adBreakCorrelationId\n"
+    '| filter (eventType = "AD_MARKER_FOUND" and adMarkers not like /,DURATION=/)'
+    ' or eventType in ["MAKING_ADS_REQUEST", "FILLED_AVAIL"]\n'
+    '| parse adMarkers /ID="(?<marker>[^"]+)"/\n'
+    "| sort @timestamp asc\n"
+    f"| limit {ROWS_LIMIT}"
+)
+"""Every sighting of a break's start marker (with its ``DATERANGE`` ID), ad request and fill: one row each."""
+# OPTIMIZATION(aws): W-2 1.33 a prefetched break is neither consumed nor requested: retire when MediaTailor fixes it
+SERVED_WITHIN: Final = timedelta(seconds=10)
+"""How long after a sighting the session's real-time request or fill must come (seen: 2.8 s)."""
+MARKER_EARLY: Final = timedelta(seconds=1)
+"""A request or fill logged this much before its sighting still serves it (events of one request, out of order)."""
+SIBLING: Final = re.compile(r"-p-[a-z0-9]$")
+"""A sibling playback configuration (``<channel>-p-<letter>``): only theirs are counted. A harness's own
+configuration in the module's log group (``<prefix>-lab-x``, whose markers make no request on purpose) is not."""
+SIGHTINGS_SPAN: Final = timedelta(minutes=3)
+"""How far apart a break's sightings by one session can be (seen: 42 s; the longest break is 120 s): each window is
+read this much wider on both sides, so a break whose sightings straddle a window's edge is judged whole, in the
+window of its first sighting."""
+MIN_SLICE: Final = timedelta(minutes=1)
 POLL_SECONDS: Final = 2
 DEADLINE_SECONDS: Final = 240
 
@@ -45,8 +88,20 @@ class QueryError(RuntimeError):
     """The Logs Insights query failed or did not finish in time."""
 
 
-def run_query(log_group: str, start: datetime, end: datetime) -> list[dict[str, str]]:
-    """Rows of :data:`QUERY` over ``log_group`` between ``start`` and ``end``, as field -> value.
+@dataclass(frozen=True, slots=True)
+class Unserved:
+    """A break of a session that neither its retrieval nor an ad request served: its first sighting."""
+
+    session: str
+    configuration: str
+    marker_at: datetime
+    marker: str = ""
+    """The break's ``DATERANGE`` ID (else its correlation id)."""
+    sightings: int = 1
+
+
+def run_query(log_group: str, start: datetime, end: datetime, query: str = QUERY) -> list[dict[str, str]]:
+    """Rows of ``query`` over ``log_group`` between ``start`` and ``end``, as field -> value.
 
     Raises:
         QueryError: the query failed, was cancelled or did not complete within :data:`DEADLINE_SECONDS`.
@@ -56,7 +111,7 @@ def run_query(log_group: str, start: datetime, end: datetime) -> list[dict[str, 
         logGroupNames=[log_group],
         startTime=int(start.timestamp()),
         endTime=int(end.timestamp()),
-        queryString=QUERY,
+        queryString=query,
     )["queryId"]
     deadline = time.monotonic() + DEADLINE_SECONDS
     while True:
@@ -71,10 +126,76 @@ def run_query(log_group: str, start: datetime, end: datetime) -> list[dict[str, 
         time.sleep(POLL_SECONDS)
 
 
+def _at(row: dict[str, str]) -> datetime:
+    """A row's ``@timestamp`` (Logs Insights: ``2026-11-06 09:35:13.938``, UTC)."""
+    return datetime.strptime(row["@timestamp"], "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
+
+
+def unserved(rows: Iterable[dict[str, str]], *, start: datetime, end: datetime) -> list[Unserved]:
+    """The unserved breaks among :data:`UNSERVED_QUERY`'s ``rows`` whose first sighting is in [``start``, ``end``):
+    breaks counted once per session by ``DATERANGE`` ID, none of whose sightings names its prefetch schedule or is
+    followed, from :data:`MARKER_EARLY` before it to :data:`SERVED_WITHIN` after, by a real-time request or a fill of
+    the session. A prefetch retrieval (a request that names its schedule) serves another break."""
+    sightings: dict[tuple[str, str], list[tuple[datetime, bool, str]]] = defaultdict(list)
+    served: dict[str, list[datetime]] = defaultdict(list)
+    for row in rows:
+        at, session = _at(row), row.get("sessionId", "")
+        prefetched = bool(row.get("prefetchScheduleName"))
+        match row.get("eventType"):
+            case "AD_MARKER_FOUND":
+                if not SIBLING.search(row.get("originId", "")):
+                    continue
+                key = row.get("marker") or row.get("adBreakCorrelationId") or row["@timestamp"]
+                sightings[session, key].append((at, prefetched, row.get("originId", "")))
+            case "MAKING_ADS_REQUEST" if prefetched:
+                continue
+            case _:
+                served[session].append(at)
+    found = []
+    for (session, key), seen in sightings.items():
+        first, _, configuration = min(seen)
+        if not start <= first < end:
+            continue
+        if any(prefetched for _, prefetched, _ in seen) or any(
+            at - MARKER_EARLY <= t <= at + SERVED_WITHIN for at, _, _ in seen for t in served[session]
+        ):
+            continue
+        found.append(Unserved(session, configuration, first, key, len(seen)))
+    return sorted(found, key=lambda item: (item.marker_at, item.session))
+
+
+def unserved_breaks(log_group: str, start: datetime, end: datetime) -> list[Unserved]:
+    """The unserved breaks whose first sighting is in [``start``, ``end``). The query reads :data:`SIGHTINGS_SPAN`
+    beyond both ends, so every sighting of those breaks and what followed them is seen; a window whose read reaches
+    :data:`ROWS_LIMIT` is read again in halves (down to :data:`MIN_SLICE`)."""
+    rows = run_query(log_group, start - SIGHTINGS_SPAN, end + SIGHTINGS_SPAN, UNSERVED_QUERY)
+    if len(rows) >= ROWS_LIMIT and end - start > MIN_SLICE:
+        middle = start + (end - start) / 2
+        return unserved_breaks(log_group, start, middle) + unserved_breaks(log_group, middle, end)
+    if len(rows) >= ROWS_LIMIT:
+        logger.warning("unserved breaks: a minute holds more rows than one query returns", extra={"start": str(start)})
+    return unserved(rows, start=start, end=end)
+
+
+def _publish_unserved(found: list[Unserved]) -> None:
+    """``UnservedBreaks``: the total, and one series per configuration that had any."""
+    metrics.add_metric(name="UnservedBreaks", unit=MetricUnit.Count, value=len(found))
+    by_configuration: dict[str, int] = defaultdict(int)
+    for item in found:
+        by_configuration[item.configuration] += 1
+    for configuration, count in sorted(by_configuration.items()):
+        with single_metric(
+            name="UnservedBreaks", unit=MetricUnit.Count, value=count, namespace=metrics.namespace
+        ) as metric:
+            metric.add_dimension(name="service", value=str(metrics.service))
+            metric.add_dimension(name="ConfigurationName", value=configuration)
+
+
 @metrics.log_metrics
 @logger.inject_lambda_context
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, int]:
-    """Count the zero-ad sessions of the hour before ``scheduled_time`` and log each one."""
+    """Count the zero-ad sessions (and, with ``UNSERVED_BREAKS``, the unserved breaks) of the hour before
+    ``scheduled_time`` and log each one."""
     config = settings()
     config.require("ads_log_group")
     end = datetime.fromisoformat(event["scheduled_time"]).astimezone(UTC)
@@ -90,4 +211,20 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, int]:
             },
         )
     metrics.add_metric(name="ZeroAdsSessions", unit=MetricUnit.Count, value=len(sessions))
-    return {"sessions": len(sessions)}
+    counts = {"sessions": len(sessions)}
+    if config.unserved_breaks:
+        found = unserved_breaks(config.ads_log_group, end - WINDOW, end)
+        for item in found:
+            logger.warning(
+                "a break's marker got neither its prefetch nor an ad request",
+                extra={
+                    "session_id": item.session,
+                    "configuration": item.configuration,
+                    "marker_at": item.marker_at.isoformat(),
+                    "marker": item.marker,
+                    "sightings": item.sightings,
+                },
+            )
+        _publish_unserved(found)
+        counts["unserved_breaks"] = len(found)
+    return counts

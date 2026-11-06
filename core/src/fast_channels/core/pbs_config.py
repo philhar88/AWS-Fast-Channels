@@ -12,6 +12,10 @@ Pure renderers, without I/O, for one stage (:func:`render`):
   ``/policy`` answer, so a hook that is skipped, slow, failing or absent leaves own book and house only (the no-hook
   contract).
 - ``stored_accounts/<prefix>.json``: the stage's account, with the module's execution plan and the Activity Controls.
+- ``stored_requests/fast-warm.json`` and ``stored_responses/warm-<adapter>.json``: the warm-up's stored request, one
+  slot that names every configured third-party adapter and answers each from a stored bid response, so a warm-up
+  probe runs each adapter's request building, privacy enforcement, metrics and bid parsing without calling it
+  (:func:`warm_stored_request`, W-12). It is the one stored request that names a partner, and no partner is called.
 
 MediaTailor's POST names the route's stored request and sends the break's length as ``ext.fast.pod_s``
 (``{{session.avail_duration_secs}}``, whole seconds rounded half up). The fast-ctv module shapes the pod from it: one
@@ -35,6 +39,7 @@ from fast_channels.core.demo_demand import InlineCreative, vast_ad
 from fast_channels.core.naming import PREFIX_PATTERN
 from fast_channels.core.pds.book import AD_SYSTEM
 from fast_channels.core.pds.names import PORT as PDS_PORT
+from fast_channels.core.pds.snapshot import demo_demand
 from fast_channels.core.timeline import whole_seconds
 
 POD_SECONDS: Final = (30, 60, 90, 120)
@@ -70,8 +75,14 @@ POLICY_HOOK: Final = "fast-ctv-policy"
 VAST_HOOK: Final = "fast-ctv-vast"
 AUCTION_ENDPOINT: Final = "/openrtb2/auction"
 TRACKER_PATH: Final = "/ads/b.gif"
-TRACKER_QUERY: Final = "d={sid}.{evid}&c={crid}&e={event}&enr={enr}"
-"""Our impression tracker's query; the module fills the placeholders, URL-encoded, for every rendered ad."""
+"""The CDN's no-store beacon object (the kit's VAST pod, the simulator's billing notice; our tracker's former form,
+``?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>``, which delivery still reads)."""
+TRACKER_PREFIX: Final = "/ads/b/"
+"""Our impression tracker: ``/ads/b/<sid>.<evid>/<crid>/<enr>.gif``, each segment percent-encoded. The parameters are
+in the path because the CDN's logs keep it: with the identity module they leave out the query (it holds the playback
+ticket), and delivery counts from those logs too (W-2 1.32). The CDN answers the path with a 1x1 GIF at the edge."""
+TRACKER_PATH_TEMPLATE: Final = TRACKER_PREFIX + "{sid}.{evid}/{crid}/{enr}.gif"
+"""Our tracker's path with the module's placeholders, which it fills percent-encoded for every rendered ad."""
 CONTENT_CATTAX: Final = 9
 """IAB Content Taxonomy 3.1 (AdCOM ``cattax`` 9)."""
 VIDEO_MIMES: Final = ("application/x-mpegURL", "video/mp4")
@@ -135,6 +146,45 @@ def auction_body(seconds: int | str, *, kids: bool = False, ad_server: bool = Fa
     }
 
 
+WARM_STORED_REQUEST: Final = "fast-warm"
+"""The warm-up's stored request (not a sibling's: no POST body MediaTailor sends names it)."""
+WARM_FIELD: Final = "warm"
+"""``ext.fast.warm``: the warm stored request's mark, which the fast-ctv module reads before it removes ``ext.fast``."""
+WARM_VETTED_ADAPTERS: Final = frozenset({SIMULATOR})
+"""Adapters the zero-recorder gate (``tests/pbs``) has shown to build exactly one request for the warm slot.
+
+Prebid Server answers an adapter from its stored bid response only when the adapter builds one HTTP request; with
+more, it logs "Request to real {} bidder will be performed" and calls the real bidder. A warm-up must never send
+synthetic traffic to a partner, so :func:`warm_adapters` refuses any other configured adapter until the gate covers
+it."""
+
+
+def warm_adapters(settings: PbsSettings) -> dict[str, dict[str, Any]]:
+    """The configured third-party adapters the warm-up answers from stored bid responses, with the parameters real
+    auctions give them (the demand allow-list's): the bidder simulator in demo mode (the shipped adapters are off).
+
+    Raises:
+        ValueError: a configured adapter has not passed the zero-recorder gate (:data:`WARM_VETTED_ADAPTERS`).
+    """
+    configured: dict[str, dict[str, Any]] = dict(demo_demand(settings.prefix)) if settings.simulator else {}
+    if unvetted := sorted(set(configured) - WARM_VETTED_ADAPTERS):
+        raise ValueError(
+            f"adapters {unvetted} have not passed the warm-up's zero-recorder gate (tests/pbs): one that builds more "
+            "than one request would be called for real"
+        )
+    return configured
+
+
+def stored_bid_response_id(adapter: str) -> str:
+    """``warm-<adapter>``: the stored bid response that answers ``adapter`` in the warm-up."""
+    return f"warm-{adapter}"
+
+
+def warm_body() -> dict[str, Any]:
+    """The warm-up's POST body: the warm stored request and one slot (``pod_s`` 30)."""
+    return {"ext": {"prebid": {"storedrequest": {"id": WARM_STORED_REQUEST}}, "fast": {POD_FIELD: str(SLOT_SECONDS)}}}
+
+
 def stored_request_ids(*, ad_server: bool = False) -> tuple[str, ...]:
     """Every stored request a stage serves: the direct route's two, and with ``ad_server`` the ad-server route's."""
     routes = (False, True) if ad_server else (False,)
@@ -189,7 +239,7 @@ class PbsSettings(BaseModel):
     server_instances: int = Field(ge=1)
     """``server.http.server-instances``: one Vert.x event loop per task vCPU."""
     tracker_base_url: str = Field(pattern=r"^https://[a-z0-9.-]+$")
-    """Scheme and host of the stage's CDN, which serves our impression tracker ``/ads/b.gif``."""
+    """Scheme and host of the stage's CDN, which serves our impression tracker (:data:`TRACKER_PREFIX`)."""
     publisher_domain: str
     """Domain in ``source.schain`` (the seller's advertising system)."""
     app_name: str = Field(default="FAST Channels", min_length=1, max_length=100)
@@ -220,7 +270,7 @@ class PbsSettings(BaseModel):
 
     @property
     def tracker_template(self) -> str:
-        return f"{self.tracker_base_url}{TRACKER_PATH}?{TRACKER_QUERY}"
+        return f"{self.tracker_base_url}{TRACKER_PATH_TEMPLATE}"
 
 
 def tracker_host(cdn_base_url: str) -> str:
@@ -456,8 +506,58 @@ def render(settings: PbsSettings) -> dict[str, str]:
             files[f"stored_requests/{stored_request_id(kids=kids, ad_server=ad_server)}.json"] = _json(
                 stored_request(settings, kids=kids, ad_server=ad_server)
             )
+    files[f"stored_requests/{WARM_STORED_REQUEST}.json"] = _json(warm_stored_request(settings))
+    for adapter in warm_adapters(settings):
+        files[f"stored_responses/{stored_bid_response_id(adapter)}.json"] = _json(warm_bid_response(adapter))
     files[f"stored_accounts/{settings.prefix}.json"] = _json(account(settings))
     return files
+
+
+# OPTIMIZATION(oss): W-12 Prebid Server Java races creating an adapter's metric keys under load (a 500): warm them
+def warm_stored_request(settings: PbsSettings) -> dict[str, Any]:
+    """The warm-up's stored request: the direct route's pod of one 30 s slot, marked ``ext.fast.warm``, whose slot
+    names every adapter of :func:`warm_adapters` with its parameters and answers each from its stored bid response
+    (``imp.ext.prebid.storedbidresponse``; Prebid Server requires the parameters when it validates the request, before
+    any hook runs).
+
+    Prebid Server builds each adapter's request and parses the stored response as its answer, creating the adapter's
+    metric keys, without the HTTP call: no partner sees a warm-up, and a new task's first real auction finds its keys
+    created. The fast-ctv module adds no bidder to a warm request, whatever ``/policy`` answers, and keeps only the own
+    book and the bidders the slot answers from stored responses.
+    """
+    request = stored_request(settings)
+    request["id"] = WARM_STORED_REQUEST
+    request["ext"]["fast"][WARM_FIELD] = True
+    [slot] = request["imp"]
+    adapters = warm_adapters(settings)
+    slot["ext"]["prebid"]["bidder"] |= adapters
+    slot["ext"]["prebid"]["storedbidresponse"] = [
+        {"bidder": adapter, "id": stored_bid_response_id(adapter)} for adapter in adapters
+    ]
+    return request
+
+
+def warm_bid_response(adapter: str) -> dict[str, Any]:
+    """``adapter``'s stored bid response: the OpenRTB response its ``makeBids`` parses, one 30 s video bid for the warm
+    slot at the lowest price, whose creative nobody plays (the warm-up's answer goes nowhere)."""
+    adm = (
+        f'<VAST version="4.2"><Ad id="warm-{adapter}"><InLine><AdSystem>fast-channels warm-up</AdSystem>'
+        f"<AdTitle>warm-{adapter}</AdTitle><Creatives><Creative><Linear><Duration>00:00:30</Duration><MediaFiles>"
+        '<MediaFile delivery="streaming" type="application/x-mpegURL" width="1920" height="1080">'
+        "<![CDATA[https://warm.invalid/warm.m3u8]]></MediaFile></MediaFiles></Linear></Creative></Creatives>"
+        "</InLine></Ad></VAST>"
+    )
+    bid = {
+        "id": f"warm-{adapter}",
+        "impid": "s1",
+        "price": 0.01,
+        "adm": adm,
+        "crid": f"warm-{adapter}",
+        "adomain": ["warm.invalid"],
+        "dur": SLOT_SECONDS,
+        "mtype": 2,
+    }
+    return {"id": "warm", "cur": "USD", "seatbid": [{"seat": adapter, "bid": [bid]}]}
 
 
 def _json(data: Mapping[str, Any]) -> str:

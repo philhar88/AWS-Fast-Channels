@@ -34,8 +34,9 @@ from fast_channels.core.mediatailor_logs import (
     EXCLUDED_MANIFEST_LOG_FIELDS,
     MANIFEST_LOG_FIELDS,
 )
+from fast_channels.core.monetization.prefetch import NAME_PREFIX
 from fast_channels.infra.arns import arn
-from fast_channels.infra.constructs.delivery import ACCESS_LOG_FIELDS
+from fast_channels.infra.constructs.delivery import ACCESS_LOG_FIELDS, VIEWER_ACCESS_LOG_FIELDS
 from fast_channels.infra.constructs.logs import DELIVERY_PRINCIPAL, deliver
 
 __all__ = [
@@ -47,10 +48,14 @@ __all__ = [
     "QUERY_SCAN_LIMIT_BYTES",
     "Lake",
     "LakeBucket",
+    "cloudfront_log_location",
+    "cloudfront_partitions",
     "lake_database_name",
+    "lake_workgroup_name",
+    "parquet_column",
 ]
 
-EXCLUDED_ACCESS_LOG_FIELDS: Final = frozenset({"c-ip", "cs-uri-query", "x-forwarded-for"})
+EXCLUDED_ACCESS_LOG_FIELDS: Final = VIEWER_ACCESS_LOG_FIELDS
 """CloudFront fields the lake's table leaves out: the viewer's address and the original viewer query."""
 
 LEDGER_PREFIX: Final = "ledger/"
@@ -83,6 +88,32 @@ def lake_database_name(prefix: str) -> str:
     """Glue database of the deployment's lake: ``<prefix>_lake``, which Athena needs no quotes for (the prefix has no
     hyphen, ``core.naming.PREFIX_PATTERN``)."""
     return f"{prefix}_lake"
+
+
+def lake_workgroup_name(prefix: str) -> str:
+    """Athena workgroup of the deployment's lake: ``<prefix>-lake``."""
+    return f"{prefix}-lake"
+
+
+def cloudfront_log_location(account: str, distribution_id: str) -> str:
+    """Key prefix of one distribution's standard logs v2 in the logs bucket (``CdnAccessLogs``), with no slash."""
+    return f"AWSLogs/aws-account-id={account}/CloudFront/DistributionId={distribution_id}"
+
+
+def cloudfront_partitions() -> dict[str, glue.PartitionProjectionConfiguration]:
+    """Partition projection of a table of CloudFront's Parquet logs: ``year`` (this year and last: the logs bucket
+    keeps CloudFront logs for days, not years), ``month``, ``day``, ``hour``."""
+    return {
+        "year": glue.PartitionProjectionConfiguration.date(
+            format="yyyy",
+            min="NOW-1YEARS",
+            max="NOW",
+            step=glue.DateProjectionStep(interval=1, interval_unit=glue.DateIntervalUnit.YEARS),
+        ),
+        "month": glue.PartitionProjectionConfiguration.integer(min=1, max=12, digits=2),
+        "day": glue.PartitionProjectionConfiguration.integer(min=1, max=31, digits=2),
+        "hour": glue.PartitionProjectionConfiguration.integer(min=0, max=23, digits=2),
+    }
 
 
 class LakeBucket(Construct):
@@ -216,14 +247,24 @@ class View:
 
 _HIVE_TYPES: Final = {"varchar": "string", "bigint": "bigint", "double": "double", "timestamp(3)": "timestamp"}
 
-# Real-time ADS requests carry the break's SCTE-35 event id (evid=) and the content's UPID (upid=); the ad marker's
-# DATERANGE ID is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). FILLED_AVAIL joins its
-# MAKING_ADS_REQUEST by requestId within one personalization.
+# ADS requests carry the break's SCTE-35 event id (evid=) and the content's UPID (upid=); the ad marker's DATERANGE ID
+# is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). An event belongs to the break its
+# prefetch schedule names (pf-<evid>, the release module's), else to the one its own ad request URL names, never to
+# whatever shares its requestId (all seen live, 2026-11-06):
+# - a FILLED_AVAIL from a retrieval can carry the previous break's URL, while its prefetchScheduleName is right;
+# - MediaTailor gives one requestId to everything a playlist request set off, which can be a break's FILLED_AVAIL and,
+#   milliseconds later, the next break's prefetch retrieval.
+# A fill with neither takes the latest request of its requestId before it.
+_SCHEDULE_EVID: Final = (
+    "TRY_CAST(regexp_extract(prefetchschedulename, '^" + NAME_PREFIX + "([0-9]{{1,10}})$', 1) AS bigint)"
+)
+"""The event id a prefetch schedule's name carries (``core.monetization.prefetch.event_id_of``), braces doubled for
+``str.format``."""
 _BREAK_EVENTS: Final = """
 WITH requests AS (
   SELECT originid AS configuration, sessionid AS session_id, requestid AS request_id,
     CAST(from_iso8601_timestamp(eventtimestamp) AS timestamp(3)) AS at,
-    TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint) AS evid,
+    coalesce(<SCHEDULE_EVID>, TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint)) AS evid,
     url_extract_parameter(adsrequesturl, 'upid') AS upid,
     url_extract_parameter(adsrequesturl, 'ch') AS channel
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'MAKING_ADS_REQUEST'
@@ -235,13 +276,26 @@ markers AS (
     CAST(from_iso8601_timestamp(regexp_extract(admarkers, 'START-DATE="([^"]+)"', 1)) AS timestamp(3)) AS started_at
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'AD_MARKER_FOUND'
 ),
-fills AS (
-  SELECT requestid AS request_id,
+filled AS (
+  SELECT originid AS configuration, sessionid AS session_id, requestid AS request_id,
+    CAST(from_iso8601_timestamp(eventtimestamp) AS timestamp(3)) AS at,
+    coalesce(<SCHEDULE_EVID>, TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint)) AS evid,
     TRY_CAST(json_extract_scalar(avail, '$.originavailduration') AS double) AS avail_seconds,
     TRY_CAST(json_extract_scalar(avail, '$.filledduration') AS double) AS filled_seconds
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'FILLED_AVAIL'
+),
+fills AS (
+  SELECT f.configuration, f.session_id, f.at, coalesce(f.evid, max_by(r.evid, r.at)) AS evid,
+    f.avail_seconds, f.filled_seconds
+  FROM filled f LEFT JOIN requests r
+    ON f.evid IS NULL AND r.request_id = f.request_id AND r.session_id = f.session_id AND r.at <= f.at
+  GROUP BY f.configuration, f.session_id, f.request_id, f.at, f.evid, f.avail_seconds, f.filled_seconds
+),
+session_breaks AS (
+  SELECT configuration, session_id, evid, min(at) AS first_request_at
+  FROM requests WHERE evid IS NOT NULL GROUP BY configuration, session_id, evid
 )
-"""
+""".replace("<SCHEDULE_EVID>", _SCHEDULE_EVID)
 
 VIEWS: Final = (
     View(
@@ -276,16 +330,19 @@ marked AS (
   SELECT evid, max(upid) AS upid, min(started_at) AS started_at FROM markers WHERE evid IS NOT NULL GROUP BY evid
 ),
 requested AS (
-  SELECT r.evid, max(r.upid) AS upid, max(r.channel) AS channel, min(r.at) AS first_request_at,
-    count(DISTINCT r.request_id) AS ads_requests, count(f.request_id) AS filled_avails,
-    max(f.avail_seconds) AS avail_seconds, sum(f.filled_seconds) AS filled_seconds
-  FROM requests r LEFT JOIN fills f ON f.request_id = r.request_id
-  WHERE r.evid IS NOT NULL GROUP BY r.evid
+  SELECT evid, max(upid) AS upid, max(channel) AS channel, min(at) AS first_request_at,
+    count(DISTINCT request_id) AS ads_requests
+  FROM requests WHERE evid IS NOT NULL GROUP BY evid
+),
+avails AS (
+  SELECT evid, count(*) AS filled_avails, max(avail_seconds) AS avail_seconds, sum(filled_seconds) AS filled_seconds
+  FROM fills WHERE evid IS NOT NULL GROUP BY evid
 )
 SELECT s.evid, coalesce(m.upid, q.upid) AS upid, q.channel, m.started_at, q.first_request_at, s.configurations,
-  s.sessions, coalesce(q.ads_requests, 0) AS ads_requests, coalesce(q.filled_avails, 0) AS filled_avails,
-  q.avail_seconds, q.filled_seconds
+  s.sessions, coalesce(q.ads_requests, 0) AS ads_requests, coalesce(a.filled_avails, 0) AS filled_avails,
+  a.avail_seconds, a.filled_seconds
 FROM seen s LEFT JOIN marked m ON m.evid = s.evid LEFT JOIN requested q ON q.evid = s.evid
+  LEFT JOIN avails a ON a.evid = s.evid
 """,
     ),
     View(
@@ -302,15 +359,24 @@ FROM seen s LEFT JOIN marked m ON m.evid = s.evid LEFT JOIN requested q ON q.evi
             ("filled_seconds", "double"),
             ("fill_rate", "double"),
         ),
-        _BREAK_EVENTS
+        _BREAK_EVENTS  # noqa: S608 - constant SQL, nothing from input
         + """
-SELECT r.configuration, date_trunc('hour', r.at) AS hour, count(DISTINCT r.evid) AS breaks,
-  count(DISTINCT r.session_id) AS sessions, count(DISTINCT r.request_id) AS ads_requests,
-  count(f.request_id) AS filled_avails, sum(f.avail_seconds) AS avail_seconds,
-  sum(f.filled_seconds) AS filled_seconds,
-  sum(f.filled_seconds) / nullif(sum(f.avail_seconds), 0) AS fill_rate
-FROM requests r LEFT JOIN fills f ON f.request_id = r.request_id
-GROUP BY r.configuration, date_trunc('hour', r.at)
+,
+asked AS (
+  SELECT configuration, date_trunc('hour', at) AS hour, count(DISTINCT evid) AS breaks,
+    count(DISTINCT session_id) AS sessions, count(DISTINCT request_id) AS ads_requests
+  FROM requests GROUP BY configuration, date_trunc('hour', at)
+),
+avails AS (
+  SELECT f.configuration, date_trunc('hour', coalesce(b.first_request_at, f.at)) AS hour,
+    count(*) AS filled_avails, sum(f.avail_seconds) AS avail_seconds, sum(f.filled_seconds) AS filled_seconds
+  FROM fills f LEFT JOIN session_breaks b
+    ON b.configuration = f.configuration AND b.session_id = f.session_id AND b.evid = f.evid
+  GROUP BY f.configuration, date_trunc('hour', coalesce(b.first_request_at, f.at))
+)
+SELECT q.configuration, q.hour, q.breaks, q.sessions, q.ads_requests, coalesce(a.filled_avails, 0) AS filled_avails,
+  a.avail_seconds, a.filled_seconds, a.filled_seconds / nullif(a.avail_seconds, 0) AS fill_rate
+FROM asked q LEFT JOIN avails a ON a.configuration = q.configuration AND a.hour = q.hour
 """,
     ),
     View(
@@ -394,7 +460,7 @@ class Lake(Construct):
             removal_policy=removal_policy,
         )
         self.tables: dict[str, glue.S3Table] = {}
-        access = f"AWSLogs/aws-account-id={stack.account}/CloudFront/DistributionId={distribution_id}"
+        access = cloudfront_log_location(stack.account, distribution_id)
         self.tables["cloudfront_access"] = glue.S3Table(
             self,
             "CloudFrontAccess",
@@ -406,23 +472,12 @@ class Lake(Construct):
             s3_prefix=f"{access}/",
             data_format=glue.DataFormat.PARQUET,
             columns=[
-                glue.Column(name=_parquet_column(f), type=glue.Schema.STRING)
+                glue.Column(name=parquet_column(f), type=glue.Schema.STRING)
                 for f in ACCESS_LOG_FIELDS
                 if f not in EXCLUDED_ACCESS_LOG_FIELDS
             ],
             partition_keys=[glue.Column(name=key, type=glue.Schema.STRING) for key in ("year", "month", "day", "hour")],
-            partition_projection={
-                # This year and last: the logs bucket keeps CloudFront logs for days, not years.
-                "year": glue.PartitionProjectionConfiguration.date(
-                    format="yyyy",
-                    min="NOW-1YEARS",
-                    max="NOW",
-                    step=glue.DateProjectionStep(interval=1, interval_unit=glue.DateIntervalUnit.YEARS),
-                ),
-                "month": glue.PartitionProjectionConfiguration.integer(min=1, max=12, digits=2),
-                "day": glue.PartitionProjectionConfiguration.integer(min=1, max=31, digits=2),
-                "hour": glue.PartitionProjectionConfiguration.integer(min=0, max=23, digits=2),
-            },
+            partition_projection=cloudfront_partitions(),
             parameters={
                 "storage.location.template": Fn.join(
                     "",
@@ -503,7 +558,7 @@ class Lake(Construct):
         self.workgroup = athena.CfnWorkGroup(
             self,
             "WorkGroup",
-            name=f"{prefix}-lake",
+            name=lake_workgroup_name(prefix),
             description=f"FAST Channels ({prefix}) lake queries",
             recursive_delete_option=True,
             state="ENABLED",
@@ -564,7 +619,7 @@ def view_table(scope: Construct, id: str, view: View, *, database_name: str) -> 
     )
 
 
-def _parquet_column(field: str) -> str:
+def parquet_column(field: str) -> str:
     """CloudFront's Parquet column name of a standard-logs field: ``cs(User-Agent)`` -> ``cs_User_Agent``,
     ``timestamp(ms)`` -> ``timestamp_ms``, lowercased for Glue."""
     return field.replace("(", "_").replace(")", "").replace("-", "_").lower()

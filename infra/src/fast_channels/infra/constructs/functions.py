@@ -166,7 +166,7 @@ class LambdaDefaults:
     @property
     def construct_unique_id(self) -> str:
         """Construct type this injector applies to (must be a property, or jsii ignores the injector)."""
-        return cast("str", lambda_.Function.PROPERTY_INJECTION_ID)
+        return lambda_.Function.PROPERTY_INJECTION_ID
 
     def inject(self, original_props: dict[str, Any], context: InjectionContext) -> dict[str, Any]:
         """Return ``original_props`` (camelCase keys) completed with the defaults; explicit props win."""
@@ -195,7 +195,7 @@ class StateMachineDefaults:
     @property
     def construct_unique_id(self) -> str:
         """Construct type this injector applies to (must be a property, or jsii ignores the injector)."""
-        return cast("str", sfn.StateMachine.PROPERTY_INJECTION_ID)
+        return sfn.StateMachine.PROPERTY_INJECTION_ID
 
     def inject(self, original_props: dict[str, Any], context: InjectionContext) -> dict[str, Any]:
         """Return ``original_props`` (camelCase keys) completed with the defaults; explicit props win."""

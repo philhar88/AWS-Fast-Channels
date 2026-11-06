@@ -1,6 +1,6 @@
 """``POST /ownbook/openrtb``: the own book, the OpenRTB bidder that Prebid Server knows as ``ownbook``.
 
-For each imp it bids the house ads and the creatives of each line with budget left that fit the slot
+For each imp it bids the house ads and the creatives of each line with budget left, in its flight, that fit the slot
 (``fast_channels.core.pds.book``), from the current snapshot and the lines' budgets (``state.budgets``), both read off
 the request path. No bid is an HTTP 204, which Prebid Server reads as no bid; so is a sidecar without a snapshot (an
 empty book). A request it cannot read is a 400, which Prebid Server logs as the bidder's error; the auction goes on
@@ -8,6 +8,7 @@ without the own book, and the module's house fallback has nothing to render.
 """
 
 import json
+from datetime import UTC, datetime
 
 from aws_lambda_powertools import Logger
 from pydantic import ValidationError
@@ -44,7 +45,7 @@ def answer(body: bytes, started: float) -> Answer:
 def _answer(request: BidRequest) -> Answer:
     snapshot = store().get()
     exhausted = budgets().exhausted(snapshot.book)
-    answered = response(request, snapshot.book, exhausted=exhausted)
+    answered = response(request, snapshot.book, exhausted=exhausted, now=datetime.now(UTC))
     bids = answered["seatbid"][0]["bid"] if answered is not None else []
     logger.info(
         "own book",

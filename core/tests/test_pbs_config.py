@@ -6,6 +6,7 @@ Prebid Server loads shows up as a reviewed diff.
 
 import json
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -14,6 +15,7 @@ from pydantic import ValidationError
 from syrupy.extensions.json import JSONSnapshotExtension
 from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
+from fast_channels.core import pbs_config
 from fast_channels.core.demo_demand import vast_ad
 from fast_channels.core.monetization.playback import POD_SECONDS_FIELD, STORED_REQUEST, ads_body
 from fast_channels.core.monetization.validators import MISSING_DURATION_SECONDS
@@ -26,6 +28,8 @@ from fast_channels.core.pbs_config import (
     SHIPPED_ADAPTERS,
     SIMULATOR,
     VAST_HOOK,
+    WARM_FIELD,
+    WARM_STORED_REQUEST,
     HouseAd,
     PbsSettings,
     account,
@@ -39,6 +43,10 @@ from fast_channels.core.pbs_config import (
     stored_request_ids,
     to_yaml,
     tracker_host,
+    warm_adapters,
+    warm_bid_response,
+    warm_body,
+    warm_stored_request,
 )
 from fast_channels.core.pds.book import AD_SYSTEM, Creative
 
@@ -76,6 +84,8 @@ def test_rendered_files() -> None:
             "current-config/prebid-config.yaml",
             "stored_requests/fast-pod.json",
             "stored_requests/fast-pod-kids.json",
+            "stored_requests/fast-warm.json",
+            "stored_responses/warm-amt.json",
             "stored_accounts/fastm.json",
         ]
     )
@@ -119,6 +129,60 @@ def test_the_stored_request_is_a_template_pod_of_one_30_s_slot_for_the_own_book_
         "prebid": {"multibid": [{"bidder": OWN_BOOK, "maxbids": 9}]},  # house ads and lines
         "fast": {"slot_s": 30},
     }
+
+
+def test_the_warm_stored_request_answers_each_adapter_from_a_stored_bid_response() -> None:
+    """W-12: the warm-up's one slot names the simulator with the allow-list's parameters and answers it from
+    ``warm-amt``; everything else is the direct route's pod, marked ``ext.fast.warm``."""
+    warm = warm_stored_request(SETTINGS)
+    [slot] = warm["imp"]
+
+    assert warm["id"] == WARM_STORED_REQUEST == "fast-warm"
+    assert warm["ext"]["fast"] == {"slot_s": 30, "warm": True}
+    assert slot["ext"]["prebid"]["bidder"] == {OWN_BOOK: {}, SIMULATOR: {"placementId": "fastm-demo"}}
+    assert slot["ext"]["prebid"]["storedbidresponse"] == [{"bidder": SIMULATOR, "id": "warm-amt"}]
+    plain = stored_request(SETTINGS)
+    assert {k: v for k, v in warm.items() if k not in {"id", "imp", "ext"}} == {
+        k: v for k, v in plain.items() if k not in {"id", "imp", "ext"}
+    }
+    assert warm_body() == {"ext": {"prebid": {"storedrequest": {"id": "fast-warm"}}, "fast": {"pod_s": "30"}}}
+
+
+def test_the_module_reads_the_warm_mark_the_stored_request_sets() -> None:
+    """The fast-ctv module's ``WarmUp.FIELD`` is ``WARM_FIELD`` (``tests/pbs/test_warmup.py`` checks the module's
+    ``warm`` log line too)."""
+    module = Path(__file__).parents[2] / "pbs/fast-ctv/src/main/java/org/prebid/server/hooks/modules/fast/ctv/core"
+    field = re.search(r'public static final String FIELD = "([^"]+)";', (module / "WarmUp.java").read_text())
+
+    assert field is not None and field[1] == WARM_FIELD == "warm"
+
+
+def test_the_stored_bid_response_is_one_video_bid_for_the_warm_slot() -> None:
+    response = warm_bid_response(SIMULATOR)
+    [seat] = response["seatbid"]
+    [bid] = seat["bid"]
+
+    assert (response["cur"], seat["seat"]) == ("USD", SIMULATOR)
+    assert (bid["impid"], bid["dur"], bid["mtype"], bid["price"]) == ("s1", 30, 2, 0.01)
+    assert bid["adm"].startswith('<VAST version="4.2">') and "warm.invalid" in bid["adm"]
+
+
+def test_own_book_mode_warms_no_partner() -> None:
+    own_book = SETTINGS.model_copy(update={"simulator": False})
+    warm = warm_stored_request(own_book)
+
+    assert warm_adapters(own_book) == {}
+    assert warm["imp"][0]["ext"]["prebid"]["bidder"] == {OWN_BOOK: {}}
+    assert warm["imp"][0]["ext"]["prebid"]["storedbidresponse"] == []
+    assert not [path for path in render(own_book) if path.startswith("stored_responses/")]
+
+
+def test_an_adapter_the_zero_recorder_gate_has_not_covered_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One that builds more than one request would be called for real: render refuses it until tests/pbs covers it."""
+    monkeypatch.setattr(pbs_config, "WARM_VETTED_ADAPTERS", frozenset())
+
+    with pytest.raises(ValueError, match="zero-recorder gate"):
+        render(SETTINGS)
 
 
 def test_the_kids_stored_request_sets_coppa() -> None:
@@ -212,7 +276,7 @@ def test_the_own_book_and_the_module_call_the_pds_sidecar_on_the_tasks_loopback(
         "policy-timeout-ms": 50,
         "select-url": "http://127.0.0.1:8090/select",
         "select-timeout-ms": 200,
-        "tracker-template": f"{CDN}/ads/b.gif?d={{sid}}.{{evid}}&c={{crid}}&e={{event}}&enr={{enr}}",
+        "tracker-template": f"{CDN}/ads/b/{{sid}}.{{evid}}/{{crid}}/{{enr}}.gif",
         "house-ads": "[]",
         "pod-min-s": 30,
         "pod-max-s": 120,

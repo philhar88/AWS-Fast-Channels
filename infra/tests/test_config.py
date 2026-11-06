@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from types import UnionType
 from typing import Annotated, Any, get_args, get_origin
@@ -9,6 +10,7 @@ from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
 from pydantic import BaseModel
 
+from fast_channels.core.adload import AdLoadPolicy
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
@@ -422,7 +424,7 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed
 
 
-MODULES = ("ops", "models", "demand", "pds", "release", "crawl")
+MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity", "selling", "viewer")
 RECS = "haiku-5-5-adaptive-8k"
 """The recommender's fixture eval record (``infra/tests/data/evals``)."""
 RECOMMENDER: dict[str, Any] = {
@@ -446,6 +448,26 @@ LINE: dict[str, Any] = {
 
 def modules_on(*names: str) -> dict[str, Any]:
     return {f"modules.{name}.enabled": True for name in names}
+
+
+SELLING: dict[str, Any] = {
+    **modules_on("ops", "demand", "pds", "release", "selling"),
+    "modules.release.channels": ["{prefix}-demo"],
+}
+"""The selling module with what it needs."""
+
+
+def test_selling_needs_pds_and_release(load_config: Load) -> None:
+    message = config_error(load_config, with_shipped(**modules_on("selling")))
+
+    assert "  - fast-channels.modules: selling needs pds and release: enable them" in message
+    assert load_config(with_shipped(**SELLING)).modules.selling.enabled
+
+
+def test_selling_resolves_the_buyers_model(load_config: Load) -> None:
+    selling = load_config(with_shipped(**SELLING), region="us-east-1").modules.selling
+
+    assert (selling.buyer_model, selling.creatives, selling.cpm) == (US_HAIKU, ("direct2",), 14)
 
 
 def test_shipped_modules_are_off_and_at_their_defaults(load_config: Load) -> None:
@@ -474,6 +496,11 @@ def test_shipped_model_registry_holds_the_scheduler_agent(load_config: Load) -> 
         ("pds", "pds needs ops and demand: enable them or turn pds off", ("ops", "demand")),
         ("release", "release needs ops, demand and pds: enable them", ("ops", "demand", "pds")),
         ("crawl", "crawl needs pds and release: enable them", ("ops", "demand", "pds", "release")),
+        (
+            "viewer",
+            "viewer needs identity: enable it or turn viewer off",
+            ("ops", "demand", "pds", "release", "identity"),
+        ),
     ],
 )
 def test_modules_need_the_modules_they_build_on(
@@ -577,7 +604,33 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ),
         ({"modules.pds.demo_lines": [{**LINE, "creatives": ["sim1"]}]}, "not direct demo creatives: sim1"),
         ({"modules.pds.demo_lines": [{**LINE, "id": f"l{n}"} for n in range(9)]}, "at most 8 items"),
+        ({"modules.pds.ad_load": {"holdout": {"max_ads": 1}}}, "holdout is the control plan and takes no policy"),
+        ({"modules.pds.ad_load": {"standard": {}}}, "standard is the control plan and takes no policy"),
+        ({"modules.pds.ad_load": {"light": {"max_ads": 0}}}, "greater than or equal to 1"),
+        ({"modules.pds.ad_load": {"light": {"bar_cpm": 21}}}, "puts λ above λ_cap"),
+        ({"modules.pds.ad_load": {"Light": {"max_ads": 1}}}, "String should match pattern"),
+        ({"modules.pds.ad_load": {f"t{n}": {"max_ads": 1} for n in range(9)}}, "at most 8 items"),
         ({"modules.crawl.holdout_percent": 101}, "less than or equal to 100"),
+        ({"modules.selling.creatives": ["sim1"]}, "modules.selling.creatives: not direct demo creatives: sim1"),
+        ({"modules.selling.creatives": []}, "should have at least 1 item"),
+        ({"modules.selling.cpm": 0}, "greater than 0"),
+        (
+            {**SELLING, "modules.demand.mode": "own_book"},
+            "selling serves booked buys with the ladder kit's direct demo creatives, which only demand.mode demo "
+            "encodes; demand.mode is own_book",
+        ),
+        (
+            {**SELLING, "modules.pds.demo_lines": [{**LINE, "creatives": ["direct2"]}]},
+            "selling.creatives direct2: served by pds.demo_lines (one line per creative)",
+        ),
+        (
+            {**SELLING, "modules.selling.buyer_model": "us.anthropic.claude-opus-5-5"},
+            "fast-channels.modules.selling.buyer_model: 'us.anthropic.claude-opus-5-5' is not in agent.allowed_models",
+        ),
+        (
+            {**SELLING, "modules.release.channels": []},
+            "fast-channels.modules.selling: its products are the monetized channels; release.channels is empty",
+        ),
     ],
 )
 def test_invalid_module_configurations(load_config: Load, overrides: dict[str, Any], expected: str) -> None:
@@ -613,6 +666,7 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
     assert modules.models.tasks["recommender"].effort is Effort.LOW
     assert modules.demand.simulator is Simulator.LAMBDA
     assert modules.pds.demo_lines == (DemoLine.model_validate(LINE),)
+    assert modules.pds.ad_load == {"light": AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))}  # the demo's, by default
     assert modules.release.channels == ("fast-demo",)
 
 

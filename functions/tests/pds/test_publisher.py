@@ -12,10 +12,20 @@ import httpx
 import pytest
 from botocore.response import StreamingBody
 from botocore.stub import ANY, Stubber
+from pydantic import ValidationError
 
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.pds.book import Book, Line
-from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot, SnapshotBase, build, demo_demand, from_ip_ranges
+from fast_channels.core.pds.snapshot import (
+    SNAPSHOT_KEY,
+    PublishedLines,
+    Snapshot,
+    SnapshotBase,
+    build,
+    demo_demand,
+    from_ip_ranges,
+    with_lines,
+)
 from fast_channels.core.specs import Creative as KitCreative
 from fast_channels.core.specs import vast_key, vast_pod
 from fast_channels.functions import aws
@@ -341,3 +351,58 @@ def test_the_published_body_is_the_snapshot(s3: Stubber, monkeypatch: pytest.Mon
         events.unregister("before-parameter-build.s3.PutObject", handler)
 
     assert [Snapshot.model_validate(json.loads(b)) for b in bodies] == [snapshot, snapshot]
+
+
+BOOKED_KEY = "lines/booked.json"
+BOOKED = Line(
+    id="adcp-buy-1-1",
+    advertiser="AWS reference buyer",
+    adomain="acme-outdoor.example",
+    creatives=("direct2",),
+    cpm=40,
+    budget=50,
+    starts=datetime(2026, 11, 6, tzinfo=UTC),
+    ends=datetime(2026, 11, 13, tzinfo=UTC),
+    channels=("fastm-demo",),
+)
+
+
+def test_published_lines_follow_the_deployments(s3: Stubber) -> None:
+    document = PublishedLines(lines=(BOOKED,)).model_dump_json().encode()
+    s3.add_response("get_object", body(document), {"Bucket": BUCKET, "Key": BOOKED_KEY})
+
+    merged = with_lines(LINED, publisher.published_lines(BUCKET, BOOKED_KEY))
+
+    assert merged.lines == (LINE, BOOKED)
+    assert with_lines(LINED, None) == LINED == with_lines(LINED, PublishedLines())
+
+
+def test_no_published_lines_yet_is_none_and_an_invalid_document_fails_the_run(s3: Stubber) -> None:
+    s3.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    s3.add_response("get_object", body(b'{"v": 2}'), {"Bucket": BUCKET, "Key": BOOKED_KEY})
+
+    assert publisher.published_lines(BUCKET, BOOKED_KEY) is None
+    with pytest.raises(ValidationError):
+        publisher.published_lines(BUCKET, BOOKED_KEY)
+
+
+def test_the_run_publishes_the_booked_lines_and_their_budgets(
+    s3: Stubber, ssm: Stubber, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDS_BOOKED_LINES_KEY", BOOKED_KEY)
+    settings.cache_clear()
+    serve(monkeypatch, ranges())
+    document = PublishedLines(lines=(BOOKED,)).model_dump_json().encode()
+    s3.add_response("get_object", body(document), {"Bucket": BUCKET, "Key": BOOKED_KEY})
+    published(s3, None)
+    kit(s3, ssm)
+    written(s3)
+    budgeted: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        publisher, "set_budgets", lambda client, **kw: budgeted.append(tuple(line.id for line in kw["lines"])) or {}
+    )
+
+    result = publisher.handler({}, Context())
+
+    assert result["lines"] == {"direct-1": ["direct1"], "adcp-buy-1-1": ["direct2"]}
+    assert budgeted == [("direct-1", "adcp-buy-1-1")]

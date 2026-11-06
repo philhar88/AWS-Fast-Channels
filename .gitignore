@@ -20,6 +20,7 @@ cdk.out/
 node_modules/
 console/node_modules/
 console/dist/
+console/dist-viewer/
 console/.vite/
 
 # Local

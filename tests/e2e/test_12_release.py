@@ -704,12 +704,20 @@ def test_the_probe_sibling_runs_the_stable_release_and_fills_house_ads(
     stable: dict[str, Any] = dict(mediatailor.get_playback_configuration(Name=state.stable))
     probe: dict[str, Any] = dict(mediatailor.get_playback_configuration(Name=probe_name))
     assert probe["Tags"]["fast:release"] == stable["Tags"]["fast:release"] == release_tag(release)
-    # the same trees for the hooks it maps: the session controls; the crawl lookup (PRE_ADS) is the pair's only
-    assert (
-        probe["FunctionMapping"]["PRE_SESSION_INITIALIZATION"]
-        == stable["FunctionMapping"]["PRE_SESSION_INITIALIZATION"]
-    )
-    assert probe["FunctionMapping"].items() <= stable["FunctionMapping"].items(), (probe["FunctionMapping"], stable)
+    # The same session controls; the crawl lookup (PRE_ADS) and the identity module's ticket redeem (a per-sibling
+    # PRE_SESSION step before the controls) are the pair's only.
+    roots = [
+        mediatailor.get_function(FunctionId=c["FunctionMapping"]["PRE_SESSION_INITIALIZATION"])[
+            "SequentialExecutorConfiguration"
+        ]
+        for c in (probe, stable)
+    ]
+    assert roots[0]["Output"] == roots[1]["Output"], "both commit exactly the session controls"
+    probe_steps, stable_steps = ([s["FunctionId"] for s in root["FunctionList"]] for root in roots)
+    assert set(probe_steps) <= set(stable_steps) and probe_steps[-1] == stable_steps[-1], (probe_steps, stable_steps)
+    assert {k: v for k, v in probe["FunctionMapping"].items() if k != "PRE_SESSION_INITIALIZATION"}.items() <= stable[
+        "FunctionMapping"
+    ].items(), (probe["FunctionMapping"], stable)
     assert probe["AvailSuppression"] == stable["AvailSuppression"]
     probe_request = probe["AdDecisionServerConfiguration"]["HttpRequest"]
     stable_request = stable["AdDecisionServerConfiguration"]["HttpRequest"]

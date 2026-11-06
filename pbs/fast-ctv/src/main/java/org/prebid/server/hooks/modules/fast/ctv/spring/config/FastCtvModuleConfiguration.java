@@ -32,7 +32,7 @@ import java.util.function.Consumer;
  *     policy-timeout-ms: 50
  *     select-url: http://pds.&lt;prefix&gt;.fast.internal/select
  *     select-timeout-ms: 100
- *     tracker-template: https://&lt;cdn&gt;/ads/b.gif?d={sid}.{evid}&amp;c={crid}&amp;e={event}&amp;enr={enr}
+ *     tracker-template: https://&lt;cdn&gt;/ads/b/{sid}.{evid}/{crid}/{enr}.gif
  *     house-ads: '[{"crid":"house1","adm":"&lt;VAST ...&gt;","dur":30,"w":1920,"h":1080}]'
  *     log-requests: true
  *     pod-min-s: 30

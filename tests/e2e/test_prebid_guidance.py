@@ -203,11 +203,13 @@ def test_render_config_writes_the_stage_configuration(tmp_path: Path) -> None:
             "stored_accounts/fastm.json",
             "stored_requests/fast-pod.json",
             "stored_requests/fast-pod-kids.json",
+            "stored_requests/fast-warm.json",
+            "stored_responses/warm-amt.json",
         ]
     )
     config = (out / "current-config/prebid-config.yaml").read_text()
     assert '"http://127.0.0.1:8090/policy"' in config  # the PDS sidecar (ADR-0036)
-    assert '"https://d111111abcdef8.cloudfront.net/ads/b.gif?d={sid}' in config
+    assert '"https://d111111abcdef8.cloudfront.net/ads/b/{sid}.{evid}/{crid}/{enr}.gif"' in config
 
 
 def test_pbs_settings_follow_the_stage(tmp_path: Path) -> None:

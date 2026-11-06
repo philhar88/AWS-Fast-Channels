@@ -89,6 +89,7 @@ def existing(configuration: str) -> list[dict[str, Any]]:
         item
         for page in aws.client("mediatailor")
         .get_paginator("list_prefetch_schedules")
+        # OPTIMIZATION(aws): W-2 2.16 without ScheduleType=ALL the list hides RECURRING schedules (undocumented default)
         .paginate(PlaybackConfigurationName=configuration, ScheduleType="ALL")
         for item in page.get("Items", [])
     ]
@@ -154,6 +155,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
                     "counts": counts,  # not top-level: "created" is a LogRecord attribute
                     "created_names": [r["Name"] for r in result.create],
                     "deleted_names": result.delete,
+                    "consuming_names": result.consuming,
                     "left_out": result.left_out[:20],
                 },
             )

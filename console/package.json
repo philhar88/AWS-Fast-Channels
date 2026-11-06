@@ -1,12 +1,13 @@
 {
   "name": "fast-channels-console",
   "private": true,
-  "version": "4.0.0",
+  "version": "4.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:mock": "VITE_MOCK=1 vite",
-    "build": "tsc -b && vite build",
+    "dev:viewer": "vite --mode viewer --open /viewer.html",
+    "build": "tsc -b && vite build && vite build --mode viewer",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "lint": "eslint . --max-warnings 0",
@@ -16,12 +17,12 @@
     "screenshots": "SCREENSHOTS=1 playwright test"
   },
   "dependencies": {
-    "@cloudscape-design/chat-components": "^1.0.182",
+    "@cloudscape-design/chat-components": "^1.0.185",
     "@cloudscape-design/collection-hooks": "^1.0.110",
-    "@cloudscape-design/components": "^3.0.1404",
-    "@cloudscape-design/design-tokens": "^3.0.116",
+    "@cloudscape-design/components": "^3.0.1407",
+    "@cloudscape-design/design-tokens": "^3.0.117",
     "@cloudscape-design/global-styles": "^1.0.71",
-    "hls.js": "1.7.3",
+    "hls.js": "1.7.4",
     "oidc-client-ts": "^3.5.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -32,18 +33,18 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.64.1",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "eslint": "^10.12.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "eslint": "^10.14.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.13.0",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.71.2",
-    "vite": "^8.3.4",
-    "vitest": "^5.0.5"
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=22.12"

@@ -1,6 +1,6 @@
 # 0011 — AgentCore Runtime (Strands) over the managed Harness
 
-**Status:** Accepted
+**Status:** Accepted, amended by [0024](0024-agentic-selling-over-adcp.md) (the AdCP seller agent serves A2A)
 
 ## Context
 AgentCore Harness (GA June 2026) runs an agent loop from configuration alone. In tests a new Harness session took about

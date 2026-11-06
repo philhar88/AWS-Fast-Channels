@@ -58,6 +58,13 @@
       "enabled": true,
       "pre_ads": true,
       "holdout_percent": 20
+    },
+    "identity": {
+      "enabled": true
+    },
+    "viewer": {
+      "enabled": true,
+      "ad_panel": true
     }
   }
 }

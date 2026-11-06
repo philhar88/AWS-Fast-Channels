@@ -1,0 +1,16 @@
+.rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 320px);
+  gap: 16px;
+  overflow-x: auto;
+  padding-block-end: 8px;
+  scroll-snap-type: x mandatory;
+  list-style: none;
+  margin: 0;
+  padding-inline: 0;
+}
+
+.tile {
+  scroll-snap-align: start;
+}
