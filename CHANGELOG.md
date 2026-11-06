@@ -135,6 +135,9 @@ All notable changes to this project are documented here. The format follows
   `^`, which `DATABASE_URL` carries as `%5E`; the Prebid Sales Agent does not decode it, so the seller failed to log in
   and exited at boot, and the ECS circuit breaker rolled the Selling stack back (seen on a release-gate stage; about
   one deploy in three). The password is now letters, digits and `-._` only (`OPTIMIZATION(oss): W-8 A12`).
+- **The operations guide's configuration tables match the model again** ([docs/operations.md](docs/operations.md)).
+  They gain `modules.demand.pod_cache_concurrency` and `pod_cache_memory_mb`, and take the model's wording for the
+  rest. Its teardown list now also names the two log groups the Selling stack leaves after each deployment.
 
 ## [4.0.0] - 2026-10-31
 

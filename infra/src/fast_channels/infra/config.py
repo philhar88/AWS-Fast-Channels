@@ -789,7 +789,8 @@ class ReleaseModule(_Module):
     probe_sibling: bool = True
     """Create a house-only probe playback configuration per channel, for canaries and smoke tests."""
     secret_rotation_days: int = Field(default=90, ge=1)
-    """Days between rotations of the origin secret that MediaTailor sends to the demand origin."""
+    """Days between rotations of the origin secret that MediaTailor sends to the demand origin (a daily check rotates
+    once they have passed)."""
     prefetch: ReleasePrefetch = ReleasePrefetch()
 
     @field_validator("channels")
@@ -834,7 +835,8 @@ class SellingModule(_Module):
     enabled: bool = False
     """Deploy agentic selling: the Prebid Sales Agent as the stage's AdCP seller of record, a sandbox in its testing
     mode (simulated money), with the AWS reference buyer and governance agents on AgentCore Runtime. A buy that a
-    buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP."""
+    buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP
+    (docs/selling.md)."""
     cpm: Decimal = Field(default=Decimal("14.00"), gt=0)
     """Fixed price of each channel product, US dollars per 1,000 impressions (simulated)."""
     creatives: tuple[str, ...] = Field(default=("direct2",), min_length=1)

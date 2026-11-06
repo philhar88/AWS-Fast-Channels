@@ -124,7 +124,8 @@ own Dockerfile, unmodified; the seller gets the bridge as a layer that adds file
 skipped when the repository already has the context's digest as a tag. It then deploys the Selling stack with the
 images, the catalog table and CloudFront's origin-facing prefix list. `destroy-demand` deletes the Selling stack first,
 and its inventory reports anything tagged `fast:module=selling` that is left, the agents' log groups and any database
-snapshot.
+snapshot. Two untagged log groups of CDK's log-retention provider stay after every deployment of the stack; delete
+them by hand ([operations.md](operations.md#destroy)).
 
 | Part | What it is |
 |---|---|
