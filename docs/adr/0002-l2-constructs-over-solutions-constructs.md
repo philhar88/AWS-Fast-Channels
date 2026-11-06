@@ -1,6 +1,6 @@
 # 0002 — Stable L2 constructs over AWS Solutions Constructs
 
-**Status:** Accepted, amended by [0020](0020-demand-through-the-prebid-server-guidance.md) (exception A)
+**Status:** Accepted, amended by [0020](0020-demand-through-the-prebid-server-guidance.md) (exception A) and [0024](0024-agentic-selling-over-adcp.md) (exception B)
 
 ## Context
 Re-use is a primary goal. AWS Solutions Constructs 2.105 offer patterns that look relevant (`aws-s3-stepfunctions`,
@@ -29,6 +29,9 @@ construct without inheriting a pattern library's opinions.
   is deployed as its own CDK app at a pinned tag, with overlays, and is not composed into this app. Porting its
   roughly 350 resources to our constructs would fork a guidance that AWS maintains. The overlays (about 150 lines)
   are re-checked against the pin on every CI run.
+- **B. The Guidance for Advertising Agents on AWS** ([0024](0024-agentic-selling-over-adcp.md)): its reference buyer
+  and governance agents are built from a pinned commit, unmodified, and deployed by this app's CDK (AgentCore Runtime
+  L2), never by the guidance's own deployer, which cannot run inside a stage's names and permissions boundary.
 
 ## L1 resources in use
 Each L1 below is used because no stable L2 covers it; a module's pull request that adds one lists it here.

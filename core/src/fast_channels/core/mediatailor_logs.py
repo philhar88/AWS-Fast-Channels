@@ -96,6 +96,7 @@ _MANIFEST_DEFAULT_FIELDS: Final = (
     "http",
     "streamId",
 )
+# OPTIMIZATION(aws): W-2 1.25 the ADS log stores header values (the origin secret, the ticket) in plain text
 EXCLUDED_ADS_LOG_FIELDS: Final = frozenset({"requestHeaders", "rawAdsRequest"})
 """Never stored: the headers MediaTailor sent the ADS (viewer address and user agent; on monetized
 configurations the origin secret and the ticket) and the opt-in raw request body (the ticket)."""

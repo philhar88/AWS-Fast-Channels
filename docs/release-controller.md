@@ -27,7 +27,7 @@ send their ad requests as a templated OpenRTB POST to Prebid Server:
 
 | Sibling | Role |
 |---|---|
-| `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it) |
+| `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it). With the `identity` module they are *ticketed*: their PRE_SESSION root redeems the playback ticket before the session controls, and their ad requests carry it (`X-Fast-T`), except on the lab channel ([identity.md](identity.md#the-pre_session-redeem)) |
 | `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs. It runs the stable sibling's release, re-applied after every promotion and rollback ([below](#the-probe-follows-the-stable-release)) |
 
 These names, and the controller's IAM grants on `<channel>-p-*`, belong to the channel: the configuration refuses
@@ -284,6 +284,10 @@ Each schedule, `pf-<event id>`, tagged `fast:owner=release-controller`:
 
 - **Create-only.** A schedule is never changed: a moved break's schedule is deleted and created again, and a re-planned
   break's is deleted, because retrieval transcodes bill whether or not the break airs.
+- **Never once its window opens.** A schedule whose consumption window has opened is kept until it closes, whatever
+  the schedule of record says: a break that has started leaves the schedule the prefetcher reads, and deleting its
+  schedule then threw away what the sessions had retrieved before they reached the marker. The run logs these as
+  `consuming_names`.
 - **When a break has moved.** Channel Assembly's approximate start shifts by a second or so between reads, and
   MediaTailor keeps schedule times in whole seconds.
   - A break has moved when its start is more than 3 s (half a 6.006 s segment) from the schedule's, both in whole
@@ -371,6 +375,7 @@ it owns the group; the Pds stack publishes the function's ARN as `/<prefix>/pds/
 | `<prefix>-release-dead-letters` | A `Desired State Rendered` event that could not start the state machine |
 | `<sibling>-presessioninithook-errors`, `-preadsrequesthook-errors`, `-function-errors`, `-getmanifest-errors` | Any error of the sibling in five minutes |
 | `<prefix>-release-zero-ads-sessions` | Sessions on a sibling that saw three breaks without an ad request (hourly) |
+| `<prefix>-release-unserved-breaks` | A sibling's break that MediaTailor neither filled from its retrieval nor asked for in real time, with nothing logged (hourly, the zero-ads detector's `UnservedBreaks`, a series per sibling). A break counts once per session, by its `DATERANGE` ID: MediaTailor can meet its start marker (not the one that gained `,DURATION=`) several times, fill it from the retrieval at the first and ask again at a later one, and the break is served when any sighting names its prefetch schedule or is followed by a real-time request or a fill of the session within 10 s. The silent-loss detector cannot see one session's lost break; this counts each |
 | `<prefix>-release-log-loss` | MediaTailor filled ad time its vended ADS log does not have, a second or more (hourly, over an hour that ended 20 minutes before): the `Sum` of `AWS/MediaTailor` `Avail.FilledDuration` against the log's `FILLED_AVAIL` `avail.filledDuration` per sibling. Both are emitted once per avail at the break, prefetched or not, and agree to the millisecond on both demand routes; request counts do not reconcile, because the log has a `MAKING_ADS_REQUEST` per retrieval and per VAST Wrapper hop. MediaTailor can leave a requested, filled break out of the log entirely, and the silent-loss detector, which counts logged markers, does not see it. An hour that began before the siblings' log group existed (a new stage) is skipped, with no datapoint |
 | `<sibling>-markers-without-ads-request` | In 2 of 10 minutes with at least 5 markers, more than half of the markers had no ad request: an invalid rendered body or an exhausted PRE_ADS budget makes no request and logs no error, and the break plays unfilled. A break's marker counts once (MediaTailor finds a Channel Assembly marker again when it gains its duration, without a request), and a ratio leaves out the viewers who join during a break. A prefetched break's marker (it names its `prefetchScheduleName`) is not counted: its request was the retrieval, and its fill loss is the log reconciliation's and the smoke test's. `<prefix>-lab-x` has this alarm too, for a harness to prove it (`tests/e2e`) |
 | `<prefix>-release-rotation-failed` | An origin-secret rotation failed: the ledger's `rotation.fail` says at which step; run it again |
@@ -408,4 +413,5 @@ stay until the stack goes.
 | `<prefix>-release-drift` in alarm | The drift function's log (`release drift`): the paths that differ |
 | `release.hold` in the ledger | No monetized channel ran and there is no lab channel (or no agent to start it): start a channel and run the release again by hand |
 | `release.rollback` in the ledger | Its `reason` (a failed smoke verdict lists what failed; `ROLLED_BACK` names the alarm, or `timed_out` the PRE_ADS requests that reached their timeout) |
+| `<prefix>-release-unserved-breaks` in alarm | **MediaTailor skipped a prefetched break; open an AWS case** ([W-2 1.33](workarounds.md)). The detector's log names each session, sibling and marker time. Check the sibling's ADS log for that session: a retrieval (`MAKING_ADS_REQUEST` with `prefetchScheduleName`), then the break's `AD_MARKER_FOUND` without it, then nothing. Attach those events and the schedule's windows (`GetPrefetchSchedule`). Nothing of ours to roll back: the viewer saw the slate for that break |
 | `<prefix>-release-log-loss` in alarm | **Log loss means delivery is under-counted.** The Pod Decision Service counts deliveries from the same log's `BEACON_FIRED`, so the breaks MediaTailor left out may have delivered impressions that were not counted, and the sweeper may release their reservations. The reconciliation function's log names the siblings and the hour. Reconcile delivery from the trackers' own logs (the impression URLs the creatives call); the alarm detects and never back-fills |

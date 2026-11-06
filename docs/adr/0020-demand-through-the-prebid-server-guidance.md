@@ -91,7 +91,10 @@ The optional demand module ([docs/demand.md](../demand.md)) puts an auction behi
   named the length in the id, so a break off the grid, such as a mid-break joiner's remainder (ADR 0021), named none.
   Third-party bidders, IDs and user data are added only by the policy hook, after a positive, in-time answer from the
   Pod Decision Service. A hook that is skipped, slow, failing or absent therefore leaves the own book and house ads:
-  no third-party call.
+  no third-party call. The warm-up's stored request `fast-warm` (added 2026-11-05, W-12) is the one that names
+  partners: each is answered from a stored bid response, Prebid Server's path without the HTTP call, so it calls none
+  either. The render refuses an adapter that the zero-recorder gate has not shown to build exactly one request (with
+  more, Prebid Server calls the real bidder).
 - **One rendered configuration per stage** (`core/pbs_config.py`):
   - the guidance's five shipped adapters off, and its simulator on in demo mode only;
   - `server.http.server-instances` = vCPU;

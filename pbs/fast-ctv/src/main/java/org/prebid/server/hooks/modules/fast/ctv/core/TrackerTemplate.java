@@ -11,8 +11,9 @@ import java.util.Objects;
  * with {@code enr} 0 (the house fallback, or an answer that lists none for the ad).
  * <p>
  * The template is a URL with the placeholders {@code {sid}}, {@code {evid}}, {@code {crid}}, {@code {event}} and
- * {@code {enr}}, for example {@code https://cdn.example/ads/b.gif?d={sid}.{evid}&c={crid}&e={event}&enr={enr}}. Each
- * value is URL-encoded.
+ * {@code {enr}}, for example {@code https://cdn.example/ads/b/{sid}.{evid}/{crid}/{enr}.gif} (the deployment's, an
+ * impression: its parameters in the path, which the CDN's logs keep). Each value is percent-encoded as a path segment
+ * or a query value: a space is {@code %20}, never {@code +}.
  */
 public final class TrackerTemplate {
 
@@ -41,6 +42,6 @@ public final class TrackerTemplate {
     }
 
     private static String encode(String value) {
-        return URLEncoder.encode(Objects.requireNonNullElse(value, ""), StandardCharsets.UTF_8);
+        return URLEncoder.encode(Objects.requireNonNullElse(value, ""), StandardCharsets.UTF_8).replace("+", "%20");
     }
 }

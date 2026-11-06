@@ -57,9 +57,13 @@ class Viewer:
     vid: str | None = None
     cid: str | None = None
     arm: str | None = None
-    tier: int | None = None
+    tier: str | None = None
+    """The viewer's ad-load tier. The binding never carries it: the PDS reads it from the viewer's profile
+    (``core.pds.viewers``) for ``/select``."""
     gpp: str | None = None
     gpp_sid: tuple[int, ...] = ()
+    persona: str | None = None
+    """The demo persona the viewer signed in as (``custom:persona``), for the persona-aware parts of the PDS."""
 
 
 ANONYMOUS: Final = Viewer()
@@ -183,6 +187,8 @@ class PolicyDecision:
     response: PolicyResponse
     ip_rule: IpRule
     contributions: Contributions
+    viewer: Viewer = ANONYMOUS
+    """The viewer parameters the mode allows: a bound viewer's in FULL and PSEUDONYMOUS, else none."""
 
 
 def decide(
@@ -228,4 +234,4 @@ def decide(
         devicetype=device_type(request.ua),
         app_content=contributions.app_content or None,
     )
-    return PolicyDecision(response, address.rule, contributions)
+    return PolicyDecision(response, address.rule, contributions, resolution.viewer)

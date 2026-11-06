@@ -215,6 +215,7 @@ def bedrock_model(spec: ModelSpec, mode: Mode, region: str, profile_arn: str | N
         model_id=spec.model_id,
         max_tokens=spec.max_tokens,
         additional_request_fields=request_fields,
+        # OPTIMIZATION(oss): FINDINGS M13-02 Strands derives these from the model id, so a profile ARN disables them
         cache_config=CacheConfig(strategy="anthropic" if anthropic and profile_arn else "auto"),
         include_tool_result_status=True if anthropic and profile_arn else "auto",
         region_name=region,

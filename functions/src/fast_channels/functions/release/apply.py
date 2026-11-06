@@ -186,6 +186,7 @@ def _existing(function_id: str) -> dict[str, Any] | None:
     return found
 
 
+# OPTIMIZATION(aws): W-2 1.16 PutFunction with Tags fails on an existing id: compare without tags (tags=False)
 def put_function(function: Function) -> bool:
     """Create ``function`` with its tags; True if it was created, False if it already existed unchanged.
 

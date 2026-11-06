@@ -103,6 +103,29 @@ def test_the_gate_scales_to_zero_only_after_15_minutes_without_a_channel() -> No
     assert definition["States"]["LowerMinimum"]["Arguments"]["MinCapacity"] == 0
 
 
+def test_the_warm_up_sends_warm_requests_one_by_one_then_a_share_of_the_replay() -> None:
+    """W-12: the warm stored request first, sequentially (2 per healthy target, plus 2), so a new task creates its
+    adapters' metric keys before concurrent auctions; then one replay request in four names it."""
+    spec = warmup_buildspec(
+        prefix="fastm",
+        cloudfront_domain="d1.cloudfront.net",
+        cluster_arn=NETWORK["cluster_arn"],
+        target_group_arn=NETWORK["target_group_arn"],
+    )
+    build = spec["phases"]["build"]["commands"]
+
+    sequential = next(i for i, command in enumerate(build) if "curl" in command and "@warm.json" in command)
+    attack = next(i for i, command in enumerate(build) if "vegeta attack" in command)
+    assert sequential < attack
+    assert "$(( 2 * (HEALTHY > 0 ? HEALTHY : 1) + 2 ))" in build[sequential]
+    assert '"X-Fast-Probe: 1"' in build[sequential] and "x-fast-origin: $SECRET" in build[sequential]
+    targets = next(command for command in build if "> targets.txt" in command)
+    assert targets.count("@warm.json") == 1 and "seq 2 4" in targets and targets.count("@body.json") == 1
+    assert """printf '%s' '{"ext":{"prebid":{"storedrequest":{"id":"fast-warm"}},"fast":{"pod_s":"30"}}}'""" in (
+        " ".join(build)
+    )
+
+
 def test_the_warmup_replays_probe_auctions_with_a_verified_vegeta() -> None:
     spec = warmup_buildspec(
         prefix="fastm",

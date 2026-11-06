@@ -24,6 +24,7 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from fast_channels.core.ad_server import AdServer
+from fast_channels.core.adload import CONTROL_TIERS, TIER_PATTERN, AdLoadPolicy
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
@@ -661,6 +662,14 @@ class DemoLine(_Section):
     """A guaranteed line: placed first in a pod, ahead of any bid."""
 
 
+MAX_AD_LOAD_TIERS: Final = 8
+"""The most tiers ``modules.pds.ad_load`` may price (DESIGN §16.1: at most 3 value tiers by 3 tolerance bands)."""
+
+
+def _default_ad_load() -> dict[str, AdLoadPolicy]:
+    return {"light": AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))}
+
+
 class PdsModule(_Module):
     """The Pod Decision Service module (``modules.pds``)."""
 
@@ -683,6 +692,14 @@ class PdsModule(_Module):
     """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's
     environment). Each line's budget is split over the own book's budget shards; a line stops serving once
     reservations hold all of it."""
+    ad_load: dict[Annotated[str, Field(pattern=TIER_PATTERN)], AdLoadPolicy] = Field(
+        default_factory=_default_ad_load, max_length=MAX_AD_LOAD_TIERS
+    )
+    """The ad load of each viewer tier (ADR-0037): ``max_ads``, the most ads in one break, and ``bar_cpm``, the
+    accepted CPM a sold ad must beat (at most $20.50: λ_cap). Viewers get a tier from their profile; FULL and
+    PSEUDONYMOUS breaks follow it, every other break and every other tier keeps the control plan (every slot, at the
+    market floor). ``standard`` and ``holdout`` are the control plan and cannot be priced. The default is the demo's
+    ``light`` tier: one ad per break, above $20."""
 
     @model_validator(mode="after")
     def _groups_hold_their_calls(self) -> Self:
@@ -704,6 +721,8 @@ class PdsModule(_Module):
             raise ValueError(f"demo_lines: a creative serves at most one line: {error}") from None
         if unknown := sorted(set(served) - set(crids(DemoRole.DIRECT))):
             raise ValueError(f"demo_lines: not direct demo creatives: {', '.join(unknown)}")
+        if control := sorted(set(self.ad_load) & CONTROL_TIERS):
+            raise ValueError(f"ad_load: {', '.join(control)} is the control plan and takes no policy")
         return self
 
 
@@ -715,6 +734,7 @@ class ReleaseStrategy(StrEnum):
     LARGE = "large"
 
 
+# OPTIMIZATION(aws): W-2 1.1 prefetch also prepares creatives (NEW_CREATIVE skips): it stays for herd shaping
 class ReleasePrefetch(_Section):
     """Ad prefetch on the monetized siblings (``modules.release.prefetch``; DESIGN §10)."""
 
@@ -769,7 +789,8 @@ class ReleaseModule(_Module):
     probe_sibling: bool = True
     """Create a house-only probe playback configuration per channel, for canaries and smoke tests."""
     secret_rotation_days: int = Field(default=90, ge=1)
-    """Days between rotations of the origin secret that MediaTailor sends to the demand origin."""
+    """Days between rotations of the origin secret that MediaTailor sends to the demand origin (a daily check rotates
+    once they have passed)."""
     prefetch: ReleasePrefetch = ReleasePrefetch()
 
     @field_validator("channels")
@@ -793,11 +814,77 @@ class CrawlModule(_Module):
     objects and in OpenRTB ``content.data[].cids``; unset, the content id travels in ``content.id`` only."""
 
 
+class IdentityModule(_Module):
+    """The viewer-identity module (``modules.identity``; ADR-0018)."""
+
+    enabled: bool = False
+    """Deploy viewer identity: a Cognito viewer pool; ``POST /playback``, which mints a single-use playback ticket for
+    a signed-in viewer's play; and ``POST /redeem``, which binds the ticket to the one session that opens it
+    (docs/identity.md)."""
+    redeem_window_seconds: int = Field(default=120, ge=30, le=600)
+    """From mint to the latest redeem: the player opens the ticket's URL at once, in one session."""
+    api_rate_limit: int = Field(default=50, ge=1, le=10_000)
+    """Requests per second the identity API accepts (API Gateway stage throttling, every method)."""
+    api_burst_limit: int = Field(default=100, ge=1, le=5_000)
+    """Burst of the identity API's throttling."""
+
+
+class SellingModule(_Module):
+    """The agentic-selling module (``modules.selling``; docs/selling.md)."""
+
+    enabled: bool = False
+    """Deploy agentic selling: the Prebid Sales Agent as the stage's AdCP seller of record, a sandbox in its testing
+    mode (simulated money), with the AWS reference buyer and governance agents on AgentCore Runtime. A buy that a
+    buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP
+    (docs/selling.md)."""
+    cpm: Decimal = Field(default=Decimal("14.00"), gt=0)
+    """Fixed price of each channel product, US dollars per 1,000 impressions (simulated)."""
+    creatives: tuple[str, ...] = Field(default=("direct2",), min_length=1)
+    """Direct demo creatives (``crid``) that booked buys are served with, one per package while its buy runs: the
+    AWS reference buyer sends no creatives. No demo line may serve them; a package left without one is not served."""
+    publisher_domain: str = Field(default="fast-channels.example", pattern=_DOMAIN)
+    """The publisher domain that the seller's products and properties name."""
+    buyer_model: str = DEFAULT_MODEL
+    """Bedrock model of the reference buyer agent (``{geo}`` resolved as for the agent; one of
+    ``agent.allowed_models``)."""
+    buyer_brand: str = Field(default="acme-outdoor.example", pattern=_DOMAIN)
+    """The brand domain that the reference buyer books for (simulated)."""
+
+    @field_validator("buyer_model")
+    @classmethod
+    def _resolve_buyer_model(cls, model: str, info: ValidationInfo) -> str:
+        region = (info.context or {}).get("region")
+        return resolve_geo(model, region) if region else model
+
+    @field_validator("creatives")
+    @classmethod
+    def _direct_creatives(cls, creatives: tuple[str, ...]) -> tuple[str, ...]:
+        if unknown := sorted(set(creatives) - set(crids(DemoRole.DIRECT))):
+            raise ValueError(f"not direct demo creatives: {', '.join(unknown)}")
+        return _unique(creatives)
+
+
+class ViewerModule(_Module):
+    """The reference viewer app (``modules.viewer``)."""
+
+    enabled: bool = False
+    """Deploy the reference viewer: a web app on its own CloudFront distribution where the demo personas sign in to
+    the viewer pool, get a rule-based rail of recommended channels from their genres and the program guide, and play
+    each channel on a playback ticket of their own."""
+    ad_panel: bool = False
+    """Add the demo's "why these ads" panel: an API that reads the Pod Decision Service's decision records of the
+    signed-in viewer's own sessions and shows each break's privacy mode, tier, ad-load policy and pod. Demo only: it
+    shows viewers their value tier, which a production viewer app never does."""
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
     "release": ("ops", "demand", "pds"),
     "crawl": ("pds", "release"),
+    "identity": ("release",),
+    "selling": ("pds", "release"),
+    "viewer": ("identity",),
 }
 """Modules an enabled module builds on."""
 
@@ -817,11 +904,28 @@ class ModulesConfig(_Section):
     pds: PdsModule = PdsModule()
     release: ReleaseModule = ReleaseModule()
     crawl: CrawlModule = CrawlModule()
+    identity: IdentityModule = IdentityModule()
+    selling: SellingModule = SellingModule()
+    viewer: ViewerModule = ViewerModule()
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""
         module: _Module = getattr(self, name)
         return module.enabled
+
+    def _selling_problems(self) -> list[str]:
+        if not self.selling.enabled:
+            return []
+        problems = []
+        if self.demand.mode is not DemandMode.DEMO:
+            problems.append(
+                "selling serves booked buys with the ladder kit's direct demo creatives, which only demand.mode demo "
+                f"encodes; demand.mode is {self.demand.mode}"
+            )
+        served = {crid for line in self.pds.demo_lines for crid in line.creatives}
+        if shared := sorted(set(self.selling.creatives) & served):
+            problems.append(f"selling.creatives {', '.join(shared)}: served by pds.demo_lines (one line per creative)")
+        return problems
 
     @model_validator(mode="after")
     def _needs_met(self) -> Self:
@@ -834,6 +938,7 @@ class ModulesConfig(_Section):
             problems.append(
                 f"demand.ad_server {self.demand.ad_server} needs release: its PRE_ADS auction is a release Function"
             )
+        problems += self._selling_problems()
         if problems:
             raise ValueError("\n".join(problems))
         return self
@@ -965,6 +1070,12 @@ class FastChannelsConfig(_Section):
                 f"{where}.ops.ledger_lock: compliance-mode records cannot be deleted before their retention ends, "
                 "which removal=destroy needs; use governance or removal=retain"
             )
+        if modules.selling.enabled:
+            allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
+            if (model := modules.selling.buyer_model) not in allowed:
+                problems.append(f"{where}.selling.buyer_model: {model!r} is not in agent.allowed_models {allowed}")
+            if not modules.release.channels:
+                problems.append(f"{where}.selling: its products are the monetized channels; release.channels is empty")
         if modules.models.enabled:
             allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
             problems += [

@@ -19,7 +19,16 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from fast_channels.core.pbs_config import PBS_VERSION as SUPPORTED_PBS_VERSION
-from fast_channels.core.pbs_config import PbsSettings, account, auction_body, house_ads, prebid_config, render, to_yaml
+from fast_channels.core.pbs_config import (
+    PbsSettings,
+    account,
+    auction_body,
+    house_ads,
+    prebid_config,
+    render,
+    to_yaml,
+    warm_body,
+)
 from fast_channels.core.pds.book import Creative
 
 if TYPE_CHECKING:
@@ -101,12 +110,20 @@ def contract_accounts() -> list[dict[str, Any]]:
     return [shipped, off, absent, cut]
 
 
-def local_config(mocks: Mocks, out: Path, *, port: int, module: bool, analytics: bool = False) -> Path:
+def local_config(
+    mocks: Mocks,
+    out: Path,
+    *,
+    port: int,
+    module: bool,
+    analytics: bool = False,
+    prometheus_port: int | None = None,
+) -> Path:
     """The stage's rendered configuration with what a local run needs instead of the guidance's environment: plain
     HTTP, file-system settings, the mocks' endpoints and a test-only OpenRTB 2.6 bidder (``echo26``). ``analytics``
     turns the guidance's log analytics reporter on (stages deploy it off)."""
     for rel, content in render(SETTINGS).items():
-        if rel.startswith("stored_requests/"):
+        if rel.startswith(("stored_requests/", "stored_responses/")):
             (out / rel).parent.mkdir(parents=True, exist_ok=True)
             (out / rel).write_text(content)
     for name in ("stored_imps", "stored_responses", "categories"):
@@ -144,6 +161,8 @@ def local_config(mocks: Mocks, out: Path, *, port: int, module: bool, analytics:
         "live": {"startup-cache-dir": str(out / "vendor-live")},
     }
     config["analytics"]["psdoa"] = {"enabled": analytics}
+    if prometheus_port is not None:  # the adapters' metric keys, for the warm-up's gate
+        config["metrics"]["prometheus"] = {"enabled": True, "port": prometheus_port}
     path = out / "local-config.yaml"
     path.write_text(to_yaml(config))
     return path
@@ -155,6 +174,7 @@ class Pbs:
 
     base_url: str
     log: Path
+    metrics_url: str | None = None
 
     def auction(
         self,
@@ -187,8 +207,27 @@ class Pbs:
             query = f"evid=820461826&upid=tears-of-steel&dur={dur}"
         return httpx.post(f"{self.base_url}/openrtb2/auction?{query}", json=body, headers=sent, timeout=10)
 
+    def warm(self) -> httpx.Response:
+        """The warm-up's probe: the warm stored request (``pbs_config.warm_body``), ``X-Fast-Probe: 1``, no ticket."""
+        sent = {
+            "Content-Type": "application/json",
+            "X-Fast-Origin": "contract-origin-secret",
+            "X-Fast-Probe": "1",
+            "X-Fast-Sid": "warmup-contract",
+            "X-Fast-Pc": f"{PREFIX}-warmup",
+        }
+        query = "evid=1&upid=warmup&dur=30030"
+        return httpx.post(f"{self.base_url}/openrtb2/auction?{query}", json=warm_body(), headers=sent, timeout=10)
 
-def start(jar: Path, config: Path, port: int, mocks: Mocks) -> Iterator[Pbs]:
+    def metrics(self) -> str:
+        """Prebid Server's Prometheus metrics (with ``prometheus_port``)."""
+        assert self.metrics_url, "started without a Prometheus port"
+        return httpx.get(self.metrics_url, timeout=5).text
+
+
+def start(
+    jar: Path, config: Path, port: int, mocks: Mocks, *, warm_up: bool = True, metrics_url: str | None = None
+) -> Iterator[Pbs]:
     """Run ``jar`` with ``config`` until the generator is closed, once ``/status`` answers."""
     log = config.parent / "pbs.log"
     environment = {**os.environ, "AMT_BIDDING_SERVER_SIMULATOR_ENDPOINT": f"{mocks.base_url}/amt"}
@@ -208,8 +247,8 @@ def start(jar: Path, config: Path, port: int, mocks: Mocks) -> Iterator[Pbs]:
                 if time.monotonic() > deadline:
                     raise RuntimeError(f"Prebid Server did not start in 180 s; see {log}")
                 time.sleep(1)
-            server = Pbs(base, log)
-            for _ in range(WARM_UP_AUCTIONS):  # the first auctions of a fresh JVM miss the 50 ms policy timeout
+            server = Pbs(base, log, metrics_url)
+            for _ in range(WARM_UP_AUCTIONS if warm_up else 0):  # a fresh JVM's first auctions miss the 50 ms policy
                 server.auction("CTX1")
             yield server
         finally:

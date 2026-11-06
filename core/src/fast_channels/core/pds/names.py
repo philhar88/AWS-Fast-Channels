@@ -64,9 +64,25 @@ def decision_stream(prefix: str, record: str) -> str:
     return f"{prefix}-pds-{record}"
 
 
+def database_name(prefix: str) -> str:
+    """The PDS's own Glue database, ``<prefix>_pds``: not the lake. Its table :data:`CDN_ACCESS_TABLE` has the CDN
+    logs' query strings, which the lake leaves out (they carry session parameters), so only the delivery function
+    reads it."""
+    return f"{prefix}_pds"
+
+
+CDN_ACCESS_TABLE: Final = "cdn_access"
+"""The CDN's logs with the query string: the time, path, query and status of every request (the delivery function
+queries our tracker's)."""
+
+
 def decision_table(record: str) -> str:
     """The lake table of one kind of decision record: ``pds_policy``, ``pds_select``, ``pds_delivery``."""
     return f"pds_{record}"
+
+
+AD_LOAD_VIEW: Final = "v_ad_load_kpis"
+"""The lake view of the ad load by tier (``infra``'s ``constructs.pds.adload_kpis``)."""
 
 
 class Parameter(StrEnum):
@@ -81,8 +97,12 @@ class Parameter(StrEnum):
     LAKE_BUCKET = "lake-bucket"
     MEDIA_BUCKET = "media-bucket"
     """The media bucket, which holds the ladder kits' ads (Data stack)."""
+    LOGS_BUCKET = "logs-bucket"
+    """The logs bucket, which holds the CDN's logs that the delivery function reads (Data stack)."""
     CONTENT_BASE_URL = "content-base-url"
     """The CDN's content base URL, our tracker's host (Media stack)."""
+    DISTRIBUTION_ID = "distribution-id"
+    """The CDN's distribution, whose logs the delivery function reads (Media stack)."""
     LADDER_VERSION = "ladder-version"
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
     CATALOG_CONTEXT_BUCKET = "catalog-context-bucket"
@@ -99,6 +119,9 @@ class Published(StrEnum):
     POLICY_LOG_GROUP = "policy-log-group"
     """The log group of the ``pds.policy`` decision records, the sidecar's (with the release module on): the release
     smoke test counts a session's decision records there."""
+    PUBLISHER_FUNCTION = "publisher-function"
+    """The snapshot publisher's name (with the selling module on): the Selling stack's sync function runs it when the
+    booked lines change."""
 
 
 def stack_parameters(*, crawl: bool) -> tuple[Parameter, ...]:

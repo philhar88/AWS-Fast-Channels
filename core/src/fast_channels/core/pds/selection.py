@@ -8,6 +8,9 @@ ad) needs a reservation of its price before it may be answered, because the answ
    no budget left, the session's cap reached, or the reservation failed). A refusal is the line's, so
 3. if any was refused, select again without that line's bids (those not reserved yet), and reserve again.
 
+A line ad outside its line's flight, or of a line sold on other channels than the break's (``Line.serves``), is left
+out from the start (``off_target``): the own book bids every line on every request, which names no channel.
+
 After :data:`ATTEMPTS` rounds that still met refusals, the pod is selected once more without any line ad that is not
 reserved, so the answer never holds an unreserved line ad. An own-book bid that is neither a house ad nor a creative
 of a line in the snapshot (the own book saw a newer snapshot, say) is left out from the start: it cannot be reserved.
@@ -20,10 +23,12 @@ impression.
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
-from fast_channels.core.pds.book import Book, Line
+from fast_channels.core.adload import CONTROL, AdLoadPolicy
+from fast_channels.core.pds.book import Book, Line, channel_of
 from fast_channels.core.pds.pod import Outcome, PodContext, PodDecision, below_floor_bids, select_pod, tier0_bids
 
 if TYPE_CHECKING:
@@ -38,10 +43,24 @@ type Reserve = Callable[[Mapping[Line, tuple[str, ...]]], frozenset[str]]
 """Reserve each line's crids; returns the crids refused."""
 
 
-def pod_context(book: Book, *, floor_cpm: Decimal = Decimal(0), scheduled: int | None = None) -> PodContext:
-    """The pod rules' context: the own book's tier-0 deals, the floor and the break of record. No session history
-    yet (``recent_crids``), no creative approved for kids breaks, every bidder's ads accepted."""
-    return PodContext(tier0_deals=book.tier0_deals, floor_cpm=floor_cpm, scheduled_ms=scheduled)
+def pod_context(
+    book: Book,
+    *,
+    floor_cpm: Decimal = Decimal(0),
+    scheduled: int | None = None,
+    ad_load: AdLoadPolicy = CONTROL,
+) -> PodContext:
+    """The pod rules' context: the own book's tier-0 deals, the floor, the break of record and the viewer's ad load.
+    No session history yet (``recent_crids``), no creative approved for kids breaks, every bidder's ads accepted."""
+    return PodContext(tier0_deals=book.tier0_deals, floor_cpm=floor_cpm, scheduled_ms=scheduled, ad_load=ad_load)
+
+
+def _off_target(line: Line, configuration: str, now: datetime | None) -> bool:
+    """Whether ``line`` may not air on this break: outside its flight (when ``now`` is known), or not sold on the
+    channel of ``configuration``."""
+    if now is not None and not line.in_flight(now):
+        return True
+    return bool(line.channels) and channel_of(configuration) not in line.channels
 
 
 def _without(request: SelectRequest, refs: frozenset[str]) -> SelectRequest:
@@ -51,12 +70,16 @@ def _without(request: SelectRequest, refs: frozenset[str]) -> SelectRequest:
 
 
 def select(
-    request: SelectRequest, rules: PodContext, book: Book, *, reserve: Reserve
+    request: SelectRequest, rules: PodContext, book: Book, *, reserve: Reserve, now: datetime | None = None
 ) -> tuple[PodDecision, frozenset[str]]:
-    """The pod for ``request`` and the crids of its line ads, every one reserved (by this call or an earlier one)."""
+    """The pod for ``request`` and the crids of its line ads, every one reserved (by this call or an earlier one).
+
+    ``now`` is the time of the break, for the lines' flights (None: flights are not checked).
+    """
     sold = {bid.ref: bid for bid in request.bids if bid.bidder in rules.own_book and not bid.house}
     lines = {ref: (bid.crid, line) for ref, bid in sold.items() if bid.crid and (line := book.line_of(bid.crid))}
-    unknown = frozenset(sold) - frozenset(lines)
+    off_target = frozenset(ref for ref, (_, line) in lines.items() if _off_target(line, request.pc, now))
+    unknown = (frozenset(sold) - frozenset(lines)) | off_target
     held: set[str] = set()
     refused: set[str] = set()  # line ids
     excluded = unknown
@@ -82,18 +105,27 @@ def select(
         excluded = unknown | {ref for ref, (crid, _) in lines.items() if crid not in held}
         decision = select_pod(_without(request, excluded), rules)
     answered = {ad.crid for ad in (*decision.pod, *decision.standalones)}
-    return _finish(request, rules, decision, baseline, excluded), frozenset(held & answered)
+    return _finish(request, rules, decision, baseline, excluded, off_target=off_target), frozenset(held & answered)
 
 
 def _finish(
-    request: SelectRequest, rules: PodContext, decision: PodDecision, baseline: PodDecision, excluded: frozenset[str]
+    request: SelectRequest,
+    rules: PodContext,
+    decision: PodDecision,
+    baseline: PodDecision,
+    excluded: frozenset[str],
+    *,
+    off_target: frozenset[str],
 ) -> PodDecision:
     """``decision`` with an outcome for every bid of ``request``: a bid left out keeps the first round's outcome if
-    it was not eligible anyway, else it is ``unreserved``; the tier-0 and below-floor bids are the request's."""
+    it was not eligible anyway, is ``off_target`` if its line may not air on the break, else it is ``unreserved``;
+    the tier-0 and below-floor bids are the request's."""
     if not excluded:
         return decision
 
     def left_out(ref: str) -> Outcome:
+        if ref in off_target:
+            return Outcome.OFF_TARGET
         first = baseline.outcomes.get(ref)
         return first if first is not None and first not in PLACEMENT else Outcome.UNRESERVED
 

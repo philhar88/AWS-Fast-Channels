@@ -55,7 +55,7 @@ from fast_channels.core.pds.models import (
 from fast_channels.core.pds.pod import select_pod, select_response
 from fast_channels.functions.crawl.patch import CrawlContributor
 
-TRACKER_BASE: Final = "https://cdn.example/ads/b.gif"
+TRACKER_BASE: Final = "https://cdn.example/ads/b"
 TRACKER_ENR: Final = 1
 """The service's trackers carry ``enr=1`` here and the module's own ``enr=0``, so a test can tell them apart."""
 THIRD_PARTIES: Final = ("/amt", "/echo26")

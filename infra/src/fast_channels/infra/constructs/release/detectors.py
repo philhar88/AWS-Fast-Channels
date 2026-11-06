@@ -53,6 +53,7 @@ from fast_channels.infra.constructs.functions import METRICS_NAMESPACE, FastFunc
 
 EVENTS: Final = names.MARKER_METRICS
 """ADS log event type -> metric (namespace ``FastChannels``, dimension ``ConfigurationName``)."""
+# OPTIMIZATION(aws): W-2 1.11 a break's marker is logged twice and prefetched ones lack the correlation id
 BREAK_START: Final = logs.FilterPattern.all(
     logs.FilterPattern.string_value("$.eventType", "=", "AD_MARKER_FOUND"),
     logs.FilterPattern.string_value("$.adMarkers", "!=", "*,DURATION=*"),
@@ -88,6 +89,7 @@ def sibling_metric(name: str, configuration: str, statistic: str = cw.Stats.SUM)
     )
 
 
+# OPTIMIZATION(aws): W-2 1.23 a skipped ADS call (invalid body, 1.7 spent budget) logs no error: we count markers
 class MarkerDetector(Construct):
     """The metric filters on ``log_group`` and an alarm ``<configuration>-markers-without-ads-request`` per
     configuration.
@@ -211,6 +213,7 @@ class AdsErrorAlarms(Construct):
             )
 
 
+# OPTIMIZATION(aws): W-2 1.32 hourly reconciliation of the ADS log against MediaTailor metrics; delete when fixed
 class LogReconciler(Construct):
     """Every hour, ``fast_channels.functions.release.reconcile`` compares each sibling's ADS log with
     ``AWS/MediaTailor``'s filled ad time and publishes what the log is missing (``UnloggedFilledSeconds``); the alarm

@@ -16,6 +16,7 @@ from fast_channels.core.ad_server import AdServer, AdServerContribution, ads_url
 from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.demand import Parameter as DemandParameter
 from fast_channels.core.demand import parameter_path
+from fast_channels.core.identity import names as identity_names
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.bundle import SIBLING_PLACEHOLDER, AdServerRoute
 from fast_channels.core.monetization.playback import SiblingRole, sibling_name
@@ -126,6 +127,10 @@ class ReleaseStack(Stack):
             channel_urls={c: parameter(names.channel_parameter_name(prefix, c)) for c in config.release_channels},
             contributions=contributions(config, pbs_origin=pbs_origin),
             ad_server=route,
+            # Tickets ride the Prebid Server route only: the experimental ad-server route's sessions stay CONTEXTUAL.
+            redeem_url=parameter(identity_names.parameter_name(prefix, identity_names.Parameter.REDEEM_URL))
+            if config.modules.identity.enabled and config.modules.demand.ad_server is AdServer.NONE
+            else None,
         )
         topic = sns.Topic.from_topic_arn(self, "Alerts", alert_topic_arn(self, prefix))
         self.logs = ReleaseLogs(self, "Logs", prefix=prefix, retention=retention, removal_policy=removal)
@@ -228,6 +233,7 @@ class ReleaseStack(Stack):
             log_retention=retention,
             removal_policy=removal,
             name="release-zero-ads-sessions",
+            unserved_breaks="release-unserved-breaks",
         )
         self.logs.grant_read(self.zero_ads.function.function.role)  # type: ignore[arg-type]
         self.reconciler = LogReconciler(

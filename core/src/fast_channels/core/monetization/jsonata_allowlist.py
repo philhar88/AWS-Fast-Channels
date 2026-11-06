@@ -12,6 +12,7 @@ ALLOWLIST_DATE: Final = "2026-10-27"
 """When the list below was transcribed from :data:`ALLOWLIST_SOURCE` (44 functions)."""
 ALLOWLIST_SOURCE: Final = "https://docs.aws.amazon.com/mediatailor/latest/ug/monetization-functions-jsonata.html"
 
+# OPTIMIZATION(aws): W-2 1.26 MediaTailor checks the allow-list only at run time: R-F2 checks it before PutFunction
 ALLOWED_FUNCTIONS: Final[frozenset[str]] = frozenset(
     {
         # Type conversion (3)

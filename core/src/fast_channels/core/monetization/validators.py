@@ -168,6 +168,7 @@ def require_valid(violations: Iterable[Violation]) -> None:
 
 HOOK_BUDGET_MS: Final = 2000
 """Each hook's own timeout, and the budget PRE_ADS, POST_ADS and PRE_MANIFEST share per manifest request."""
+# OPTIMIZATION(aws): W-2 1.26 PutFunction enforces none of these limits: R-F1 does; optional once AWS enforces them
 EXPRESSION_MAX: Final = 1000
 OUTPUT_VALUE_MAX: Final = 1000
 OUTPUTS_PER_FUNCTION_MAX: Final = 20
@@ -266,6 +267,7 @@ ALARM_STEP_MINUTES: Final = 2
 FIRST_STEP_MAX_PERCENT: Final = 10
 NOT_BREACHING: Final = "notBreaching"
 PREFETCH_VARIABLES: Final = ("scte.event_id", "scte.segmentation_upid", "session.avail_duration_ms")
+# OPTIMIZATION(aws): W-2 2.20 a zero or missing duration arrives as 300 s (undocumented): never a grid length
 MISSING_DURATION_SECONDS: Final = 300
 """MediaTailor's ``avail_duration_secs`` for a zero or missing break duration (P0-20 §4.4)."""
 _POLICY_ARN: Final = re.compile(r"^arn:[^:]+:mediatailor:[^:]*:[^:]*:playbackConfiguration/(?P<name>.+)$")
@@ -743,6 +745,7 @@ def _check_pre_ads(tree: _Tree, routes: Collection[AdsRoute]) -> Iterator[Violat
 # --- the ADS request -----------------------------------------------------------------------------------------------
 
 
+# OPTIMIZATION(aws): W-2 1.22 R-P1 keeps the body to safe variables in JSON strings; relax when values are escaped
 def check_body_template(body: str | None, *, where: str = "body") -> list[Violation]:
     """R-P1: MediaTailor inserts values without JSON escaping and sends nothing when the result is not JSON."""
     if body is None:
@@ -963,6 +966,7 @@ def _check_ad_server(sibling: Sibling, bundle: Bundle, trees: Mapping[Hook, _Tre
         yield _violation(Rule.P7, where, f"PRE_SESSION commits {missing} empty, so a player cannot set them")
 
 
+# OPTIMIZATION(aws): W-2 1.6 the Live max includes hook time: R-P3 adds PRE_ADS; drop it if the budget is ADS-only
 def check_live_maximum(playback: PlaybackConfiguration, *, pre_ads_ms: int) -> list[Violation]:
     """R-P3: the Live (and VOD) maximum is a wall clock that starts before the PRE_ADS hook, and what it cuts is the
     ADS call, or the call is never sent (P0-03); it covers the PRE_ADS tree's timeout plus the ADS timeout."""
@@ -1001,6 +1005,7 @@ def check_ad_behaviour(sibling: Sibling) -> list[Violation]:
         found.append(
             _violation(Rule.P4, where, "AvailSuppression is AFTER_LIVE_EDGE 00:00:00 PARTIAL_AVAIL (defence in depth)")
         )
+    # OPTIMIZATION(aws): W-2 1.9 PRE_MANIFEST drops first injections and transcodes: drop this clause when fixed
     if Hook.PRE_MANIFEST in (playback.function_mapping or {}):
         found.append(_violation(Rule.P4, where, "no PRE_MANIFEST function: injection is a transcode path (P0-07)"))
     return found
@@ -1116,6 +1121,7 @@ def check_rollout(rollout: Rollout) -> list[Violation]:
     return found
 
 
+# OPTIMIZATION(aws): W-2 4.7 an INSUFFICIENT_DATA monitor rolls a deployment back: R-A2 wants notBreaching
 def check_monitors(treat_missing_data: Mapping[str, str | None]) -> list[Violation]:
     """R-A2: each rollout monitor (alarm name → ``TreatMissingData``) is ``notBreaching``; a new sibling has no
     traffic yet, and an alarm in ``INSUFFICIENT_DATA`` rolls the deployment back."""

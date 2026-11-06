@@ -49,17 +49,34 @@ The console Cognito client lists `http://localhost:5173/` as a callback and logo
 The Runtime and the Gateway answer CORS for any origin (verified, see below). The media CDN's response-headers
 policy sends `Access-Control-Allow-Origin: *` (SPEC §5.4).
 
+## The reference viewer
+
+The same package builds a second app, the reference viewer of the `viewer` module ([docs/viewer.md](../docs/viewer.md)):
+`viewer.html` and `src/viewer/`, built with `vite build --mode viewer` to `dist-viewer/`. It shares the players
+(`src/players/`, plus `ticketed.ts`, which mints a playback ticket for every open, and `breaks.ts`, which follows ads
+and slate through a break), the EPG readers, the event log and the mock CDN. Its own provider stack signs the demo
+personas in to the viewer pool, never the operator pool. Its preview CSP drops AgentCore and adds Cognito's
+user-pools API and the playback and ad panel APIs.
+
+```bash
+npm run dev:viewer        # http://localhost:5173/viewer.html; add ?mock for fixture personas, pods and decisions
+```
+
+![The viewer's rail](docs/screenshots/viewer-rail.png)
+![A light pod, and why](docs/screenshots/viewer-watch-light.png)
+
 ## Scripts
 
 | Script | Purpose |
 |---|---|
 | `npm run dev` / `dev:mock` | Vite dev server (backend from `public/config.json`, or fixtures) |
+| `npm run dev:viewer` | The viewer's dev server (backend from `public-viewer/config.json`, or `?mock`) |
 | `npm run typecheck` | `tsc -b` (app + tooling configs, `noEmit`) |
 | `npm run lint` | ESLint flat config (typescript-eslint strict + stylistic type-checked, React hooks/compiler rules), zero warnings |
 | `npm test` | Vitest unit tests of the protocol, transcript, Gateway, schedule, ad segment detection, player retry and gating, and routing modules |
-| `npm run build` | Type-check, then build to `dist/` |
+| `npm run build` | Type-check, then build the console to `dist/` and the viewer to `dist-viewer/` |
 | `npm run preview` | Serve `dist/` with the production Content-Security-Policy |
-| `npm run test:e2e` | Playwright smoke tests: the production bundle in mock mode under the strict CSP; fails on any CSP violation (`npx playwright install chromium` once) |
+| `npm run test:e2e` | Playwright smoke tests: both production bundles in mock mode under their strict CSPs (projects `console` and `viewer`); fails on any CSP violation (`npx playwright install chromium` once) |
 | `npm run screenshots` | Same tests, refreshing `docs/screenshots/*.png` |
 
 ## Deploying

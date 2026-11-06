@@ -9,10 +9,9 @@ from typing import Any
 
 import pytest
 
-from fast_channels.core.adload import slot_lambdas
+from fast_channels.core.adload import C_INS, CONTROL, AdLoadPolicy, slot_lambdas
 from fast_channels.core.pds.models import AdmKind, Bid, Mode, PodReason, SelectRequest, SelectResponse
 from fast_channels.core.pds.pod import (
-    C_INS,
     DEFAULT_CONTEXT,
     MIN_AVAIL_MS,
     Outcome,
@@ -28,7 +27,7 @@ FIXTURES = Path(__file__).resolve().parents[3] / "contracts" / "fixtures" / "pds
 SID = "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d"
 EVID = "820461826"
 SLOT_MS = 30030  # a 30 s ad on the 29.97 fps grid
-TRACKER = "https://cdn.example.com/ads/b.gif"
+TRACKER = "https://cdn.example.com/ads/b"
 TIER0 = PodContext(tier0_deals=frozenset({"fast-direct-1"}))
 
 
@@ -270,26 +269,82 @@ def test_lambda_prices_ad_load_per_slot() -> None:
     assert decision.reason is PodReason.PARTIAL
 
 
-def test_tier0_runs_whatever_lambda_says() -> None:
+def test_tier0_runs_at_any_price_where_ad_load_is_free() -> None:
     line = bid("line", bidder="ownbook", price=Decimal("0.10"), dealid="pg")
-    decision = select_pod(request([line]), PodContext(tier0_deals={"pg"}, lambdas=(Decimal(1),)))
+    decision = select_pod(request([line]), PodContext(tier0_deals={"pg"}))
     assert decision.outcomes == {"line": Outcome.WON}
     assert decision.tier0 == {"line"}
 
 
-def test_the_lambda_stub_prices_nothing() -> None:
+def test_where_ad_load_has_a_price_a_tier0_line_must_beat_it_too() -> None:
+    line = bid("line", bidder="ownbook", price=Decimal(8), dealid="pg")
+    priced = PodContext(tier0_deals={"pg"}, lambdas=(Decimal("0.0195"),))  # a $20 bar
+    assert select_pod(request([line]), priced).outcomes == {"line": Outcome.BAR}
+    rich = bid("rich", bidder="ownbook", price=Decimal(25), dealid="pg")
+    assert select_pod(request([rich]), priced).outcomes == {"rich": Outcome.WON}
+
+
+def test_the_control_plan_prices_nothing() -> None:
     assert slot_lambdas(3) == (Decimal(0),) * 3
     assert slot_lambdas(0) == ()
+    assert slot_lambdas(2, CONTROL) == slot_lambdas(2)
     context = PodContext(lambdas=slot_lambdas(2))
     assert crids(select_pod(request(demo_demand(2), 2), context)) == crids(select_pod(request(demo_demand(2), 2)))
     with pytest.raises(ValueError, match="negative"):
         slot_lambdas(-1)
 
 
-def test_the_default_lambda_is_the_ad_load_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fast_channels.core.pds.pod.slot_lambdas", lambda slots: (Decimal(1),) * slots)
+def test_the_default_lambda_is_the_ad_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    def priced(slots: int, policy: AdLoadPolicy = CONTROL) -> tuple[Decimal, ...]:
+        return (Decimal(1),) * slots
+
+    monkeypatch.setattr("fast_channels.core.pds.pod.slot_lambdas", priced)
     decision = select_pod(request([bid("x", price=Decimal(50)), house("h")]))
     assert decision.outcomes == {"x": Outcome.BAR, "h": Outcome.BAR}
+
+
+# --- ad load by tier --------------------------------------------------------------------------------------------------
+
+LIGHT = AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))
+
+
+def test_a_light_tier_gets_one_ad_above_its_bar() -> None:
+    standard = select_pod(request(demo_demand(4), 4), TIER0)
+    light = select_pod(request(demo_demand(4), 4), TIER0.model_copy(update={"ad_load": LIGHT}))
+
+    assert crids(standard)[0] == ["direct1", "sim2", "sim3", "house2"]
+    assert crids(light) == (["sim3"], [])
+    assert not light.min_load
+    assert light.reason is PodReason.PARTIAL
+    outcomes = light.outcomes
+    assert outcomes["sim2"] is Outcome.AD_LOAD  # above the bar, but the pod holds its one ad
+    assert {outcomes[ref] for ref in ("direct1", "sim1", "sim4", "h1", "h2", "h3", "h4")} == {Outcome.BAR}
+
+
+def test_a_cap_alone_keeps_the_best_ads_and_no_more() -> None:
+    capped = TIER0.model_copy(update={"ad_load": AdLoadPolicy(max_ads=2)})
+    decision = select_pod(request(demo_demand(4), 4), capped)
+    assert crids(decision)[0] == ["direct1", "sim3"]  # tier-0 first, then the best paid bid; λ is 0
+    assert decision.outcomes["sim2"] is Outcome.AD_LOAD
+    assert decision.outcomes["h4"] is Outcome.AD_LOAD
+
+
+def test_a_tier_never_empties_a_pod() -> None:
+    cheap = [bid("x", "s1", price=Decimal(5)), bid("y", "s2", price=Decimal(12)), house("h", "s2")]
+    decision = select_pod(request(cheap, 2), PodContext(ad_load=LIGHT))
+    assert decision.min_load
+    assert crids(decision) == (["y"], ["h"])  # the control plan's first ad, with its standalone
+    assert decision.outcomes == {"x": Outcome.AD_LOAD, "y": Outcome.WON, "h": Outcome.STANDALONE}
+
+    only_house = select_pod(request([house("h")]), PodContext(ad_load=LIGHT))
+    assert (crids(only_house), only_house.min_load) == ((["h"], []), True)
+
+
+def test_the_minimum_load_needs_something_to_place() -> None:
+    nothing = select_pod(request([bid("x", crid=None)]), PodContext(ad_load=LIGHT))
+    assert (nothing.reason, nothing.min_load) == (PodReason.EMPTY, False)
+    short = select_pod(request([bid("x", price=Decimal(5))], dur_ms=29_000), PodContext(ad_load=LIGHT))
+    assert (short.reason, short.min_load) == (PodReason.SHORT_AVAIL, False)
 
 
 def test_lambdas_must_match_the_slots() -> None:
@@ -422,16 +477,16 @@ def test_select_response_sequences_the_pod_and_tracks_every_ad() -> None:
     assert [(ad.impid, ad.ref, ad.sequence) for ad in answer.pod] == [("s1", "direct1", 1), ("s2", "sim2", 2)]
     assert [(ad.impid, ad.ref) for ad in answer.standalone] == [("s1", "sim1"), ("s2", "h2")]
     assert set(answer.trackers) == {"direct1", "sim2", "sim1", "h2"}
-    assert answer.trackers["h2"] == [f"{TRACKER}?d={SID}.{EVID}&c=house2&e=impression&enr=1"]
+    assert answer.trackers["h2"] == [f"{TRACKER}/{SID}.{EVID}/house2/1.gif"]
 
 
 def test_tracker_url_encodes_third_party_creative_ids() -> None:
     url = tracker_url(TRACKER, "s.1", "a b&c=/d")
-    assert url == f"{TRACKER}?d=s.1&c=a%20b%26c%3D%2Fd&e=impression&enr=0"
+    assert url == f"{TRACKER}/s.1/a%20b%26c%3D%2Fd/0.gif", "each value one path segment"
 
 
 @pytest.mark.parametrize(
-    "base", ["http://cdn.example.com/ads/b.gif", "https:///b.gif", f"{TRACKER}?x=1", f"{TRACKER}#f"]
+    "base", ["http://cdn.example.com/ads/b", "https:///b", f"{TRACKER}?x=1", f"{TRACKER}#f", f"{TRACKER}/"]
 )
 def test_tracker_base_is_a_plain_https_url(base: str) -> None:
     with pytest.raises(ValueError, match="https URL"):
@@ -489,6 +544,9 @@ def _random_request(rng: random.Random) -> tuple[SelectRequest, PodContext]:
         scheduled_ms=rng.choice([None, slots * SLOT_MS]),
         lambdas=tuple(Decimal(rng.choice([0, 0, 0, 5])) / 1000 for _ in range(slots)),
     )
+    if rng.random() < 0.5:
+        policy = AdLoadPolicy(max_ads=rng.choice([None, 1, 2]), bar_cpm=Decimal(rng.choice([0, 3, 9, 20])))
+        context = context.model_copy(update={"ad_load": policy, "lambdas": ()})
     return select, context
 
 
@@ -518,6 +576,14 @@ def test_randomized_pods_keep_every_invariant() -> None:
             assert all(b.house or b.crid in context.kids_approved for b in placed)
         if select.dur_ms < MIN_AVAIL_MS:
             assert not decision.pod
+        policy = context.ad_load
+        if decision.min_load:
+            assert len(decision.pod) == 1, "the minimum load is one ad"
+        elif policy.max_ads is not None:
+            assert len(decision.pod) <= policy.max_ads, "more ads than the tier allows"
+        if not policy.is_control:
+            control = select_pod(select, context.model_copy(update={"ad_load": CONTROL}))
+            assert bool(decision.pod) == bool(control.pod), "the tier emptied a pod"
         if select.mode in {Mode.SAFE, Mode.KIDS, None}:
             assert all(b.bidder == "ownbook" for b in placed)
         if select.probe:

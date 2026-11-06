@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 MARKER = "AD_MARKER_FOUND"
 REQUEST = "MAKING_ADS_REQUEST"
 FILLED = "FILLED_AVAIL"
+# OPTIMIZATION(aws): W-2 2.28 step timeouts are no Function.Errors: we read Function.Latency against each timeout
 TIMEOUT_PERIODS: Final = 2
 """A request that reaches its timeout in this many one-minute periods fails a release: a dependency down or slow,
 not one cold call (fastm, 2026-10-30: the crawl request reached its 250 ms once, on a healthy smoke's first

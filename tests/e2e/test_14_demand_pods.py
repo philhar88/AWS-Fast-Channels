@@ -41,7 +41,6 @@ from ipaddress import ip_address
 from typing import Any, Final
 
 import pytest
-from _demand import prebid_log_group
 from _stack import Module, Plane, Stage
 from botocore.exceptions import ClientError
 from harness import BREAK_POLICY, CONTENT_ID, LEAD, Channel, Player, Tools, wait_for
@@ -49,26 +48,32 @@ from harness_demand import DemandEdge
 from harness_pods import (
     ADS_EVENTS,
     FIRST_SIGHT,
+    GAP_SESSION_SHARE,
     LOGGED,
     SMART_TV_USER_AGENT,
     Break,
     Creatives,
     IpAddress,
     Logs,
+    Sources,
     Viewer,
     any_of,
     avail_ads,
     breaks,
     egress_address,
     event_line,
+    gap_share,
     ipv4_client,
-    json_object,
+    line_creatives,
+    log_gaps,
     masked,
+    milliseconds,
+    objects,
+    playback_plan,
     pod_of,
-    prebid_tasks,
     record_pattern,
     timestamp,
-    warmups,
+    wait_until_ready,
     watch,
 )
 from playback import Window, break_windows
@@ -76,14 +81,13 @@ from playback import Window, break_windows
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl import names as crawl
 from fast_channels.core.crawl.catalog_context import context_key
-from fast_channels.core.demand import Parameter, simulator_function, warmup_project
+from fast_channels.core.demand import Parameter
 from fast_channels.core.demo_demand import demo_index_key
 from fast_channels.core.events import CatalogItemChanged, put_events_entry
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.prefetch import PrefetchPolicy, schedule_name
-from fast_channels.core.monetization.release import PlaybackPlan
 from fast_channels.core.pbs_config import tracker_host
-from fast_channels.core.pds.delivery import Beacon, Credit, beacon
+from fast_channels.core.pds.delivery import CDN_LOG_EVERY, CDN_LOG_LAG, Beacon, Credit, Source, beacon
 from fast_channels.core.pds.records import DELIVERY_RECORD, POLICY_RECORD, SELECT_RECORD
 from fast_channels.core.specs import vast_key
 from fast_channels.functions.tools.catalog import catalog_item
@@ -104,8 +108,6 @@ FIRST_BREAK: Final = {**BREAK_POLICY, "slate_gops": 15}
 LONG_BREAKS: Final = {**BREAK_POLICY, "slate_gops": 60}
 """One 120.12 s break per program."""
 BREAK_SECONDS: Final = [30.03, 120.12, 120.12]
-READY_TIMEOUT_S: Final = 1500
-"""Census lag (up to about 4.5 minutes), then Prebid Server's scale-out (about 3) and warm-up (about 3), with room."""
 CONTEXT_TIMEOUT_S: Final = 120
 LOGS_TIMEOUT_S: Final = 420
 """The delivery records follow the ADS log through a subscription; the module's lines follow Prebid Server's log."""
@@ -122,44 +124,12 @@ NOT_READY: Final = FIRST_SIGHT | {"TRANSCODE_IN_PROGRESS"}
 """Skip reasons of a creative MediaTailor has not prepared yet."""
 OWN_SEATS: Final = frozenset({"ownbook", "fast-ctv"})
 """The seats of the own book's ads and of the module's own house ads (``HousePod.SEAT``)."""
-LINE_CREATIVES: Final = {"direct1": "direct-1", "direct2": "direct-2"}
 """The fastci stage's demo lines (``stages/fastci.json``) by creative."""
-
-
-@dataclass(frozen=True)
-class Sources:
-    """The log groups of one run."""
-
-    ads: str
-    policy: str
-    select: str
-    delivery: str
-    pbs: str
-    simulator: str
-
-    @classmethod
-    def of(cls, stage: Stage, edge: DemandEdge) -> Sources:
-        functions = stage.session.client("lambda", region_name=stage.region)
-
-        def group(output: str) -> str:
-            configuration = functions.get_function_configuration(FunctionName=stage.output(Module.PDS, output))
-            return str(configuration["LoggingConfig"]["LogGroup"])
-
-        decisions = stage.output(Module.PDS, "DecisionLogGroup")  # the sidecar's (ADR-0036)
-
-        ecs = stage.session.client("ecs", region_name=stage.region)
-        [service] = ecs.describe_services(cluster=edge.cluster, services=[edge.service])["services"]
-        definition = ecs.describe_task_definition(taskDefinition=service["taskDefinition"])["taskDefinition"]
-        pbs = prebid_log_group(definition)
-        assert pbs, f"no Prebid Server container log group in {service['taskDefinition']}"
-        return cls(
-            ads=stage.output(Module.RELEASE, "SiblingLogGroup"),
-            policy=decisions,
-            select=decisions,
-            delivery=group("DeliveryFunction"),
-            pbs=pbs,
-            simulator=f"/aws/lambda/{simulator_function(stage.prefix)}",
-        )
+CDN_COUNT_WAIT: Final = CDN_LOG_LAG + 2 * CDN_LOG_EVERY + timedelta(minutes=5)
+"""How long after the last firing the CDN-log runs have counted it: a log file about 5 minutes after its requests,
+read :data:`CDN_LOG_LAG` after it arrived, by a run every :data:`CDN_LOG_EVERY`."""
+CUT_MARGIN: Final = timedelta(seconds=60)
+"""Firings this close to either end of the cut may be counted from either log."""
 
 
 @dataclass
@@ -187,6 +157,8 @@ class Smoke:
     """Every ``pds.policy`` record, of any session, while the viewers' auctions ran."""
     whole_address_events: int
     """Events of the simulator's log since the viewers joined that hold the viewers' full address."""
+    lines: dict[str, str] = field(default_factory=dict)
+    """The own book's line creatives (crid to line id) in the stage's snapshot when the viewers joined."""
     schedules: dict[str, dict[str, Any]] = field(default_factory=dict)
     """The sibling's prefetch schedules while the viewers played, by name."""
     late: set[str] = field(default_factory=set)
@@ -195,6 +167,10 @@ class Smoke:
     mid: str | None = None
     """The mid-break joiner's session id (among :attr:`viewers`)."""
     mid_joined: datetime | None = None
+    sources: Sources | None = None
+    """The run's log groups (the delivery check reads the CDN-log runs' records later)."""
+    cut: tuple[datetime, datetime] | None = None
+    """When the delivery subscription to the siblings' ADS log was cut and put back (``--cut-ads-delivery``)."""
 
     @property
     def sids(self) -> set[str]:
@@ -227,6 +203,13 @@ class Smoke:
     def counted(self) -> set[tuple[str, str, str]]:
         return {(d["sid"], d["evid"], d["crid"]) for d in self.deliveries}
 
+    def gaps(self) -> set[tuple[str, str]]:
+        """W-2 1.32's known gaps (``harness_pods.log_gaps``): breaks the ADS log left incomplete although the PDS
+        decided them and our tracker shows them played."""
+        played = {(b.sid, b.evid) for b in self.beacons}
+        played |= {(d["sid"], d["evid"]) for d in self.deliveries if d.get("impression")}
+        return log_gaps(self.breaks.values(), played)
+
     def complete(self) -> bool:
         """Every viewer's breaks answered, decided and rendered; every stitched ad's firing logged and counted."""
         decided = all(
@@ -251,6 +234,10 @@ class Smoke:
             rows.append(f"late joiners {sorted(sid[:8] for sid in self.late)} at {clock(self.late_joined)}")
         if self.mid is not None:
             rows.append(f"mid-break joiner {self.mid[:8]} at {clock(self.mid_joined)}")
+        if self.cut is not None:
+            rows.append(f"delivery subscription cut {clock(self.cut[0])}-{clock(self.cut[1])}")
+        gaps = self.gaps()
+        rows.append(f"ADS log gaps (W-2 1.32): {len(gaps)} {sorted((sid[:8], evid) for sid, evid in gaps)}")
         for found in sorted(self.breaks.values(), key=lambda b: (b.requested_at or self.joined, b.sid)):
             pod, standalones = found.rendered()
             avail, fill = found.avail or {}, found.fill(self.creatives)
@@ -284,6 +271,7 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
     with ipv4_client(follow_redirects=True, timeout=20.0, headers=headers) as http:
         egress = egress_address(http)
         cleanups: list[Callable[[], None]] = []
+        cut = DeliveryCut(stage) if request.config.getoption("cut_ads_delivery") else None
         try:
             tools("channels___start_channel", channel=channel.name)
             asset = request.getfixturevalue("ingested")  # while Prebid Server scales out
@@ -293,12 +281,16 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
             windows = break_windows(schedule(tools, channel.name, asset.asset_id))
             assert [round((w.ends - w.starts).total_seconds(), 2) for w in windows] == BREAK_SECONDS, windows
             plan = playback_plan(stage, channel.name)
+            lines = line_creatives(stage, channel.name)
             joined = datetime.now(UTC)
             viewers = [Viewer.join(Player(client=http), plan.playback["hls"]) for _ in range(VIEWERS)]
             schedules = prefetch_schedules(stage, plan.configuration)
             watch(viewers, ends=windows[0].starts)
             schedules |= prefetch_schedules(stage, plan.configuration)
             watch(viewers, ends=windows[1].starts - LATE_JOIN_LEAD)
+            if cut is not None:  # the first break's beacons are counted by now: its one ad fired at its start
+                cut.cut()
+                cleanups.append(cut.restore)
             late_joined = datetime.now(UTC)
             late = [Viewer.join(Player(client=http), plan.playback["hls"]) for _ in range(LATE_VIEWERS)]
             viewers += late
@@ -306,11 +298,15 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
             mid_joined = datetime.now(UTC)
             mid = Viewer.join(Player(client=http), plan.playback["hls"])
             viewers.append(mid)
+            if cut is not None:  # put back between the second break and the third
+                watch(viewers, ends=min(windows[1].ends + timedelta(seconds=30), windows[2].starts))
+                cut.restore()
             watch(viewers, ends=windows[-1].ends + TAIL)
         finally:
             tools("channels___stop_channel", channel=channel.name)
             for cleanup in cleanups:
                 cleanup()
+    sources = Sources.of(stage, edge)
     smoke = Smoke(
         stage=stage,
         sibling=plan.configuration,
@@ -332,35 +328,55 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
         policies=[],
         whole_address_events=0,
         schedules=schedules,
+        lines=lines,
         late={viewer.sid for viewer in late},
         late_joined=late_joined,
         mid=mid.sid,
         mid_joined=mid_joined,
+        sources=sources,
+        cut=cut.window if cut is not None else None,
     )
-    read_logs(smoke, Sources.of(stage, edge))
+    read_logs(smoke, sources)
     print(smoke.report())
     return smoke
 
 
-def wait_until_ready(stage: Stage, edge: DemandEdge) -> set[str]:
-    """Until Prebid Server runs and every running task's warm-up succeeded; the running tasks' images. The PDS is a
-    sidecar of those tasks, healthy before Prebid Server starts (ADR-0036): nothing of its own to wait for."""
-    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
-    last: dict[str, Any] = {}
+class DeliveryCut:
+    """The delivery function's subscription to the siblings' ADS log, deleted and put back as it was
+    (``--cut-ads-delivery``): MediaTailor still logs its beacons meanwhile, but the delivery function is not sent
+    them, so only the CDN's log can count them."""
 
-    def ready() -> set[str] | None:
-        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
-        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
-        last.update(tasks=len(tasks), warmups=sorted(warmed.values()))
-        if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
-            raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
-        warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
-        return set(tasks.values()) if warm else None
+    def __init__(self, stage: Stage) -> None:
+        self.logs = stage.session.client("logs", region_name=stage.region)
+        self.group = stage.output(Module.RELEASE, "SiblingLogGroup")
+        [self.filter] = [
+            f
+            for f in self.logs.describe_subscription_filters(logGroupName=self.group)["subscriptionFilters"]
+            if f["filterName"] == f"{stage.prefix}-pds-delivery-release"
+        ]
+        self.at: datetime | None = None
+        self.back: datetime | None = None
 
-    started = time.monotonic()
-    images = wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
-    print(f"ready {time.monotonic() - started:.0f} s after the ingest: {last}")
-    return images
+    def cut(self) -> None:
+        self.logs.delete_subscription_filter(logGroupName=self.group, filterName=self.filter["filterName"])
+        self.at = datetime.now(UTC)
+        print(f"delivery subscription cut at {clock(self.at)}")
+
+    def restore(self) -> None:
+        if self.at is None or self.back is not None:
+            return
+        self.logs.put_subscription_filter(
+            logGroupName=self.group,
+            filterName=self.filter["filterName"],
+            filterPattern=self.filter["filterPattern"],
+            destinationArn=self.filter["destinationArn"],
+        )
+        self.back = datetime.now(UTC)
+        print(f"delivery subscription put back at {clock(self.back)}")
+
+    @property
+    def window(self) -> tuple[datetime, datetime] | None:
+        return (self.at, self.back) if self.at is not None and self.back is not None else None
 
 
 def prefetch_schedules(stage: Stage, configuration: str) -> dict[str, dict[str, Any]]:
@@ -441,16 +457,6 @@ def schedule(tools: Tools, channel: str, asset_id: str) -> list[dict[str, Any]]:
     return programs
 
 
-def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
-    """The channel's playback plan, read through the CDN as a player reads it."""
-    ssm = stage.session.client("ssm", region_name=stage.region)
-    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
-    with ipv4_client(timeout=10.0) as http:
-        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
-    response.raise_for_status()
-    return PlaybackPlan.model_validate_json(response.text)
-
-
 def read_logs(smoke: Smoke, sources: Sources) -> None:
     """Fill ``smoke`` from the run's logs, read again until it is complete or :data:`LOGS_TIMEOUT_S` passed."""
     client = smoke.stage.session.client("logs", region_name=smoke.stage.region)
@@ -491,19 +497,6 @@ def read_logs(smoke: Smoke, sources: Sources) -> None:
     smoke.whole_address_events = len(since.events(sources.simulator, f'"{smoke.egress}"'))
 
 
-def objects(logs: Logs, group: str, pattern: str) -> list[dict[str, Any]]:
-    """The JSON objects of the matching events of ``group``, with when each was logged (:data:`LOGGED`)."""
-    return [
-        found | {LOGGED: event["timestamp"]}
-        for event in logs.events(group, pattern)
-        if (found := json_object(str(event["message"])))
-    ]
-
-
-def milliseconds(moment: datetime) -> int:
-    return int(moment.timestamp() * 1000)
-
-
 # --- the checks ----------------------------------------------------------------------------------------------------
 
 
@@ -511,11 +504,15 @@ def test_every_break_is_asked_answered_as_xml_and_rendered_from_the_pds(smoke: S
     """Each viewer's every break: MediaTailor's POST and a VAST response it accepted (no ``ERROR_*`` event) and a
     ``FILLED_AVAIL``. Each of its ad server requests (the prefetch retrieval, and a real-time request at the break if
     MediaTailor made one) is one auction: one ``/policy`` and one ``/select`` record and one module line, with the
-    patch applied and exactly that ``/select`` pod rendered. No record or line is outside those auctions."""
+    patch applied and exactly that ``/select`` pod rendered. No record or line is outside those auctions. A known ADS
+    log gap (W-2 1.32: decided and played, but not logged whole) is left out of the ADS-log checks."""
+    gaps = smoke.gaps()
     for viewer in smoke.viewers:
         found = smoke.of(viewer.sid)
         assert len(found) == len(smoke.windows_of(viewer.sid)), (viewer.sid, [b.evid for b in found], viewer.errors[:5])
         for each in found:
+            if (each.sid, each.evid) in gaps:
+                continue
             assert set(each.event_types) >= ADS_EVENTS, (each.sid, each.evid, each.event_types)
             assert not [t for t in each.event_types if t.startswith("ERROR")], (each.sid, each.evid, each.event_types)
             auctions = each.auctions()
@@ -544,8 +541,9 @@ def retrieved(smoke: Smoke) -> list[Break]:
 def test_a_retrieved_break_is_filled_from_its_retrieval(smoke: Smoke) -> None:
     """Prefetch (M3-06): a break MediaTailor retrieved ahead under its schedule ``pf-<evid>`` is filled from that
     retrieval, with no second ad server request at the break (P0-02: every session that retrieved filled from its
-    schedule). A second request is a second auction: its bids, reservations and bid requests count twice."""
-    found = retrieved(smoke)
+    schedule). A second request is a second auction: its bids, reservations and bid requests count twice. A known ADS
+    log gap is left out."""
+    found = [b for b in retrieved(smoke) if (b.sid, b.evid) not in smoke.gaps()]
     asked_again = [
         (b.sid[:8], b.evid, [(r.prefetch, clock(r.at)) for r in b.requests], b.filled_from)
         for b in found
@@ -669,8 +667,13 @@ def test_a_fallback_is_safe_and_still_a_pod_and_there_is_none(smoke: Smoke) -> N
 def test_the_stitched_order_is_the_pods_sequence(smoke: Smoke) -> None:
     """MediaTailor stitches every pod the module rendered in ``sequence`` order: each winner in its position, a
     standalone in the position of a winner it skipped, and nothing else; once every creative is known, a 120 s pod plays
-    whole."""
-    problems = {key: fill.problems for key, b in smoke.breaks.items() if (fill := b.fill(smoke.creatives)).problems}
+    whole. A known ADS log gap is left out: without its request or its ``FILLED_AVAIL`` nothing can be compared."""
+    gaps = smoke.gaps()
+    problems = {
+        key: fill.problems
+        for key, b in smoke.breaks.items()
+        if key not in gaps and (fill := b.fill(smoke.creatives)).problems
+    }
     assert not problems, f"{problems}\n{smoke.report()}"
     whole = [
         b
@@ -742,10 +745,12 @@ def splice_near(viewer: Viewer, moment: datetime | None) -> datetime:
 
 def test_the_decision_records_carry_mediatailors_session_id(smoke: Smoke) -> None:
     """``X-Fast-Sid`` is MediaTailor's session id: every break MediaTailor asked about has the PDS's policy and select
-    records and the module's line under the viewer's session id, its ``evid`` and the stable sibling."""
+    records and the module's line under the viewer's session id, its ``evid`` and the stable sibling. A known ADS log
+    gap counts as asked: the PDS was."""
+    gaps = smoke.gaps()
     for viewer in smoke.viewers:
         found = smoke.of(viewer.sid)
-        asked = {b.evid for b in found if "MAKING_ADS_REQUEST" in b.event_types}
+        asked = {b.evid for b in found if "MAKING_ADS_REQUEST" in b.event_types or (b.sid, b.evid) in gaps}
         assert asked, viewer.sid
         for kind in ("policy", "select", "pod_lines"):
             assert {b.evid for b in found if getattr(b, kind)} == asked, (viewer.sid, kind)
@@ -773,7 +778,19 @@ def test_no_client_header_reaches_the_simulator(smoke: Smoke) -> None:
         if any(line.get("policy_fallback") is None for line in auction.lines)
         and any(SIMULATOR in p.get("bidders", []) for p in auction.policy)
     ]
-    assert len(smoke.simulator) == len(called), "one simulator request per auction whose applied patch added it"
+    gaps = smoke.gaps()  # their unlogged auctions: the policy records no logged request holds
+    unlogged = [
+        record
+        for b in smoke.breaks.values()
+        if (b.sid, b.evid) in gaps
+        for record in b.policy
+        if not any(record in auction.policy for auction in b.auctions()) and SIMULATOR in record.get("bidders", [])
+    ]
+    assert len(smoke.simulator) == len(called) + len(unlogged), (
+        "one simulator request per auction whose applied patch added it",
+        len(called),
+        len(unlogged),
+    )
 
 
 def test_the_simulator_gets_the_viewers_address_masked_and_never_whole(smoke: Smoke) -> None:
@@ -795,18 +812,66 @@ def test_the_simulator_gets_the_viewers_address_masked_and_never_whole(smoke: Sm
     assert smoke.whole_address_events == 0, "the viewers' full address is in the simulator's log"
 
 
+def wait_for_deliveries(smoke: Smoke) -> None:
+    """When a stitched ad or a firing has no ``pds.delivery`` record yet (the subscription was cut, or the ADS log left
+    the beacon out), wait for the CDN-log runs (:data:`CDN_COUNT_WAIT` after the last firing) to count it."""
+    if not (smoke.stitched() | smoke.fired()) - smoke.counted() or smoke.sources is None:
+        return
+    client = smoke.stage.session.client("logs", region_name=smoke.stage.region)
+    since = Logs(client, start_ms=milliseconds(smoke.joined - timedelta(minutes=1)))
+    last = max((b.at for b in smoke.beacons), default=datetime.now(UTC))
+    while (missing := (smoke.stitched() | smoke.fired()) - smoke.counted()) and datetime.now(
+        UTC
+    ) < last + CDN_COUNT_WAIT:
+        time.sleep(30)
+        smoke.deliveries = objects(since, smoke.sources.delivery, record_pattern(DELIVERY_RECORD, smoke.sids))
+    print(f"delivery records: {len(smoke.deliveries)}; not counted yet: {len(missing)}")
+
+
 def test_delivery_is_counted_from_mediatailors_beacon_firings(smoke: Smoke) -> None:
-    """Every stitched ad's tracker fired (``BEACON_FIRED``) and every firing is a ``pds.delivery`` record, with one
-    impression per ad; the direct lines' ads are credited to their reservations, the others to none."""
-    assert smoke.stitched() <= smoke.fired(), smoke.stitched() - smoke.fired()
-    assert smoke.fired() == smoke.counted(), smoke.fired() ^ smoke.counted()
-    for sid, event_id, crid in smoke.counted():
-        records = [d for d in smoke.deliveries if (d["sid"], d["evid"], d["crid"]) == (sid, event_id, crid)]
-        [first] = [d for d in records if d["impression"]]
-        line = LINE_CREATIVES.get(crid)
-        assert (first.get("line"), first["credit"]) == (line, Credit.DELIVERED if line else Credit.UNRESERVED), first
-        assert first["pc"] == smoke.sibling, first
-    assert {crid for *_, crid in smoke.fired()} >= set(LINE_CREATIVES), smoke.fired()
+    """Every stitched ad's tracker fired and is a ``pds.delivery`` record, with one impression per ad, counted from the
+    ADS log's ``BEACON_FIRED`` or, where that log left it out, from the CDN's log (W-2 1.32); the direct lines' ads
+    are credited to their reservations, the others to none. With ``--cut-ads-delivery`` the firings during the cut are
+    counted from the CDN's log, and the others from the ADS log."""
+    wait_for_deliveries(smoke)
+    counted, fired = smoke.counted(), smoke.fired()
+    assert smoke.stitched() <= counted, f"stitched ads without a tracker hit: {smoke.stitched() - counted}"
+    assert fired <= counted, fired - counted
+    first: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for key in counted:
+        records = [d for d in smoke.deliveries if (d["sid"], d["evid"], d["crid"]) == key]
+        [first[key]] = [d for d in records if d["impression"]]
+        line = smoke.lines.get(key[2])
+        record = first[key]
+        assert (record.get("line"), record["credit"]) == (line, Credit.DELIVERED if line else Credit.UNRESERVED), record
+        assert record["pc"] == smoke.sibling, record
+        if key not in fired:
+            assert record["source"] == Source.CDN_LOG, f"counted but never fired: {record}"
+    if smoke.cut is not None:
+        cut, back = smoke.cut
+        sources = {
+            (b.sid, b.evid, b.crid): first[(b.sid, b.evid, b.crid)]["source"]
+            for b in smoke.beacons
+            if not (cut - CUT_MARGIN < b.at < cut + CUT_MARGIN or back - CUT_MARGIN < b.at < back + CUT_MARGIN)
+        }
+        inside = {key for b in smoke.beacons if cut < b.at < back and (key := (b.sid, b.evid, b.crid)) in sources}
+        assert inside, f"no firing during the cut {clock(cut)}-{clock(back)}"
+        wrong = {key: source for key, source in sources.items() if (key in inside) != (source == Source.CDN_LOG)}
+        assert not wrong, f"counted from the wrong log for the cut {clock(cut)}-{clock(back)}: {wrong}"
+        print(f"cut {clock(cut)}-{clock(back)}: {len(inside)} firings counted from the CDN's log")
+    cdn_only = [key for key, record in first.items() if record["source"] == Source.CDN_LOG]
+    print(f"impressions: {len(counted)}, of which the CDN's log counted {len(cdn_only)}")
+    assert {crid for *_, crid in fired} >= set(smoke.lines), (smoke.lines, fired)
+
+
+def test_the_ads_log_gaps_are_known_and_rare(smoke: Smoke) -> None:
+    """W-2 1.32: the vended ADS log can leave out events of a break MediaTailor filled. The checks above skip such a
+    known gap (decided by the PDS, played by our tracker); this one reports them and fails when more than
+    :data:`harness_pods.GAP_SESSION_SHARE` of the sessions have one: that is not the known defect's rate."""
+    gaps = smoke.gaps()
+    share = gap_share(gaps, smoke.sids)
+    print(f"ADS log gaps (W-2 1.32): {len(gaps)} breaks in {share:.0%} of {len(smoke.sids)} sessions: {sorted(gaps)}")
+    assert share <= GAP_SESSION_SHARE, f"{share:.0%} of the sessions have an ADS log gap: {sorted(gaps)}"
 
 
 def test_prebid_server_ran_the_deployed_image(pds: Stage, smoke: Smoke) -> None:

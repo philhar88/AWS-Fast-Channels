@@ -262,6 +262,7 @@ def _deploy(content: dict[str, str], *, strategy: str, description: str, tags: d
     return {"deployment": deployment["DeploymentNumber"], "version": version, "pointer": content}
 
 
+# OPTIMIZATION(aws): W-2 4.7 the stage's no-bake strategy, not AppConfig.AllAtOnce (which bakes 10 minutes)
 def _at_once() -> str:
     """A rollback (or a pointer that moves no viewer) goes at once; only a promotion is gradual and monitored."""
     config = settings()
@@ -289,6 +290,7 @@ def point(release: int, change_id: str, chosen: list[dict[str, str]]) -> dict[st
     return deployed
 
 
+# OPTIMIZATION(aws): W-2 2.28 step timeouts are no Function.Errors: delete with timed_out_steps when they count
 def step_maxima(sibling: str, function_id: str, start: datetime, end: datetime) -> list[float]:
     """The per-minute maxima (ms) of a PRE_ADS ``HTTP_REQUEST`` function's ``Function.Latency`` on ``sibling``."""
     dimensions = {

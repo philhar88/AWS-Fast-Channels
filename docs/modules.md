@@ -7,7 +7,11 @@ FAST Channels v3.0.0 airs channels with preconditioned house ads. The optional m
 - show-level metadata in ad requests;
 - a release process for monetized playback configurations, with ad prefetch;
 - a per-task model registry;
+- agentic selling over AdCP: a buyer agent books the own book (v4.1.0, [selling.md](selling.md));
 - the operations they need: a lake, a hash-chained ledger, detectors, runbooks and a probe.
+
+Since v4.0.0, `identity` adds signed-in viewers, whose single-use playback tickets carry who they are to the decision
+service (unreleased).
 
 ![The optional modules around one monetized channel; the experimental ad-server chain is dashed](images/architecture-modules.png)
 
@@ -34,6 +38,9 @@ a deployment is v3.0.0's, which snapshot tests of every shipped template check (
 | `pds` | The Pod Decision Service. Per break, it decides what Prebid Server may ask third parties (bidders, regulations, device fields) and which ads make up the pod. It also runs the own book (house ads and direct lines with budgets), reservations, delivery from our impression tracker, and a decision record per call into the lake | `ops`, `demand` | With `make deploy-demand`: a sidecar in each Prebid Server task, and `…-Pds` beside the guidance | Data: the table `<prefix>-pds`, a private config bucket and their names in SSM | [pds.md](pds.md); [ADR-0036](adr/0036-pds-sidecar-in-the-prebid-server-task.md), [0022](adr/0022-delivery-states-billing-and-the-hash-chained-ledger.md) |
 | `release` | The Release Controller for monetized playback configurations. Each monetized channel gets sibling configurations with MediaTailor Functions, deployed one release at a time: a smoke gate, then gradual promotion with unattended rollback. A viewer who joins during a break gets ads for the rest of it (`AFTER_LIVE_EDGE` with `PARTIAL_AVAIL`). It also handles the origin-secret rotation, ad prefetch with one SINGLE schedule per upcoming break, Function caches declared by scope, drift and log-reconciliation checks, and an ownership guard on every other role | `ops`, `demand`, `pds` | With `make deploy-demand`: `…-Release` | Media: each monetized channel admits its sibling configurations (`<channel>-p-?`), and the stopped lab channel `<prefix>-lab`. Every stack: the `ReleaseGuard` policy | [release-controller.md](release-controller.md); [ADR-0019](adr/0019-functions-release-controller-siblings.md), [0021](adr/0021-threshold-121-slate-and-constant-session-controls.md), [0023](adr/0023-machine-principals.md), [0033](adr/0033-prefetch-single-schedules.md), [0034](adr/0034-every-function-request-cached-by-scope.md) |
 | `crawl` | Show-level content metadata in ad requests. It keeps a catalog context object per title (title, series, IAB Content Taxonomy 3.1 genre and category, rating, language, producer). A cached PRE_ADS lookup by the break's UPID reads it, and OpenRTB 2.6 `app.content` carries it, with an uplift holdout | `pds`, `release` | `FastChannels-<prefix>-Crawl` (the context publisher) | Release: the PRE_ADS lookup in the bundle. Pds: the `app.content` patch | [content-enrichment.md](content-enrichment.md); [ADR-0031](adr/0031-show-level-content-metadata.md) |
+| `identity` | Signed-in viewers. A Cognito viewer pool; `POST /playback`, which mints a single-use opaque ticket for a monetized channel's stable sibling; and `POST /redeem`, which binds a ticket to one session. The CDN's edge rebuild lets only the ticket reach MediaTailor's session init, the pair siblings redeem it at PRE_SESSION, and the Pod Decision Service decides every break from the ticket's row, recording a bound viewer by `vid` (a KMS HMAC of the token's subject) | `release` | `FastChannels-<prefix>-Identity` | Media: the edge rebuild on `/v1/*` (reads only) and access logs without the viewer's query and address. Release: ticketed pair siblings with the redeem. Pds: the sidecar's ticket lookup | [identity.md](identity.md); [ADR-0018](adr/0018-opaque-playback-ticket.md) |
+| `selling` | Agentic selling over AdCP, a sandbox. The Prebid Sales Agent (AdCP 3.1.1, MCP and A2A 1.0) is the stage's seller of record, with one product per monetized channel. The AWS reference buyer and governance agents run on AgentCore Runtime. A buy that the buyer agent books becomes a direct line of the own book (budget, flight, CPM, brand, channel), and its delivery goes back to the buyer over AdCP | `pds`, `release`; `demand.mode: demo` | With `make deploy-demand`: `FastChannels-<prefix>-Selling` beside the guidance | DemandBuild: the images' repositories and an arm64 build project. Pds: the publisher adds the booked lines | [selling.md](selling.md); [ADR-0024](adr/0024-agentic-selling-over-adcp.md) |
+| `viewer` | A reference viewer app for the demo: personas sign in to the viewer pool, get a rule-based rail of recommended channels, and play each channel on a playback ticket of their own. With `ad_panel`, a demo-only "why these ads" panel shows each break's privacy mode, tier, ad-load policy and pod from the PDS's decision records | `identity` | `FastChannels-<prefix>-Viewer` | — | [viewer.md](viewer.md); [ADR-0028](adr/0028-reference-viewer-on-its-own-origin.md) |
 
 ## Complexity and cost per module
 
@@ -49,6 +56,9 @@ teardown times are the median stack deletions of the development stages in Octob
 | `pds` | `ops`, `demand` | Pds; a sidecar in each Prebid Server task; changes Data | about 12 | under $0.01: the hourly publisher, the sweeper, alarms, the table on demand | $0: it runs in the demand module's tasks | Pds 6 min (at worst 17), in `make destroy-demand` |
 | `release` | `ops`, `demand`, `pds` | Release; changes Media, Ops, Pds, and every stack's `ReleaseGuard` | about 21 | about $0.01: its KMS key ($1 a month), 38 alarms on `fastm` ($3.80 a month), the hourly checks | cents: the prefetcher every 5 minutes, the smoke test's probe sessions | Release 2 min, after its reaper, in `make destroy-demand` |
 | `crawl` | `pds`, `release` | Crawl; changes Release and Pds | 2 | $0: one alarm | $0 | Crawl 2 min, in `make destroy` |
+| `identity` | `release` | Identity; changes Media, Release and Pds | 3 | under $0.01: its KMS key ($1 a month), one alarm | cents per thousand plays: a mint, a KMS MAC and a redeem each, a DynamoDB read per break, the edge function on every `/v1/*` request | Identity, in `make destroy`, with the pool's users |
+| `selling` | `pds`, `release` | Selling; changes DemandBuild and Pds | about 12 | about $0.08 ($60 a month): the seller's task, its database and its internal load balancer; its KMS key and secrets | the buyer agent's Bedrock tokens and AgentCore Runtime time per booking | Selling, in `make destroy-demand` (it takes 16 minutes to create: the CloudFront VPC origin takes 10) |
+| `viewer` | identity | Viewer | 2, and 1 more with `ad_panel` | under $0.01: the site's bucket and distribution | the panel's Logs Insights queries while a panel is open (US$0.005 per GB scanned) | Viewer 3–5 min (the distribution), in `make destroy` |
 | Ad server (experimental) | `demand`, `release` | The `mock` ad server in Demand; the Prebid Cache function's concurrency in the guidance | a few | about $0.17 ($124 a month) while enabled | — | with `demand` |
 
 With every module on, a stage holds about 145 IAM roles, against 45 for v3.0.0's three stacks. With the guidance
@@ -95,13 +105,14 @@ make deploy-demand STAGE=fastm              # with demand: the guidance, Demand,
 make seed STAGE=fastm SEED_ARGS="--wait --yes"
 ```
 
-The repository ships three stages with every module on:
+The repository ships four stages:
 
-- `fastm`, for development;
-- `fastci`, for the end-to-end tests;
-- `fastciads`, which is `fastci` with the experimental `mock` ad server.
+- `fastm`, for development, with every module on but `selling`;
+- `fastci`, for the end-to-end tests, the same;
+- `fastciads`, which is `fastci` with the experimental `mock` ad server;
+- `fastcisell`, with `selling` and the modules it needs, and no demo lines (their creatives serve booked buys).
 
-All three use the shared as-run router ([below](#account-level-limits-and-teardown-residue)).
+All four use the shared as-run router ([below](#account-level-limits-and-teardown-residue)).
 
 Points to know before turning a module on:
 
@@ -131,6 +142,7 @@ Points to know before turning a module on:
 ```
 Data → Media → Ops                          (ops)
      → Media → Crawl                        (crawl)
+     → Identity                             (identity)
 Models → Operator                           (models; Operator also after Data and Media)
 DemandEdge (us-east-1), DemandBuild         (demand; no dependency)
 ```
@@ -144,7 +156,7 @@ DemandEdge (us-east-1), DemandBuild         (demand; no dependency)
    Cache function its provisioned concurrency.
 4. The SSM contract `/<prefix>/demand/*`.
 5. The rendered Prebid Server configuration: what differs is uploaded and read back.
-6. Demand, then Pds, then Release.
+6. Demand, then Pds, then Release, then Selling (its images are built first, on an arm64 project).
 7. One run of each census gate.
 8. The smoke test.
 
@@ -153,7 +165,7 @@ See [demand.md](demand.md#deploy-and-destroy) for the details.
 Destroy in reverse:
 
 ```bash
-make destroy-demand STAGE=fastm   # Release, Pds, Demand, the guidance and what it retains, DemandEdge/-Build
+make destroy-demand STAGE=fastm   # Selling, Release, Pds, Demand, the guidance and what it retains, DemandEdge/-Build
 make destroy STAGE=fastm          # the repository's stacks
 uv run python scripts/ledger_verify.py purge --prefix fastm --apply   # with ops: the Object-Locked ledger archive
 ```
@@ -222,6 +234,16 @@ operations signal, never air time.
 | `release` | An origin-secret rotation fails part-way | Both of the gate's values stay admitted, so the siblings keep sending one it accepts. `<prefix>-release-rotation-failed` notifies the alert topic |
 | `crawl` | The publisher cannot use a catalog item | It logs the error, counts it in `ContextsInvalid` and leaves the title's object as it was. A trigger that still fails after its retries goes to a dead-letter queue, whose alarm `<prefix>-crawl-publisher-dead-letters` notifies the alert topic |
 | `crawl` | The PRE_ADS lookup cannot read a title's context object | The break is requested without the metadata: the lookup fails open |
+| `identity` | A viewer is not signed in, or `POST /playback` fails | The viewer app plays the plan's anonymous URL, whose sessions are CONTEXTUAL |
+| `identity` | A ticket is replayed by another session, expired, unknown or for another configuration | `POST /redeem` answers 409 and leaves the row as it was, and the Pod Decision Service serves every break CONTEXTUAL with the reason |
+| `identity` | The PRE_SESSION redeem fails or times out | The session starts anyway. The Pod Decision Service binds a fresh ticket itself, inside its redeem window, with the same conditional update |
+| `identity` | The multivariant request fails (an origin error while a channel starts) and the player retries the same URL | MediaTailor created the first session and redeemed the ticket for it before the error, so the retry is a replay: CONTEXTUAL ads. A player mints a new ticket for each attempt ([identity.md](identity.md#post-playback)) |
+| `identity` | The ticket lookup fails (timeout, throttle) | That break is SAFE: own book and house ads only, never third parties for what may be a signed-in viewer |
+| `identity` | The edge rebuild throws | It catches every error and passes the emptied request on: an anonymous session, never CloudFront's 503. `<prefix>-identity-edge-errors` fires on any execution error |
+| `selling` | The seller, its bridge or the sync function is down | No new buy becomes a line, and the delivery the buyer reads stops advancing. Lines already published keep serving through the snapshot until their flight ends |
+| `selling` | A package cannot be served (no fixed USD CPM, no budget, no free demo creative) | It gets no line, and the bridge logs why (`unserved`). The buy stays booked at the seller |
+| `viewer` | `POST /playback` is unreachable or refuses a channel (`not_released`) | The player plays the channel's playback plan: an anonymous, CONTEXTUAL session on the control plan |
+| `viewer` | The ad panel's query is slow or fails | The panel says the decision records are not available; playback is untouched |
 | `models` | The SSM entry is missing, invalid or names another model or profile | The agent runs on its entry as deployed and logs a warning |
 | `models` | A task's day reaches its `daily_cap_usd` | Runs and model calls are refused with `MODEL_CAP_REACHED`, and the alert topic is told once that day. The cap is a breaker against a runaway, about ten times expected use |
 | `models` | The spend counter is unreachable | Calls go ahead and the agent logs a warning |
@@ -247,6 +269,8 @@ These are us-east-1 list prices, rounded. Lines marked *measured* come from runs
 | `pds` | The table and buckets on demand; the snapshot publisher, delivery and sweeper functions; its alarms | Nothing beyond the Prebid Server tasks: the service runs in them (ADR-0036) |
 | `release` | Its KMS key ($1 a month); its alarms and composite alarm; the hourly drift check and log reconciliation; AppConfig; cents of state machines | The prefetcher's runs every 5 minutes while a monetized channel runs; the smoke test's probe sessions for each release |
 | `crawl` | One alarm ($0.10 a month). The publisher's runs, S3 objects and CloudFront requests cost well under a cent at demo scale (*measured*) | The same, plus the cached PRE_ADS lookup's requests |
+| `identity` | Its KMS key ($1 a month) and one alarm ($0.10 a month). The viewer pool is free up to 10,000 monthly active users (Essentials) | Per play: one mint (Lambda, a KMS `GenerateMac` at $0.03 per 10,000, a DynamoDB write) and one redeem (API Gateway and a DynamoDB update); per break a consistent DynamoDB read; the edge rebuild at $0.10 per million `/v1/*` requests |
+| `selling` | About $60 a month while deployed: the seller's Fargate task (1 vCPU, 2 GB, arm64, about $0.04 an hour), its `db.t4g.micro` database ($0.016 an hour and 20 GB), its internal load balancer ($0.0225 an hour), the governance agent's KMS key ($1 a month) and three secrets | Per booking, the buyer agent's Bedrock tokens and AgentCore Runtime time (one turn of about 30 seconds with Claude Haiku 5.5) |
 
 *Measured* runs:
 
@@ -272,9 +296,12 @@ leaves behind.
 | **VPCs and Elastic IP addresses** | The guidance has its own VPC with two NAT gateways (2 addresses). The `guidance_stack` simulator adds a second VPC and two more. The default quotas are 5 VPCs and 5 Elastic IPs per Region | One demand stage uses 1 VPC and 2 addresses with `simulator: lambda`, or 2 and 4 with `guidance_stack`. Request increases before running several |
 | **Prefixes without hyphens** | Each stage's resource names and IAM grants are scoped by `<prefix>-*`, so a prefix such as `fast-x` would fall inside the grants of a stage `fast` | Synth refuses a prefix with a hyphen. Name stages like `fastci`, `fastcih` or `fastciads` |
 | **Channel names outside the siblings' names** | The release module names a monetized channel's playback configurations `<channel>-p-a`, `-p-b` and `-p-z`, and its grants cover `<channel>-p-*` | Synth refuses an IaC channel named another channel's (or `<prefix>-lab`'s) name plus `-p-…`, with the module on or off, and one named `<prefix>-agent`, whose siblings would be agent-owned names |
+| **The identity API logs only with the account's API Gateway CloudWatch role** | A REST API writes its access log through the account's `cloudwatchRoleArn`, one per account and Region. The identity stack does not take that setting over. Without a valid role the API works but logs nothing, and nothing fails | Check `aws apigateway get-account` before relying on the log, and set the role once per account and Region ([identity.md](identity.md#logs)) |
+| **CloudFront cache policies: 2 per guidance stack** | Each Prebid Server guidance stack creates two custom cache policies (`<prefix>-pbsCachePolicy-<region>`, `<prefix>-pbsHealthCachePolicy-<region>`), and an account allows 20 custom cache policies (the default quota), shared with everything else in it. A `make deploy-demand` without two free fails its guidance stack with "Account's Cache Policies limit reached" | Count before deploying a demand stage: `aws cloudfront list-cache-policies --type custom --query 'CachePolicyList.Quantity'`. Request a quota increase, or destroy idle demand stages |
 | **Demand prefix of at most 10 characters** | The guidance's dedicated CDK bootstrap uses the prefix as its qualifier | Synth refuses a longer prefix with demand on |
 | **KMS keys pending deletion** | `make destroy-demand` schedules the guidance's six KMS keys for deletion with the 7-day minimum, and the release module's log key with CDK's default 30-day window | They bill nothing while pending. They are the only residue the demand inventory allows |
-| **CDK LogRetention log groups after `make destroy`** | Deleting the Operator stack runs CDK's log-retention provider once more. It recreates two log groups that no stack owns, one of them without retention: `FastChannels-<prefix>-Operator-LogRetention…ResourceLogs…` and `/aws/lambda/FastChannels-<prefix>-Oper-LogRetention…`. This is v3.0.0 behaviour, with or without modules | Delete both by hand after the destroy. Find them with `aws logs describe-log-groups --log-group-name-pattern LogRetention`, then run `aws logs delete-log-group --log-group-name <name>` |
+| **The identity module's vid key and demo viewers** | `make destroy` schedules the vid key `alias/<prefix>-identity-vid` for deletion with a 7-day window. `scripts/seed_personas.py` writes the secret `<prefix>/identity/demo-users`, which no stack owns | The key bills nothing while pending; a stage deployed again under the prefix gets a new key, so every `vid` changes. Run `seed_personas.py --prefix <prefix> --delete` before `make destroy`: it deletes the users and the secret ([identity.md](identity.md#demo-viewers)) |
+| **CDK LogRetention log groups after `make destroy`** | Deleting the Operator stack runs CDK's log-retention provider once more. It recreates two log groups that no stack owns, one of them without retention: `FastChannels-<prefix>-Operator-LogRetention…ResourceLogs…` and `/aws/lambda/FastChannels-<prefix>-Oper-LogRetention…`. This is v3.0.0 behaviour, with or without modules. With `selling`, deleting the Selling stack (in `make destroy-demand`) leaves `/aws/lambda/FastChannels-<prefix>-Sell-LogRetention…` the same way | Delete them by hand after the destroy. Find them with `aws logs describe-log-groups --log-group-name-pattern LogRetention`, then run `aws logs delete-log-group --log-group-name <name>` |
 | **The probe canary's function logs** | CloudWatch Synthetics creates `/aws/lambda/cwsyn-<prefix>-probe-*` at the canary's first run and deletes only the function with the canary | Delete the log group by hand after `make destroy` |
 | **The ledger archive** | With `ledger_lock` `governance` or `compliance` the archive is retained and its records are under Object Lock | After `make destroy`, `scripts/ledger_verify.py purge --prefix <prefix> --apply` deletes the versions whose retention has passed, then the bucket. In governance mode `--apply --bypass-governance` deletes it at once. Development stages use `ledger_retention_days: 1` |
 

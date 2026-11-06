@@ -13,12 +13,20 @@ from fast_channels.core.pds import names
 from fast_channels.core.pds.book import Line
 from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord, SelectRecord
 from fast_channels.core.pds.snapshot import SnapshotBase, demo_demand
+from fast_channels.core.selling.names import BOOKED_LINES_KEY
 from fast_channels.core.timeline import BREAK_SLATE_GOPS
 from fast_channels.infra.config import DemandMode
 from fast_channels.infra.constructs.alerts import alert_topic_arn
 from fast_channels.infra.constructs.crawl.kpis import KPIS
 from fast_channels.infra.constructs.ops.lake import lake_database_name, view_table
-from fast_channels.infra.constructs.pds import DecisionLog, DeliveryCounter, ReleaseSweeper, SnapshotPublisher
+from fast_channels.infra.constructs.pds import (
+    CdnAccessTable,
+    DecisionLog,
+    DeliveryCounter,
+    ReleaseSweeper,
+    SnapshotPublisher,
+)
+from fast_channels.infra.constructs.pds.adload_kpis import AD_LOAD_KPIS
 from fast_channels.infra.constructs.pds.alarms import ModuleAlarms
 
 if TYPE_CHECKING:
@@ -29,13 +37,14 @@ if TYPE_CHECKING:
 
 
 def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
-    """What the deployment puts in the snapshot: the break lengths of the default ladder's grid and, in demo mode, the
-    guidance's bidder simulator as the demand and the synthetic direct lines (``modules.pds.demo_lines``) in the own
-    book."""
+    """What the deployment puts in the snapshot: the break lengths of the default ladder's grid, the tiers' ad load
+    (``modules.pds.ad_load``) and, in demo mode, the guidance's bidder simulator as the demand and the synthetic
+    direct lines (``modules.pds.demo_lines``) in the own book."""
     grid = config.ladder(config.ladders.default).grid
     breaks_ms = tuple(grid.gop_exact(gops) for gops in BREAK_SLATE_GOPS)
+    ad_load = config.modules.pds.ad_load
     if config.modules.demand.mode is not DemandMode.DEMO:
-        return SnapshotBase(breaks_ms=breaks_ms)
+        return SnapshotBase(breaks_ms=breaks_ms, ad_load=ad_load)
     lines = tuple(
         Line(
             id=line.id,
@@ -50,7 +59,7 @@ def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
         )
         for line in config.modules.pds.demo_lines
     )
-    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines, breaks_ms=breaks_ms)
+    return SnapshotBase(demand=demo_demand(config.prefix), lines=lines, breaks_ms=breaks_ms, ad_load=ad_load)
 
 
 class PdsStack(Stack):
@@ -106,9 +115,19 @@ class PdsStack(Stack):
                 self, names.parameter_name(prefix, names.Parameter.MEDIA_BUCKET)
             ),
         )
-        # The Media stack's CDN, by SSM parameter too (our tracker's host).
+        logs_bucket = s3.Bucket.from_bucket_name(
+            self,
+            "LogsBucket",
+            ssm.StringParameter.value_for_string_parameter(
+                self, names.parameter_name(prefix, names.Parameter.LOGS_BUCKET)
+            ),
+        )
+        # The Media stack's CDN, by SSM parameter too (our tracker's host, and the distribution whose logs count it).
         content_base_url = ssm.StringParameter.value_for_string_parameter(
             self, names.parameter_name(prefix, names.Parameter.CONTENT_BASE_URL)
+        )
+        distribution_id = ssm.StringParameter.value_for_string_parameter(
+            self, names.parameter_name(prefix, names.Parameter.DISTRIBUTION_ID)
         )
         self.publisher = SnapshotPublisher(
             self,
@@ -120,7 +139,16 @@ class PdsStack(Stack):
             alert_topic=alerts,
             log_retention=retention,
             removal_policy=removal,
+            booked_lines_key=BOOKED_LINES_KEY if config.modules.selling.enabled else None,
         )
+        if config.modules.selling.enabled:
+            ssm.StringParameter(
+                self,
+                "PublisherFunctionParameter",
+                parameter_name=names.parameter_name(prefix, names.Published.PUBLISHER_FUNCTION),
+                string_value=self.publisher.function.function.function_name,
+                description="Read by the selling module's stack: its sync function runs the publisher",
+            )
         crawl = config.modules.crawl
         # The sidecar's log group, which the guidance stack creates: its pds.policy and pds.select records.
         self.decision_log_group = logs.LogGroup.from_log_group_name(
@@ -138,11 +166,18 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        self.cdn_access = CdnAccessTable(
+            self, "CdnAccess", prefix=prefix, logs_bucket=logs_bucket, distribution_id=distribution_id
+        )
         self.delivery = DeliveryCounter(
             self,
             "Delivery",
             prefix=prefix,
             content_base_url=content_base_url,
+            group=self.publisher.group,
+            cdn_access=self.cdn_access,
+            logs_bucket=logs_bucket,
+            lake_bucket=lake,
             alert_topic=alerts,
             log_retention=retention,
             removal_policy=removal,
@@ -184,6 +219,10 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        # The ad load by tier, a view over the select and delivery records.
+        self.ad_load_kpis = view_table(self, "AdLoadKpis", AD_LOAD_KPIS, database_name=lake_database_name(prefix))
+        for records in (self.select_records, self.delivery_records):
+            self.ad_load_kpis.node.add_dependency(records.table)
         self.crawl_kpis = None
         if crawl.enabled:
             # The crawl module's KPIs, a view over the three tables of decision records.

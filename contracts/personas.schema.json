@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Mode": {
+      "description": "Privacy mode of one break: what third parties may receive (docs/pds.md#privacy-modes).",
+      "enum": [
+        "FULL",
+        "PSEUDONYMOUS",
+        "CONTEXTUAL",
+        "SAFE",
+        "KIDS"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "Persona": {
+      "additionalProperties": false,
+      "description": "One demo persona.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z]{2,16}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "bio": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Bio",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode",
+          "description": "The privacy mode of the persona's breaks."
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Value"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null for a kids profile and a guest."
+        },
+        "tolerance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tolerance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null for a kids profile and a guest."
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9-]{0,15}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ad-load tier of the persona's profile; null without a profile.",
+          "title": "Tier"
+        },
+        "sign_in": {
+          "$ref": "#/$defs/SignIn"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The demo user's sign-in name; null for a kids profile and a guest.",
+          "title": "Email"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z]{2,16}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The persona whose sign-in a kids profile uses.",
+          "title": "Account"
+        },
+        "genres": {
+          "default": [],
+          "description": "The rail's seed, in the catalog's genre vocabulary.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Genres",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "bio",
+        "mode",
+        "value",
+        "tolerance",
+        "tier",
+        "sign_in",
+        "email"
+      ],
+      "title": "Persona",
+      "type": "object"
+    },
+    "SignIn": {
+      "description": "How the persona reaches the app.",
+      "enum": [
+        "user",
+        "kids_profile",
+        "guest"
+      ],
+      "title": "SignIn",
+      "type": "string"
+    },
+    "Tolerance": {
+      "description": "How readily the persona tunes away from ads (the premise of the demo).",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Tolerance",
+      "type": "string"
+    },
+    "Value": {
+      "description": "How much the persona's breaks are worth to buyers (the premise of the demo).",
+      "enum": [
+        "high",
+        "mid",
+        "low"
+      ],
+      "title": "Value",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``contracts/personas.json``.",
+  "properties": {
+    "v": {
+      "default": 1,
+      "title": "V",
+      "type": "integer"
+    },
+    "personas": {
+      "items": {
+        "$ref": "#/$defs/Persona"
+      },
+      "title": "Personas",
+      "type": "array"
+    }
+  },
+  "required": [
+    "personas"
+  ],
+  "title": "PersonaList",
+  "type": "object"
+}

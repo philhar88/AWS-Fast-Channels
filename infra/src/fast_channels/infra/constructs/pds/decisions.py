@@ -11,7 +11,7 @@ the objects is empty and reads as a row of nulls (seen live): query with ``recor
 """
 
 import types
-from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, get_args, get_origin
 
 from aws_cdk import Duration, RemovalPolicy, Size, Stack
 from aws_cdk import aws_glue as glue
@@ -59,7 +59,7 @@ def _column_type(annotation: Any) -> glue.Type:
         return glue.Schema.array(_column_type(args[0]))
     scalar = isinstance(annotation, type)
     kind = next((kind for base, kind in _SCALARS if scalar and issubclass(annotation, base)), None)
-    return kind or cast("glue.Type", glue.Schema.STRING)
+    return kind or glue.Schema.STRING
 
 
 def record_columns(model: type[BaseModel]) -> list[glue.Column]:

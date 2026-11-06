@@ -82,6 +82,9 @@ class Settings:
     """SSM parameter with the channel census's last count (ops module)."""
     ads_log_group: str = field(default_factory=lambda: _env("ADS_LOG_GROUP"))
     """The deployment's MediaTailor vended-log group (``/aws/vendedlogs/mediatailor/<prefix>``)."""
+    unserved_breaks: bool = field(default_factory=lambda: _env("UNSERVED_BREAKS") == "true")
+    """The zero-ads detector also counts unserved breaks: a break's first marker with neither a prefetch nor a
+    real-time request (the release module's siblings)."""
     as_run_breaks: bool = field(default_factory=lambda: _env("AS_RUN_BREAKS") == "true")
     """The as-run reconciler marks breaks aired (ops module)."""
     epg_break_ids: bool = field(default_factory=lambda: _env("EPG_BREAK_IDS") == "true")
@@ -102,6 +105,19 @@ class Settings:
     """JSON of what the deployment configures in the snapshot (``core.pds.snapshot.SnapshotBase``)."""
     pds_table: str = field(default_factory=lambda: _env("PDS_TABLE"))
     """The Pod Decision Service's table (``<prefix>-pds``: budgets, caps, reservations, delivery)."""
+    pds_booked_lines_key: str = field(default_factory=lambda: _env("PDS_BOOKED_LINES_KEY"))
+    """The config bucket's object of the lines booked over AdCP (selling module), which the publisher adds to the own
+    book; unset without the module."""
+    pds_publisher_function: str = field(default_factory=lambda: _env("PDS_PUBLISHER_FUNCTION"))
+    """The snapshot publisher's function, which the selling module's sync runs when the booked lines change."""
+    selling_products: str = field(default_factory=lambda: _env("SELLING_PRODUCTS"))
+    """JSON of the selling module's product terms (``functions.selling.sync.Terms``)."""
+    lake_workgroup: str = field(default_factory=lambda: _env("LAKE_WORKGROUP"))
+    """The lake's Athena workgroup (``<prefix>-lake``), which the delivery function's CDN-log runs query in."""
+    cdn_log_table: str = field(default_factory=lambda: _env("CDN_LOG_TABLE"))
+    """``<database>.<table>`` of the CDN's logs with the query string (``<prefix>_pds.cdn_access``)."""
+    select_table: str = field(default_factory=lambda: _env("SELECT_TABLE"))
+    """``<database>.<table>`` of the ``pds.select`` decision records (``<prefix>_lake.pds_select``)."""
     release_bucket: str = field(default_factory=lambda: _env("RELEASE_BUCKET"))
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
     release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
@@ -140,6 +156,12 @@ class Settings:
     receives each MediaTailor log type, and in which layout."""
     origin_secret_region: str = field(default_factory=lambda: _env("ORIGIN_SECRET_REGION"))
     """Region of the demand origin's secrets (the DemandEdge stack, in us-east-1)."""
+    identity_table: str = field(default_factory=lambda: _env("IDENTITY_TABLE"))
+    """The identity module's ticket table (``<prefix>-identity``)."""
+    vid_key: str = field(default_factory=lambda: _env("VID_KEY"))
+    """ARN of the identity module's KMS HMAC key, which the ``vid`` is computed with."""
+    redeem_window_ms: int = field(default_factory=lambda: int(_env("REDEEM_WINDOW_MS") or 0))
+    """``modules.identity.redeem_window_seconds`` in milliseconds: from mint to the latest redeem of a ticket."""
 
     @property
     def app(self) -> str:

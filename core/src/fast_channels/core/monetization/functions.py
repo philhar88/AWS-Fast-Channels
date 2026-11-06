@@ -33,6 +33,7 @@ from pydantic import (
 from pydantic.alias_generators import to_pascal
 
 RUNTIME: Final = "JSONATA"
+# OPTIMIZATION(aws): W-2 1.20 PutFunction rejects hyphenated ids (unpublished pattern): prefixes use underscores
 FUNCTION_ID_PATTERN: Final = r"^[A-Za-z0-9_]+$"
 RELEASE_SUFFIX: Final = re.compile(r"_r[0-9]{4}$")
 MAX_RELEASE: Final = 9999

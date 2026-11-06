@@ -6,6 +6,148 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-06
+
+Version 4.1.0 adds signed-in viewers (`identity`), ad load by viewer tier (`pds`), a reference viewer app
+(`viewer`) and agentic ad selling over AdCP (`selling`), and lists every workaround of AWS behaviour in
+[docs/workarounds.md](docs/workarounds.md). Every new module is off by default; with every module off a deployment
+is v3.0.0's, which snapshot tests of every shipped template check.
+
+### Added
+
+- **Workarounds to remove** ([docs/workarounds.md](docs/workarounds.md)): every place the code works around AWS
+  product behaviour is marked `OPTIMIZATION(aws): <id>` (and `OPTIMIZATION(oss)` for an open-source dependency),
+  and the page lists each one: the AWS behaviour, our workaround, where it lives and what to delete when AWS fixes
+  it. 28 ids, from the MediaTailor service-linked-role grant (W-2 1.30) to the AppConfig strategies (W-2 4.7) and
+  the guidance overlays (W-11). A test checks that the markers and the rows name the same ids.
+- **The `identity` module (off by default; needs `release`):** signed-in viewers, by single-use playback tickets
+  ([docs/identity.md](docs/identity.md), [ADR-0018](docs/adr/0018-opaque-playback-ticket.md)). The
+  `FastChannels-<prefix>-Identity` stack holds:
+  - a Cognito viewer pool (Essentials, administrators create users), whose pre-token-generation trigger puts the
+    scope `fast/playback` and the claim `fast:persona` in access tokens;
+  - `POST /playback`, which takes an access token with that scope (ID tokens are refused) and a channel name. It
+    answers the stable sibling's playback URL with a 22-character opaque ticket `ads.t`, valid for 120 s. The ticket
+    row holds the configuration, the privacy mode, the persona and the viewer id `vid`, a KMS HMAC of the token's
+    issuer and subject; the raw subject is stored nowhere;
+  - `POST /redeem`, one conditional DynamoDB update with no Lambda, which binds a ticket to the first session that
+    redeems it on its own configuration. A replay, an expired or unknown ticket, or another configuration gets a 409.
+
+  `scripts/seed_personas.py` creates the demo personas' viewers and keeps their passwords in Secrets Manager, and
+  `tests/e2e/harness_identity.py` signs them in and mints for other e2e tests. The shipped stages turn the module on.
+- **Demand: the warm-up creates every adapter's metric keys without calling a partner** (W-12). Prebid Server Java
+  creates an adapter's metric keys without a lock, and the first concurrent auctions on a new task could fail with an
+  HTTP 500; a probe gets no partner, so the warm-up never created them. A new stored request, `fast-warm`, names
+  every configured third-party adapter and answers each from a stored bid response (`stored_responses/warm-<adapter>`).
+  The warm-up sends it one request at a time first (two per healthy target, plus two), then as one replay request in
+  four. The fast-ctv module adds no bidder to a warm request and keeps only the stored-response ones, and the render
+  refuses an adapter the new zero-recorder contract gate (`tests/pbs/test_warmup.py`) has not covered: one that built
+  more than one request would be called for real. See [docs/demand.md](docs/demand.md#scaling-the-census-gate-dayparts-and-warm-up).
+- **Agentic selling (`modules.selling`, off by default; [docs/selling.md](docs/selling.md),
+  [ADR-0024](docs/adr/0024-agentic-selling-over-adcp.md)).** The Prebid Sales Agent (AdCP 3.1.1, MCP and A2A 1.0) is
+  the stage's seller of record, a testing-mode sandbox in the guidance's VPC. The AWS reference buyer and governance
+  agents run on AgentCore Runtime from pinned upstream images. A buy that the buyer agent books becomes a direct line
+  of the PDS own book (budget, flight, CPM, brand, the product's channel), is reserved, counted and written to the
+  ledger like any line, and its delivery is reported back over AdCP. The stage `fastcisell` runs it, and
+  `tests/e2e/test_21_selling.py` proves it end to end.
+- **Own-book lines with flights and channels.** A line may carry a flight (`starts`, `ends`), which the own book
+  honours, and the channels it is sold on, which `/select` honours (the new outcome `off_target`). Lines without them
+  serialize, and hash, as before.
+- **Identity on the playback path** (`modules.identity`, ADR-0018):
+  - **the edge rebuild**, a CloudFront Function on the media distribution's `/v1/*` behaviour: an init request reaches
+    MediaTailor with only a single well-formed `ads.t`, every other viewer parameter (`ads.*`, `aws.*`,
+    `manifest.*`) dropped; `/v1/session` and non-canonical init paths are refused; the behaviour allows GET, HEAD
+    and OPTIONS only. It catches every error (a throw is CloudFront's 503), and `<prefix>-identity-edge-errors`
+    fires on any. With the module on, the CDN's access logs leave out `cs-uri-query`, `c-ip` and `x-forwarded-for`;
+  - **the PRE_SESSION redeem** on the monetized channels' pair siblings, which also forward the ticket to Prebid
+    Server (`X-Fast-T`): one uncached `HTTP_REQUEST` per sibling before the session controls. The probe, the lab
+    channel and the experimental ad-server route are not ticketed;
+  - **the Pod Decision Service's ticket lookup** on every break: bound to this session and configuration inside the
+    lease (2 h idle, 24 h absolute) is the viewer's; anything else is CONTEXTUAL with the reason (`replay`,
+    `pc_mismatch`, `expired_or_raced`, `unknown`); a failed lookup is SAFE. The sidecar binds a fresh ticket itself
+    when the hook's redeem never landed. `pds.policy` records carry a bound viewer's `vid` and the ticket's `cid`.
+
+  The edge rebuild's dropping of `aws.*` is listed as a workaround of `W-2 FR-1`.
+- **Delivery from two sources** (`modules.pds`, W-2 1.32): the vended ADS log can leave out a whole break that
+  MediaTailor filled, so the delivery function also counts our tracker's requests in the CDN's standard logs. Every 5
+  minutes one Athena query reads the log files that arrived 10 to 15 minutes earlier, each file once, and counts only
+  requests whose break's select record placed that ad. A firing that both sources record counts once, by
+  `(sid, evid, crid)`. Our tracker's parameters move into its path, `/ads/b/<sid>.<evid>/<crid>/<enr>.gif`, which the
+  logs keep with the identity module (they leave out the query): with the demand module the CDN answers `/ads/b/*`
+  with a 1x1 GIF from a CloudFront Function, and the former `/ads/b.gif?d=…` form is still read. The metric
+  `CdnLogOnlyImpressions` counts what the ADS log left out, and `pds.delivery` records gain `source`. The query
+  string stays out of the lake, in the PDS's own Glue database `<prefix>_pds`. The Data and Media stacks write two
+  more parameters for the Pds stack, `/<prefix>/pds/logs-bucket` and `/<prefix>/pds/distribution-id`: run
+  `make deploy` before `deploy-demand`.
+- **The demand leg's e2e checks tolerate W-2 1.32** (`tests/e2e/test_14_demand_pods.py`): a break the PDS decided and
+  our tracker shows played, but whose vended ADS log is incomplete, is a known log gap. The checks that read that log
+  leave it out and report it, and more than one session in five with a gap still fails. The delivery check counts
+  from both logs and waits for the CDN-log runs when a record is missing; `--cut-ads-delivery` cuts the delivery
+  subscription over the second break to prove the CDN's log counts what the ADS log did not.
+- **Ad load by viewer tier** (`pds`, [ADR-0037](docs/adr/0037-ad-load-by-viewer-tier.md),
+  [docs/pds.md](docs/pds.md#ad-load-by-tier)).
+  - A signed-in viewer's profile (`VIEWER#<vid>` in the PDS table) names an ad-load tier.
+  - Each tier's policy, `modules.pds.ad_load.<tier>`, caps the ads in a break (`max_ads`) and sets the accepted CPM a
+    sold ad must beat (`bar_cpm`, at most $20.50, so λ stays within λ_cap).
+  - `/select` applies it to FULL and PSEUDONYMOUS breaks with a bound viewer. Every other break, and the tiers
+    `standard` and `holdout`, keep the control plan.
+  - The default `light` tier allows one ad per break, above $20: on the demo's prices, one $35 ad and the slate, where
+    the holdout gets the full pod. A tier never empties a pod. The tier and the bar never travel on the wire, so bid
+    requests are the same for every tier.
+  - The `pds.select` record gains `tier` and `ad_load`, a bid beyond the cap has the outcome `ad_load`, and the lake
+    view `v_ad_load_kpis` shows ads per break, the winning and turned-away prices, and revenue by tier.
+  - `contracts/personas.json` is the demo's eight personas with their sign-ins, genres and tiers, for the seed script
+    and the viewer app.
+
+- **The reference viewer** (`viewer`, [ADR-0028](docs/adr/0028-reference-viewer-on-its-own-origin.md),
+  [docs/viewer.md](docs/viewer.md)).
+  - A second build of the `console/` package (`console/dist-viewer`) on its own CloudFront distribution, in the stack
+    `FastChannels-<prefix>-Viewer`. Its CSP names only the media CDN, Cognito's user-pools API and the two APIs it
+    calls.
+  - A persona picker: the demo personas of `contracts/personas.json` sign in to the viewer pool with its public
+    client, one persona per tab.
+  - A rule-based rail of recommended channels per persona, from the declared genres and the public EPG feeds. A
+    channel in an ad break ranks lower, and every tile says why it is there.
+  - A player that mints a playback ticket for every open and reopen, falls back to the anonymous playback plan,
+    and shows each ad, the slate after it and every break as played.
+  - With `modules.viewer.ad_panel`, a demo-only "why these ads" panel: an HTTP API with a JWT authorizer reads the
+    decision records of the viewer's own session with Logs Insights, and shows each break's privacy mode, tier,
+    ad-load policy and pod.
+  - The operator console's hosting is factored out as `StaticSite`; the operator templates are unchanged.
+
+### Changed
+
+- **A tier-0 line must beat λ where a tier prices ad load** (`pds`). Where λ is 0, which is every break without a
+  priced tier, tier-0 lines still run at any price.
+
+### Fixed
+
+- **The prefetcher never deletes a schedule whose consumption window has opened** (`modules.release`). A break that
+  has started leaves the schedule the prefetcher reads, which took it for a re-planned break and deleted its schedule
+  (seen 7 s into a break, before the sessions reached its marker). What the sessions had retrieved was thrown away:
+  some asked again in real time, and one got no ads for the break. Such a schedule is now kept until its window
+  closes, and the run lists it as `consuming_names`.
+- **Unserved prefetched breaks are counted and alarmed** (`modules.release`). MediaTailor sometimes neither fills a
+  prefetched break from its retrieval nor asks in real time, and logs nothing (`W-2 1.33`, seen in 3 of 33 sessions).
+  The release module's zero-ads detector now counts each such break per sibling (`UnservedBreaks`) and alarms on any
+  (`<prefix>-release-unserved-breaks`). A break counts once per session, by its `DATERANGE` ID, and is served when any
+  of its sightings is: MediaTailor can meet a break's start marker three times, fill it from the retrieval, ask again
+  in real time and replace the pod, then do nothing (seen on a release-gate stage). The silent-loss detector, which
+  needs at least five markers a minute, could not see one session's lost break. The e2e tests 18 and 20 tolerate exactly this case in at most one session in five.
+- **The lake's break views pair a fill with its own break** (`v_breaks`, `v_fill_by_pc`). They joined `FILLED_AVAIL`
+  to `MAKING_ADS_REQUEST` by `requestId`, but MediaTailor gives one `requestId` to everything a playlist request set
+  off, which can be a break's `FILLED_AVAIL` and, 80 ms later, the next break's prefetch retrieval (seen live). That
+  fill then counted for the next break, and the break's own fill for none. An event now belongs to the break its
+  prefetch schedule names (`pf-<evid>`: a fill from a retrieval can carry the previous break's ad request URL, also seen
+  live), else to the one its own URL names, and a fill with neither to the latest request of its `requestId` before
+  it. The ad-server leg's e2e harness reads the ADS log by the same rule.
+- **The seller's database password needs no URL encoding** (`modules.selling`). The generated password could contain
+  `^`, which `DATABASE_URL` carries as `%5E`; the Prebid Sales Agent does not decode it, so the seller failed to log in
+  and exited at boot, and the ECS circuit breaker rolled the Selling stack back (seen on a release-gate stage; about
+  one deploy in three). The password is now letters, digits and `-._` only (`OPTIMIZATION(oss): W-8 A12`).
+- **The operations guide's configuration tables match the model again** ([docs/operations.md](docs/operations.md)).
+  They gain `modules.demand.pod_cache_concurrency` and `pod_cache_memory_mb`, and take the model's wording for the
+  rest. Its teardown list now also names the two log groups the Selling stack leaves after each deployment.
+
 ## [4.0.0] - 2026-10-31
 
 Version 4.0.0 is a major release. It adds the optional monetization and operations modules
@@ -663,7 +805,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
-[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v1.0.0...v2.0.0

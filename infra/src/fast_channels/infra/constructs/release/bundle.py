@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from fast_channels.core.identity.functions import IdentityContribution
 from fast_channels.core.monetization.bundle import (
     AdServerRoute,
     Bundle,
@@ -76,16 +77,21 @@ def render(
     channel_urls: Mapping[str, str],
     contributions: Sequence[BundleContribution] = (),
     ad_server: Callable[[Callable[[str], str]], AdServerRoute | None] | None = None,
+    redeem_url: str | None = None,
 ) -> RenderedBundle:
     """The deployment's bundle: its monetized channels (``modules.release.channels``, and the lab channel), the
     Prebid Server origin, and the module's contributions. ``ad_server`` builds the pair siblings' ad-server route
-    from deploy-time values (passed through the placeholders, like the channels' URLs).
+    from deploy-time values (passed through the placeholders, like the channels' URLs). ``redeem_url`` (the identity
+    module's ``POST /redeem``, a deploy-time value too) makes the general siblings ticketed and adds their
+    PRE_SESSION redeem (``core.identity.functions``).
 
     Raises:
         InvalidBundleError: the bundle breaks a validator.
     """
     placeholders = _Placeholders()
     route = ad_server(placeholders.hide) if ad_server else None
+    if redeem_url is not None:
+        contributions = [IdentityContribution(redeem_url=placeholders.hide(redeem_url)), *contributions]
     iac = {channel.name: channel for channel in config.iac_channels}
     lab = config.lab_channel.name if config.lab_channel else None
     channels = [
@@ -109,6 +115,7 @@ def render(
         probe_sibling=config.modules.release.probe_sibling,
         contributions=contributions,
         ad_server=route,
+        ticketed=redeem_url is not None,
     )
     require_valid(validate_bundle(bundle))
     document = json.dumps(bundle_document(bundle)["bundle"], sort_keys=True, separators=(",", ":"))

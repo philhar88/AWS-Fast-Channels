@@ -7,6 +7,7 @@ from aws_cdk import Stack
 
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION, alert_topic, cdn_error_alarm
 from fast_channels.infra.constructs.delivery import CdnAccessLogs
+from fast_channels.infra.constructs.identity.edge import edge_error_alarm
 
 if TYPE_CHECKING:
     from aws_cdk import aws_cloudfront as cloudfront
@@ -58,8 +59,13 @@ class EdgeStack(Stack):
             scope, id, description=f"FAST Channels ({config.prefix}): CloudFront logs and alarms", **kwargs
         )
         name = f"{config.prefix}-{distribution.stack.region}"
+        identity = config.modules.identity.enabled
         self.access_logs = CdnAccessLogs(
-            self, "AccessLogs", distribution=distribution, logs_bucket=data.logs_bucket, name=name
+            self, "AccessLogs", distribution=distribution, logs_bucket=data.logs_bucket, name=name, private=identity
         )
         self.topic = alert_topic(self, "Alerts", name=f"{name}-alerts", email=config.notifications.email)
         cdn_error_alarm(self, "CdnErrors", distribution=distribution, topic=self.topic, name=f"{name}-cdn-5xx")
+        if identity:
+            edge_error_alarm(
+                self, "EdgeRebuildErrors", prefix=config.prefix, topic=self.topic, name=f"{name}-identity-edge-errors"
+            )

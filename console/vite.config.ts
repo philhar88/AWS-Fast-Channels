@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import react from "@vitejs/plugin-react";
-import { createReadStream, statSync } from "node:fs";
-import { extname, join, normalize, sep } from "node:path";
+import { createReadStream, renameSync, statSync } from "node:fs";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Connect, type Plugin } from "vite";
 
@@ -30,6 +30,33 @@ const PREVIEW_CSP = [
   "object-src 'none'",
 ].join("; ");
 
+/**
+ * Policy enforced by `vite preview --mode viewer`, with the shape of the viewer site's response-headers policy
+ * (`fast_channels.infra.constructs.viewer`): the operator's, minus AgentCore, plus the viewer pool's Cognito API and
+ * the playback and ad panel APIs (their execute-api hosts vary by deployment). The viewer calls no hosted login page.
+ */
+const VIEWER_PREVIEW_CSP = PREVIEW_CSP.replace(
+  "connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com",
+  "connect-src 'self' https://cognito-idp.us-east-1.amazonaws.com https://*.execute-api.us-east-1.amazonaws.com https://*.cloudfront.net",
+);
+
+/** The viewer build's entry, emitted as `index.html` of `dist-viewer` (the viewer site's default root object). */
+const VIEWER_ENTRY = "viewer.html";
+
+function viewerIndex(): Plugin {
+  let outDir = "";
+  return {
+    name: "fast-viewer-index",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      renameSync(join(outDir, VIEWER_ENTRY), join(outDir, "index.html"));
+    },
+  };
+}
+
 const MEDIA_TYPES: Record<string, string> = {
   ".m3u8": "application/vnd.apple.mpegurl",
   ".ts": "video/mp2t",
@@ -55,15 +82,25 @@ function mockCdn(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), mockCdn()],
-  build: {
-    target: "es2023",
-    // Emit every asset as a file: data: URIs would need a looser font-src/img-src.
-    assetsInlineLimit: 0,
-    modulePreload: { polyfill: false },
-    chunkSizeWarningLimit: 1500,
-  },
-  preview: { headers: { "Content-Security-Policy": PREVIEW_CSP } },
-  test: { include: ["src/**/*.test.ts"] },
+/**
+ * Two builds of one package: the operator console (`dist`, the default) and, with `--mode viewer`, the reference
+ * viewer app (`dist-viewer`, from viewer.html), which the viewer module deploys to a site of its own.
+ */
+export default defineConfig(({ mode }) => {
+  const viewer = mode === "viewer";
+  return {
+    plugins: [react(), mockCdn(), ...(viewer ? [viewerIndex()] : [])],
+    // The viewer's local backend config for `npm run dev:viewer` is public-viewer/config.json, never the console's.
+    publicDir: viewer ? "public-viewer" : "public",
+    build: {
+      target: "es2023",
+      // Emit every asset as a file: data: URIs would need a looser font-src/img-src.
+      assetsInlineLimit: 0,
+      modulePreload: { polyfill: false },
+      chunkSizeWarningLimit: 1500,
+      ...(viewer ? { outDir: "dist-viewer", rolldownOptions: { input: VIEWER_ENTRY } } : {}),
+    },
+    preview: { headers: { "Content-Security-Policy": viewer ? VIEWER_PREVIEW_CSP : PREVIEW_CSP } },
+    test: { include: ["src/**/*.test.ts"] },
+  };
 });

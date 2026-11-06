@@ -3,9 +3,10 @@ the task role's grants, as the CDK context ``scripts/guidance_app.py`` reads (:d
 
 ``scripts/_demand.py`` renders it at deploy (:func:`sidecar`); the wrapper adds it to the guidance's own stack. The
 grants are exactly the hot-path functions' were: the snapshot object, the budget shards' reads, the reservations'
-writes (``BUDGET#``, ``CAP#``, ``RES#`` items) and the ledger's ``pds/*`` chains, and with the crawl module the
-catalog-context objects. The task role is shared with Prebid Server's container, so Prebid Server could make these
-calls too (ADR-0036 weighs that).
+writes (``BUDGET#``, ``CAP#``, ``RES#`` items) and the ledger's ``pds/*`` chains, the viewer profiles' reads
+(``VIEWER#`` items, ADR-0037), with the crawl module the catalog-context objects, and with the identity module the
+ticket rows (``T#`` items of ``<prefix>-identity``: read, self-redeem and ``last_seen``). The task role is shared with
+Prebid Server's container, so Prebid Server could make these calls too (ADR-0036 weighs that).
 
 The sidecar runs in the guidance's VPC, whose S3 gateway endpoint lets requests through only to the guidance's own
 buckets (its endpoint policy): S3 answers anything else ``AccessDenied``, whatever the role allows (seen live). So
@@ -20,9 +21,12 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field
 
 from fast_channels.core.crawl.catalog_context import CONTEXT_PREFIX
+from fast_channels.core.identity.names import table_name as identity_table
+from fast_channels.core.identity.ticket import KEY_PREFIX as TICKET_KEY_PREFIX
 from fast_channels.core.ledger import ledger_table
 from fast_channels.core.pds.names import CONTAINER, PORT, sidecar_log_group, table_name
 from fast_channels.core.pds.snapshot import SNAPSHOT_KEY
+from fast_channels.core.pds.viewers import PROFILE_PREFIX
 
 CONTEXT: Final = "fastPds"
 """The CDK context key the guidance wrapper reads the sidecar from (JSON)."""
@@ -92,6 +96,7 @@ def statements(
     account: str,
     config_bucket: str,
     catalog_context_bucket: str | None = None,
+    identity: bool = False,
 ) -> tuple[dict[str, Any], ...]:
     """The sidecar's grants (module docstring)."""
     pds = _table(partition, region, account, table_name(prefix))
@@ -109,6 +114,13 @@ def statements(
             "Action": "dynamodb:BatchGetItem",
             "Resource": pds,
             "Condition": _leading(["BUDGET#*"]),
+        },
+        {
+            "Sid": "PdsViewerProfiles",
+            "Effect": "Allow",
+            "Action": "dynamodb:GetItem",
+            "Resource": pds,
+            "Condition": _leading([f"{PROFILE_PREFIX}*"]),
         },
         {
             "Sid": "PdsReservations",
@@ -148,6 +160,16 @@ def statements(
                 "Resource": f"arn:{partition}:s3:::{catalog_context_bucket}/{CONTEXT_PREFIX}*",
             },
         ]
+    if identity:
+        granted.append(
+            {
+                "Sid": "PdsTicketBindings",
+                "Effect": "Allow",
+                "Action": ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+                "Resource": _table(partition, region, account, identity_table(prefix)),
+                "Condition": _leading([f"{TICKET_KEY_PREFIX}*"]),
+            }
+        )
     return tuple(granted)
 
 
@@ -200,20 +222,18 @@ DYNAMODB_ITEM_ACTIONS: Final = (
 
 
 def dynamodb_endpoint_statements(
-    *, prefix: str, partition: str, region: str, account: str
+    *, prefix: str, partition: str, region: str, account: str, identity: bool = False
 ) -> tuple[dict[str, Any], ...]:
-    """The DynamoDB gateway endpoint's policy: item calls on the PDS table and the ledger, nothing else (module
-    docstring). The task role still decides which items."""
+    """The DynamoDB gateway endpoint's policy: item calls on the PDS table and the ledger, and with the identity module
+    its ticket table, nothing else (module docstring). The task role still decides which items."""
+    tables = [table_name(prefix), ledger_table(prefix), *([identity_table(prefix)] if identity else [])]
     return (
         {
             "Sid": "PdsTables",
             "Effect": "Allow",
             "Principal": {"AWS": "*"},
             "Action": list(DYNAMODB_ITEM_ACTIONS),
-            "Resource": [
-                _table(partition, region, account, table_name(prefix)),
-                _table(partition, region, account, ledger_table(prefix)),
-            ],
+            "Resource": [_table(partition, region, account, name) for name in tables],
             "Condition": {"StringEquals": {"aws:ResourceAccount": account}},
         },
     )
@@ -233,6 +253,7 @@ def sidecar(
     select_timeout_ms: int = 200,
     crawl: dict[str, str] | None = None,
     catalog_context_bucket: str | None = None,
+    identity: bool = False,
 ) -> Sidecar:
     """The sidecar of stage ``prefix``.
 
@@ -248,6 +269,8 @@ def sidecar(
         crawl: with the crawl module on, its environment (``CRAWL_HOLDOUT_PERCENT``, and
             ``PUBLISHER_DOMAIN`` when set).
         catalog_context_bucket: with the crawl module on, its catalog-context bucket.
+        identity: the identity module is on: the sidecar reads and binds tickets in ``<prefix>-identity``
+            (``IDENTITY_TABLE``, ``fast_channels.pds.bindings``).
     """
     environment = {
         "FAST_PREFIX": prefix,
@@ -262,6 +285,7 @@ def sidecar(
         "PDS_SELECT_TIMEOUT_MS": str(select_timeout_ms),
         **(crawl or {}),
         **({"CATALOG_CONTEXT_BUCKET": catalog_context_bucket} if catalog_context_bucket else {}),
+        **({"IDENTITY_TABLE": identity_table(prefix)} if identity else {}),
     }
     return Sidecar(
         image=image,
@@ -275,6 +299,7 @@ def sidecar(
             account=account,
             config_bucket=config_bucket,
             catalog_context_bucket=catalog_context_bucket,
+            identity=identity,
         ),
         endpoint_statements=endpoint_statements(
             account=account,
@@ -283,6 +308,6 @@ def sidecar(
             catalog_context_bucket=catalog_context_bucket,
         ),
         dynamodb_endpoint_statements=dynamodb_endpoint_statements(
-            prefix=prefix, partition=partition, region=region, account=account
+            prefix=prefix, partition=partition, region=region, account=account, identity=identity
         ),
     )

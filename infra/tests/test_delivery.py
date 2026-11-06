@@ -1,5 +1,6 @@
 """MediaDistribution, CdnAccessLogs and EdgeStack in isolated stacks, plus the generated path contract."""
 
+import base64
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -12,15 +13,23 @@ from aws_cdk import aws_s3 as s3
 from aws_cdk.assertions import Annotations, Match, Template
 from cdk_nag import AwsSolutionsChecks, ServerlessChecks
 
+from fast_channels.core.pbs_config import TRACKER_PREFIX
+from fast_channels.core.pds.pod import tracker_url
+from fast_channels.functions.ingest.kit import BEACON_GIF
 from fast_channels.infra.config import FastChannelsConfig
 from fast_channels.infra.constructs.delivery import (
     ACCESS_LOG_FIELDS,
+    CACHING_DISABLED,
     DEFAULT_PATH,
     ROUTES,
+    TRACKER_FUNCTION_CODE,
+    TRACKER_GIF,
+    TRACKER_ROUTE,
     CdnAccessLogs,
     MediaDistribution,
     Origin,
     path_contract,
+    routes,
 )
 from fast_channels.infra.stacks.data import DataStack
 from fast_channels.infra.stacks.edge import EDGE_REGION, EdgeStack
@@ -421,3 +430,42 @@ def test_no_unacknowledged_nag_findings(tmp_path: Path, domain: str | None) -> N
     assert isinstance(app, App)
 
     assert nag_violations(app, tmp_path) == []
+
+
+def test_the_tracker_route_answers_our_trackers_path_at_the_edge() -> None:
+    """With the demand module: ``/ads/b/*`` before the default route, uncached, behind a viewer-request function
+    that answers the kit's 1x1 GIF itself (the media bucket has no such key: its answer would be a 403)."""
+    stack = new_stack()
+    media_distribution(stack, tracker=True)
+    template = Template.from_stack(stack)
+    config = distribution_config(template)
+    paths = [b["PathPattern"] for b in config["CacheBehaviors"]]
+    [behaviour] = [b for b in config["CacheBehaviors"] if b["PathPattern"] == TRACKER_ROUTE.path]
+    [function] = template.find_resources("AWS::CloudFront::Function").values()
+
+    assert paths == ["/tm/*", "/v1/*", "/ads/b/*"]
+    assert behaviour["CachePolicyId"] == CACHING_DISABLED.policy.cache_policy_id
+    assert behaviour["TargetOriginId"] == Origin.MEDIA.value and "OriginRequestPolicyId" not in behaviour
+    [association] = behaviour["FunctionAssociations"]
+    assert association["EventType"] == "viewer-request"
+    props = function["Properties"]
+    assert (props["FunctionCode"], props["FunctionConfig"]["Runtime"]) == (TRACKER_FUNCTION_CODE, "cloudfront-js-2.0")
+    assert props["AutoPublish"] is True
+    assert base64.b64decode(TRACKER_GIF) == BEACON_GIF
+    assert "'cache-control': {value: 'no-store'}" in TRACKER_FUNCTION_CODE
+    assert (
+        tracker_url("https://cdn.example/ads/b", "s.1", "c")
+        .removeprefix("https://cdn.example")
+        .startswith(TRACKER_PREFIX)
+    )
+    assert TRACKER_ROUTE.contract()["viewer_request"].startswith("Answers a 1x1 GIF")
+
+
+def test_without_the_demand_module_there_is_no_tracker_route() -> None:
+    stack = new_stack()
+    media_distribution(stack)
+    template = Template.from_stack(stack)
+
+    assert routes() == ROUTES and TRACKER_ROUTE not in ROUTES
+    assert not template.find_resources("AWS::CloudFront::Function")
+    assert "FunctionAssociations" not in json.dumps(distribution_config(template))

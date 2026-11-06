@@ -84,6 +84,8 @@ deploy time. Golden copies for a sample stage are in `core/tests/__snapshots__/t
 | `current-config/prebid-config.yaml` | Replaces the guidance's default file, so it repeats every default it keeps. Changes: `server.http.server-instances` = `modules.demand.server_instances`; the five shipped adapters (`appnexus`, `ix`, `openx`, `pubmatic`, `rubicon`) off; the simulator (`amt`) on in `demo` mode only; the own book `ownbook`, a `generic` alias on the PDS sidecar's `http://127.0.0.1:8090/ownbook/openrtb` (OpenRTB 2.6); `hooks.fast-ctv` (policy and select URLs and timeouts, the tracker template, the kit's house ads as `house-ads`, the break lengths it shapes a pod for, `pod-min-s` 30 and `pod-max-s` 120, request logging); GDPR out of scope unless a request signals it; the unprotected log-level endpoint off |
 | `stored_requests/fast-pod.json` | The one stored request of the direct route: a template pod (`podid` "1") of one 30 s slot `s1` (`rqddurs` [30]) and `ext.fast.slot_s` 30. The module copies the slot once per whole 30 s of the POST's `ext.fast.pod_s` (`s1`, `s2`, …, `poddur` = the break, `slotinpod` 1 first, -1 last, 0 for one slot) and drops `ext.fast` before any bidder sees it; `app.content` `livestream` 1, `context` 1, `cattax` 9; a complete `source.schain`; `regs.coppa` 0; `imp.ssai` 3; `tmax` 500; bidder: the own book only, with up to 9 bids per slot (`ext.prebid.multibid`; Prebid Server otherwise keeps one bid per bidder and slot, and the house ads would never reach the module); no `device` or `user` |
 | `stored_requests/fast-pod-kids.json` | The same with `regs.coppa` 1, for child-directed playback configurations |
+| `stored_requests/fast-warm.json` | The warm-up's stored request (no sibling names it): the direct route's pod of one slot, marked `ext.fast.warm`, whose slot names every configured third-party adapter (the simulator in demo mode) with its allow-list parameters and answers it from a stored bid response (`imp.ext.prebid.storedbidresponse`). The one stored request that names a partner, and no partner is called ([warm-up](#scaling-the-census-gate-dayparts-and-warm-up)) |
+| `stored_responses/warm-<adapter>.json` | That adapter's stored bid response: one 30 s video bid for the warm slot at the lowest price |
 | `stored_accounts/<prefix>.json` | The execution plan: `processed-auction-request` → `fast-ctv-policy` inside `modules.pds.policy_group_timeout_ms`, `exitpoint` → `fast-ctv-vast` inside `select_group_timeout_ms`. Activity Controls deny `transmitEids`, `transmitUfpd` and `transmitPreciseGeo` to every bidder but the own book. Debug output is off |
 
 The Pod Decision Service is a sidecar in each Prebid Server task, on `http://127.0.0.1:8090`
@@ -234,6 +236,23 @@ The warm-up waits for the target's health because load on a task that is not yet
 checked, fails the guidance's health checks (`/status` every 60 s, unhealthy after 2 failures, healthy after 5
 successes) and ECS replaces the task. Scaling from zero, the load balancer has no healthy target and fails open: it
 sends requests to tasks still starting, which refuse them (HTTP 502).
+
+**The adapters' metric keys** (W-12). Prebid Server Java creates an adapter's per-request-type metric key without a
+lock, and the first concurrent auctions that reach a new key can fail with an HTTP 500 (a
+`ConcurrentModificationException`). A probe gets no partner, so a plain warm-up never creates those keys. The
+warm-up therefore sends the warm stored request (`fast-warm`) too: two per healthy target, plus two, one after another
+before the replay (the load balancer spreads them over the targets), then one replay request in four. Its slot
+answers every configured adapter from a stored bid response: Prebid Server builds the adapter's request, applies the
+privacy rules, updates the adapter's metrics and parses the stored answer, without the HTTP call. The fast-ctv module
+adds no bidder to a warm request, whatever `/policy` answers, and keeps only the own book and the stored-response
+bidders. Prebid Server uses a stored bid response only for an adapter that builds exactly one HTTP request; with
+more, it calls the real bidder. So `pbs_config` refuses at render any configured adapter that the zero-recorder gate
+has not covered (`WARM_VETTED_ADAPTERS`). That gate, `tests/pbs/test_warmup.py`, runs a fresh Prebid Server with
+every adapter endpoint at a local recorder: warm probes must reach no recorder and create the adapters' keys
+(`adapter_amt_requests_type_openrtb2_web`). A task's first warm request can answer 400: Prebid Server reads a stored
+bid response from S3 on every request (it caches stored requests, not responses) within the 100 ms stored-request
+timeout, and a new task's first S3 read can take longer. Each target gets at least two sequential warm requests, so
+the next one creates the keys.
 
 `scripts/prebid_guidance.py herd --rate 400 --seconds 6` replays a break herd with the warm-up project and prints
 vegeta's status codes and latency percentiles. A warm stage serves 400/s for 6 s on 2 tasks.
@@ -487,14 +506,15 @@ are the only residue. The Pod Decision Service's table and config bucket are the
 and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
 
 **The demand leg** (BUILD-PLAN §12.3 `e2e-demand`; the `End-to-end` workflow with `leg: demand`, or the same
-steps locally) deploys `STAGE=fastci MODULES=ops,demand,pds,release,crawl` (the `fastci` stage with only those
-modules on), runs `make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`, `test_12_release.py`,
-`test_13_crawl.py` and `test_14_demand_pods.py`. It then destroys the demand module, the stage and the ledger archive,
+steps locally) deploys `STAGE=fastci MODULES=ops,demand,pds,release,crawl,identity` (the `fastci` stage with only
+those modules on), runs `make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`, `test_12_release.py`,
+`test_13_crawl.py`, `test_14_demand_pods.py` and `test_18_ad_load.py`. It then destroys the demand module, the stage and the ledger archive,
 and fails on any residue but KMS keys pending deletion. A run takes about three hours and costs a few US dollars. The
 edge tests must start within the census gate's 15 minutes, before the gate scales Prebid Server to zero with no
 channel running. The pods test then starts the channel, waits for the gate to scale Prebid Server out again (and for
 the warm-ups; the PDS is a sidecar of those tasks), and plays four viewers, two late joiners and a mid-break joiner through MediaTailor for three breaks: about
-30 minutes ([tests/e2e/README.md](../tests/e2e/README.md)).
+30 minutes ([tests/e2e/README.md](../tests/e2e/README.md)). The ad-load test seeds two personas of different tiers
+(`light` and `holdout`), mints each a playback ticket and plays both through two 120.12 s breaks: about 25 minutes.
 
 **The ad-server leg** (`tests/e2e/test_15_ad_server.py`, experimental: no default leg runs it) needs the stage
 `fastciads`: `fastci` with
@@ -525,7 +545,8 @@ web ACL, the Valkey cache minimum). Destroy throwaway stages right after use.
   body therefore carries only constants and MediaTailor's own variables, each inside a JSON string. The playback
   ticket and every player parameter travel in header templates, which Prebid Server never copies to bidders.
 - **The no-hook contract.** A stored request names only the own book. If the module is disabled or absent, or
-  `/policy` is unreachable, slow or failing, the auction calls no third-party bidder.
+  `/policy` is unreachable, slow or failing, the auction calls no third-party bidder. The warm-up's `fast-warm`
+  names partners, each answered from a stored bid response, so it calls none either (W-12).
 - **One stored request per route.** MediaTailor rounds `session.avail_duration_secs` half up and sends 300 for a
   missing duration. The body carries the value as `ext.fast.pod_s`, and the module shapes a pod for any length from
   30 to 120 s, on the 30.03 s grid or not (a mid-break joiner asks for the rest of the break). A shorter, longer,

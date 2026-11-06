@@ -9,6 +9,7 @@ import pytest
 from aws_cdk import aws_sqs as sqs
 
 from fast_channels.core.demand import NETWORK_CONTEXT
+from fast_channels.core.selling.names import CONTEXT, Image
 
 GLOBAL_MODELS = {
     "agent.model": "global.anthropic.claude-haiku-5-5",
@@ -104,6 +105,39 @@ def test_no_unacknowledged_findings_beside_the_guidance(
         extra={NETWORK_CONTEXT: network},
     )
     assert deployment.stage.demand is not None
+
+    deployment.app.synth()
+
+    reports = json.loads((tmp_path / "validation-report.json").read_text())["pluginReports"]
+    assert [v for r in reports for v in r.get("violations", [])] == []
+
+
+FASTCISELL: dict[str, Any] = json.loads(
+    (Path(__file__).resolve().parents[2] / "stages" / "fastcisell.json").read_text()
+)
+"""The ``fastcisell`` stage: the selling module and what it needs."""
+
+
+def test_no_unacknowledged_findings_with_agentic_selling(fresh_deployment: Callable[..., Any], tmp_path: Path) -> None:
+    """The selling module's stacks, which exist once the guidance is deployed and the images are built (M7)."""
+    network = {
+        "vpc_id": "vpc-0123456789abcdef0",
+        "private_subnets": [
+            {"id": "subnet-0aaaaaaaaaaaaaaa1", "az": "us-east-1a", "route_table": "rtb-0aaaaaaaaaaaaaaa1"},
+            {"id": "subnet-0bbbbbbbbbbbbbbb2", "az": "us-east-1b", "route_table": "rtb-0bbbbbbbbbbbbbbb2"},
+        ],
+        "task_security_group_id": "sg-0123456789abcdef0",
+        "cluster_arn": "arn:aws:ecs:us-east-1:123456789012:cluster/fastcisell-pbs-PrebidCluster",
+        "service_arn": "arn:aws:ecs:us-east-1:123456789012:service/fastcisell-pbs-PrebidCluster/fastcisell-pbs-Service",
+        "cloudfront_domain": "d111111abcdef8.cloudfront.net",
+        "target_group_arn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fastcisell/0123456789ab",
+        "simulator_code_key": "simulator/0123456789abcdef.zip",
+    }
+    images = {image: f"123456789012.dkr.ecr.us-east-1.amazonaws.com/fastcisell-{image}:0123" for image in Image}
+    selling = {"images": images, "catalog_table": "catalog", "origin_facing_prefix_list": "pl-3b927c52"}
+
+    deployment = fresh_deployment(FASTCISELL, outdir=tmp_path, extra={NETWORK_CONTEXT: network, CONTEXT: selling})
+    assert deployment.stage.selling is not None
 
     deployment.app.synth()
 

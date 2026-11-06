@@ -129,7 +129,13 @@
           "policy_group_timeout_ms": 75,
           "select_timeout_ms": 200,
           "select_group_timeout_ms": 250,
-          "demo_lines": []
+          "demo_lines": [],
+          "ad_load": {
+            "light": {
+              "max_ads": 1,
+              "bar_cpm": 20
+            }
+          }
         },
         "release": {
           "enabled": false,
@@ -152,6 +158,24 @@
           "pre_ads": true,
           "holdout_percent": 20,
           "publisher_domain": null
+        },
+        "identity": {
+          "enabled": false,
+          "redeem_window_seconds": 120,
+          "api_rate_limit": 50,
+          "api_burst_limit": 100
+        },
+        "selling": {
+          "enabled": false,
+          "cpm": 14.00,
+          "creatives": ["direct2"],
+          "publisher_domain": "fast-channels.example",
+          "buyer_model": "{geo}.anthropic.claude-haiku-5-5",
+          "buyer_brand": "acme-outdoor.example"
+        },
+        "viewer": {
+          "enabled": false,
+          "ad_panel": false
         }
       }
     },

@@ -129,6 +129,7 @@ def _viewer(entry: str) -> ViewerIp:
     return ViewerIp(viewer, IpRule.OK)
 
 
+# OPTIMIZATION(aws): W-2 2.22 session.client_ip is the client-set leftmost XFF entry: we read the appended chain
 def viewer_ip(xff: str, cfva: str, origin_facing: Sequence[IpNetwork]) -> ViewerIp:
     """Apply the viewer-IP rule to Prebid Server's ``X-Forwarded-For`` and ``CloudFront-Viewer-Address``.
 
