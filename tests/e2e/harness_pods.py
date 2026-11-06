@@ -26,6 +26,7 @@ from fast_channels.core.demand import simulator_function, warmup_project
 from fast_channels.core.demo_demand import DemoIndex
 from fast_channels.core.manifests import parse_multivariant
 from fast_channels.core.monetization import names
+from fast_channels.core.monetization.prefetch import event_id_of
 from fast_channels.core.monetization.release import PlaybackPlan
 from fast_channels.core.pds.book import Creative, house_creatives
 from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
@@ -494,6 +495,12 @@ class Break:
         return reconcile(pod, standalones, stitched, skipped)
 
 
+def break_of(event: Mapping[str, Any]) -> str | None:
+    """The ``evid`` an ADS event names: its prefetch schedule's (``pf-<evid>``), else its ad request URL's."""
+    named = event_id_of(str(event.get("prefetchScheduleName") or ""))
+    return str(named) if named is not None else evid(event.get("adsRequestUrl"))
+
+
 def breaks(
     ads_events: Iterable[Mapping[str, Any]],
     records: Iterable[Mapping[str, Any]],
@@ -502,10 +509,14 @@ def breaks(
     """Every break by (session id, ``evid``): its ADS events, the PDS's policy and select records, and the module's
     ``fast-ctv-pod`` lines.
 
-    An ADS event that carries the ad request URL belongs to that URL's break. One without it (``VAST_RESPONSE``,
-    ``AD_MARKER_FOUND``) belongs to the break of the latest event of the same ``requestId`` before it, or of the first
-    one after it. MediaTailor gives one ``requestId`` to everything a single playlist request set off, which can be
-    two breaks: a break's ``FILLED_AVAIL`` and, milliseconds later, the next break's prefetch retrieval (seen live).
+    An ADS event belongs to the break its prefetch schedule names (``prefetchScheduleName``, ``pf-<evid>``), else to
+    the break of its ad request URL, else to that of the latest event of the same ``requestId`` before it (or of the
+    first one after it). Both orders are MediaTailor's as seen live (2026-11-06):
+
+    - one ``requestId`` covers everything a single playlist request set off, which can be two breaks: a break's
+      ``FILLED_AVAIL`` and, milliseconds later, the next break's prefetch retrieval;
+    - a break filled from its prefetch retrieval can log ``FILLED_AVAIL`` with the previous break's ad request URL;
+      its schedule name is the break's own.
     """
     found: dict[tuple[str, str], Break] = {}
 
@@ -520,7 +531,7 @@ def breaks(
         group = sorted(request, key=timestamp)
         keys = [
             (str(sid), event_id)
-            if (sid := event.get("sessionId")) and (event_id := evid(event.get("adsRequestUrl"))) is not None
+            if (sid := event.get("sessionId")) and (event_id := break_of(event)) is not None
             else None
             for event in group
         ]
