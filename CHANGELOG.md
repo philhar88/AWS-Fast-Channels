@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-11-06
+
+A patch release: unplayed line ads give their budget back after 10 to 15 minutes, the as-run sweep counts a break
+that a channel stop cut short as aired, two more MediaTailor behaviours are measured, and
+[docs/limitations.md](docs/limitations.md) lists every AWS and open-source limitation we found, with what the
+repository does about it.
+
 ### Added
 
 - **The zero-ads detector counts the prefetched breaks MediaTailor filled again in real time** (`release`, W-2 1.34).
@@ -845,7 +852,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
-[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v2.0.0...v3.0.0
