@@ -80,6 +80,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="test_12_release: make releases on the stage (a broken one, rolled back) and prove the silent-loss "
         "detector; about 50 minutes, with the stage's first IaC channel on air",
     )
+    parser.addoption(
+        "--cut-ads-delivery",
+        action="store_true",
+        help="test_14_demand_pods: cut the delivery function's subscription to the siblings' ADS log over the second "
+        "break, so that its impressions can only be counted from the CDN's logs (W-2 1.32); about 20 minutes more",
+    )
 
 
 def pytest_report_header(config: pytest.Config) -> str:

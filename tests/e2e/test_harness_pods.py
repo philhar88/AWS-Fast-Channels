@@ -565,3 +565,31 @@ def test_creatives_are_read_from_the_media_bucket() -> None:
     s3 = Fake(get_object=lambda Bucket, Key: {"Body": Body(objects[Key])})  # noqa: N803 - boto3's argument names
     known = Creatives.read(s3, "media", index_key="ads/s/demo/creatives.json", vast_key="ads/s/vast.xml")
     assert known.by_id == {"sim1-std-1234": "sim1", "h1-std-1234": "house1"}
+
+
+def test_a_decided_and_played_break_the_ads_log_left_incomplete_is_a_known_gap() -> None:
+    """W-2 1.32, seen live: a session's break-1 ``FILLED_AVAIL`` and its break-2 retrieval's request were not logged."""
+    url = "https://pbs.example/openrtb2/auction?evid=7&dur=30030"
+    whole = [
+        ads_event("MAKING_ADS_REQUEST", "q1", "2026-11-06T00:27:25.0Z", adsRequestUrl=url),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T00:27:25.2Z"),
+        ads_event("FILLED_AVAIL", "q1", "2026-11-06T00:29:55.9Z", adsRequestUrl=url, avail={}),
+    ]
+    at = logged_at("2026-11-06T00:27:25.1Z")
+    decided = [{"record": "pds.policy", "sid": SID, "evid": e} | at for e in ("7", "8", "9")]
+    decided += [select_record(e) | at for e in ("7", "8")]
+    found = pods.breaks(whole[:2], decided, [])  # 7: no FILLED_AVAIL; 8: no request at all; 9: no select record
+    other = pods.breaks(whole, decided[:1] + decided[3:4], [])  # 7, logged whole
+
+    assert pods.log_gaps(found.values(), played={(SID, "7"), (SID, "8"), (SID, "9")}) == {(SID, "7"), (SID, "8")}
+    assert pods.log_gaps(found.values(), played={(SID, "8")}) == {(SID, "8")}, "a break our tracker never fired for"
+    assert pods.log_gaps(other.values(), played={(SID, "7")}) == set(), "logged whole: no gap"
+    assert pods.logged_whole(other[SID, "7"]) and not pods.logged_whole(found[SID, "7"])
+
+
+def test_the_gap_share_is_of_sessions_not_breaks() -> None:
+    gaps = {("s1", "7"), ("s1", "8"), ("s2", "7")}
+
+    assert pods.gap_share(gaps, {"s1", "s2", "s3", "s4", "s5", "s6", "s7"}) == 2 / 7
+    assert pods.gap_share(gaps, set()) == 0.0
+    assert pods.gap_share({("s1", "7")}, {f"s{n}" for n in range(1, 8)}) <= pods.GAP_SESSION_SHARE

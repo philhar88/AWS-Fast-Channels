@@ -66,10 +66,16 @@ All notable changes to this project are documented here. The format follows
   requests whose break's select record placed that ad. A firing that both sources record counts once, by
   `(sid, evid, crid)`. Our tracker's parameters move into its path, `/ads/b/<sid>.<evid>/<crid>/<enr>.gif`, which the
   logs keep with the identity module (they leave out the query): with the demand module the CDN answers `/ads/b/*`
-  with a 1x1 GIF from a CloudFront Function, and the former `/ads/b.gif?d=…` form is still read. The metric `CdnLogOnlyImpressions` counts what the ADS log left out, and `pds.delivery`
-  records gain `source`. The query string stays out of the lake, in the PDS's own Glue database `<prefix>_pds`. The
-  Data and Media stacks write two more parameters for the Pds stack, `/<prefix>/pds/logs-bucket` and
-  `/<prefix>/pds/distribution-id`: run `make deploy` before `deploy-demand`.
+  with a 1x1 GIF from a CloudFront Function, and the former `/ads/b.gif?d=…` form is still read. The metric
+  `CdnLogOnlyImpressions` counts what the ADS log left out, and `pds.delivery` records gain `source`. The query
+  string stays out of the lake, in the PDS's own Glue database `<prefix>_pds`. The Data and Media stacks write two
+  more parameters for the Pds stack, `/<prefix>/pds/logs-bucket` and `/<prefix>/pds/distribution-id`: run
+  `make deploy` before `deploy-demand`.
+- **The demand leg's e2e checks tolerate W-2 1.32** (`tests/e2e/test_14_demand_pods.py`): a break the PDS decided and
+  our tracker shows played, but whose vended ADS log is incomplete, is a known log gap. The checks that read that log
+  leave it out and report it, and more than one session in five with a gap still fails. The delivery check counts
+  from both logs and waits for the CDN-log runs when a record is missing; `--cut-ads-delivery` cuts the delivery
+  subscription over the second break to prove the CDN's log counts what the ADS log did not.
 
 ## [4.0.0] - 2026-10-31
 
