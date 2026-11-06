@@ -250,7 +250,7 @@ operations signal, never air time.
 | `ops` | A detector, the poller or the probe fails | Operations signal is lost, not air time. The module's alarms treat missing data as not breaching, so a quiet stage does not page |
 | `ops` | A runbook's trigger fires | The runbook records its decision in the ledger and acts on nothing ([above](#what-v400-does-not-do)) |
 | `ops` | A ledger record is modified, dropped, inserted or reordered | `scripts/ledger_verify.py verify` fails, and the table's alarms catch a changed or rejected entry |
-| `ops` | Channel Assembly logs no `AdBreakStart` for a break that started within about a minute of `StopChannel` | The sweep marks that break `UNAIRED` although it aired ([channel-assembly.md](channel-assembly.md#the-schedule-of-record-and-the-epg)) |
+| `ops` | Channel Assembly logs no `AdBreakStart` for a break that started within about a minute of `StopChannel` | The sweep finds the stop in CloudTrail's event history and marks the break `AIRED` with `stopped_at`. If the sweeper may not read the history, it marks the break `UNAIRED` although it aired ([channel-assembly.md](channel-assembly.md#the-schedule-of-record-and-the-epg)) |
 
 AppConfig kill switches (the `flags` profile of `<prefix>-fast`) turn off each module's consumers at runtime without
 a deployment ([observability.md](observability.md#runbooks-flags-and-the-probe)).

@@ -282,6 +282,7 @@ lists what a teardown leaves behind.
 | [Operations](docs/operations.md) | Configuration reference, deploy and destroy, users, quotas, costs, security, troubleshooting |
 | [Optional modules](docs/modules.md) | The ad-monetization and operations modules: complexity and cost per module, turning them on, capacity, fail-safe behaviour, account-level limits |
 | [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md), [Viewer identity](docs/identity.md) | The `demand`, `pds`, `release`, `crawl` and `identity` modules |
+| [Known limitations and product suggestions](docs/limitations.md) | What we found in the AWS services and open-source projects the reference uses: what each item means for a deployment, what the repository does about it, and what we suggest to the product |
 | [Workarounds to remove](docs/workarounds.md) | The AWS product behaviour we work around, where each workaround lives and what to delete when AWS fixes it |
 | [Reference viewer](docs/viewer.md) | The `viewer` module: demo personas, a rail of recommended channels, ticketed playback and the "why these ads" panel; its 10-minute demo script |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |

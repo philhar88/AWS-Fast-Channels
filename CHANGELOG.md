@@ -16,8 +16,24 @@ All notable changes to this project are documented here. The format follows
   - The AppConfig Agent extension's `Configuration-Version` header can name another version than the content
     it serves. The promote function, the runbooks and the e2e rig's stub mint log `content_version`, a hash of
     the document, instead.
+- **Known limitations and product suggestions** ([docs/limitations.md](docs/limitations.md)): what we found in the
+  AWS services and open-source projects the reference uses, one row per item, by service. Each row says what the
+  item means for a deployment, what the repository does about it (a workaround, nothing needed, or not used) and
+  what we suggest to the product. The page also lists ten product suggestions and the documentation gaps we
+  measured. `tests/e2e/test_workarounds.py` checks that every id of [docs/workarounds.md](docs/workarounds.md) has
+  a row.
 
 ### Changed
+
+- **The as-run sweep marks a break that the channel was stopped in `AIRED`, not `UNAIRED`** (`ops`, W-2 1.31).
+  - Channel Assembly's as-run log can leave out the `AdBreakStart` of a break that went on air up to about a minute
+    before `StopChannel`. Before it marks a break `UNAIRED`, the sweep now reads the channel's `StopChannel` calls
+    from CloudTrail's event history, whoever made them. A break that went on air at most 60 s before a stop is
+    marked `AIRED` at its planned on-air time, with `stopped_at`; the metric `BreaksAiredBeforeStop` counts them.
+  - The sweeper's role may call `cloudtrail:LookupEvents`, which has no resource-level permissions. When an SCP
+    denies the call, the sweep logs a warning and marks such breaks `UNAIRED`, as before.
+  - The sweep decides a break at the earliest 16 minutes after its on-air time, so that CloudTrail's history holds
+    the stop (before, 10 minutes after the break's end).
 
 - **An unplayed line ad gives its budget back 10 to 15 minutes after it was reserved, not after 2 hours** (`pds`).
   - The sweeper now runs every 5 minutes, and releases a reservation that saw no impression in its hold. The hold
