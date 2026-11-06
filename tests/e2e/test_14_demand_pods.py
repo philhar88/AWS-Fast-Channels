@@ -64,6 +64,7 @@ from harness_pods import (
     event_line,
     gap_share,
     ipv4_client,
+    line_creatives,
     log_gaps,
     masked,
     milliseconds,
@@ -123,7 +124,6 @@ NOT_READY: Final = FIRST_SIGHT | {"TRANSCODE_IN_PROGRESS"}
 """Skip reasons of a creative MediaTailor has not prepared yet."""
 OWN_SEATS: Final = frozenset({"ownbook", "fast-ctv"})
 """The seats of the own book's ads and of the module's own house ads (``HousePod.SEAT``)."""
-LINE_CREATIVES: Final = {"direct1": "direct-1", "direct2": "direct-2"}
 """The fastci stage's demo lines (``stages/fastci.json``) by creative."""
 CDN_COUNT_WAIT: Final = CDN_LOG_LAG + 2 * CDN_LOG_EVERY + timedelta(minutes=5)
 """How long after the last firing the CDN-log runs have counted it: a log file about 5 minutes after its requests,
@@ -157,6 +157,8 @@ class Smoke:
     """Every ``pds.policy`` record, of any session, while the viewers' auctions ran."""
     whole_address_events: int
     """Events of the simulator's log since the viewers joined that hold the viewers' full address."""
+    lines: dict[str, str] = field(default_factory=dict)
+    """The own book's line creatives (crid to line id) in the stage's snapshot when the viewers joined."""
     schedules: dict[str, dict[str, Any]] = field(default_factory=dict)
     """The sibling's prefetch schedules while the viewers played, by name."""
     late: set[str] = field(default_factory=set)
@@ -279,6 +281,7 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
             windows = break_windows(schedule(tools, channel.name, asset.asset_id))
             assert [round((w.ends - w.starts).total_seconds(), 2) for w in windows] == BREAK_SECONDS, windows
             plan = playback_plan(stage, channel.name)
+            lines = line_creatives(stage, channel.name)
             joined = datetime.now(UTC)
             viewers = [Viewer.join(Player(client=http), plan.playback["hls"]) for _ in range(VIEWERS)]
             schedules = prefetch_schedules(stage, plan.configuration)
@@ -325,6 +328,7 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
         policies=[],
         whole_address_events=0,
         schedules=schedules,
+        lines=lines,
         late={viewer.sid for viewer in late},
         late_joined=late_joined,
         mid=mid.sid,
@@ -837,7 +841,7 @@ def test_delivery_is_counted_from_mediatailors_beacon_firings(smoke: Smoke) -> N
     for key in counted:
         records = [d for d in smoke.deliveries if (d["sid"], d["evid"], d["crid"]) == key]
         [first[key]] = [d for d in records if d["impression"]]
-        line = LINE_CREATIVES.get(key[2])
+        line = smoke.lines.get(key[2])
         record = first[key]
         assert (record.get("line"), record["credit"]) == (line, Credit.DELIVERED if line else Credit.UNRESERVED), record
         assert record["pc"] == smoke.sibling, record
@@ -857,7 +861,7 @@ def test_delivery_is_counted_from_mediatailors_beacon_firings(smoke: Smoke) -> N
         print(f"cut {clock(cut)}-{clock(back)}: {len(inside)} firings counted from the CDN's log")
     cdn_only = [key for key, record in first.items() if record["source"] == Source.CDN_LOG]
     print(f"impressions: {len(counted)}, of which the CDN's log counted {len(cdn_only)}")
-    assert {crid for *_, crid in fired} >= set(LINE_CREATIVES), fired
+    assert {crid for *_, crid in fired} >= set(smoke.lines), (smoke.lines, fired)
 
 
 def test_the_ads_log_gaps_are_known_and_rare(smoke: Smoke) -> None:

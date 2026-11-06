@@ -15,6 +15,7 @@ that creates its own user passes its email and password instead. ``ticket_of`` a
 import base64
 import json
 import secrets
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+from harness import Player, wait_for
+from harness_pods import Viewer
 
 from fast_channels.core.identity.names import PERSONA_ATTRIBUTE, Parameter, demo_users_secret, parameter_name
 from fast_channels.core.identity.ticket import TICKET
@@ -127,3 +130,33 @@ def claims(token: str) -> dict[str, Any]:
     payload = token.split(".")[1]
     decoded: dict[str, Any] = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     return decoded
+
+
+SERVING_TIMEOUT_S: Final = 300
+"""How long a just-started channel may take to serve its playlist (its origin answers 404 until then)."""
+JOIN_ATTEMPTS: Final = 3
+
+
+def wait_until_serving(http: httpx.Client, url: str) -> None:
+    """Until the channel's plain playback URL answers its multivariant playlist (a guest session)."""
+
+    def serving() -> bool | None:
+        return http.get(url).status_code == httpx.codes.OK or None
+
+    wait_for(serving, timeout=SERVING_TIMEOUT_S, interval=5, what=f"the channel to serve {url}")
+
+
+def join(stage: Stage, http: httpx.Client, token: str, channel: str) -> tuple[Viewer, dict[str, Any]]:
+    """A signed-in viewer's session, as the viewer app starts one, and the ``POST /playback`` answer it played: a
+    ticket minted for each attempt, never a ticket retried. A ticket binds the first session that redeems it, and
+    MediaTailor creates (and redeems) the session even when it answers the player an error (a just-started channel's
+    404), so a retry with the same ticket would be a replay (docs/identity.md)."""
+    failures = []
+    for _ in range(JOIN_ATTEMPTS):
+        answer = mint(stage, token, channel)
+        response = http.get(answer["url"])  # minted and joined at once: redeemed within 120 s
+        if response.status_code == httpx.codes.OK:
+            return Viewer.of(Player(client=http), response), answer
+        failures.append(response.status_code)
+        time.sleep(5)
+    raise AssertionError(f"no session after {JOIN_ATTEMPTS} tickets: {failures}")

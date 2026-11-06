@@ -23,20 +23,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
-import httpx
 import pytest
 import seed_personas
 from _stack import Module, Stage
-from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
+from harness import BREAK_POLICY, LEAD, Channel, Tools, wait_for
 from harness_demand import DemandEdge
-from harness_identity import mint, sign_in
+from harness_identity import join, sign_in, wait_until_serving
 from harness_pods import (
     SMART_TV_USER_AGENT,
     Logs,
     Sources,
-    Viewer,
     event_line,
     ipv4_client,
+    line_creatives,
     milliseconds,
     objects,
     playback_plan,
@@ -64,14 +63,9 @@ LONG_BREAKS: Final = {**BREAK_POLICY, "slate_gops": 60}
 """One 120.12 s break per program."""
 BREAK_SECONDS: Final = [120.12, 120.12]
 TAIL: Final = timedelta(seconds=90)
-SERVING_TIMEOUT_S: Final = 300
-"""How long a just-started channel may take to serve its playlist (its origin answers 404 until then)."""
-JOIN_ATTEMPTS: Final = 3
 LOGS_TIMEOUT_S: Final = 420
 LAKE_TIMEOUT_S: Final = 900
 """The decision records reach the lake through Firehose's buffer (up to 5 minutes) and the hour's partition."""
-LINE_CREATIVES: Final = frozenset({"direct1", "direct2"})
-"""The demo direct lines' creatives (``modules.pds.demo_lines``): the line ads a pod's reservations hold."""
 NOTHING_ELIGIBLE: Final = frozenset({PodReason.EMPTY.value, PodReason.SHORT_AVAIL.value})
 SELECT_FALLBACK: Final = "SELECT_FALLBACK"
 
@@ -81,6 +75,7 @@ class Run:
     """The two viewers' run: their sessions, their breaks and what the PDS and the module logged."""
 
     stage: Stage
+    channel: str
     joined: datetime
     windows: list[Window]
     vids: dict[str, str]
@@ -161,12 +156,13 @@ def run(
             assert [round((w.ends - w.starts).total_seconds(), 2) for w in windows] == BREAK_SECONDS, windows
             wait_until_serving(http, playback_plan(stage, channel.name).playback["hls"])
             joined = datetime.now(UTC)
-            viewers = {who: join(stage, http, tokens[who], channel.name) for who in PERSONAS}
+            viewers = {who: join(stage, http, tokens[who], channel.name)[0] for who in PERSONAS}
             watch(list(viewers.values()), ends=windows[-1].ends + TAIL)
         finally:
             tools("channels___stop_channel", channel=channel.name)
     found = Run(
         stage=stage,
+        channel=channel.name,
         joined=joined,
         windows=windows,
         vids=seeded,
@@ -179,29 +175,6 @@ def run(
     read_logs(found, Sources.of(stage, edge))
     print(report(found))
     yield found
-
-
-def wait_until_serving(http: httpx.Client, url: str) -> None:
-    """Until the channel's plain playback URL answers its multivariant playlist (a guest session)."""
-
-    def serving() -> bool | None:
-        return http.get(url).status_code == httpx.codes.OK or None
-
-    wait_for(serving, timeout=SERVING_TIMEOUT_S, interval=5, what=f"the channel to serve {url}")
-
-
-def join(stage: Stage, http: httpx.Client, token: str, channel: str) -> Viewer:
-    """A signed-in viewer's session, as the viewer app starts one: a ticket minted for each attempt, never a ticket
-    retried. A ticket binds the first session that redeems it, and MediaTailor creates (and redeems) the session
-    even when it answers the player an error, so a retry with the same ticket would be a replay."""
-    failures = []
-    for _ in range(JOIN_ATTEMPTS):
-        response = http.get(mint(stage, token, channel)["url"])  # minted and joined at once: redeemed within 120 s
-        if response.status_code == httpx.codes.OK:
-            return Viewer.of(Player(client=http), response)
-        failures.append(response.status_code)
-        time.sleep(5)
-    raise AssertionError(f"no session after {JOIN_ATTEMPTS} tickets: {failures}")
 
 
 def read_logs(run: Run, sources: Sources) -> None:
@@ -327,12 +300,11 @@ def test_no_break_fell_back(run: Run) -> None:
 
 
 def test_every_line_ad_in_a_pod_is_reserved_and_counted(run: Run) -> None:
+    line_ads = set(line_creatives(run.stage, run.channel))  # the own book's lines: demo lines, booked buys
     for record in run.selects:
         by_ref = {b["ref"]: b for b in record["bids"]}
         answered = [by_ref[ref] for ref in (*record["pod"], *record["standalone"])]
-        lines = {
-            b["crid"] for b in answered if b["bidder"] == OWN_BOOK and not b["house"] and b["crid"] in LINE_CREATIVES
-        }
+        lines = {b["crid"] for b in answered if b["bidder"] == OWN_BOOK and not b["house"] and b["crid"] in line_ads}
         assert set(record["reserved"]) == lines, (
             f"{record['decision_id']}: reserved {record['reserved']}, lines {lines}"
         )
