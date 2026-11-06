@@ -4,13 +4,13 @@ decision record by their ``vid``; a replayed ticket, an expired one and a guest 
 Runs only on a stage with the Identity, Pds and Release stacks and the demand module deployed (``STAGE=fastci`` or
 ``fastm`` after ``make deploy-demand``); skipped otherwise. The module fixture does the billable part once:
 
-1. create a viewer of the test's own in the pool, sign it in and mint two tickets for the stage's first monetized
-   channel; one of them is then put past its redeem window, as a ticket opened too late;
-2. start the channel, ingest the test pattern while Prebid Server scales out, wait until it is warm, and schedule the
-   pattern with one 60.06 s break;
-3. join, through the CDN as a player does: the signed-in viewer with their ticket; a second session with the same
-   ticket once the first is bound (a replay); a guest on the plan's own URL; and the late ticket. All of them watch
-   the break;
+1. create a viewer of the test's own in the pool and sign it in;
+2. start the stage's first monetized channel, ingest the test pattern while Prebid Server scales out, wait until it
+   is warm, and schedule the pattern with one 60.06 s break;
+3. wait until the channel serves, mint the late ticket, then join through the CDN as a player does: the signed-in
+   viewer with a fresh ticket per attempt (``harness_identity.join``), and the late ticket is put past its redeem
+   window; once the first session is bound, a second session with the same ticket (a replay), a guest on the plan's
+   own URL, and the late ticket, one request each. All of them watch the break;
 4. stop the channel, and read each session's ``pds.policy`` and ``pds.select`` records from the sidecar's log.
 
 The ticket's row then says which session it is bound to, and the records say what every break of every session was.
