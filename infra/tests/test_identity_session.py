@@ -67,6 +67,8 @@ def test_the_mediatailor_route_reads_only_behind_the_edge_rebuild(deployment: Ge
     assert association["FunctionARN"] == {"Fn::GetAtt": [logical, "FunctionARN"]}
     functions_elsewhere = [p for p, b in behaviours.items() if p != "/v1/*" and b.get("FunctionAssociations")]
     assert functions_elsewhere == [TRACKER_ROUTE.path], "only the demand module's tracker route has its own"
+    [tracker] = behaviours[TRACKER_ROUTE.path]["FunctionAssociations"]
+    assert tracker["FunctionARN"] != {"Fn::GetAtt": [logical, "FunctionARN"]}, "not the edge rebuild"
 
 
 def test_without_the_module_the_route_is_v3s(deployment: GetDeployment) -> None:
