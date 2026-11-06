@@ -1,6 +1,7 @@
 """Offline tests of the release harness (not marked e2e): the bundle with the lookup, the rig's template, and how the
 viewers' breaks are read from the logs."""
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,6 +18,7 @@ from fast_channels.core.monetization.functions import (
     Hook,
     function_stem,
 )
+from fast_channels.core.monetization.release import content_version
 from fast_channels.core.monetization.validators import validate_bundle
 
 ORIGIN = "https://abc.lambda-url.us-east-1.on.aws/"
@@ -101,6 +103,39 @@ def test_the_rig_opens_no_lambda_to_everyone_and_its_mint_reads_only_the_pointer
     assert all(
         r["Properties"]["RetentionInDays"] == 1 for r in resources.values() if r["Type"] == "AWS::Logs::LogGroup"
     )
+
+
+class _Served:
+    """What the AppConfig Agent extension answered: a document and a ``Configuration-Version`` header that names
+    another version (W-2 4.6: after a rollback, content v2 came with ``Configuration-Version: 1``)."""
+
+    def __init__(self, document: dict[str, str], header: str) -> None:
+        self.body, self.headers = json.dumps(document).encode(), {"Configuration-Version": header}
+
+    def __enter__(self) -> _Served:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
+def test_the_mint_logs_the_contents_version_never_the_header(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for name, value in {"APPLICATION": "app1", "ENVIRONMENT": "env1", "PROFILE": "prof1"}.items():
+        monkeypatch.setenv(name, value)
+    served = {"fastm-demo": "fastm-demo-p-b", "fastm-lab": "fastm-lab-p-a"}
+    mint: dict[str, Any] = {}
+    exec(harness_release.MINT_CODE, mint)
+    monkeypatch.setattr(mint["urllib"].request, "urlopen", lambda request, timeout: _Served(served, header="1"))
+
+    assert mint["handler"]({"viewers": ["v1"], "channel": "fastm-demo"}, None) == {"v1": "fastm-demo-p-b"}
+    [line] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert line == {"viewer": "v1", "sibling": "fastm-demo-p-b", "content_version": content_version(served)}
+    assert line["content_version"] != "1", "the header's version is never the logged one"
 
 
 def test_a_break_failed_when_its_pre_ads_hook_erred(monkeypatch: pytest.MonkeyPatch) -> None:
