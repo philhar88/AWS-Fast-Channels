@@ -10,7 +10,7 @@ from fast_channels.core.monetization.functions import Hook
 from fast_channels.core.monetization.playback import HEADER_TICKET, TICKET_TEMPLATE
 from fast_channels.core.monetization.validators import validate_bundle
 from fast_channels.core.pds.sidecar import sidecar
-from fast_channels.infra.constructs.delivery import VIEWER_ACCESS_LOG_FIELDS, path_contract, routes
+from fast_channels.infra.constructs.delivery import TRACKER_ROUTE, VIEWER_ACCESS_LOG_FIELDS, path_contract, routes
 from fast_channels.infra.constructs.identity.edge import CODE
 
 type GetDeployment = Callable[..., Any]
@@ -54,8 +54,9 @@ def _behaviours(template: Any) -> dict[str, dict[str, Any]]:
 def test_the_mediatailor_route_reads_only_behind_the_edge_rebuild(deployment: GetDeployment) -> None:
     d = deployment(IDENTITY)
     media = d.template(d.stage.media)
-    [(logical, function)] = _resources(media, "AWS::CloudFront::Function").items()
-    assert function["Name"] == "fastm-identity-edge" and function["AutoPublish"] is True
+    functions = _resources(media, "AWS::CloudFront::Function").items()
+    [(logical, function)] = [(k, f) for k, f in functions if f["Name"] == "fastm-identity-edge"]
+    assert function["AutoPublish"] is True
     assert function["FunctionConfig"]["Runtime"] == "cloudfront-js-2.0"
     assert function["FunctionCode"] == CODE.read_text()
     behaviours = _behaviours(media)
@@ -64,13 +65,16 @@ def test_the_mediatailor_route_reads_only_behind_the_edge_rebuild(deployment: Ge
     [association] = mediatailor["FunctionAssociations"]
     assert association["EventType"] == "viewer-request"
     assert association["FunctionARN"] == {"Fn::GetAtt": [logical, "FunctionARN"]}
-    assert not [p for p, b in behaviours.items() if p != "/v1/*" and b.get("FunctionAssociations")]
+    functions_elsewhere = [p for p, b in behaviours.items() if p != "/v1/*" and b.get("FunctionAssociations")]
+    assert functions_elsewhere == [TRACKER_ROUTE.path], "only the demand module's tracker route has its own"
 
 
 def test_without_the_module_the_route_is_v3s(deployment: GetDeployment) -> None:
     d = deployment(RELEASE)
     media = d.template(d.stage.media)
-    assert not _resources(media, "AWS::CloudFront::Function")
+    names = {f["Name"] for f in _resources(media, "AWS::CloudFront::Function").values()}
+    assert "fastm-identity-edge" not in names, "the tracker route's function is the demand module's"
+    assert "FunctionAssociations" not in _behaviours(media)["/v1/*"]
     assert len(_behaviours(media)["/v1/*"]["AllowedMethods"]) == 7
     assert routes() == routes(ticketed=False)
 
