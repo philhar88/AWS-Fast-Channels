@@ -281,13 +281,14 @@ def test_with_unserved_breaks_the_hour_is_counted_logged_and_published_per_sibli
 
     answer = zero_ads_sessions.handler({"scheduled_time": "2026-10-29T03:00:00Z"}, Context())
 
-    assert answer == {"sessions": 0, "unserved_breaks": 1}
+    assert answer == {"sessions": 0, "unserved_breaks": 1, "refilled_breaks": 0}
     _, unserved = clients.queries
     assert unserved["queryString"] == zero_ads_sessions.UNSERVED_QUERY
     assert unserved["endTime"] - unserved["startTime"] == 3600 + 2 * 180, "every sighting of the hour's breaks"
     [record] = [r for r in caplog.records if "neither its prefetch" in r.getMessage()]
     assert (record.session_id, record.configuration) == ("876e6c26", "fastm-demo-p-a")  # type: ignore[attr-defined]
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"_aws"' in line]
+    assert [line["RefilledBreaks"] for line in lines if "RefilledBreaks" in line] == [[0.0]], "published, no alarm"
     total = [line for line in lines if "UnservedBreaks" in line and "ConfigurationName" not in line]
     by_sibling = [line for line in lines if "UnservedBreaks" in line and "ConfigurationName" in line]
     assert [line["UnservedBreaks"] for line in total] == [[1.0]]
@@ -395,3 +396,37 @@ def test_only_the_siblings_breaks_count() -> None:
     assert [u.configuration for u in zero_ads_sessions.unserved(rows, start=HOUR_START, end=SCHEDULED)] == [
         "fastm-demo-p-z"
     ]
+
+
+def test_leg_bs_rerun_refilled_exactly_two_breaks() -> None:
+    """W-2 1.34: in both test_18 sessions MediaTailor filled break 1 from its retrieval, met its start marker again
+    seconds later, asked in real time and filled it a second time. 2ceaa3ec's prefetched sighting is not in the log:
+    its first fill came 7 s before the first logged sighting."""
+    start, end = LEG_B_DAY
+    found = zero_ads_sessions.refilled(_leg_b("unserved-legb-rerun.json"), start=start, end=end)
+    assert [(r.session[:8], r.configuration, f"{r.marker_at:%H:%M:%S}", r.fills) for r in found] == [
+        ("d0b5f746", "fastcid-demo-p-a", "13:29:17", 2),
+        ("2ceaa3ec", "fastcid-demo-p-a", "13:29:23", 2),
+    ]
+
+
+def test_leg_bs_first_run_refilled_none() -> None:
+    """A session that fell back to a real-time request after its retrieval went unused was filled once."""
+    start, end = LEG_B_DAY
+    assert zero_ads_sessions.refilled(_leg_b("unserved-legb-first-run.json"), start=start, end=end) == []
+
+
+def test_a_break_with_two_fills_is_refilled_and_the_previous_breaks_fill_is_not_its_own() -> None:
+    marker = HOUR_START + timedelta(minutes=10)
+    same = {"marker": "1793971743691-34-32B22F95"}
+    rows = [
+        row(marker - timedelta(seconds=40), "s-1", "FILLED_AVAIL"),  # the previous break's
+        row(marker, "s-1", "AD_MARKER_FOUND") | same | {"prefetchScheduleName": "pf-1"},
+        row(marker + timedelta(milliseconds=300), "s-1", "FILLED_AVAIL"),
+        row(marker + timedelta(seconds=28), "s-1", "AD_MARKER_FOUND") | same,
+        row(marker + timedelta(seconds=35), "s-1", "MAKING_ADS_REQUEST"),
+        row(marker + timedelta(seconds=35.4), "s-1", "FILLED_AVAIL"),
+    ]
+    [found] = zero_ads_sessions.refilled(rows, start=HOUR_START, end=SCHEDULED)
+    assert (found.session, found.fills, found.marker_at) == ("s-1", 2, marker)
+    assert zero_ads_sessions.refilled(rows[:3], start=HOUR_START, end=SCHEDULED) == [], "one fill"

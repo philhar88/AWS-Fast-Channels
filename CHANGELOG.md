@@ -6,6 +6,53 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-11-06
+
+A patch release: unplayed line ads give their budget back after 10 to 15 minutes, the as-run sweep counts a break
+that a channel stop cut short as aired, two more MediaTailor behaviours are measured, and
+[docs/limitations.md](docs/limitations.md) lists every AWS and open-source limitation we found, with what the
+repository does about it.
+
+### Added
+
+- **The zero-ads detector counts the prefetched breaks MediaTailor filled again in real time** (`release`, W-2 1.34).
+  - `RefilledBreaks`, per sibling: a session's break, by its `DATERANGE` ID, with more than one `FILLED_AVAIL`.
+    The viewer saw the first ad start twice; delivery already credits the repeat once. No alarm: the
+    troubleshooting table of [docs/release-controller.md](docs/release-controller.md#troubleshooting) says what to do.
+- **Pointer and flag reads log the version of the content they got** (`release`, `ops`, W-2 4.6).
+  - The AppConfig Agent extension's `Configuration-Version` header can name another version than the content
+    it serves. The promote function, the runbooks and the e2e rig's stub mint log `content_version`, a hash of
+    the document, instead.
+- **Known limitations and product suggestions** ([docs/limitations.md](docs/limitations.md)): what we found in the
+  AWS services and open-source projects the reference uses, one row per item, by service. Each row says what the
+  item means for a deployment, what the repository does about it (a workaround, nothing needed, or not used) and
+  what we suggest to the product. The page also lists ten product suggestions and the documentation gaps we
+  measured. `tests/e2e/test_workarounds.py` checks that every id of [docs/workarounds.md](docs/workarounds.md) has
+  a row.
+
+### Changed
+
+- **The as-run sweep marks a break that the channel was stopped in `AIRED`, not `UNAIRED`** (`ops`, W-2 1.31).
+  - Channel Assembly's as-run log can leave out the `AdBreakStart` of a break that went on air up to about a minute
+    before `StopChannel`. Before it marks a break `UNAIRED`, the sweep now reads the channel's `StopChannel` calls
+    from CloudTrail's event history, whoever made them. A break that went on air at most 60 s before a stop is
+    marked `AIRED` at its planned on-air time, with `stopped_at`; the metric `BreaksAiredBeforeStop` counts them.
+  - The sweeper's role may call `cloudtrail:LookupEvents`, which has no resource-level permissions. When an SCP
+    denies the call, the sweep logs a warning and marks such breaks `UNAIRED`, as before.
+  - The sweep decides a break at the earliest 16 minutes after its on-air time, so that CloudTrail's history holds
+    the stop (before, 10 minutes after the break's end).
+
+- **An unplayed line ad gives its budget back 10 to 15 minutes after it was reserved, not after 2 hours** (`pds`).
+  - The sweeper now runs every 5 minutes, and releases a reservation that saw no impression in its hold. The hold
+    is twice the longest an impression takes: the prefetch's retrieval lead (150 s by default), the pod (120 s) and
+    the log's delay (13 s at the 99th percentile). Rounded up to the minute, it is 10 minutes, and never less; a
+    longer `modules.release.prefetch.retrieval_lead_seconds` holds longer.
+  - A burst of breaks that never air, such as viewers who leave before their prefetched break, no longer holds a
+    line's budget for two hours.
+  - An impression that arrives after its release is still credited, marked late in the ledger, with its price taken
+    again: a beacon MediaTailor retried, or one that only the CDN's logs counted (W-2 1.32), which are read 10 to 25
+    minutes after the firing (ADR-0022, ADR-0036).
+
 ## [4.1.0] - 2026-11-06
 
 Version 4.1.0 adds signed-in viewers (`identity`), ad load by viewer tier (`pds`), a reference viewer app
@@ -805,7 +852,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
-[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v2.0.0...v3.0.0

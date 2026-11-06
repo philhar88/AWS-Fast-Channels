@@ -4,7 +4,8 @@
 [0020](0020-demand-through-the-prebid-server-guidance.md)'s placement of the Pod Decision Service (Lambda functions
 behind an internal load balancer, kept warm by census-gated provisioned concurrency) and amends 0020's deployment of
 the guidance: with `modules.pds` on, the guidance's own app is deployed through a thin wrapper that adds the
-sidecar.
+sidecar. Amended on 2026-11-06: an unplayed reservation is released 10 minutes after it was made
+("Reservation holds").
 
 ## Context
 
@@ -239,8 +240,8 @@ no probe header, the 120 s stored request), 2 warm tasks unless noted:
 
 ### Reservation holds
 
-A line ad reserved at `/select` is released two hours later if no impression arrived (`RELEASE_AFTER`; the sweeper
-runs every 15 minutes). The bursts above (about 2,300 auctions in an hour) held a $1 demo line's whole budget for those two hours.
+Until 2026-11-06 a line ad reserved at `/select` was released two hours later if no impression arrived (the
+sweeper ran every 15 minutes). The bursts above (about 2,300 auctions in an hour) held a $1 demo line's whole budget for those two hours.
 With prefetch a reservation is taken up to 150 s before its break, so a viewer who leaves before the break holds
 budget for the same two hours. Measured:
 
@@ -249,11 +250,30 @@ budget for the same two hours. Measured:
 - over 14 days and every stage: 1,554 impressions, 775 line ads delivered, 0 late deliveries.
 
 A reservation's impression therefore arrives within its retrieval lead (at most 150 s), the break (at most 120.12 s)
-and the log's delay (13 s at p99): under 5 minutes. **Recommendation, for a later change:** release a reservation 10
-minutes after it was made (twice that) with the sweeper every 5 minutes, so an unaired reservation returns its budget
-within 15 minutes instead of 2 hours 15. The late path stays: MediaTailor retries a failed beacon for up to an hour,
-and an impression after its release is still credited (`LATE`), so a retry costs at most one ad's price in
-overspend. None has been seen.
+and the log's delay (13 s at p99): under 5 minutes.
+
+**Amendment (2026-11-06): done.** A reservation is released after its hold, twice that, in whole minutes and never
+less than 10 (`core.pds.delivery.release_after` of the stage's `retrieval_lead_seconds`, `LOG_DELAY` 13 s): 10
+minutes at the default lead, and longer for a longer lead. The Pds stack passes it to the sweeper
+(`PDS_RELEASE_AFTER_SECONDS`), which runs every 5 minutes, so an unaired reservation returns its budget 10 to 15
+minutes after it was made instead of 2 hours to 2 hours 15. The late path stays: an impression after its release is
+still credited (`LATE`), ledgered as late, and its price is taken again, so it costs at most one ad's price in
+overspend. That is a beacon MediaTailor retried (for up to an hour; none seen), and now also every line ad that
+only the CDN's logs count (W-2 1.32): a log file is read 10 to 25 minutes after the firing, past the hold.
+
+Proof on a throwaway stage (fastci with `pds` and `release`, `tests/e2e/test_22_reservation_holds.py`): one viewer
+on the stable sibling through a 120.12 s break, and a burst of 20 ad requests for the same sibling from sessions
+that never played.
+
+- The burst reserved 40 line ads (two per break). Every one was released by the sweeper 11 min 41 s to 11 min 44 s
+  after it was made, with its `money.release` event (two earlier runs: 13 min 50 s to 13 min 53 s, and 11 min 25 s
+  to 11 min 28 s; the spread is the sweeper's phase against the burst).
+- Every line's budget moved by exactly the ledger's money of the run: the burst's price came back whole, and only
+  the viewer's delivered ads stayed taken.
+- The viewer's two line ads were delivered once each, credited `delivered`, and never released, though the sweeper
+  ran past their hold. Nothing was delivered late.
+- The demand leg's pods test (`test_14_demand_pods.py`) passed on the same stage: 58 impressions, none from the
+  CDN's log only.
 
 ## Consequences
 

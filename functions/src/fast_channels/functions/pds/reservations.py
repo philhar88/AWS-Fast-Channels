@@ -8,7 +8,8 @@ reservation and its money event change together or not at all:
   ``budget.Budgets.shard``), counts them against the line's per-session cap and writes their reservations; a shard's
   ``remaining`` never goes below zero;
 - :func:`deliver` (the delivery function) marks a reservation DELIVERED when MediaTailor fires our tracker;
-- :func:`release` (the sweeper) gives back the price of a reservation that saw no impression in two hours.
+- :func:`release` (the sweeper) gives back the price of a reservation that saw no impression in time
+  (``core.pds.delivery.release_after``).
 
 Amounts are DynamoDB numbers (exact decimals); the ledger holds them as decimal strings.
 """

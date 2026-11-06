@@ -19,6 +19,8 @@ from botocore.stub import Stubber
 from fast_channels.core.pds.book import Line
 from fast_channels.core.pds.delivery import (
     CDN_LOG_EVERY,
+    RELEASE_AFTER,
+    SWEEP_EVERY,
     Credit,
     Source,
     State,
@@ -274,35 +276,116 @@ def test_a_non_json_message_is_ignored(stage: Tables) -> None:
     assert delivery.handler(event, Context())["ignored"] == 2
 
 
-def test_the_sweeper_releases_what_saw_no_impression_in_two_hours(stage: Tables) -> None:
+def shards_remaining(stage: Tables, line: str) -> Decimal:
+    budget = [stage.item({"pk": f"BUDGET#{line}", "sk": f"S#{n}"}) for n in range(4)]
+    return sum((Decimal(b["remaining"]["N"]) for b in budget if b), Decimal(0))
+
+
+def sweep(stage: Tables, now: datetime, hold: timedelta = RELEASE_AFTER) -> dict[str, int]:
+    return sweeper.sweep(stage.pds, stage.ledger, now=now, time_left=lambda: 60_000, hold=hold)
+
+
+def test_the_sweeper_releases_what_saw_no_impression_in_its_hold(stage: Tables) -> None:
     delivery.handler(subscription(recorded()[:1]), Context())  # direct1 of S1 is delivered; direct2 of S2 is not
+    assert shards_remaining(stage, "direct-2") == Decimal(1) - Decimal("0.006")
 
-    early = sweeper.sweep(
-        stage.pds, stage.ledger, now=RESERVED_AT + timedelta(hours=1, minutes=59), time_left=lambda: 60_000
-    )
-    late = sweeper.sweep(
-        stage.pds, stage.ledger, now=RESERVED_AT + timedelta(hours=2, minutes=1), time_left=lambda: 60_000
-    )
-    after = sweeper.sweep(stage.pds, stage.ledger, now=RESERVED_AT + timedelta(hours=3), time_left=lambda: 60_000)
+    early = sweep(stage, RESERVED_AT + RELEASE_AFTER - timedelta(seconds=1))
+    due = sweep(stage, RESERVED_AT + RELEASE_AFTER + timedelta(seconds=1))
+    after = sweep(stage, RESERVED_AT + RELEASE_AFTER + SWEEP_EVERY)
 
-    assert (early, late, after) == (
+    assert (early, due, after) == (
         {"released": 0, "skipped": 0},
         {"released": 1, "skipped": 0},
         {"released": 0, "skipped": 0},
     )
     item = stage.item(reservation_key(f"{S2}.77", "direct2"))
     assert item is not None and item["state"]["S"] == State.RELEASED
-    budget = [stage.item({"pk": "BUDGET#direct-2", "sk": f"S#{n}"}) for n in range(4)]
-    assert sum(Decimal(b["remaining"]["N"]) for b in budget if b) == Decimal(1)
+    assert datetime.fromisoformat(item["released_at"]["S"]) - RESERVED_AT == RELEASE_AFTER + timedelta(seconds=1)
+    assert shards_remaining(stage, "direct-2") == Decimal(1), "the unplayed reservation's price is back"
+    played = stage.item(reservation_key(f"{S1}.1234", "direct1"))
+    assert played is not None and played["state"]["S"] == State.DELIVERED and "released_at" not in played
+    releases = [e for e in stage.ledger_entries() if e["action"]["S"] == "money.release"]
+    assert len(releases) == 1
 
 
-def test_the_sweeper_stops_before_its_timeout(stage: Tables, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("phase", [timedelta(0), timedelta(seconds=1), timedelta(minutes=2, seconds=30)])
+def test_every_five_minutes_an_unplayed_reservation_is_released_10_to_15_minutes_after_it_was_made(
+    stage: Tables, phase: timedelta
+) -> None:
+    """The default hold with the schedule's runs, whatever their phase against the reservation: released by the
+    first run past its hold."""
+    runs = [RESERVED_AT + phase + n * SWEEP_EVERY for n in range(6)]
+
+    released = [run for run in runs if sweep(stage, run)["released"]]
+
+    assert len(released) == 1
+    assert RELEASE_AFTER < released[0] - RESERVED_AT <= RELEASE_AFTER + SWEEP_EVERY
+    assert (shards_remaining(stage, "direct-1"), shards_remaining(stage, "direct-2")) == (Decimal(100), Decimal(1))
+
+
+def test_an_impression_after_its_release_is_delivered_late_and_ledgered_as_late(
+    stage: Tables, caplog: pytest.LogCaptureFixture
+) -> None:
+    released = sweep(stage, RESERVED_AT + RELEASE_AFTER + timedelta(seconds=1))
+    assert released == {"released": 2, "skipped": 0}
+    assert shards_remaining(stage, "direct-2") == Decimal(1)
+    caplog.clear()
+
+    late = delivery.handler(subscription([recorded()[-1]]), Context())  # direct2 of S2, after its release
+    again = delivery.handler(subscription([recorded()[-1]]), Context())
+
+    assert (late["impressions"], late["delivered"], late["late"]) == (1, 0, 1)
+    assert (again["impressions"], again["late"]) == (0, 0)
+    assert [(r["crid"], r["impression"], r["credit"]) for r in records(caplog)] == [
+        ("direct2", True, "late"),
+        ("direct2", False, "repeat"),
+    ]
+    item = stage.item(reservation_key(f"{S2}.77", "direct2"))
+    assert item is not None and item["state"]["S"] == State.DELIVERED
+    assert "released_at" in item and "delivered_at" in item
+    assert shards_remaining(stage, "direct-2") == Decimal(1) - Decimal("0.006"), "its price is taken again"
+    money = [
+        (e["action"]["S"], e) for e in stage.ledger_entries() if e.get("subject", {}).get("S") == f"{S2}.77/direct2"
+    ]
+    assert sorted(action for action, _ in money) == ["money.deliver", "money.release", "money.reserve"]
+    [(_, delivered)] = [m for m in money if m[0] == "money.deliver"]
+    assert json.loads(delivered["detail"]["S"]).get("late") is True
+
+
+def test_an_impression_that_only_the_cdn_log_counts_after_its_release_is_late(
+    stage: Tables, athena: Athena, caplog: pytest.LogCaptureFixture
+) -> None:
+    """W-2 1.32: the ADS log left the break out, and the CDN's log file is read 10 to 25 minutes after the firing,
+    past the hold: the impression is still counted, late."""
+    assert run_at(ON_TIME) - RESERVED_AT > RELEASE_AFTER + timedelta(minutes=4)
+    sweep(stage, RESERVED_AT + RELEASE_AFTER + timedelta(seconds=1))
+    athena.files.append(LogFile(ON_TIME, [cdn_row(f"{S2}.77", "direct2", FIRED)]))
+    caplog.clear()
+
+    totals = delivery.handler(cdn_run(run_at(ON_TIME)), Context())
+
+    assert (totals["impressions"], totals["delivered"], totals["late"]) == (1, 0, 1)
+    assert [(r["crid"], r["credit"], r["source"]) for r in records(caplog)] == [("direct2", "late", "cdn_log")]
+    assert shards_remaining(stage, "direct-2") == Decimal(1) - Decimal("0.006")
+
+
+def test_the_sweeper_takes_its_hold_from_the_stage(stage: Tables, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PDS_RELEASE_AFTER_SECONDS", str(100 * 365 * 24 * 3600))  # nothing is that old
+    settings.cache_clear()
+    assert sweeper.handler({}, Context()) == {"released": 0, "skipped": 0}
+
+    monkeypatch.delenv("PDS_RELEASE_AFTER_SECONDS")
+    settings.cache_clear()
+    assert sweeper.handler({}, Context()) == {"released": 2, "skipped": 0}  # RELEASE_AFTER: made days ago
+
+
+def test_the_sweeper_stops_before_its_timeout(stage: Tables) -> None:
     totals = sweeper.handler({}, Context(left_ms=5_000))
 
     assert totals == {"released": 0, "skipped": 0}
-    monkeypatch.setattr(sweeper, "RELEASE_AFTER", timedelta(0))
-    assert sweeper.sweep(stage.pds, stage.ledger, now=datetime.now(UTC), time_left=lambda: 5_000)["released"] == 0
-    assert sweeper.sweep(stage.pds, stage.ledger, now=datetime.now(UTC), time_left=lambda: 60_000)["released"] == 2
+    now = datetime.now(UTC)
+    assert sweeper.sweep(stage.pds, stage.ledger, now=now, time_left=lambda: 5_000, hold=timedelta(0))["released"] == 0
+    assert sweeper.sweep(stage.pds, stage.ledger, now=now, time_left=lambda: 60_000, hold=timedelta(0))["released"] == 2
 
 
 def test_the_sweeper_pages_through_the_index(stage: Tables, monkeypatch: pytest.MonkeyPatch) -> None:

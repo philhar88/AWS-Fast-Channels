@@ -135,7 +135,10 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
    `<prefix>`), `{"<channel>": "<candidate>"}`, deployed with the stage's strategy (`modules.release.strategy`;
    never all at once). The environment monitors `<prefix>-release-candidate`, a composite alarm over the pair
    siblings' hook and marker alarms: in ALARM, the deployment rolls back. The controller polls the deployment every
-   minute and stops it when a candidate's PRE_ADS request [timed out](#timed-out-requests).
+   minute and stops it when a candidate's PRE_ADS request [timed out](#timed-out-requests). The promote function
+   logs each pointer it deploys with its `content_version`, a hash of the document. A mint that reads the pointer
+   through the AppConfig Agent extension (as the e2e rig's stub mint does) logs that hash of what it got, not the
+   extension's `Configuration-Version` header, which can name another version ([W-2 4.6](workarounds.md)).
 4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, the
    channel's probe is re-applied with the new stable release ([below](#the-probe-follows-the-stable-release)), and
    the Function trees no sibling keeps are deleted.
@@ -304,7 +307,7 @@ Each schedule, `pf-<event id>`, tagged `fast:owner=release-controller`:
 - **On retrieval** the sibling's Functions run as at a break (PRE_ADS's content lookup included), and Prebid Server and
   the Pod Decision Service answer minutes ahead. MediaTailor rounds the duration to whole seconds (`60000`); the PDS
   checks the pod against the break of record ([pds.md](pds.md)). Reservations are taken at retrieval and delivered by
-  our tracker's impression; one whose break the session never watched is released by the sweeper after 2 hours.
+  our tracker's impression; one whose break the session never watched is released by the sweeper 10 to 15 minutes after it was reserved.
 - **Joins** use our tracker (`d=<sid>.<evid>`): prefetch events carry no `adBreakCorrelationId`, and a
   prefetch-consumed `FILLED_AVAIL` names the session's previous request URL.
 - A session that joins after a break's retrieval window gets real-time insertion for that break.
@@ -414,4 +417,5 @@ stay until the stack goes.
 | `release.hold` in the ledger | No monetized channel ran and there is no lab channel (or no agent to start it): start a channel and run the release again by hand |
 | `release.rollback` in the ledger | Its `reason` (a failed smoke verdict lists what failed; `ROLLED_BACK` names the alarm, or `timed_out` the PRE_ADS requests that reached their timeout) |
 | `<prefix>-release-unserved-breaks` in alarm | **MediaTailor skipped a prefetched break; open an AWS case** ([W-2 1.33](workarounds.md)). The detector's log names each session, sibling and marker time. Check the sibling's ADS log for that session: a retrieval (`MAKING_ADS_REQUEST` with `prefetchScheduleName`), then the break's `AD_MARKER_FOUND` without it, then nothing. Attach those events and the schedule's windows (`GetPrefetchSchedule`). Nothing of ours to roll back: the viewer saw the slate for that break |
+| `RefilledBreaks` above 0 (no alarm) | **MediaTailor filled a prefetched break again in real time; add the sessions to the AWS case** ([W-2 1.34](workarounds.md)). The zero-ads detector's log (`a prefetched break was filled again in real time`) names each session, sibling, marker time and its fills. The viewer saw the first ad start twice; delivery credited it once (`repeat`), so nothing is over-counted and nothing needs a rollback |
 | `<prefix>-release-log-loss` in alarm | **Log loss means delivery is under-counted.** The Pod Decision Service counts deliveries from the same log's `BEACON_FIRED`, so the breaks MediaTailor left out may have delivered impressions that were not counted, and the sweeper may release their reservations. The reconciliation function's log names the siblings and the hour. Reconcile delivery from the trackers' own logs (the impression URLs the creatives call); the alarm detects and never back-fills |

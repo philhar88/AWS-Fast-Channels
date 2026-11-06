@@ -10,8 +10,10 @@ An own-book line ad that ``/select`` places moves through these states:
 ``DELIVERED``
     MediaTailor fired our tracker for the ad (a ``BEACON_FIRED`` event in the ad decision server log).
 ``RELEASED``
-    No impression :data:`RELEASE_AFTER` the reservation (MediaTailor retries a beacon for up to an hour): the price
-    goes back to the shard. An impression that still arrives later is delivered anyway and recorded as late.
+    No impression :func:`release_after` the reservation (10 minutes with prefetch's default lead): the price goes
+    back to the shard. An impression that still arrives later is delivered anyway and recorded as late: a beacon
+    MediaTailor retried (for up to an hour), or one that only the CDN's logs count (W-2 1.32): a log file is read
+    :data:`CDN_LOG_LAG` after it arrives, 10 to 25 minutes after the firing.
 ``RECONCILED``
     Later, against the counterparty's count, which is what bills; ours is a seller-side server count.
 
@@ -23,6 +25,7 @@ A firing is read from two sources (:class:`Source`), deduplicated by those keys:
 :func:`cdn_beacon`), because the ADS log can leave out a whole break that MediaTailor filled (W-2 1.32).
 """
 
+import math
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -33,13 +36,37 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fast_channels.core.pbs_config import TRACKER_PATH, TRACKER_PREFIX
+from fast_channels.core.pbs_config import POD_MAX_SECONDS, TRACKER_PATH, TRACKER_PREFIX
 from fast_channels.core.pds.buckets import bucket
 from fast_channels.core.pds.models import EVID_PATTERN, NAME_PATTERN, SID_PATTERN, decision_id
 from fast_channels.core.pds.pod import TRACKER_EVENT, Outcome
 
-RELEASE_AFTER: Final = timedelta(hours=2)
-"""How long a reservation waits for its impression before its price is released."""
+LOG_DELAY: Final = timedelta(seconds=13)
+"""How long our tracker's firing takes to become a delivery through the ADS log, at the 99th percentile: the
+``BEACON_FIRED`` event reached the siblings' log p50 8.0 s and p99 12.5 s after the firing (76 events), and the
+delivery record was written p50 8.4 s and p99 12.7 s after it (52 records), on the persistent dev stage (ADR-0036,
+"Reservation holds")."""
+RELEASE_AFTER: Final = timedelta(minutes=10)
+"""The shortest a reservation waits for its impression before its price is released (:func:`release_after`)."""
+SWEEP_EVERY: Final = timedelta(minutes=5)
+"""How often the sweeper releases what is due, so an unplayed reservation is released at most this long after it is
+due."""
+
+
+def release_after(retrieval_lead_s: int = 0) -> timedelta:
+    """How long a reservation waits for its impression before its price is released: twice the longest an impression
+    can take, in whole minutes, and at least :data:`RELEASE_AFTER`.
+
+    A reservation is made when MediaTailor asks for the break's ads: with prefetch at most ``retrieval_lead_s``
+    before the break (``modules.release.prefetch.retrieval_lead_seconds``; 0 without prefetch), in real time at the
+    break. The last ad of the pod fires its impression before the pod ends, within :data:`POD_MAX_SECONDS` of the
+    break's start, and the firing becomes a delivery :data:`LOG_DELAY` later. With the default lead of 150 s that is
+    2 x (150 + 120 + 13) s, 9 min 26 s: 10 minutes.
+    """
+    longest = timedelta(seconds=retrieval_lead_s + POD_MAX_SECONDS) + LOG_DELAY
+    return max(RELEASE_AFTER, timedelta(minutes=math.ceil(2 * longest / timedelta(minutes=1))))
+
+
 BUDGET_SHARDS: Final = 4
 """Budget shards per line: reservations spread over them, so no single item takes every write."""
 SHARD_SEED: Final = "budget-v1"
