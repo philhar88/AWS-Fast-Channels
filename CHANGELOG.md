@@ -121,6 +121,10 @@ All notable changes to this project are documented here. The format follows
   prefetch schedule names (`pf-<evid>`: a fill from a retrieval can carry the previous break's ad request URL, also seen
   live), else to the one its own URL names, and a fill with neither to the latest request of its `requestId` before
   it. The ad-server leg's e2e harness reads the ADS log by the same rule.
+- **The seller's database password needs no URL encoding** (`modules.selling`). The generated password could contain
+  `^`, which `DATABASE_URL` carries as `%5E`; the Prebid Sales Agent does not decode it, so the seller failed to log in
+  and exited at boot, and the ECS circuit breaker rolled the Selling stack back (seen on a release-gate stage; about
+  one deploy in three). The password is now letters, digits and `-._` only (`OPTIMIZATION(oss): W-8 A12`).
 
 ## [4.0.0] - 2026-10-31
 
