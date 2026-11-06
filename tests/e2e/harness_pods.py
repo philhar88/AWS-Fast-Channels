@@ -40,6 +40,9 @@ POLL_SECONDS: Final = 3.5
 _SESSION_ID: Final = re.compile(r"/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/")
 _MODULE_MESSAGE: Final = re.compile(r'"message":\s*"(\{.*\})"')
 ADS_EVENTS: Final = frozenset({"MAKING_ADS_REQUEST", "VAST_RESPONSE", "FILLED_AVAIL"})
+GAP_SESSION_SHARE: Final = 1 / 5
+"""At most this share of a run's sessions may have a known ADS log gap (:func:`log_gaps`): W-2 1.32 was seen in one
+session of seven. More is not that defect's rate, and fails the run."""
 """The ADS log events of a break answered and stitched."""
 FIRST_SIGHT: Final = frozenset({"NEW_CREATIVE", "IMPORT_IN_PROGRESS"})
 """MediaTailor's skip reasons for a creative it has not imported yet: ``NEW_CREATIVE`` the first time it sees it (it
@@ -535,3 +538,25 @@ def warmups(codebuild: Any, project: str, tasks: Collection[str]) -> dict[str, s
         if task is not None and task in tasks and task not in status:
             status[str(task)] = str(build["buildStatus"])
     return status
+
+
+def logged_whole(found: Break) -> bool:
+    """Whether the ADS log has the break whole: MediaTailor's request, its VAST response and the ``FILLED_AVAIL``
+    (:data:`ADS_EVENTS`), and a request for every auction the PDS decided (one ``pds.policy`` record each)."""
+    return set(found.event_types) >= ADS_EVENTS and len(found.requests) >= len(found.policy)
+
+
+# OPTIMIZATION(aws): W-2 1.32 the vended ADS log can leave out events of a break MediaTailor filled
+def log_gaps(found: Iterable[Break], played: Collection[tuple[str, str]]) -> set[tuple[str, str]]:
+    """The session-breaks, ``(sid, evid)``, that the ADS log left incomplete although the PDS decided them (its policy
+    and select records) and our tracker shows them played (``played``: the breaks of our tracker's firings and
+    ``pds.delivery`` impressions, from either log). They are W-2 1.32's known gaps: the checks that read the ADS log
+    skip them, and a break with no decision, or one our tracker never fired for, still fails."""
+    return {
+        (b.sid, b.evid) for b in found if b.policy and b.select and (b.sid, b.evid) in played and not logged_whole(b)
+    }
+
+
+def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:
+    """The share of ``sessions`` with at least one known ADS log gap."""
+    return len({sid for sid, _ in gaps} & set(sessions)) / len(sessions) if sessions else 0.0
