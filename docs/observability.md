@@ -213,6 +213,7 @@ adding; filter on the partition keys to keep scans small.
 | `v_zero_ads_sessions` | Sessions that saw at least three ad breaks and made no ad request, with the day, configuration and first and last break | — |
 | `ledger` | The ledger's archived records ([below](#ledger)) | `day` (`yyyy/MM/dd`) |
 | `pds_policy`, `pds_select`, `pds_delivery` | With `pds`: the Pod Decision Service's decision records, one row per call or tracker firing, with `decision_id`, `sid`, `evid` and `pc` ([pds.md](pds.md#decision-records)). Filter on `record = 'pds.<kind>'`: the objects hold an empty line between records | `datehour` |
+| `v_ad_load_kpis` | With `pds`: breaks, ads per break, fill, winning and turned-away prices, impressions and revenue by hour, playback configuration, viewer tier and the policy applied ([pds.md](pds.md#ad-load-by-tier)) | — |
 | `v_crawl_kpis` | With `crawl`: coverage, bids, fill and price by hour, playback configuration and holdout arm ([content-enrichment.md](content-enrichment.md#measuring-the-uplift)) | — |
 
 Column names are the log fields in lower case (`eventtype`, `adsrequesturl`, `cs_uri_stem`, `cmcd_session_id`).

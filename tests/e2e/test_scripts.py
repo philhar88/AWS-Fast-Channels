@@ -17,7 +17,7 @@ import httpx
 import pytest
 from _stack import Plane, StackError, Stage
 from botocore.exceptions import ClientError
-from botocore.stub import Stubber
+from botocore.stub import ANY, Stubber
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
@@ -813,3 +813,33 @@ def test_seed_personas_takes_the_contracts_signed_in_personas(tmp_path: Path) ->
     assert personas.contract_personas(tmp_path / "missing.json") == []
     secret = personas.password()
     assert len(secret) >= 12 and any(c.isupper() for c in secret) and any(c.isdigit() for c in secret)
+
+
+class _Clients:
+    """A session that hands out the given clients (so a Stubber sees every call)."""
+
+    def __init__(self, **clients: Any) -> None:
+        self.clients = clients
+
+    def client(self, name: str, **_: Any) -> Any:
+        return self.clients[name]
+
+
+def test_seed_personas_writes_and_deletes_a_tiered_personas_pds_profile(stubbed: Any) -> None:
+    """A contract persona with a tier gets ``VIEWER#<vid>`` in ``<prefix>-pds``; a kids profile, a persona outside the
+    contract and a stage without the pds module get none."""
+    dynamodb = session().client("dynamodb")
+    stub = stubbed(dynamodb)
+    vid = "0123456789abcdef0123456789abcdef"
+    key = {"pk": {"S": f"VIEWER#{vid}"}, "sk": {"S": "PROFILE"}}
+    stub.add_response("put_item", {}, {"TableName": "fastci-pds", "Item": ANY})
+    stub.add_client_error("put_item", "ResourceNotFoundException", "Requested resource not found", 400)
+    stub.add_response("delete_item", {}, {"TableName": "fastci-pds", "Key": key})
+    stage = Stage("fastci", _Clients(dynamodb=dynamodb))  # type: ignore[arg-type]
+
+    assert personas._profile(stage, "dana", vid) == "light"
+    assert personas._profile(stage, "mia", vid) is None  # a kids profile: no call
+    assert personas._profile(stage, "e2e-seeded", vid) is None  # not in the contract: no call
+    assert personas._profile(stage, "ben", vid) is None  # no PDS table on the stage
+    personas._delete_profile(stage, vid)
+    assert (personas.tier_of("ben"), personas.tier_of("guest"), personas.tier_of("nobody")) == ("holdout", None, None)

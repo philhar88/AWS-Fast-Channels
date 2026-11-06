@@ -27,6 +27,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
+from fast_channels.core.adload import CONTROL, AdLoadPolicy
 from fast_channels.core.pds.book import Book, Line, channel_of
 from fast_channels.core.pds.pod import Outcome, PodContext, PodDecision, below_floor_bids, select_pod, tier0_bids
 
@@ -42,10 +43,16 @@ type Reserve = Callable[[Mapping[Line, tuple[str, ...]]], frozenset[str]]
 """Reserve each line's crids; returns the crids refused."""
 
 
-def pod_context(book: Book, *, floor_cpm: Decimal = Decimal(0), scheduled: int | None = None) -> PodContext:
-    """The pod rules' context: the own book's tier-0 deals, the floor and the break of record. No session history
-    yet (``recent_crids``), no creative approved for kids breaks, every bidder's ads accepted."""
-    return PodContext(tier0_deals=book.tier0_deals, floor_cpm=floor_cpm, scheduled_ms=scheduled)
+def pod_context(
+    book: Book,
+    *,
+    floor_cpm: Decimal = Decimal(0),
+    scheduled: int | None = None,
+    ad_load: AdLoadPolicy = CONTROL,
+) -> PodContext:
+    """The pod rules' context: the own book's tier-0 deals, the floor, the break of record and the viewer's ad load.
+    No session history yet (``recent_crids``), no creative approved for kids breaks, every bidder's ads accepted."""
+    return PodContext(tier0_deals=book.tier0_deals, floor_cpm=floor_cpm, scheduled_ms=scheduled, ad_load=ad_load)
 
 
 def _off_target(line: Line, configuration: str, now: datetime | None) -> bool:

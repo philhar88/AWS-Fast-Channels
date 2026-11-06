@@ -2,13 +2,16 @@
 
 import json
 from collections.abc import Callable
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from fast_channels.core.adload import AdLoadPolicy
 from fast_channels.core.demand import NETWORK_CONTEXT
 from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord
 from fast_channels.core.pds.snapshot import SnapshotBase
+from fast_channels.infra.constructs.pds.adload_kpis import AD_LOAD_KPIS
 from fast_channels.infra.constructs.pds.decisions import LOG_FIELDS
 
 if TYPE_CHECKING:
@@ -197,6 +200,7 @@ def test_the_publisher_runs_on_deploy_and_hourly_with_the_demo_demand(deployment
     assert base.demand == {"amt": {"placementId": "fastm-demo"}}
     assert base.lines == ()
     assert base.breaks_ms == (30030, 60060, 90090, 120120), "the 30.03 s grid of the default ladder"
+    assert base.ad_load == {"light": AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))}
     schedules = {s["ScheduleExpression"] for s in resources(template, "AWS::Scheduler::Schedule").values()}
     assert schedules == {"rate(1 hour)", "rate(15 minutes)", "rate(5 minutes)"}  # publisher, sweeper, CDN logs
     assert template.find_resources("Custom::Trigger")
@@ -214,7 +218,8 @@ def test_the_publisher_runs_on_deploy_and_hourly_with_the_demo_demand(deployment
         for f in resources(own_book.template(own_book.stage.pds), "AWS::Lambda::Function").values()
         if f["Handler"] == "fast_channels.functions.pds.publisher.handler"
     ]
-    assert SnapshotBase.model_validate_json(quiet["Environment"]["Variables"]["PDS_SNAPSHOT_BASE"]).demand == {}
+    quiet_base = SnapshotBase.model_validate_json(quiet["Environment"]["Variables"]["PDS_SNAPSHOT_BASE"])
+    assert (quiet_base.demand, set(quiet_base.ad_load)) == ({}, {"light"}), "tiers apply without demo demand too"
 
 
 def test_the_publisher_reads_only_the_kits_and_writes_only_budgets(deployment: GetDeployment) -> None:
@@ -365,6 +370,26 @@ def test_policy_records_flow_into_the_lake(deployment: GetDeployment) -> None:
     [select] = [t for t in tables if t["Name"] == "pds_select"]
     columns = {c["Name"]: c["Type"] for c in select["StorageDescriptor"]["Columns"]}
     assert (columns["reserved"], columns["reason"], columns["below_floor"]) == ("array<string>", "string", "bigint")
+    assert (columns["tier"], columns["ad_load"]) == ("string", "string")  # ad_load as its JSON text
+
+
+def test_the_ad_load_view_reads_the_select_and_delivery_records(deployment: GetDeployment) -> None:
+    d = deployment(PDS, extra=EXTRA)
+    template = d.template(d.stage.pds)
+    tables = resources(template, "AWS::Glue::Table")
+    [(logical, view)] = [(k, t) for k, t in tables.items() if t["TableInput"]["Name"] == "v_ad_load_kpis"]
+
+    assert view["TableInput"]["TableType"] == "VIRTUAL_VIEW"
+    assert view["DatabaseName"] == "fastm_lake"
+    columns = [c["Name"] for c in view["TableInput"]["StorageDescriptor"]["Columns"]]
+    assert columns[:5] == ["datehour", "configuration", "tier", "policy", "reason"]
+    assert {"ads_per_break", "winning_cpm_avg", "turned_away_usd", "revenue_usd"} <= set(columns)
+    sources = {k for k, t in tables.items() if t["TableInput"]["Name"] in {"pds_select", "pds_delivery"}}
+    assert set(template.find_resources("AWS::Glue::Table")[logical]["DependsOn"]) == sources
+    sql = AD_LOAD_KPIS.sql
+    assert '"{db}"."pds_select"' in sql and '"{db}"."pds_delivery"' in sql and "NOT probe" in sql
+    assert "('below_bar', 'ad_load')" in sql, "the outcomes of the bids a tier turned away"
+    assert logical == "AdLoadKpis"
 
 
 @pytest.mark.parametrize("overrides", [PDS], ids=["pds"])

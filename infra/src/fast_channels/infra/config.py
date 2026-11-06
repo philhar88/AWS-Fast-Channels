@@ -24,6 +24,7 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from fast_channels.core.ad_server import AdServer
+from fast_channels.core.adload import CONTROL_TIERS, TIER_PATTERN, AdLoadPolicy
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
@@ -661,6 +662,14 @@ class DemoLine(_Section):
     """A guaranteed line: placed first in a pod, ahead of any bid."""
 
 
+MAX_AD_LOAD_TIERS: Final = 8
+"""The most tiers ``modules.pds.ad_load`` may price (DESIGN §16.1: at most 3 value tiers by 3 tolerance bands)."""
+
+
+def _default_ad_load() -> dict[str, AdLoadPolicy]:
+    return {"light": AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))}
+
+
 class PdsModule(_Module):
     """The Pod Decision Service module (``modules.pds``)."""
 
@@ -683,6 +692,14 @@ class PdsModule(_Module):
     """Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's
     environment). Each line's budget is split over the own book's budget shards; a line stops serving once
     reservations hold all of it."""
+    ad_load: dict[Annotated[str, Field(pattern=TIER_PATTERN)], AdLoadPolicy] = Field(
+        default_factory=_default_ad_load, max_length=MAX_AD_LOAD_TIERS
+    )
+    """The ad load of each viewer tier (ADR-0037): ``max_ads``, the most ads in one break, and ``bar_cpm``, the
+    accepted CPM a sold ad must beat (at most $20.50: λ_cap). Viewers get a tier from their profile; FULL and
+    PSEUDONYMOUS breaks follow it, every other break and every other tier keeps the control plan (every slot, at the
+    market floor). ``standard`` and ``holdout`` are the control plan and cannot be priced. The default is the demo's
+    ``light`` tier: one ad per break, above $20."""
 
     @model_validator(mode="after")
     def _groups_hold_their_calls(self) -> Self:
@@ -704,6 +721,8 @@ class PdsModule(_Module):
             raise ValueError(f"demo_lines: a creative serves at most one line: {error}") from None
         if unknown := sorted(set(served) - set(crids(DemoRole.DIRECT))):
             raise ValueError(f"demo_lines: not direct demo creatives: {', '.join(unknown)}")
+        if control := sorted(set(self.ad_load) & CONTROL_TIERS):
+            raise ValueError(f"ad_load: {', '.join(control)} is the control plan and takes no policy")
         return self
 
 

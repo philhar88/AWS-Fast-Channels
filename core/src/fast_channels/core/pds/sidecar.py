@@ -3,10 +3,10 @@ the task role's grants, as the CDK context ``scripts/guidance_app.py`` reads (:d
 
 ``scripts/_demand.py`` renders it at deploy (:func:`sidecar`); the wrapper adds it to the guidance's own stack. The
 grants are exactly the hot-path functions' were: the snapshot object, the budget shards' reads, the reservations'
-writes (``BUDGET#``, ``CAP#``, ``RES#`` items) and the ledger's ``pds/*`` chains, with the crawl module the
-catalog-context objects, and with the identity module the ticket rows (``T#`` items of ``<prefix>-identity``:
-read, self-redeem and ``last_seen``). The task role is shared with Prebid Server's container, so Prebid Server could
-make these calls too (ADR-0036 weighs that).
+writes (``BUDGET#``, ``CAP#``, ``RES#`` items) and the ledger's ``pds/*`` chains, the viewer profiles' reads
+(``VIEWER#`` items, ADR-0037), with the crawl module the catalog-context objects, and with the identity module the
+ticket rows (``T#`` items of ``<prefix>-identity``: read, self-redeem and ``last_seen``). The task role is shared with
+Prebid Server's container, so Prebid Server could make these calls too (ADR-0036 weighs that).
 
 The sidecar runs in the guidance's VPC, whose S3 gateway endpoint lets requests through only to the guidance's own
 buckets (its endpoint policy): S3 answers anything else ``AccessDenied``, whatever the role allows (seen live). So
@@ -26,6 +26,7 @@ from fast_channels.core.identity.ticket import KEY_PREFIX as TICKET_KEY_PREFIX
 from fast_channels.core.ledger import ledger_table
 from fast_channels.core.pds.names import CONTAINER, PORT, sidecar_log_group, table_name
 from fast_channels.core.pds.snapshot import SNAPSHOT_KEY
+from fast_channels.core.pds.viewers import PROFILE_PREFIX
 
 CONTEXT: Final = "fastPds"
 """The CDK context key the guidance wrapper reads the sidecar from (JSON)."""
@@ -113,6 +114,13 @@ def statements(
             "Action": "dynamodb:BatchGetItem",
             "Resource": pds,
             "Condition": _leading(["BUDGET#*"]),
+        },
+        {
+            "Sid": "PdsViewerProfiles",
+            "Effect": "Allow",
+            "Action": "dynamodb:GetItem",
+            "Resource": pds,
+            "Condition": _leading([f"{PROFILE_PREFIX}*"]),
         },
         {
             "Sid": "PdsReservations",

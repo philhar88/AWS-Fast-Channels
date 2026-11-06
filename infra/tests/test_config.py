@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from types import UnionType
 from typing import Annotated, Any, get_args, get_origin
@@ -9,6 +10,7 @@ from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
 from pydantic import BaseModel
 
+from fast_channels.core.adload import AdLoadPolicy
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
@@ -597,6 +599,12 @@ def test_every_unmet_need_is_reported(load_config: Load) -> None:
         ),
         ({"modules.pds.demo_lines": [{**LINE, "creatives": ["sim1"]}]}, "not direct demo creatives: sim1"),
         ({"modules.pds.demo_lines": [{**LINE, "id": f"l{n}"} for n in range(9)]}, "at most 8 items"),
+        ({"modules.pds.ad_load": {"holdout": {"max_ads": 1}}}, "holdout is the control plan and takes no policy"),
+        ({"modules.pds.ad_load": {"standard": {}}}, "standard is the control plan and takes no policy"),
+        ({"modules.pds.ad_load": {"light": {"max_ads": 0}}}, "greater than or equal to 1"),
+        ({"modules.pds.ad_load": {"light": {"bar_cpm": 21}}}, "puts λ above λ_cap"),
+        ({"modules.pds.ad_load": {"Light": {"max_ads": 1}}}, "String should match pattern"),
+        ({"modules.pds.ad_load": {f"t{n}": {"max_ads": 1} for n in range(9)}}, "at most 8 items"),
         ({"modules.crawl.holdout_percent": 101}, "less than or equal to 100"),
         ({"modules.selling.creatives": ["sim1"]}, "modules.selling.creatives: not direct demo creatives: sim1"),
         ({"modules.selling.creatives": []}, "should have at least 1 item"),
@@ -653,6 +661,7 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
     assert modules.models.tasks["recommender"].effort is Effort.LOW
     assert modules.demand.simulator is Simulator.LAMBDA
     assert modules.pds.demo_lines == (DemoLine.model_validate(LINE),)
+    assert modules.pds.ad_load == {"light": AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))}  # the demo's, by default
     assert modules.release.channels == ("fast-demo",)
 
 

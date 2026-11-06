@@ -1,7 +1,8 @@
 """``POST /select``: the pod the fast-ctv Prebid Server module renders after each auction.
 
 The answer comes from ``fast_channels.core.pds.selection.select``:
-- the pod rules run on the current snapshot (the own book's tier-0 deals, the floor, the break of record);
+- the pod rules run on the current snapshot (the own book's tier-0 deals, the floor, the break of record) with the ad
+  load of the viewer's tier (``core.adload``; the tier from ``/policy``'s bound viewer, ``viewers``);
 - every own-book line ad in the pod or among its standalones is reserved first (``functions.pds.reservations``, on the
   shard ``Budgets.shard`` picks), and a line whose price cannot be reserved is left out.
 
@@ -25,6 +26,7 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 
+from fast_channels.core.adload import ad_load
 from fast_channels.core.pbs_config import TRACKER_PREFIX
 from fast_channels.core.pds.models import SelectRequest
 from fast_channels.core.pds.pod import scheduled_ms, select_response, tracker_url
@@ -37,6 +39,7 @@ from fast_channels.functions.settings import settings
 from fast_channels.pds import state
 from fast_channels.pds.http import INTERNAL, NO_SNAPSHOT, REFUSED, Answer, refused_fields
 from fast_channels.pds.telemetry import counters, window
+from fast_channels.pds.viewers import viewers
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -145,8 +148,13 @@ def _answer(request: SelectRequest, started: float) -> Answer:
     if snapshot.version == EMPTY.version:
         counters.add("SelectNoSnapshot")
         return NO_SNAPSHOT
+    tier = viewers().tier(request.decision_id, request.mode, probe=request.probe)
+    load = ad_load(tier, request.mode, probe=request.probe, tiers=snapshot.ad_load)
     rules = pod_context(
-        snapshot.book, floor_cpm=snapshot.floor_cpm, scheduled=scheduled_ms(request.dur_ms, snapshot.breaks_ms)
+        snapshot.book,
+        floor_cpm=snapshot.floor_cpm,
+        scheduled=scheduled_ms(request.dur_ms, snapshot.breaks_ms),
+        ad_load=load.rules,
     )
     decision, reserved = select(
         request, rules, snapshot.book, reserve=_reserver(request, started), now=datetime.now(UTC)
@@ -154,12 +162,18 @@ def _answer(request: SelectRequest, started: float) -> Answer:
     enr = arm(request.sid, request.evid, settings().crawl_holdout_percent)
     body = select_response(request, decision, tracker_base=base, enr=enr).model_dump_json()
     record = select_record(
-        request, decision, latency_ms=round((time.perf_counter() - started) * 1000, 3), reserved=reserved
+        request,
+        decision,
+        latency_ms=round((time.perf_counter() - started) * 1000, 3),
+        reserved=reserved,
+        tier=tier,
+        ad_load=load,
     )
     logger.info(
         "decision",
         extra={**record.model_dump(mode="json"), "snapshot": snapshot.version, "correlation_id": request.decision_id},
     )
     counters.add("SelectDecisions", dimension=("reason", decision.reason.value))
+    counters.add("AdLoadDecisions", dimension=("reason", record.ad_load.reason.value))
     counters.add("LineAdsReserved", len(reserved))
     return Answer(200, body)

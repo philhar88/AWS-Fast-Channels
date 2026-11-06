@@ -92,6 +92,7 @@ it costs.
 | `modules.pds.select_timeout_ms` | int | `200` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. `/select` reserves the pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-125 ms); 400-session break herds measured p99 65-134 ms, max 111-166 ms at the module, and at 150 ms one pod in 400 fell back (ADR-0036). |
 | `modules.pds.select_group_timeout_ms` | int | `250` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
 | `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's environment). Each line's budget is split over the own book's budget shards; a line stops serving once reservations hold all of it. |
+| `modules.pds.ad_load` | map of str to object | `{"light": {"max_ads": 1, "bar_cpm": "20"}}` | The ad load of each viewer tier (ADR-0037): `max_ads`, the most ads in one break, and `bar_cpm`, the accepted CPM a sold ad must beat (at most $20.50: λ_cap). Viewers get a tier from their profile; FULL and PSEUDONYMOUS breaks follow it, every other break and every other tier keeps the control plan (every slot, at the market floor). `standard` and `holdout` are the control plan and cannot be priced. The default is the demo's `light` tier: one ad per break, above $20. |
 | `modules.release.enabled` | bool | `false` | Deploy the Release Controller: each monetized channel gets a pair of playback configurations with MediaTailor Functions; a release goes to the idle one through a smoke test, is promoted by a gradual AppConfig pointer and is rolled back unattended on an alarm. |
 | `modules.release.channels` | list of str | `[]` | IaC channels to monetize (names from `channels.iac`; `{prefix}` is replaced as there). Their channel policy also admits the sibling configurations `<channel>-p-?`. Adding a channel widens its policy once, and the deployment refuses that while the channel runs: stop it first. |
 | `modules.release.strategy` | `demo` or `standard` or `large` | `"demo"` | `demo` (a simulated audience: 10% steps over 30 minutes), `standard` (up to 20,000 concurrent viewers: 10% steps over 3 hours) or `large` (exponential steps over 4 hours). |
@@ -172,6 +173,13 @@ it costs.
 | `caps.per_session` | int or null | `null` | Most impressions of the line per playback session; `null`: uncapped. |
 | `tier0` | bool | `false` | A guaranteed line: placed first in a pod, ahead of any bid. |
 
+`modules.pds.ad_load.<tier>`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `max_ads` | int or null | `null` | The most ads one break may hold, sold or house; `null`: as many as the pod has slots. |
+| `bar_cpm` | decimal | `"0"` | A sold ad runs only if its accepted CPM (price * accept ratio) is above this, US dollars; 0: the market floor alone. At most λ_cap + c_ins, $20.50. |
+
 <details>
 <summary>Regenerate the tables after changing a field's documentation</summary>
 
@@ -186,6 +194,7 @@ from typing import Annotated, Literal, get_args, get_origin
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
 
+from fast_channels.core.adload import AdLoadPolicy
 from fast_channels.infra.config import (
     CdnEndpoint,
     ChannelConfig,
@@ -201,6 +210,8 @@ def text(doc):
 
 
 def kind(t):
+    if get_origin(t) is Annotated:  # a constrained type: its base
+        return kind(get_args(t)[0])
     if get_origin(t) is UnionType:
         null = " or null" if NoneType in get_args(t) else ""
         return " or ".join(kind(a) for a in get_args(t) if a is not NoneType) + null
@@ -247,6 +258,7 @@ tables = [
     ("modules.models.tasks.<task>", ModelTask),
     ("modules.demand.dayparts[]", DemandDaypart),
     ("modules.pds.demo_lines[]", DemoLine),
+    ("modules.pds.ad_load.<tier>", AdLoadPolicy),
 ]
 for title, model in tables:
     heading = [f"`{title}`:", ""] if title else []

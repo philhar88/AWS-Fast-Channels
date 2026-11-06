@@ -9,16 +9,20 @@ Deterministic and exact for the stored requests' equal 30 s slots:
    (``rqddurs``). A ``crid``, and an ``adomain`` unless it is a house ad. No ``crid`` the session saw in its recent
    breaks. At or above the floor, except house ads (fillers) and tier-0 lines (contracted).
 2. **Value.** Tier-0 lines first (sponsorships, guaranteed lines, PG deals: their ``dealid`` is in the tier-0 set),
-   then paid bids by accepted net value ``price / 1000 * accept_ratio(bidder) - c_ins``, which must beat the slot's
-   ad-load price λ (:mod:`fast_channels.core.adload`); house ads fill what is left where λ is 0.
+   then paid bids by accepted net value ``price / 1000 * accept_ratio(bidder) - c_ins``. Where the viewer's ad-load
+   tier prices ad load (λ > 0, :mod:`fast_channels.core.adload`), a sold ad, tier-0 lines included, must beat λ;
+   house ads fill what is left only where λ is 0.
 3. **Placement.** A bid stays in its own imp's slot. Candidates are taken best first; one is placed if its slot is
    free, it repeats no ``crid``, ``adomain`` or IAB category already in the pod (across bidders; house ads, which
-   advertise nothing, only repeat no ``crid``), and the pod still fits: Σ ``dur`` ≤ ``poddur`` and Σ VAST durations
-   ≤ the break. Slots nothing fills are not returned; Channel Assembly's break slate plays them (MediaTailor keeps a
-   partial pod at a personalization threshold of 121 s).
+   advertise nothing, only repeat no ``crid``), the pod still fits (Σ ``dur`` ≤ ``poddur`` and Σ VAST durations
+   ≤ the break), and the pod holds fewer ads than the tier's ``max_ads``. Slots nothing fills are not returned;
+   Channel Assembly's break slate plays them (MediaTailor keeps a partial pod at a personalization threshold of
+   121 s).
 4. **Standalones.** Per winner, the best remaining candidate of the same imp and duration: what MediaTailor's ad
    buffet plays in that slot if the winner fails. The pod stays within the break even if every winner fails.
-5. **Empty pod** for an avail under 30 s (the tail of a break a session joined late).
+5. **Minimum load.** A tier never empties a pod: if its rules leave nothing, the pod is selected under the control
+   plan with at most one ad (``PodDecision.min_load``).
+6. **Empty pod** for an avail under 30 s (the tail of a break a session joined late).
 
 The break is ``dur_ms`` as MediaTailor requested it, except on prefetched breaks: a prefetch retrieval carries the
 duration rounded to whole seconds (60,000 for a 60,060 ms break), so when ``dur_ms`` is exactly the schedule of
@@ -26,7 +30,7 @@ record's duration rounded, the schedule's duration is the limit (2 x 30.03 s fit
 """
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import IntEnum, StrEnum
 from typing import Annotated, Final
@@ -34,7 +38,7 @@ from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fast_channels.core.adload import slot_lambdas
+from fast_channels.core.adload import C_INS, CONTROL, AdLoadPolicy, slot_lambdas
 from fast_channels.core.pds.models import (
     OWN_BOOK,
     Bid,
@@ -50,8 +54,6 @@ from fast_channels.core.timeline import whole_seconds
 
 MIN_AVAIL_MS: Final = 30_000
 """Avails shorter than this get an empty pod."""
-C_INS: Final = Decimal("0.0005")
-"""``c_ins``: the cost of inserting one ad, US dollars."""
 _OWN_BOOK_ONLY: Final = frozenset({Mode.SAFE, Mode.KIDS, None})
 
 
@@ -80,6 +82,8 @@ class Outcome(StrEnum):
     FLOOR = "below_floor"
     BAR = "below_bar"
     """Its net value does not beat the slot's ad-load price."""
+    AD_LOAD = "ad_load"
+    """It would have been placed, but the pod already holds the viewer's tier's most ads (``max_ads``)."""
     OUTBID = "outbid"
     """A better candidate took its slot."""
     SEPARATION = "separation"
@@ -108,8 +112,9 @@ class PodContext(BaseModel):
     floor_cpm: Decimal = Field(default=Decimal(0), ge=0, description="Price floor for paid bids, CPM.")
     recent_crids: frozenset[str] = Field(default=frozenset(), description="Creatives of the session's recent breaks.")
     scheduled_ms: int | None = Field(default=None, gt=0, description="Duration of the break in the schedule of record.")
+    ad_load: AdLoadPolicy = Field(default=CONTROL, description="The ad load of the viewer's tier.")
     lambdas: tuple[Annotated[Decimal, Field(ge=0)], ...] = Field(
-        default=(), description="Ad-load price per slot, US dollars; empty for the ad-load model's (slot_lambdas)."
+        default=(), description="Ad-load price per slot, US dollars; empty for the ad load's (slot_lambdas)."
     )
 
 
@@ -151,6 +156,8 @@ class PodDecision:
     """Refs of the bids from tier-0 lines and deals."""
     below_floor: frozenset[str] = frozenset()
     """Refs of the bids under the floor (house ads and tier-0 lines are never under it)."""
+    min_load: bool = False
+    """The tier's ad load left the pod empty, so this pod is the control plan's, with at most one ad."""
 
     @property
     def filled_ms(self) -> int:
@@ -269,8 +276,8 @@ def _candidate(bid: Bid, slot: int, context: PodContext) -> _Candidate:
 
 def _wanted(candidate: _Candidate, lambdas: tuple[Decimal, ...]) -> bool:
     match candidate.kind:
-        case _Kind.TIER0:
-            return True
+        case _Kind.TIER0:  # contracted: at any price where ad load is free, else like any sold ad
+            return lambdas[candidate.slot] <= 0 or candidate.net - lambdas[candidate.slot] > 0
         case _Kind.PAID:
             return candidate.net - lambdas[candidate.slot] > 0
         case _Kind.HOUSE:
@@ -314,6 +321,7 @@ class _Pod:
 
     poddur: int
     budget: int
+    max_ads: int | None = None
     winners: dict[int, _Candidate] = field(default_factory=dict)
     claimed: set[str] = field(default_factory=set)
     used_dur: int = 0
@@ -327,6 +335,8 @@ class _Pod:
             return Outcome.SEPARATION
         if self.used_dur + candidate.dur > self.poddur or self.used_ms + candidate.vast_dur_ms > self.budget:
             return Outcome.NO_ROOM
+        if self.max_ads is not None and len(self.winners) >= self.max_ads:
+            return Outcome.AD_LOAD
         self.winners[candidate.slot] = candidate
         self.claimed |= candidate.claims
         self.used_dur += candidate.dur
@@ -372,11 +382,25 @@ def below_floor_bids(request: SelectRequest, context: PodContext) -> frozenset[s
 
 def select_pod(request: SelectRequest, context: PodContext = DEFAULT_CONTEXT) -> PodDecision:
     """Select the pod for ``request`` (rules in the module docstring)."""
+    lambdas = context.lambdas or slot_lambdas(len(request.slots), context.ad_load)
+    if len(lambdas) != len(request.slots):
+        raise ValueError(f"lambdas has {len(lambdas)} entries for {len(request.slots)} slots")
+    decision = _select(request, context, lambdas, context.ad_load.max_ads)
+    if decision.pod or decision.reason is PodReason.SHORT_AVAIL or context.ad_load.is_control:
+        return decision
+    control = _select(request, context, slot_lambdas(len(request.slots)), 1)
+    return replace(control, min_load=True) if control.pod else decision
+
+
+def _select(
+    request: SelectRequest, context: PodContext, lambdas: tuple[Decimal, ...], max_ads: int | None
+) -> PodDecision:
     slots = request.slots
-    lambdas = context.lambdas or slot_lambdas(len(slots))
-    if len(lambdas) != len(slots):
-        raise ValueError(f"lambdas has {len(lambdas)} entries for {len(slots)} slots")
-    pod = _Pod(poddur=min(slot.poddur for slot in slots), budget=limit_ms(request.dur_ms, context.scheduled_ms))
+    pod = _Pod(
+        poddur=min(slot.poddur for slot in slots),
+        budget=limit_ms(request.dur_ms, context.scheduled_ms),
+        max_ads=max_ads,
+    )
     tier0, below_floor = tier0_bids(request, context), below_floor_bids(request, context)
     if request.dur_ms < MIN_AVAIL_MS:
         outcomes = dict.fromkeys((bid.ref for bid in request.bids), Outcome.SHORT_AVAIL)

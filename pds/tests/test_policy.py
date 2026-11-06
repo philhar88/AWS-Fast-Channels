@@ -174,3 +174,21 @@ def test_the_store_reads_the_configured_bucket(monkeypatch: pytest.MonkeyPatch) 
     finally:
         snapshot_store.cache_clear()
         settings.cache_clear()
+
+
+def test_each_answer_is_handed_to_the_breaks_select(snapshot: _Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bound viewer of a FULL or PSEUDONYMOUS break goes to its /select (``viewers.Viewers.note``)."""
+    noted: list[tuple[str, object]] = []
+
+    class Noting:
+        def note(self, decision_id: str, decision: object) -> None:
+            noted.append((decision_id, decision))
+
+    monkeypatch.setattr(policy, "viewers", Noting)
+
+    response = ask(json.dumps(question()))
+
+    assert response.status == 200
+    [(decision_id, decision)] = noted
+    assert decision_id == f"{SID}.820461826"
+    assert decision.response.mode == "CONTEXTUAL"  # type: ignore[attr-defined]

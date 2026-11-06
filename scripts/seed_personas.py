@@ -12,6 +12,9 @@ is sent. The passwords are written to the Secrets Manager secret ``<prefix>/iden
 ``{"<persona>": {"email": ..., "password": ...}}``; a re-run keeps them. The script prints each persona's ``vid``
 (``core.identity.vid.viewer_id``), the id the Pod Decision Service knows the viewer by; the raw ``sub`` is never
 printed or stored.
+
+With the ``pds`` module, each persona of the contract that has an ad-load tier also gets its profile in the PDS table
+(``VIEWER#<vid>``, ``fast_channels.functions.pds.profiles.put_profile``, ADR-0037), and ``--delete`` removes it.
 """
 
 import argparse
@@ -31,6 +34,11 @@ from fast_channels.core.identity.names import (
     parameter_name,
 )
 from fast_channels.core.identity.vid import viewer_id
+from fast_channels.core.pds.names import table_name
+from fast_channels.core.pds.viewers import profile_key
+from fast_channels.core.personas import persona as contract_persona
+from fast_channels.functions.pds.profiles import put_profile
+from fast_channels.functions.pds.reservations import item_key
 
 if TYPE_CHECKING:
     from mypy_boto3_cognito_idp import CognitoIdentityProviderClient
@@ -94,6 +102,39 @@ def _write_secret(stage: Stage, users: dict[str, dict[str, str]]) -> None:
         )
 
 
+def tier_of(persona: str) -> str | None:
+    """The ad-load tier the contract gives ``persona``; ``None`` for one without a profile or not in the contract."""
+    try:
+        return contract_persona(persona).tier
+    except ValueError:
+        return None
+
+
+def _missing_table(error: ClientError) -> bool:
+    return error.response.get("Error", {}).get("Code") == "ResourceNotFoundException"
+
+
+def _profile(stage: Stage, persona: str, vid: str) -> str | None:
+    """Write ``persona``'s PDS profile (``VIEWER#<vid>``); its tier, or ``None`` without a tier or a PDS table."""
+    if (tier := tier_of(persona)) is None:
+        return None
+    try:
+        put_profile(stage.session.client("dynamodb"), table_name(stage.prefix), vid, persona)
+    except ClientError as error:
+        if _missing_table(error):  # the stage runs without the pds module
+            return None
+        raise
+    return tier
+
+
+def _delete_profile(stage: Stage, vid: str) -> None:
+    try:
+        stage.session.client("dynamodb").delete_item(TableName=table_name(stage.prefix), Key=item_key(profile_key(vid)))
+    except ClientError as error:
+        if not _missing_table(error):
+            raise
+
+
 def _user(cognito: CognitoIdentityProviderClient, pool: str, persona: str, email: str, secret: str) -> str:
     """Create (or update) the persona's user; its ``sub``."""
     attributes: list[AttributeTypeTypeDef] = [
@@ -111,7 +152,8 @@ def _user(cognito: CognitoIdentityProviderClient, pool: str, persona: str, email
 
 
 def seed(stage: Stage, personas: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Create ``personas`` in the stage's pool; each one's ``{persona, email, vid}``."""
+    """Create ``personas`` in the stage's pool, with their PDS profiles; each one's ``{persona, email, vid}``, and
+    ``tier`` where a profile was written."""
     cognito: CognitoIdentityProviderClient = stage.session.client("cognito-idp")
     pool, issuer = _parameter(stage, Parameter.USER_POOL_ID), _parameter(stage, Parameter.ISSUER)
     key = _parameter(stage, Parameter.VID_KEY)
@@ -123,21 +165,25 @@ def seed(stage: Stage, personas: list[dict[str, str]]) -> list[dict[str, str]]:
         secret = users.get(persona, {}).get("password") or password()
         sub = _user(cognito, pool, persona, email, secret)
         vid = viewer_id(kms, key_id=key, issuer=issuer, sub=sub)
-        # B2 adds the persona's PDS profile here (fast_channels.functions.pds.profiles.put_profile).
+        tier = _profile(stage, persona, vid)
         users[persona] = {"email": email, "password": secret}
-        seeded.append({"persona": persona, "email": email, "vid": vid})
+        seeded.append({"persona": persona, "email": email, "vid": vid} | ({"tier": tier} if tier else {}))
     _write_secret(stage, users)
     return seeded
 
 
 def delete(stage: Stage, personas: list[dict[str, str]]) -> list[str]:
-    """Delete ``personas``' users (and the secret once none is left); the deleted personas."""
+    """Delete ``personas``' users and their PDS profiles (and the secret once none is left); the deleted personas."""
     cognito: CognitoIdentityProviderClient = stage.session.client("cognito-idp")
-    pool = _parameter(stage, Parameter.USER_POOL_ID)
+    pool, issuer = _parameter(stage, Parameter.USER_POOL_ID), _parameter(stage, Parameter.ISSUER)
+    key, kms = _parameter(stage, Parameter.VID_KEY), stage.session.client("kms")
     users = _secret(stage)
     deleted = []
     for entry in personas:
         try:
+            user = cognito.admin_get_user(UserPoolId=pool, Username=entry["email"])
+            sub = next(a["Value"] for a in user["UserAttributes"] if a["Name"] == "sub")
+            _delete_profile(stage, viewer_id(kms, key_id=key, issuer=issuer, sub=sub))
             cognito.admin_delete_user(UserPoolId=pool, Username=entry["email"])
             deleted.append(entry["id"])
         except cognito.exceptions.UserNotFoundException:

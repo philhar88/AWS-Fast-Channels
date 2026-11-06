@@ -466,6 +466,52 @@ def test_a_break_filled_from_its_retrieval_airs_the_retrieval() -> None:
     assert joined.rendered() == (["direct1"], ["sim1"])
 
 
+def test_one_request_id_for_two_breaks_files_each_event_under_its_own_break() -> None:
+    """MediaTailor gave one requestId to a 30 s break's FILLED_AVAIL and, 80 ms later, the next break's prefetch
+    retrieval (seen live, 2026-11-06): each event goes to the break its URL names, a URL-less one to the latest
+    before it."""
+    short = "https://pbs.example/openrtb2/auction?evid=7&dur=30000"
+    retrieval = "https://pbs.example/openrtb2/auction?evid=8&dur=120000"
+    events = [
+        ads_event("AD_MARKER_FOUND", "q1", "2026-11-06T01:06:42.546Z"),
+        ads_event("FILLED_AVAIL", "q1", "2026-11-06T01:06:42.714Z", adsRequestUrl=short),
+        ads_event("MAKING_ADS_REQUEST", "q1", "2026-11-06T01:06:42.793Z", adsRequestUrl=retrieval),
+        ads_event("RAW_ADS_RESPONSE", "q1", "2026-11-06T01:06:42.945Z", adsRequestUrl=retrieval),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T01:06:42.949Z"),
+    ]
+
+    found = pods.breaks(events, [], [])
+
+    assert {key: found[key].event_types for key in found} == {
+        (SID, "7"): ["AD_MARKER_FOUND", "FILLED_AVAIL"],
+        (SID, "8"): ["MAKING_ADS_REQUEST", "RAW_ADS_RESPONSE", "VAST_RESPONSE"],
+    }
+
+
+def test_a_prefetched_fill_goes_to_its_schedules_break_whatever_its_url_says() -> None:
+    """A break filled from its prefetch retrieval logged FILLED_AVAIL with the previous break's ad request URL (seen
+    live, 2026-11-06); its schedule name, pf-<evid>, is the break's own, and so is its marker's."""
+    stale = "https://pbs.example/openrtb2/auction?evid=7&dur=30000"
+    retrieval = "https://pbs.example/openrtb2/auction?evid=8&dur=120000"
+    events = [
+        ads_event(
+            "MAKING_ADS_REQUEST", "q1", "2026-11-06T03:37:24.001Z", adsRequestUrl=retrieval, prefetchScheduleName="pf-8"
+        ),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T03:37:24.084Z", prefetchScheduleName="pf-8"),
+        ads_event("AD_MARKER_FOUND", "q2", "2026-11-06T03:39:04.670Z", prefetchScheduleName="pf-8"),
+        ads_event("FILLED_AVAIL", "q2", "2026-11-06T03:39:05.295Z", adsRequestUrl=stale, prefetchScheduleName="pf-8"),
+        ads_event("FILLED_AVAIL", "q3", "2026-11-06T03:40:00.000Z", adsRequestUrl=stale),  # real time: its URL's
+    ]
+
+    found = pods.breaks(events, [], [])
+
+    assert {key: found[key].event_types for key in found} == {
+        (SID, "8"): ["MAKING_ADS_REQUEST", "VAST_RESPONSE", "AD_MARKER_FOUND", "FILLED_AVAIL"],
+        (SID, "7"): ["FILLED_AVAIL"],
+    }
+    assert pods.break_of({"prefetchScheduleName": "not-ours", "adsRequestUrl": stale}) == "7"
+
+
 def test_an_auction_holds_what_was_logged_from_just_before_its_request_until_the_next() -> None:
     events = [
         ads_event(

@@ -13,18 +13,26 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
-from _demand import PREBID_CONTAINER
-from harness import Player, TransientResponseError
+from _demand import PREBID_CONTAINER, prebid_log_group
+from _stack import Module, Stage
+from harness import Player, TransientResponseError, wait_for
 from playback import Segment, Splice, media_segments, splices
 
+from fast_channels.core.demand import simulator_function, warmup_project
 from fast_channels.core.demo_demand import DemoIndex
 from fast_channels.core.manifests import parse_multivariant
+from fast_channels.core.monetization import names
+from fast_channels.core.monetization.prefetch import event_id_of
+from fast_channels.core.monetization.release import PlaybackPlan
 from fast_channels.core.pds.book import Creative, house_creatives
 from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
+
+if TYPE_CHECKING:
+    from harness_demand import DemandEdge
 
 type IpAddress = IPv4Address | IPv6Address
 
@@ -52,6 +60,8 @@ LOGGED: Final = "@logged_ms"
 places the record in the auction of one of MediaTailor's requests (:meth:`Break.auctions`)."""
 CLOCK_SLACK: Final = timedelta(seconds=1)
 """How much earlier than MediaTailor's ``MAKING_ADS_REQUEST`` an auction's records may be logged."""
+READY_TIMEOUT_S: Final = 1500
+"""Census lag (up to about 4.5 minutes), then Prebid Server's scale-out (about 3) and warm-up (about 3), with room."""
 
 
 # --- the viewer's address ------------------------------------------------------------------------------------------
@@ -100,11 +110,16 @@ class Viewer:
 
     @classmethod
     def join(cls, player: Player, url: str) -> Viewer:
-        """A new session on the playback URL ``url``."""
-        response = player.get(url)
+        """A new session on the playback URL ``url`` (a transient error is retried: not for a ticketed URL, whose
+        ticket binds the first session; see :meth:`of`)."""
+        return cls.of(player, player.get(url))
+
+    @classmethod
+    def of(cls, player: Player, response: httpx.Response) -> Viewer:
+        """The session whose multivariant playlist ``response`` is."""
         variants = parse_multivariant(response.text)
         if not variants:
-            raise AssertionError(f"{url} lists no variants: {response.text[:300]}")
+            raise AssertionError(f"{response.url} lists no variants: {response.text[:300]}")
         variant = urljoin(str(response.url), min(variants, key=lambda v: v.bandwidth).uri)
         if (sid := session_id(variant)) is None:
             raise AssertionError(f"no MediaTailor session id in {variant}")
@@ -480,27 +495,51 @@ class Break:
         return reconcile(pod, standalones, stitched, skipped)
 
 
+def break_of(event: Mapping[str, Any]) -> str | None:
+    """The ``evid`` an ADS event names: its prefetch schedule's (``pf-<evid>``), else its ad request URL's."""
+    named = event_id_of(str(event.get("prefetchScheduleName") or ""))
+    return str(named) if named is not None else evid(event.get("adsRequestUrl"))
+
+
 def breaks(
     ads_events: Iterable[Mapping[str, Any]],
     records: Iterable[Mapping[str, Any]],
     pod_lines: Iterable[Mapping[str, Any]],
 ) -> dict[tuple[str, str], Break]:
-    """Every break by (session id, ``evid``): its ADS events (those that carry the ad request URL, and the others of
-    the same ``requestId``: ``VAST_RESPONSE`` carries none), the PDS's policy and select records, and the module's
-    ``fast-ctv-pod`` lines."""
+    """Every break by (session id, ``evid``): its ADS events, the PDS's policy and select records, and the module's
+    ``fast-ctv-pod`` lines.
+
+    An ADS event belongs to the break its prefetch schedule names (``prefetchScheduleName``, ``pf-<evid>``), else to
+    the break of its ad request URL, else to that of the latest event of the same ``requestId`` before it (or of the
+    first one after it). Both orders are MediaTailor's as seen live (2026-11-06):
+
+    - one ``requestId`` covers everything a single playlist request set off, which can be two breaks: a break's
+      ``FILLED_AVAIL`` and, milliseconds later, the next break's prefetch retrieval;
+    - a break filled from its prefetch retrieval can log ``FILLED_AVAIL`` with the previous break's ad request URL;
+      its schedule name is the break's own.
+    """
     found: dict[tuple[str, str], Break] = {}
 
     def at(sid: str, event_id: str) -> Break:
         return found.setdefault((sid, event_id), Break(sid, event_id))
 
     events = [event for event in ads_events if event.get("eventType") != "BEACON_FIRED"]
-    requests: dict[str, tuple[str, str]] = {}
+    by_request: dict[str, list[Mapping[str, Any]]] = {}
     for event in events:
-        if (sid := event.get("sessionId")) and (event_id := evid(event.get("adsRequestUrl"))) is not None:
-            requests.setdefault(str(event.get("requestId") or id(event)), (str(sid), event_id))
-    for event in events:
-        if (key := requests.get(str(event.get("requestId") or id(event)))) is not None:
-            at(*key).events.append(dict(event))
+        by_request.setdefault(str(event.get("requestId") or id(event)), []).append(event)
+    for request in by_request.values():
+        group = sorted(request, key=timestamp)
+        keys = [
+            (str(sid), event_id)
+            if (sid := event.get("sessionId")) and (event_id := break_of(event)) is not None
+            else None
+            for event in group
+        ]
+        latest = next((key for key in keys if key is not None), None)
+        for event, key in zip(group, keys, strict=True):
+            latest = key or latest
+            if latest is not None:
+                at(*latest).events.append(dict(event))
     for record in records:
         if record.get("record") == POLICY_RECORD:
             at(str(record["sid"]), str(record["evid"])).policy.append(dict(record))
@@ -560,3 +599,86 @@ def log_gaps(found: Iterable[Break], played: Collection[tuple[str, str]]) -> set
 def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:
     """The share of ``sessions`` with at least one known ADS log gap."""
     return len({sid for sid, _ in gaps} & set(sessions)) / len(sessions) if sessions else 0.0
+
+
+# --- the run's log groups and Prebid Server's readiness (the demand smokes') ---------------------------------------
+
+
+@dataclass(frozen=True)
+class Sources:
+    """The log groups of one run."""
+
+    ads: str
+    policy: str
+    select: str
+    delivery: str
+    pbs: str
+    simulator: str
+
+    @classmethod
+    def of(cls, stage: Stage, edge: DemandEdge) -> Sources:
+        functions = stage.session.client("lambda", region_name=stage.region)
+
+        def group(output: str) -> str:
+            configuration = functions.get_function_configuration(FunctionName=stage.output(Module.PDS, output))
+            return str(configuration["LoggingConfig"]["LogGroup"])
+
+        decisions = stage.output(Module.PDS, "DecisionLogGroup")  # the sidecar's (ADR-0036)
+
+        ecs = stage.session.client("ecs", region_name=stage.region)
+        [service] = ecs.describe_services(cluster=edge.cluster, services=[edge.service])["services"]
+        definition = ecs.describe_task_definition(taskDefinition=service["taskDefinition"])["taskDefinition"]
+        pbs = prebid_log_group(definition)
+        assert pbs, f"no Prebid Server container log group in {service['taskDefinition']}"
+        return cls(
+            ads=stage.output(Module.RELEASE, "SiblingLogGroup"),
+            policy=decisions,
+            select=decisions,
+            delivery=group("DeliveryFunction"),
+            pbs=pbs,
+            simulator=f"/aws/lambda/{simulator_function(stage.prefix)}",
+        )
+
+
+def wait_until_ready(stage: Stage, edge: DemandEdge) -> set[str]:
+    """Until Prebid Server runs and every running task's warm-up succeeded; the running tasks' images. The PDS is a
+    sidecar of those tasks, healthy before Prebid Server starts (ADR-0036): nothing of its own to wait for."""
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+    last: dict[str, Any] = {}
+
+    def ready() -> set[str] | None:
+        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        last.update(tasks=len(tasks), warmups=sorted(warmed.values()))
+        if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
+            raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
+        warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
+        return set(tasks.values()) if warm else None
+
+    started = time.monotonic()
+    images = wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
+    print(f"ready {time.monotonic() - started:.0f} s after the ingest: {last}")
+    return images
+
+
+def objects(logs: Logs, group: str, pattern: str) -> list[dict[str, Any]]:
+    """The JSON objects of the matching events of ``group``, with when each was logged (:data:`LOGGED`)."""
+    return [
+        found | {LOGGED: event["timestamp"]}
+        for event in logs.events(group, pattern)
+        if (found := json_object(str(event["message"])))
+    ]
+
+
+def milliseconds(moment: datetime) -> int:
+    return int(moment.timestamp() * 1000)
+
+
+def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
+    """The channel's playback plan, read through the CDN as a player reads it."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
+    with ipv4_client(timeout=10.0) as http:
+        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
+    response.raise_for_status()
+    return PlaybackPlan.model_validate_json(response.text)

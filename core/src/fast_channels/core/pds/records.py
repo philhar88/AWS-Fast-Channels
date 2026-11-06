@@ -2,16 +2,23 @@
 joined on ``decision_id``.
 
 The PDS logs them (Powertools JSON); a subscription delivers them to the lake. The select record keeps every bid at or
-above the floor with what became of it, which is what forgone-revenue accounting and off-policy evaluation need.
-Records never hold the ticket, the viewer's address or headers, or the catalog context: only their outcomes (the
-mode and reason, the viewer-IP rule's outcome, the context's length). A policy record names a bound viewer by
-``vid`` (an HMAC of their sign-in, never the sign-in itself) and the ticket's ``cid``, in FULL and PSEUDONYMOUS only.
+above the floor with what became of it, which is what forgone-revenue accounting and off-policy evaluation need, and
+the ad load the break got: the viewer's tier and the policy applied (ADR-0037). Records never hold the ticket, the
+viewer's address or headers, the catalog context or the viewer's persona: only their outcomes (the mode and reason,
+the viewer-IP rule's outcome, the context's length, the tier). A policy record names a bound viewer by ``vid`` (an
+HMAC of their sign-in, never the sign-in itself) and the ticket's ``cid``, in FULL and PSEUDONYMOUS only.
 """
 
 from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from fast_channels.core.adload import (
+    CONTROL,
+    CONTROL_TIER,
+    AdLoad,
+    AdLoadReason,
+)
 from fast_channels.core.pds.delivery import Credit, Source
 from fast_channels.core.pds.models import (
     SCHEMA_VERSION,
@@ -92,6 +99,18 @@ class BidRecord(BaseModel):
     outcome: Outcome
 
 
+class AdLoadRecord(BaseModel):
+    """The ad load one break got (``core.adload``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy: str = Field(description="The tier whose policy applied; standard for the control plan.")
+    reason: AdLoadReason
+    max_ads: int | None = Field(description="The most ads the policy allows; null: every slot.")
+    bar_cpm: Money = Field(description="The accepted CPM a sold ad had to beat; 0: the market floor alone.")
+    slots: int = Field(ge=0, description="The slots the pod offered.")
+
+
 class SelectRecord(_Record):
     """The ``/select`` decision for one break."""
 
@@ -107,6 +126,12 @@ class SelectRecord(_Record):
     bids: list[BidRecord] = Field(description="Every bid at or above the floor.")
     below_floor: int = Field(ge=0, description="Bids under the floor, counted only.")
     reserved: list[str] = Field(default_factory=list, description="Crids of the own-book line ads reserved.")
+    tier: str | None = Field(default=None, description="The viewer's ad-load tier; null without a profile.")
+    ad_load: AdLoadRecord = Field(description="The ad load the break got.")
+
+
+CONTROL_LOAD: Final = AdLoad(CONTROL_TIER, AdLoadReason.CONTROL, CONTROL)
+"""The ad load of a break whose decision names none."""
 
 
 def policy_record(request: PolicyRequest, decision: PolicyDecision, *, latency_ms: float) -> PolicyRecord:
@@ -137,9 +162,17 @@ def policy_record(request: PolicyRequest, decision: PolicyDecision, *, latency_m
 
 
 def select_record(
-    request: SelectRequest, decision: PodDecision, *, latency_ms: float, reserved: Iterable[str] = ()
+    request: SelectRequest,
+    decision: PodDecision,
+    *,
+    latency_ms: float,
+    reserved: Iterable[str] = (),
+    tier: str | None = None,
+    ad_load: AdLoad = CONTROL_LOAD,
 ) -> SelectRecord:
-    """The record of one ``/select`` answer."""
+    """The record of one ``/select`` answer, whose viewer has ``tier`` and whose pod followed ``ad_load`` (the
+    minimum-load guardrail is read from ``decision``)."""
+    applied = ad_load.guarded() if decision.min_load else ad_load
     bids = [
         BidRecord(
             ref=bid.ref,
@@ -177,6 +210,14 @@ def select_record(
         bids=[bid for bid in bids if bid.ref not in decision.below_floor],
         below_floor=len(decision.below_floor),
         reserved=sorted(reserved),
+        tier=tier,
+        ad_load=AdLoadRecord(
+            policy=applied.policy,
+            reason=applied.reason,
+            max_ads=applied.rules.max_ads,
+            bar_cpm=applied.rules.bar_cpm,
+            slots=len(request.slots),
+        ),
     )
 
 

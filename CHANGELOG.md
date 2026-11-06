@@ -76,6 +76,25 @@ All notable changes to this project are documented here. The format follows
   leave it out and report it, and more than one session in five with a gap still fails. The delivery check counts
   from both logs and waits for the CDN-log runs when a record is missing; `--cut-ads-delivery` cuts the delivery
   subscription over the second break to prove the CDN's log counts what the ADS log did not.
+- **Ad load by viewer tier** (`pds`, [ADR-0037](docs/adr/0037-ad-load-by-viewer-tier.md),
+  [docs/pds.md](docs/pds.md#ad-load-by-tier)).
+  - A signed-in viewer's profile (`VIEWER#<vid>` in the PDS table) names an ad-load tier.
+  - Each tier's policy, `modules.pds.ad_load.<tier>`, caps the ads in a break (`max_ads`) and sets the accepted CPM a
+    sold ad must beat (`bar_cpm`, at most $20.50, so λ stays within λ_cap).
+  - `/select` applies it to FULL and PSEUDONYMOUS breaks with a bound viewer. Every other break, and the tiers
+    `standard` and `holdout`, keep the control plan.
+  - The default `light` tier allows one ad per break, above $20: on the demo's prices, one $35 ad and the slate, where
+    the holdout gets the full pod. A tier never empties a pod. The tier and the bar never travel on the wire, so bid
+    requests are the same for every tier.
+  - The `pds.select` record gains `tier` and `ad_load`, a bid beyond the cap has the outcome `ad_load`, and the lake
+    view `v_ad_load_kpis` shows ads per break, the winning and turned-away prices, and revenue by tier.
+  - `contracts/personas.json` is the demo's eight personas with their sign-ins, genres and tiers, for the seed script
+    and the viewer app.
+
+### Changed
+
+- **A tier-0 line must beat λ where a tier prices ad load** (`pds`). Where λ is 0, which is every break without a
+  priced tier, tier-0 lines still run at any price.
 
 ### Fixed
 

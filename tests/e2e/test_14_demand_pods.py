@@ -41,7 +41,6 @@ from ipaddress import ip_address
 from typing import Any, Final
 
 import pytest
-from _demand import prebid_log_group
 from _stack import Module, Plane, Stage
 from botocore.exceptions import ClientError
 from harness import BREAK_POLICY, CONTENT_ID, LEAD, Channel, Player, Tools, wait_for
@@ -56,6 +55,7 @@ from harness_pods import (
     Creatives,
     IpAddress,
     Logs,
+    Sources,
     Viewer,
     any_of,
     avail_ads,
@@ -64,14 +64,15 @@ from harness_pods import (
     event_line,
     gap_share,
     ipv4_client,
-    json_object,
     log_gaps,
     masked,
+    milliseconds,
+    objects,
+    playback_plan,
     pod_of,
-    prebid_tasks,
     record_pattern,
     timestamp,
-    warmups,
+    wait_until_ready,
     watch,
 )
 from playback import Window, break_windows
@@ -79,12 +80,11 @@ from playback import Window, break_windows
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl import names as crawl
 from fast_channels.core.crawl.catalog_context import context_key
-from fast_channels.core.demand import Parameter, simulator_function, warmup_project
+from fast_channels.core.demand import Parameter
 from fast_channels.core.demo_demand import demo_index_key
 from fast_channels.core.events import CatalogItemChanged, put_events_entry
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.prefetch import PrefetchPolicy, schedule_name
-from fast_channels.core.monetization.release import PlaybackPlan
 from fast_channels.core.pbs_config import tracker_host
 from fast_channels.core.pds.delivery import CDN_LOG_EVERY, CDN_LOG_LAG, Beacon, Credit, Source, beacon
 from fast_channels.core.pds.records import DELIVERY_RECORD, POLICY_RECORD, SELECT_RECORD
@@ -107,8 +107,6 @@ FIRST_BREAK: Final = {**BREAK_POLICY, "slate_gops": 15}
 LONG_BREAKS: Final = {**BREAK_POLICY, "slate_gops": 60}
 """One 120.12 s break per program."""
 BREAK_SECONDS: Final = [30.03, 120.12, 120.12]
-READY_TIMEOUT_S: Final = 1500
-"""Census lag (up to about 4.5 minutes), then Prebid Server's scale-out (about 3) and warm-up (about 3), with room."""
 CONTEXT_TIMEOUT_S: Final = 120
 LOGS_TIMEOUT_S: Final = 420
 """The delivery records follow the ADS log through a subscription; the module's lines follow Prebid Server's log."""
@@ -132,42 +130,6 @@ CDN_COUNT_WAIT: Final = CDN_LOG_LAG + 2 * CDN_LOG_EVERY + timedelta(minutes=5)
 read :data:`CDN_LOG_LAG` after it arrived, by a run every :data:`CDN_LOG_EVERY`."""
 CUT_MARGIN: Final = timedelta(seconds=60)
 """Firings this close to either end of the cut may be counted from either log."""
-
-
-@dataclass(frozen=True)
-class Sources:
-    """The log groups of one run."""
-
-    ads: str
-    policy: str
-    select: str
-    delivery: str
-    pbs: str
-    simulator: str
-
-    @classmethod
-    def of(cls, stage: Stage, edge: DemandEdge) -> Sources:
-        functions = stage.session.client("lambda", region_name=stage.region)
-
-        def group(output: str) -> str:
-            configuration = functions.get_function_configuration(FunctionName=stage.output(Module.PDS, output))
-            return str(configuration["LoggingConfig"]["LogGroup"])
-
-        decisions = stage.output(Module.PDS, "DecisionLogGroup")  # the sidecar's (ADR-0036)
-
-        ecs = stage.session.client("ecs", region_name=stage.region)
-        [service] = ecs.describe_services(cluster=edge.cluster, services=[edge.service])["services"]
-        definition = ecs.describe_task_definition(taskDefinition=service["taskDefinition"])["taskDefinition"]
-        pbs = prebid_log_group(definition)
-        assert pbs, f"no Prebid Server container log group in {service['taskDefinition']}"
-        return cls(
-            ads=stage.output(Module.RELEASE, "SiblingLogGroup"),
-            policy=decisions,
-            select=decisions,
-            delivery=group("DeliveryFunction"),
-            pbs=pbs,
-            simulator=f"/aws/lambda/{simulator_function(stage.prefix)}",
-        )
 
 
 @dataclass
@@ -413,27 +375,6 @@ class DeliveryCut:
         return (self.at, self.back) if self.at is not None and self.back is not None else None
 
 
-def wait_until_ready(stage: Stage, edge: DemandEdge) -> set[str]:
-    """Until Prebid Server runs and every running task's warm-up succeeded; the running tasks' images. The PDS is a
-    sidecar of those tasks, healthy before Prebid Server starts (ADR-0036): nothing of its own to wait for."""
-    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
-    last: dict[str, Any] = {}
-
-    def ready() -> set[str] | None:
-        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
-        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
-        last.update(tasks=len(tasks), warmups=sorted(warmed.values()))
-        if failed := [status for status in warmed.values() if status not in {"SUCCEEDED", "IN_PROGRESS"}]:
-            raise AssertionError(f"a Prebid Server warm-up did not succeed: {failed}")
-        warm = bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}
-        return set(tasks.values()) if warm else None
-
-    started = time.monotonic()
-    images = wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server", state=lambda: last)
-    print(f"ready {time.monotonic() - started:.0f} s after the ingest: {last}")
-    return images
-
-
 def prefetch_schedules(stage: Stage, configuration: str) -> dict[str, dict[str, Any]]:
     """The configuration's prefetch schedules: their retrieval and consumption windows and matching value."""
     mediatailor = stage.session.client("mediatailor", region_name=stage.region)
@@ -512,16 +453,6 @@ def schedule(tools: Tools, channel: str, asset_id: str) -> list[dict[str, Any]]:
     return programs
 
 
-def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
-    """The channel's playback plan, read through the CDN as a player reads it."""
-    ssm = stage.session.client("ssm", region_name=stage.region)
-    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
-    with ipv4_client(timeout=10.0) as http:
-        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
-    response.raise_for_status()
-    return PlaybackPlan.model_validate_json(response.text)
-
-
 def read_logs(smoke: Smoke, sources: Sources) -> None:
     """Fill ``smoke`` from the run's logs, read again until it is complete or :data:`LOGS_TIMEOUT_S` passed."""
     client = smoke.stage.session.client("logs", region_name=smoke.stage.region)
@@ -560,19 +491,6 @@ def read_logs(smoke: Smoke, sources: Sources) -> None:
         ]
         smoke.policies = objects(auctions, sources.policy, f'{{ $.record = "{POLICY_RECORD}" }}')
     smoke.whole_address_events = len(since.events(sources.simulator, f'"{smoke.egress}"'))
-
-
-def objects(logs: Logs, group: str, pattern: str) -> list[dict[str, Any]]:
-    """The JSON objects of the matching events of ``group``, with when each was logged (:data:`LOGGED`)."""
-    return [
-        found | {LOGGED: event["timestamp"]}
-        for event in logs.events(group, pattern)
-        if (found := json_object(str(event["message"])))
-    ]
-
-
-def milliseconds(moment: datetime) -> int:
-    return int(moment.timestamp() * 1000)
 
 
 # --- the checks ----------------------------------------------------------------------------------------------------

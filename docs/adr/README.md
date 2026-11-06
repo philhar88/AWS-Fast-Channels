@@ -40,3 +40,4 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0034](0034-every-function-request-cached-by-scope.md) | Every Function request declares how its answers may be reused, and is cached by that scope | Accepted |
 | [0035](0035-prebid-results-for-an-ad-servers-vast.md) | Prebid results for an ad server's VAST: one cached pod per break | Accepted (an experimental mode in v4.0.0) |
 | [0036](0036-pds-sidecar-in-the-prebid-server-task.md) | The Pod Decision Service as a sidecar in the Prebid Server task | Accepted |
+| [0037](0037-ad-load-by-viewer-tier.md) | Ad load by viewer tier: a cap and a bar per tier, applied in `/select` | Accepted |

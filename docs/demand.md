@@ -506,14 +506,15 @@ are the only residue. The Pod Decision Service's table and config bucket are the
 and exits non-zero if it finds any; the tagging index's stale entries for deleted resources are not counted.
 
 **The demand leg** (BUILD-PLAN §12.3 `e2e-demand`; the `End-to-end` workflow with `leg: demand`, or the same
-steps locally) deploys `STAGE=fastci MODULES=ops,demand,pds,release,crawl` (the `fastci` stage with only those
-modules on), runs `make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`, `test_12_release.py`,
-`test_13_crawl.py` and `test_14_demand_pods.py`. It then destroys the demand module, the stage and the ledger archive,
+steps locally) deploys `STAGE=fastci MODULES=ops,demand,pds,release,crawl,identity` (the `fastci` stage with only
+those modules on), runs `make deploy-demand`, then `tests/e2e/test_11_demand_edge.py`, `test_12_release.py`,
+`test_13_crawl.py`, `test_14_demand_pods.py` and `test_18_ad_load.py`. It then destroys the demand module, the stage and the ledger archive,
 and fails on any residue but KMS keys pending deletion. A run takes about three hours and costs a few US dollars. The
 edge tests must start within the census gate's 15 minutes, before the gate scales Prebid Server to zero with no
 channel running. The pods test then starts the channel, waits for the gate to scale Prebid Server out again (and for
 the warm-ups; the PDS is a sidecar of those tasks), and plays four viewers, two late joiners and a mid-break joiner through MediaTailor for three breaks: about
-30 minutes ([tests/e2e/README.md](../tests/e2e/README.md)).
+30 minutes ([tests/e2e/README.md](../tests/e2e/README.md)). The ad-load test seeds two personas of different tiers
+(`light` and `holdout`), mints each a playback ticket and plays both through two 120.12 s breaks: about 25 minutes.
 
 **The ad-server leg** (`tests/e2e/test_15_ad_server.py`, experimental: no default leg runs it) needs the stage
 `fastciads`: `fastci` with
