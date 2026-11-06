@@ -62,6 +62,8 @@ def test_policy_record_holds_outcomes_never_viewer_values() -> None:
         "dur_ms": 60060,
         "mode": "CONTEXTUAL",
         "reason": "unknown",
+        "vid": None,
+        "cid": None,
         "bidders": ["amt"],
         "devicetype": 3,
         "ip_rule": "ok",

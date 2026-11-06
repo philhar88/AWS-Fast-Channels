@@ -4,13 +4,13 @@ deployed stage.
 Runs only when the stage has the Identity stack (``STAGE=fastm`` or ``fastci``). The test creates one viewer of its
 own in the pool (``e2e-<run id>@personas.example.com``), signs it in with a password as the viewer app does, mints
 tickets for the stage's first monetized channel, and redeems them as MediaTailor's PRE_SESSION Function would. It
-deletes the viewer and its ticket rows at the end. It plays nothing: the session path (the edge rebuild, the
-PRE_SESSION redeem and the Pod Decision Service's binding) is the session test's.
+runs the CDN's edge rebuild on crafted events (``TestFunction``) and asks the CDN for an explicit session init. It
+deletes the viewer and its ticket rows at the end. It plays nothing: sessions on a running channel, with the
+PRE_SESSION redeem and the Pod Decision Service's binding, are ``test_19_identity_session.py``'s.
 """
 
 import json
 import re
-import secrets
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -22,7 +22,8 @@ import pytest
 import seed_personas
 from _stack import MODULE_OUTPUT_KEYS, Module, Stage
 from botocore.exceptions import ClientError
-from harness_identity import claims, mint, parameter, sign_in, ticket_of, tokens
+from harness_identity import SignedIn, claims, mint, parameter, sign_in, ticket_of
+from harness_identity import viewer as signed_in_viewer
 
 from fast_channels.core.identity.names import PERSONA_CLAIM, PLAYBACK_SCOPE, Parameter
 from fast_channels.core.identity.ticket import TICKET
@@ -74,14 +75,6 @@ class Identity:
         return dict(item)
 
 
-@dataclass(frozen=True)
-class Viewer:
-    email: str
-    sub: str
-    access_token: str
-    id_token: str
-
-
 @pytest.fixture(scope="module")
 def identity(stage: Stage) -> Iterator[Identity]:
     if stage.status(Module.IDENTITY) is None:
@@ -94,30 +87,11 @@ def identity(stage: Stage) -> Iterator[Identity]:
 
 
 @pytest.fixture(scope="module")
-def viewer(identity: Identity, run_id: str) -> Iterator[Viewer]:
+def viewer(identity: Identity, run_id: str) -> Iterator[SignedIn]:
     """A viewer of the pool, signed in with USER_PASSWORD_AUTH on the viewer app client."""
-    cognito = identity.stage.session.client("cognito-idp")
-    pool, client = identity.outputs["UserPoolId"], identity.outputs["UserPoolClientId"]
-    email, password = f"e2e-{run_id.lower()}@personas.example.com", f"{secrets.token_urlsafe(18)}aA1!"
-    cognito.admin_create_user(
-        UserPoolId=pool,
-        Username=email,
-        UserAttributes=[
-            {"Name": "email", "Value": email},
-            {"Name": "email_verified", "Value": "true"},
-            {"Name": "custom:persona", "Value": PERSONA},
-        ],
-        MessageAction="SUPPRESS",
-    )
-    try:
-        cognito.admin_set_user_password(UserPoolId=pool, Username=email, Password=password, Permanent=True)
-        user = cognito.admin_get_user(UserPoolId=pool, Username=email)
-        sub = next(a["Value"] for a in user["UserAttributes"] if a["Name"] == "sub")
-        assert identity.parameter(Parameter.CLIENT_ID) == client
-        signed_in = tokens(identity.stage, email, password)
-        yield Viewer(email, sub, signed_in["AccessToken"], signed_in["IdToken"])
-    finally:
-        cognito.admin_delete_user(UserPoolId=pool, Username=email)
+    assert identity.parameter(Parameter.CLIENT_ID) == identity.outputs["UserPoolClientId"]
+    with signed_in_viewer(identity.stage, f"e2e-{run_id.lower()}@personas.example.com", persona=PERSONA) as found:
+        yield found
 
 
 @pytest.fixture(scope="module")
@@ -130,14 +104,16 @@ def plan(identity: Identity) -> dict[str, Any]:
     return found
 
 
-def test_the_access_token_carries_the_playback_scope_and_the_persona(viewer: Viewer) -> None:
+def test_the_access_token_carries_the_playback_scope_and_the_persona(viewer: SignedIn) -> None:
     access, id_token = claims(viewer.access_token), claims(viewer.id_token)
     assert access["token_use"] == "access" and PLAYBACK_SCOPE in access["scope"].split(), access.get("scope")
     assert access[PERSONA_CLAIM] == PERSONA
     assert id_token["token_use"] == "id" and "scope" not in id_token and id_token["custom:persona"] == PERSONA
 
 
-def test_no_token_or_an_id_token_is_refused_with_cors(identity: Identity, viewer: Viewer, plan: dict[str, Any]) -> None:
+def test_no_token_or_an_id_token_is_refused_with_cors(
+    identity: Identity, viewer: SignedIn, plan: dict[str, Any]
+) -> None:
     for token in (None, viewer.id_token, "not-a-jwt"):
         response = identity.mint(token, {"channel": plan["channel"]})
         assert response.status_code in {401, 403}, (token and token[:10], response.status_code, response.text)
@@ -154,7 +130,9 @@ def test_no_token_or_an_id_token_is_refused_with_cors(identity: Identity, viewer
     assert preflight.status_code in {200, 204} and preflight.headers["access-control-allow-origin"] == "*"
 
 
-def test_a_signed_in_viewer_gets_a_single_use_ticket(identity: Identity, viewer: Viewer, plan: dict[str, Any]) -> None:
+def test_a_signed_in_viewer_gets_a_single_use_ticket(
+    identity: Identity, viewer: SignedIn, plan: dict[str, Any]
+) -> None:
     started = time.time() * 1000
     response = identity.mint(viewer.access_token, {"channel": plan["channel"]})
     assert response.status_code == 200, response.text
@@ -181,7 +159,7 @@ def test_a_signed_in_viewer_gets_a_single_use_ticket(identity: Identity, viewer:
     assert "redeemedBy" not in row
 
 
-def test_the_redeem_binds_a_ticket_to_one_session(identity: Identity, viewer: Viewer, plan: dict[str, Any]) -> None:
+def test_the_redeem_binds_a_ticket_to_one_session(identity: Identity, viewer: SignedIn, plan: dict[str, Any]) -> None:
     response = identity.mint(viewer.access_token, {"channel": plan["channel"]})
     ticket, pc = ticket_of(response.json()["url"]), plan["configuration"]
     first = identity.redeem(ticket, "e2e-session-1", pc)
@@ -205,7 +183,7 @@ def test_the_redeem_binds_a_ticket_to_one_session(identity: Identity, viewer: Vi
         assert refused.status_code == 400, (body, refused.status_code)
 
 
-def test_an_expired_or_unknown_ticket_is_not_bound(identity: Identity, viewer: Viewer, plan: dict[str, Any]) -> None:
+def test_an_expired_or_unknown_ticket_is_not_bound(identity: Identity, viewer: SignedIn, plan: dict[str, Any]) -> None:
     response = identity.mint(viewer.access_token, {"channel": plan["channel"]})
     ticket, pc = ticket_of(response.json()["url"]), plan["configuration"]
     identity.table.update_item(
@@ -218,7 +196,7 @@ def test_an_expired_or_unknown_ticket_is_not_bound(identity: Identity, viewer: V
     assert identity.redeem("u" * 22, "e2e-session-3", pc).status_code == 409, "no row"
 
 
-def test_an_unknown_channel_or_a_bad_body_is_a_400(identity: Identity, viewer: Viewer) -> None:
+def test_an_unknown_channel_or_a_bad_body_is_a_400(identity: Identity, viewer: SignedIn) -> None:
     for body, error in (
         ({"channel": f"{identity.stage.prefix}-nope"}, "unknown_channel"),
         ({"chan": 1}, "invalid_request"),
@@ -227,7 +205,7 @@ def test_an_unknown_channel_or_a_bad_body_is_a_400(identity: Identity, viewer: V
         assert (response.status_code, response.json()["error"]) == (400, error), response.text
 
 
-def test_the_access_log_holds_no_address_or_ticket(identity: Identity, viewer: Viewer, plan: dict[str, Any]) -> None:
+def test_the_access_log_holds_no_address_or_ticket(identity: Identity, viewer: SignedIn, plan: dict[str, Any]) -> None:
     """Only with the account's API Gateway CloudWatch role (docs/identity.md#logs): without it nothing is logged."""
     session = identity.stage.session
     role = session.client("apigateway").get_account().get("cloudwatchRoleArn")
@@ -263,3 +241,73 @@ def test_a_seeded_persona_signs_in_and_mints_through_the_harness(identity: Ident
         assert identity.row(ticket)["vid"] == seeded["vid"], "the script prints the vid the mint writes"
     finally:
         assert seed_personas.delete(identity.stage, [entry]) == [SEEDED]
+
+
+TICKET_1, TICKET_2 = "A" * 11 + "b" * 11, "C" * 11 + "d" * 11
+EDGE_CASES: Final[list[tuple[str, str, dict[str, str | list[str]], dict[str, str] | int]]] = [
+    # (label, path, query, expected): P0-05's crafted events; expected is the query left, or the refusal's status
+    ("a ticket and junk", "init", {"ads.t": TICKET_1, "ads.x": "junk", "aws.logMode": "DEBUG"}, {"ads.t": TICKET_1}),
+    ("two tickets", "init", {"ads.t": [TICKET_1, TICKET_2]}, {}),
+    ("21 characters", "init", {"ads.t": TICKET_1[:21]}, {}),
+    ("overrides only", "init", {"aws.availSuppressionMode": "OFF"}, {}),
+    ("an extra segment", "extra", {"ads.t": TICKET_1}, 400),
+    ("explicit session init", "session", {"ads.t": TICKET_1}, 403),
+    ("a child playlist", "child", {"aws.sessionId": "s"}, {"aws.sessionId": "s"}),
+]
+
+
+def _edge_paths(plan: dict[str, Any]) -> dict[str, str]:
+    path = urlsplit(plan["playback"]["hls"]).path  # /v1/master/<hash>/<configuration>/<name>.m3u8
+    _, _, _, account, configuration, name = path.split("/")
+    return {
+        "init": path,
+        "extra": f"/v1/master/{account}/{configuration}/extra/{name}",
+        "session": f"/v1/session/{account}/{configuration}/{name}",
+        "child": f"/v1/manifest/{account}/{configuration}/00000000-0000-0000-0000-000000000000/0.m3u8",
+    }
+
+
+def _event_query(query: dict[str, str | list[str]]) -> dict[str, Any]:
+    built: dict[str, Any] = {}
+    for name, value in query.items():
+        values = value if isinstance(value, list) else [value]
+        multi = {"multiValue": [{"value": v} for v in values]} if len(values) > 1 else {}
+        built[name] = {"value": values[0], **multi}
+    return built
+
+
+def test_the_deployed_edge_rebuild_answers_the_crafted_events(identity: Identity, plan: dict[str, Any]) -> None:
+    """CloudFront's ``TestFunction`` on the published function (its source's unit tests are
+    ``infra/tests/test_edge_rebuild.py``)."""
+    cloudfront = identity.stage.session.client("cloudfront")
+    name = f"{identity.stage.prefix}-identity-edge"
+    etag = cloudfront.describe_function(Name=name, Stage="LIVE")["ETag"]
+    paths = _edge_paths(plan)
+    for label, path, query, expected in EDGE_CASES:
+        event = {
+            "version": "1.0",
+            "context": {"eventType": "viewer-request"},
+            "viewer": {"ip": "198.51.100.10"},
+            "request": {"method": "GET", "uri": paths[path], "querystring": _event_query(query), "headers": {}},
+        }
+        result = cloudfront.test_function(
+            Name=name, IfMatch=etag, Stage="LIVE", EventObject=json.dumps(event).encode()
+        )["TestResult"]
+        assert not result.get("FunctionErrorMessage"), (label, result)
+        output = json.loads(result["FunctionOutput"])
+        if isinstance(expected, int):
+            assert output["response"]["statusCode"] == expected, (label, output)
+        else:
+            left = {k: v["value"] for k, v in output["request"]["querystring"].items()}
+            assert left == expected, (label, output)
+
+
+def test_the_cdn_refuses_explicit_session_initialization(plan: dict[str, Any]) -> None:
+    """``POST /v1/session`` is refused by the behaviour's methods, ``GET`` by the function, both 403; a non-canonical
+    init path is a 400. None of them reaches MediaTailor."""
+    parts = urlsplit(plan["playback"]["hls"])
+    origin, paths = f"{parts.scheme}://{parts.netloc}", _edge_paths(plan)
+    with httpx.Client(timeout=TIMEOUT) as http:
+        assert http.post(f"{origin}{paths['session']}", json={}).status_code == 403
+        assert http.get(f"{origin}{paths['session']}").status_code == 403
+        assert http.get(f"{origin}{paths['extra']}?ads.t={TICKET_1}").status_code == 400

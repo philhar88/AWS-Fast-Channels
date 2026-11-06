@@ -77,7 +77,11 @@ The PDS resolves a break's mode in this order (`fast_channels.core.pds.policy.re
 3. a bound viewer whose consent cannot be read gives SAFE (`consent_unavailable`);
 4. otherwise the consent decides: FULL, PSEUDONYMOUS, or CONTEXTUAL (`opted_out`, keeping only the GPP string).
 
-Until viewer identity exists, no session carries a ticket, so every session is CONTEXTUAL with reason `missing`.
+Without the `identity` module no session carries a ticket, so every session is CONTEXTUAL with reason `missing`.
+With it, the sidecar reads the ticket's row on every break and decides step 2 from it, binding a fresh ticket
+itself when the PRE_SESSION redeem never landed; a lookup that fails makes the break SAFE
+([identity.md](identity.md#the-pod-decision-service)). There is no consent store yet: a bound viewer's consent is
+the privacy mode the mint wrote on the row (`PSEUDONYMOUS`).
 Prebid Server's account Activity Controls do the per-field disclosure for each mode.
 
 ## The viewer-IP rule
@@ -227,8 +231,9 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
 `fast_channels.core.pds.records` defines one JSON record per call, and one per firing of our tracker, joined on
 `decision_id`:
 
-- **`pds.policy`**: mode and reason, the bidders added, the device type, the viewer-IP rule's outcome, the catalog
-  context's length, the patch contributors applied or skipped and their record fields, latency;
+- **`pds.policy`**: mode and reason, a bound viewer's `vid` and the ticket's `cid` (FULL and PSEUDONYMOUS only;
+  otherwise `null`), the bidders added, the device type, the viewer-IP rule's outcome, the catalog context's
+  length, the patch contributors applied or skipped and their record fields, latency;
 - **`pds.select`**: the break and its budget, every bid at or above the floor with its outcome (bids below it are
   counted), the pod, the standalones, the filled duration, latency;
 - **`pds.delivery`**: the break and the creative, the configuration that fired it, when, the tracker's HTTP status,

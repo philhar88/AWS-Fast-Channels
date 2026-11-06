@@ -1,8 +1,8 @@
 # 0018 — Viewer identity through an opaque single-use playback ticket, bound at session init
 
-**Status:** Proposed. It is accepted once the session leg passes end to end: a signed-in viewer's session carries
-their `vid` into the Pod Decision Service's decision record, and a replayed ticket is refused. The first change
-(`modules.identity`) ships the pool, the mint and the redeem; the second wires them into the playback path.
+**Status:** Accepted (2026-11-05). The session leg passed end to end on a throwaway stage: a signed-in viewer's
+session carried their `vid` into the Pod Decision Service's decision record, bound by the PRE_SESSION redeem; a
+replayed ticket, a ticket opened too late and a guest were CONTEXTUAL (`tests/e2e/test_19_identity_session.py`).
 
 ## Context
 
@@ -63,16 +63,22 @@ Identity reaches the decision as a row, never as a value in a URL or a session v
 
 - A viewer value reaches MediaTailor only as 22 random characters that are useless after their first session.
   Tokens stay between the app and the mint.
-- The ticket is in CloudFront's request, so the standard log must omit `cs-uri-query`, and the opt-in MediaTailor
-  events that carry it (`PRE_SESSION_INIT_FUNCTION_COMPLETED`, `RAW_ADS_REQUEST`) stay off.
+- The ticket is in CloudFront's request, so the standard log omits `cs-uri-query` (and the viewer's address), and
+  the opt-in MediaTailor events that carry it (`PRE_SESSION_INIT_FUNCTION_COMPLETED`, `RAW_ADS_REQUEST`) stay off:
+  the lab channel's siblings, which publish them, are never ticketed.
 - `POST /redeem` takes no credential, because the MediaTailor Function has none to send. Guessing a live ticket means
   guessing 128 random bits inside its 120 s window, under the API stage's throttling.
 - Every play costs one mint (a Lambda, one KMS `GenerateMac` and one DynamoDB write) and one redeem in the session's
   hook budget.
-- **Residual risk: a failed PRE_SESSION hook.** If the redeem's hook fails, MediaTailor may open the session without
-  ads at all rather than anonymous (FINDINGS FR-1). The session change detects it through the
-  `PreSessionInitHook.Errors` metric and the zero-ad-sessions detector of the `ops` module, and marks the workaround
-  `OPTIMIZATION(aws)`.
+- **A failed PRE_SESSION redeem costs nothing but the binding.** The redeem writes only a temporary, so a 409 or a
+  timeout leaves the session as it was, and the PDS binds a fresh ticket itself inside its redeem window.
+- **Residual risk: a direct caller.** MediaTailor's endpoints are public and honour player-set `aws.*` at init, and a
+  failed PRE_SESSION hook keeps them: a caller who skips the CDN and makes the hook fail gets an ad-free session
+  (W-2 FR-1). The edge rebuild closes the CDN path; the `PreSessionInitHook.Errors` alarms and the zero-ad-sessions
+  detector of the `ops` module detect the rest. Both are marked `OPTIMIZATION(aws): W-2 FR-1`
+  ([Workarounds to remove](../workarounds.md)).
+- A lookup on every break adds one consistent DynamoDB read to `/policy`'s budget; a failed read makes the break SAFE
+  rather than CONTEXTUAL, because the session may be a signed-in viewer's.
 - The viewer app must fall back to the plan's anonymous URL when the mint fails, and must ask for a new ticket for
   every play, retry and channel change.
 

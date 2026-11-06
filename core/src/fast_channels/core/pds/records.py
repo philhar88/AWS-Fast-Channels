@@ -4,7 +4,8 @@ joined on ``decision_id``.
 The PDS logs them (Powertools JSON); a subscription delivers them to the lake. The select record keeps every bid at or
 above the floor with what became of it, which is what forgone-revenue accounting and off-policy evaluation need.
 Records never hold the ticket, the viewer's address or headers, or the catalog context: only their outcomes (the
-mode and reason, the viewer-IP rule's outcome, the context's length).
+mode and reason, the viewer-IP rule's outcome, the context's length). A policy record names a bound viewer by
+``vid`` (an HMAC of their sign-in, never the sign-in itself) and the ticket's ``cid``, in FULL and PSEUDONYMOUS only.
 """
 
 from typing import TYPE_CHECKING, Final, Literal
@@ -57,6 +58,10 @@ class PolicyRecord(_Record):
     dur_ms: int
     mode: Mode
     reason: Reason
+    vid: str | None = Field(
+        default=None, description="The bound viewer's id (identity module), in FULL and PSEUDONYMOUS only."
+    )
+    cid: str | None = Field(default=None, description="The ticket's mint correlation id, with the viewer's id.")
     bidders: list[str] = Field(description="Bidders the patch added.")
     devicetype: DeviceType | None
     ip_rule: IpRule = Field(description="Outcome of the viewer-IP rule; the address itself is never recorded.")
@@ -119,6 +124,8 @@ def policy_record(request: PolicyRequest, decision: PolicyDecision, *, latency_m
         dur_ms=request.dur_ms,
         mode=response.mode,
         reason=response.reason,
+        vid=decision.viewer.vid,
+        cid=decision.viewer.cid,
         bidders=sorted(response.bidders),
         devicetype=response.device.devicetype,
         ip_rule=decision.ip_rule,

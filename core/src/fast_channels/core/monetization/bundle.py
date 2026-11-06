@@ -89,6 +89,8 @@ class SiblingContext(_Model):
     role: SiblingRole
     route: AdsRoute
     content_base_url: str
+    ticketed: bool = False
+    """The sibling forwards the playback ticket (``X-Fast-T``) and redeems it at PRE_SESSION (the identity module)."""
 
 
 @runtime_checkable
@@ -337,13 +339,17 @@ def build_bundle(
     probe_sibling: bool = True,
     contributions: Sequence[BundleContribution] = (),
     ad_server: AdServerRoute | None = None,
+    ticketed: bool = False,
 ) -> Bundle:
     """The bundle of ``channels``: siblings ``a``/``b`` (and the probe ``z``) per channel, each hook's root executor
     over ``contributions`` and then the session controls. The probe, which never forwards a ticket, publishes the
     PRE_SESSION hook events as lab siblings do, so the committed session controls can be read from its logs.
 
-    Phase 1 has no kids pairs and no ticket (M4); sessions are CONTEXTUAL and PRE_SESSION runs the controls alone.
-    With ``ad_server`` the pair siblings take the ad-server route (M8-09) and the probe stays on Prebid Server.
+    With ``ticketed`` (the identity module) the general siblings on the Prebid Server route forward the playback
+    ticket, except the lab channel's (which publish their hook events, and so the ticket) and a child-directed
+    channel's (KIDS has no viewer id); the identity contribution redeems it on exactly those (:attr:`SiblingContext.
+    ticketed`). Without it every session is CONTEXTUAL and PRE_SESSION runs the controls alone. There are no kids pairs
+    yet. With ``ad_server`` the pair siblings take the ad-server route (M8-09) and the probe stays on Prebid Server.
     Validate the result with :func:`fast_channels.core.monetization.validators.validate_bundle`.
     """
     functions = _Functions()
@@ -360,6 +366,11 @@ def build_bundle(
                 role=role,
                 route=route,
                 content_base_url=content_base_url,
+                ticketed=ticketed
+                and role is SiblingRole.GENERAL
+                and route is AdsRoute.PBS
+                and not channel.lab
+                and not channel.child_directed,
             )
             by_hook: dict[Hook, list[HookTree]] = {}
             for contribution in every:
@@ -375,6 +386,7 @@ def build_bundle(
                 function_mapping=mapping,
                 kids=channel.child_directed or role is SiblingRole.KIDS,
                 probe=role is SiblingRole.PROBE,
+                ticketed=context.ticketed,
                 lab=channel.lab or role is SiblingRole.PROBE,  # never ticketed: it may log the hook's output
                 route=route,
                 ad_server_url=ad_server.url.replace(SIBLING_PLACEHOLDER, name)

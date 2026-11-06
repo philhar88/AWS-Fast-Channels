@@ -838,6 +838,7 @@ class DemandStage:
             select_timeout_ms=self.config.modules.pds.select_timeout_ms,
             crawl=crawl_environment(self.config),
             catalog_context_bucket=values.get(pds_names.Parameter.CATALOG_CONTEXT_BUCKET.value),
+            identity=self.config.modules.identity.enabled,
         )
 
     def deploy_guidance(self, image: str, with_sidecar: Sidecar | None = None) -> None:

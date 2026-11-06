@@ -14,7 +14,7 @@ All notable changes to this project are documented here. The format follows
   it. 28 ids, from the MediaTailor service-linked-role grant (W-2 1.30) to the AppConfig strategies (W-2 4.7) and
   the guidance overlays (W-11). A test checks that the markers and the rows name the same ids.
 - **The `identity` module (off by default; needs `release`):** signed-in viewers, by single-use playback tickets
-  ([docs/identity.md](docs/identity.md), [ADR-0018](docs/adr/0018-opaque-playback-ticket.md), Proposed). The
+  ([docs/identity.md](docs/identity.md), [ADR-0018](docs/adr/0018-opaque-playback-ticket.md)). The
   `FastChannels-<prefix>-Identity` stack holds:
   - a Cognito viewer pool (Essentials, administrators create users), whose pre-token-generation trigger puts the
     scope `fast/playback` and the claim `fast:persona` in access tokens;
@@ -26,9 +26,7 @@ All notable changes to this project are documented here. The format follows
     redeems it on its own configuration. A replay, an expired or unknown ticket, or another configuration gets a 409.
 
   `scripts/seed_personas.py` creates the demo personas' viewers and keeps their passwords in Secrets Manager, and
-  `tests/e2e/harness_identity.py` signs them in and mints for other e2e tests. The playback path does not use the
-  tickets yet: the CDN's edge rebuild, the siblings' PRE_SESSION redeem and the PDS's binding check come next. The
-  shipped stages turn the module on.
+  `tests/e2e/harness_identity.py` signs them in and mints for other e2e tests. The shipped stages turn the module on.
 - **Demand: the warm-up creates every adapter's metric keys without calling a partner** (W-12). Prebid Server Java
   creates an adapter's metric keys without a lock, and the first concurrent auctions on a new task could fail with an
   HTTP 500; a probe gets no partner, so the warm-up never created them. A new stored request, `fast-warm`, names
@@ -47,6 +45,21 @@ All notable changes to this project are documented here. The format follows
 - **Own-book lines with flights and channels.** A line may carry a flight (`starts`, `ends`), which the own book
   honours, and the channels it is sold on, which `/select` honours (the new outcome `off_target`). Lines without them
   serialize, and hash, as before.
+- **Identity on the playback path** (`modules.identity`, ADR-0018):
+  - **the edge rebuild**, a CloudFront Function on the media distribution's `/v1/*` behaviour: an init request reaches
+    MediaTailor with only a single well-formed `ads.t`, every other viewer parameter (`ads.*`, `aws.*`,
+    `manifest.*`) dropped; `/v1/session` and non-canonical init paths are refused; the behaviour allows GET, HEAD
+    and OPTIONS only. It catches every error (a throw is CloudFront's 503), and `<prefix>-identity-edge-errors`
+    fires on any. With the module on, the CDN's access logs leave out `cs-uri-query`, `c-ip` and `x-forwarded-for`;
+  - **the PRE_SESSION redeem** on the monetized channels' pair siblings, which also forward the ticket to Prebid
+    Server (`X-Fast-T`): one uncached `HTTP_REQUEST` per sibling before the session controls. The probe, the lab
+    channel and the experimental ad-server route are not ticketed;
+  - **the Pod Decision Service's ticket lookup** on every break: bound to this session and configuration inside the
+    lease (2 h idle, 24 h absolute) is the viewer's; anything else is CONTEXTUAL with the reason (`replay`,
+    `pc_mismatch`, `expired_or_raced`, `unknown`); a failed lookup is SAFE. The sidecar binds a fresh ticket itself
+    when the hook's redeem never landed. `pds.policy` records carry a bound viewer's `vid` and the ticket's `cid`.
+
+  The edge rebuild's dropping of `aws.*` is listed as a workaround of `W-2 FR-1`.
 
 ## [4.0.0] - 2026-10-31
 
