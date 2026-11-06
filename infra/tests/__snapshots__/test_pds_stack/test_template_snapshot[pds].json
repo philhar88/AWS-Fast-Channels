@@ -172,6 +172,113 @@
       },
       "Type": "AWS::IAM::Role"
     },
+    "AdLoadKpis": {
+      "DependsOn": [
+        "DeliveryRecordsTableECC84390",
+        "SelectRecordsTableE024190E"
+      ],
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": "fastm_lake",
+        "TableInput": {
+          "Description": "Ad load by hour, playback configuration, viewer tier and the policy applied: ads per break, fill, the winning and turned-away prices, impressions and revenue",
+          "Name": "v_ad_load_kpis",
+          "Parameters": {
+            "comment": "Presto View",
+            "presto_view": "true"
+          },
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "datehour",
+                "Type": "string"
+              },
+              {
+                "Name": "configuration",
+                "Type": "string"
+              },
+              {
+                "Name": "tier",
+                "Type": "string"
+              },
+              {
+                "Name": "policy",
+                "Type": "string"
+              },
+              {
+                "Name": "reason",
+                "Type": "string"
+              },
+              {
+                "Name": "breaks",
+                "Type": "bigint"
+              },
+              {
+                "Name": "slots",
+                "Type": "bigint"
+              },
+              {
+                "Name": "ads",
+                "Type": "bigint"
+              },
+              {
+                "Name": "ads_per_break",
+                "Type": "double"
+              },
+              {
+                "Name": "sold_ads",
+                "Type": "bigint"
+              },
+              {
+                "Name": "avail_seconds",
+                "Type": "double"
+              },
+              {
+                "Name": "filled_seconds",
+                "Type": "double"
+              },
+              {
+                "Name": "fill_rate",
+                "Type": "double"
+              },
+              {
+                "Name": "winning_cpm_avg",
+                "Type": "double"
+              },
+              {
+                "Name": "winning_cpm_min",
+                "Type": "double"
+              },
+              {
+                "Name": "turned_away_bids",
+                "Type": "bigint"
+              },
+              {
+                "Name": "turned_away_usd",
+                "Type": "double"
+              },
+              {
+                "Name": "impressions",
+                "Type": "bigint"
+              },
+              {
+                "Name": "revenue_usd",
+                "Type": "double"
+              },
+              {
+                "Name": "ecpm",
+                "Type": "double"
+              }
+            ],
+            "SerdeInfo": {}
+          },
+          "TableType": "VIRTUAL_VIEW",
+          "ViewExpandedText": "/* Presto View */",
+          "ViewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggYnJlYWtzIEFTIChcbiAgU0VMRUNUIGRlY2lzaW9uX2lkLCBtaW4oZGF0ZWhvdXIpIEFTIGRhdGVob3VyLCBhcmJpdHJhcnkocGMpIEFTIGNvbmZpZ3VyYXRpb24sXG4gICAgY29hbGVzY2UoYXJiaXRyYXJ5KHRpZXIpLCAnbm9uZScpIEFTIHRpZXIsXG4gICAgY29hbGVzY2UoYXJiaXRyYXJ5KGpzb25fZXh0cmFjdF9zY2FsYXIoYWRfbG9hZCwgJyQucG9saWN5JykpLCAnc3RhbmRhcmQnKSBBUyBwb2xpY3ksXG4gICAgY29hbGVzY2UoYXJiaXRyYXJ5KGpzb25fZXh0cmFjdF9zY2FsYXIoYWRfbG9hZCwgJyQucmVhc29uJykpLCAnY29udHJvbCcpIEFTIHJlYXNvbixcbiAgICBtYXgoVFJZX0NBU1QoanNvbl9leHRyYWN0X3NjYWxhcihhZF9sb2FkLCAnJC5zbG90cycpIEFTIGJpZ2ludCkpIEFTIHNsb3RzLFxuICAgIG1heChjYXJkaW5hbGl0eShwb2QpKSBBUyBhZHMsIG1heChkdXJfbXMpIEFTIGR1cl9tcywgbWF4KGZpbGxlZF9tcykgQVMgZmlsbGVkX21zXG4gIEZST00gXCJmYXN0bV9sYWtlXCIuXCJwZHNfc2VsZWN0XCJcbiAgV0hFUkUgcmVjb3JkID0gJ3Bkcy5zZWxlY3QnIEFORCBOT1QgcHJvYmVcbiAgR1JPVVAgQlkgZGVjaXNpb25faWRcbiksXG5iaWRzIEFTIChcbiAgU0VMRUNUIERJU1RJTkNUIHMuZGVjaXNpb25faWQsIGpzb25fZXh0cmFjdF9zY2FsYXIoYiwgJyQucmVmJykgQVMgcmVmLCBqc29uX2V4dHJhY3Rfc2NhbGFyKGIsICckLmNyaWQnKSBBUyBjcmlkLFxuICAgIGpzb25fZXh0cmFjdF9zY2FsYXIoYiwgJyQub3V0Y29tZScpIEFTIG91dGNvbWUsXG4gICAgY29hbGVzY2UoVFJZX0NBU1QoanNvbl9leHRyYWN0X3NjYWxhcihiLCAnJC5ob3VzZScpIEFTIGJvb2xlYW4pLCBmYWxzZSkgQVMgaG91c2UsXG4gICAgVFJZX0NBU1QoanNvbl9leHRyYWN0X3NjYWxhcihiLCAnJC5wcmljZScpIEFTIGRvdWJsZSkgQVMgY3BtXG4gIEZST00gXCJmYXN0bV9sYWtlXCIuXCJwZHNfc2VsZWN0XCIgcyBDUk9TUyBKT0lOIFVOTkVTVChzLmJpZHMpIEFTIHQgKGIpXG4gIFdIRVJFIHMucmVjb3JkID0gJ3Bkcy5zZWxlY3QnIEFORCBOT1Qgcy5wcm9iZVxuKSxcbnByaWNlZCBBUyAoXG4gIFNFTEVDVCBkZWNpc2lvbl9pZCxcbiAgICBjb3VudF9pZihvdXRjb21lID0gJ3dvbicgQU5EIE5PVCBob3VzZSkgQVMgc29sZF9hZHMsXG4gICAgc3VtKGNwbSkgRklMVEVSIChXSEVSRSBvdXRjb21lID0gJ3dvbicgQU5EIE5PVCBob3VzZSkgQVMgd2lubmluZ19jcG1fc3VtLFxuICAgIG1pbihjcG0pIEZJTFRFUiAoV0hFUkUgb3V0Y29tZSA9ICd3b24nIEFORCBOT1QgaG91c2UpIEFTIHdpbm5pbmdfY3BtX21pbixcbiAgICBjb3VudF9pZihvdXRjb21lIElOICgnYmVsb3dfYmFyJywgJ2FkX2xvYWQnKSBBTkQgTk9UIGhvdXNlKSBBUyB0dXJuZWRfYXdheV9iaWRzLFxuICAgIGNvYWxlc2NlKHN1bShjcG0pIEZJTFRFUiAoV0hFUkUgb3V0Y29tZSBJTiAoJ2JlbG93X2JhcicsICdhZF9sb2FkJykgQU5EIE5PVCBob3VzZSksIDApIC8gMTAwMCBBUyB0dXJuZWRfYXdheV91c2RcbiAgRlJPTSBiaWRzXG4gIEdST1VQIEJZIGRlY2lzaW9uX2lkXG4pLFxud29uIEFTIChcbiAgU0VMRUNUIERJU1RJTkNUIGRlY2lzaW9uX2lkLCBjcmlkLCBDQVNFIFdIRU4gaG91c2UgVEhFTiAwIEVMU0UgY3BtIEVORCBBUyBjcG1cbiAgRlJPTSBiaWRzIFdIRVJFIG91dGNvbWUgSU4gKCd3b24nLCAnc3RhbmRhbG9uZScpXG4pLFxuZWFybmVkIEFTIChcbiAgU0VMRUNUIGQuZGVjaXNpb25faWQsIGNvdW50KCopIEFTIGltcHJlc3Npb25zLCBzdW0oY29hbGVzY2Uody5jcG0sIDApKSAvIDEwMDAgQVMgcmV2ZW51ZV91c2RcbiAgRlJPTSAoXG4gICAgU0VMRUNUIERJU1RJTkNUIGRlY2lzaW9uX2lkLCBjcmlkIEZST00gXCJmYXN0bV9sYWtlXCIuXCJwZHNfZGVsaXZlcnlcIlxuICAgIFdIRVJFIHJlY29yZCA9ICdwZHMuZGVsaXZlcnknIEFORCBpbXByZXNzaW9uXG4gICkgZFxuICBMRUZUIEpPSU4gd29uIHcgT04gdy5kZWNpc2lvbl9pZCA9IGQuZGVjaXNpb25faWQgQU5EIHcuY3JpZCA9IGQuY3JpZFxuICBHUk9VUCBCWSBkLmRlY2lzaW9uX2lkXG4pXG5TRUxFQ1QgYi5kYXRlaG91ciwgYi5jb25maWd1cmF0aW9uLCBiLnRpZXIsIGIucG9saWN5LCBiLnJlYXNvbiwgY291bnQoKikgQVMgYnJlYWtzLFxuICBzdW0oYi5zbG90cykgQVMgc2xvdHMsIHN1bShiLmFkcykgQVMgYWRzLCBDQVNUKHN1bShiLmFkcykgQVMgZG91YmxlKSAvIGNvdW50KCopIEFTIGFkc19wZXJfYnJlYWssXG4gIHN1bShwLnNvbGRfYWRzKSBBUyBzb2xkX2FkcyxcbiAgc3VtKGIuZHVyX21zKSAvIDEwMDBlMCBBUyBhdmFpbF9zZWNvbmRzLCBzdW0oYi5maWxsZWRfbXMpIC8gMTAwMGUwIEFTIGZpbGxlZF9zZWNvbmRzLFxuICBDQVNUKHN1bShiLmZpbGxlZF9tcykgQVMgZG91YmxlKSAvIG51bGxpZihzdW0oYi5kdXJfbXMpLCAwKSBBUyBmaWxsX3JhdGUsXG4gIHN1bShwLndpbm5pbmdfY3BtX3N1bSkgLyBudWxsaWYoc3VtKHAuc29sZF9hZHMpLCAwKSBBUyB3aW5uaW5nX2NwbV9hdmcsXG4gIG1pbihwLndpbm5pbmdfY3BtX21pbikgQVMgd2lubmluZ19jcG1fbWluLFxuICBzdW0ocC50dXJuZWRfYXdheV9iaWRzKSBBUyB0dXJuZWRfYXdheV9iaWRzLCBzdW0ocC50dXJuZWRfYXdheV91c2QpIEFTIHR1cm5lZF9hd2F5X3VzZCxcbiAgc3VtKGUuaW1wcmVzc2lvbnMpIEFTIGltcHJlc3Npb25zLCBzdW0oZS5yZXZlbnVlX3VzZCkgQVMgcmV2ZW51ZV91c2QsXG4gIHN1bShlLnJldmVudWVfdXNkKSAqIDEwMDAgLyBudWxsaWYoc3VtKGUuaW1wcmVzc2lvbnMpLCAwKSBBUyBlY3BtXG5GUk9NIGJyZWFrcyBiXG5MRUZUIEpPSU4gcHJpY2VkIHAgT04gcC5kZWNpc2lvbl9pZCA9IGIuZGVjaXNpb25faWRcbkxFRlQgSk9JTiBlYXJuZWQgZSBPTiBlLmRlY2lzaW9uX2lkID0gYi5kZWNpc2lvbl9pZFxuR1JPVVAgQlkgYi5kYXRlaG91ciwgYi5jb25maWd1cmF0aW9uLCBiLnRpZXIsIGIucG9saWN5LCBiLnJlYXNvbiIsImNhdGFsb2ciOiJhd3NkYXRhY2F0YWxvZyIsInNjaGVtYSI6ImZhc3RtX2xha2UiLCJjb2x1bW5zIjpbeyJuYW1lIjoiZGF0ZWhvdXIiLCJ0eXBlIjoidmFyY2hhciJ9LHsibmFtZSI6ImNvbmZpZ3VyYXRpb24iLCJ0eXBlIjoidmFyY2hhciJ9LHsibmFtZSI6InRpZXIiLCJ0eXBlIjoidmFyY2hhciJ9LHsibmFtZSI6InBvbGljeSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoicmVhc29uIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJicmVha3MiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoic2xvdHMiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoiYWRzIiwidHlwZSI6ImJpZ2ludCJ9LHsibmFtZSI6ImFkc19wZXJfYnJlYWsiLCJ0eXBlIjoiZG91YmxlIn0seyJuYW1lIjoic29sZF9hZHMiLCJ0eXBlIjoiYmlnaW50In0seyJuYW1lIjoiYXZhaWxfc2Vjb25kcyIsInR5cGUiOiJkb3VibGUifSx7Im5hbWUiOiJmaWxsZWRfc2Vjb25kcyIsInR5cGUiOiJkb3VibGUifSx7Im5hbWUiOiJmaWxsX3JhdGUiLCJ0eXBlIjoiZG91YmxlIn0seyJuYW1lIjoid2lubmluZ19jcG1fYXZnIiwidHlwZSI6ImRvdWJsZSJ9LHsibmFtZSI6Indpbm5pbmdfY3BtX21pbiIsInR5cGUiOiJkb3VibGUifSx7Im5hbWUiOiJ0dXJuZWRfYXdheV9iaWRzIiwidHlwZSI6ImJpZ2ludCJ9LHsibmFtZSI6InR1cm5lZF9hd2F5X3VzZCIsInR5cGUiOiJkb3VibGUifSx7Im5hbWUiOiJpbXByZXNzaW9ucyIsInR5cGUiOiJiaWdpbnQifSx7Im5hbWUiOiJyZXZlbnVlX3VzZCIsInR5cGUiOiJkb3VibGUifSx7Im5hbWUiOiJlY3BtIiwidHlwZSI6ImRvdWJsZSJ9XSwicnVuQXNJbnZva2VyIjpmYWxzZSwicHJvcGVydGllcyI6e319 */"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
     "CdnAccessDatabase0FAD7CE7": {
       "DeletionPolicy": "Delete",
       "Properties": {
