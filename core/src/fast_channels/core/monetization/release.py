@@ -13,6 +13,8 @@ them, :func:`applied` records it, :func:`differences` compares what a configurat
 returns (drift), and :class:`PlaybackPlan` is the document players without a ticket read.
 """
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -191,6 +193,20 @@ def kept_releases(states: Mapping[str, ChannelState]) -> set[int]:
 def pointer(states: Mapping[str, ChannelState]) -> dict[str, str]:
     """The release pointer (AppConfig profile ``release``): each released channel's stable sibling."""
     return {name: state.stable for name, state in sorted(states.items()) if state.stable is not None}
+
+
+CONTENT_VERSION_LENGTH: Final = 12
+
+
+# OPTIMIZATION(aws): W-2 4.6 the extension's Configuration-Version can name other content: version the content itself
+def content_version(document: Mapping[str, Any]) -> str:
+    """The version of an AppConfig document (the release pointer, the flags) derived from the document itself: the
+    first :data:`CONTENT_VERSION_LENGTH` hex characters of the SHA-256 of its canonical JSON (sorted keys, no
+    whitespace). A reader logs this, never the AppConfig Agent extension's ``Configuration-Version`` header, which can
+    name another version than the content it served (after rollbacks and cold starts); the controller logs it beside
+    the hosted version it deploys, so the two can be matched."""
+    canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:CONTENT_VERSION_LENGTH]
 
 
 class PlaybackPlan(_Model):

@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The zero-ads detector counts the prefetched breaks MediaTailor filled again in real time** (`release`, W-2 1.34).
+  - `RefilledBreaks`, per sibling: a session's break, by its `DATERANGE` ID, with more than one `FILLED_AVAIL`.
+    The viewer saw the first ad start twice; delivery already credits the repeat once. No alarm: the
+    troubleshooting table of [docs/release-controller.md](docs/release-controller.md#troubleshooting) says what to do.
+- **Pointer and flag reads log the version of the content they got** (`release`, `ops`, W-2 4.6).
+  - The AppConfig Agent extension's `Configuration-Version` header can name another version than the content
+    it serves. The promote function, the runbooks and the e2e rig's stub mint log `content_version`, a hash of
+    the document, instead.
+
 ### Changed
 
 - **An unplayed line ad gives its budget back 10 to 15 minutes after it was reserved, not after 2 hours** (`pds`).

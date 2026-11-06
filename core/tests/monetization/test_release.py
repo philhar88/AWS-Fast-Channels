@@ -13,6 +13,7 @@ from fast_channels.core.monetization.release import (
     PlaybackPlan,
     SiblingRecord,
     applied,
+    content_version,
     differences,
     followed,
     kept_releases,
@@ -49,6 +50,15 @@ def test_never_stored_log_fields() -> None:
     assert not {"mediaTailorPath", "input", "http"} & set(MANIFEST_LOG_FIELDS)
     assert "output" in MANIFEST_LOG_FIELDS  # the PRE_SESSION hook's committed controls stay readable
     assert set(RECORD_FIELDS) < set(VENDED_LOG_TYPES)
+
+
+def test_the_content_version_names_the_content_whatever_its_key_order() -> None:
+    """W-2 4.6: the version logged is derived from the document, so equal content gives the same version."""
+    served = {"fastm-demo": "fastm-demo-p-b", "fastm-lab": "fastm-lab-p-a"}
+    version = content_version(served)
+    assert len(version) == 12 and int(version, 16) >= 0
+    assert content_version(dict(reversed(served.items()))) == version
+    assert content_version({**served, "fastm-demo": "fastm-demo-p-a"}) != version
 
 
 def test_the_first_release_configures_every_sibling(kit: SimpleNamespace) -> None:

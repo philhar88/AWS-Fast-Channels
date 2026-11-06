@@ -95,11 +95,17 @@ def handler(event, context):
         return {"statusCode": 200, "headers": {"content-type": "application/vnd.apple.mpegurl"}, "body": body}
     return {"statusCode": 403, "body": ""}
 """
+# OPTIMIZATION(aws): W-2 4.6 the mint logs the pointer's content version, never the extension's Configuration-Version
 MINT_CODE: Final = """
-import json, os, urllib.request
+import hashlib, json, os, urllib.request
 
 URL = (f"http://localhost:2772/applications/{os.environ['APPLICATION']}/environments/{os.environ['ENVIRONMENT']}"
        f"/configurations/{os.environ['PROFILE']}")
+
+
+def content_version(document):
+    canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
 def handler(event, context):
@@ -107,9 +113,14 @@ def handler(event, context):
     for viewer in event["viewers"]:
         request = urllib.request.Request(URL, headers={"Entity-Id": viewer})
         with urllib.request.urlopen(request, timeout=3) as response:
-            found[viewer] = json.loads(response.read() or b"{}").get(event["channel"])
+            document = json.loads(response.read() or b"{}")
+        found[viewer] = document.get(event["channel"])
+        print(json.dumps({"viewer": viewer, "sibling": found[viewer], "content_version": content_version(document)}))
     return found
 """
+"""The stub mint reads the pointer through the AppConfig Agent extension, as a mint does. Its log names the version
+of the content it got (``core.monetization.release.content_version``), never the ``Configuration-Version`` header,
+which can name another version (W-2 4.6)."""
 
 
 # --- the rig -------------------------------------------------------------------------------------------------------

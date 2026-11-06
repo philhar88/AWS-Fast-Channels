@@ -28,6 +28,7 @@ from fast_channels.core.monetization.release import (
     PROBE_LETTER,
     ChannelState,
     SiblingRecord,
+    content_version,
     followed,
     kept_releases,
     last_good,
@@ -259,7 +260,15 @@ def _deploy(content: dict[str, str], *, strategy: str, description: str, tags: d
         Description=description,
         Tags=tags,
     )
-    return {"deployment": deployment["DeploymentNumber"], "version": version, "pointer": content}
+    found = {
+        "deployment": deployment["DeploymentNumber"],
+        "version": version,
+        "content_version": content_version(content),
+        "pointer": content,
+    }
+    # A reader through the AppConfig Agent extension logs content_version, never its Configuration-Version header
+    logger.info("pointer deployed", extra=found)
+    return found
 
 
 # OPTIMIZATION(aws): W-2 4.7 the stage's no-bake strategy, not AppConfig.AllAtOnce (which bakes 10 minutes)

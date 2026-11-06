@@ -21,6 +21,7 @@ from botocore.exceptions import ClientError
 from fast_channels.core.events import AssetFailed, ChannelAlert, SchedulePublished
 from fast_channels.core.flags import PROFILE, Flags
 from fast_channels.core.ledger import Json, LedgerKind, entry_from_item
+from fast_channels.core.monetization.release import content_version
 from fast_channels.core.runbooks import (
     REPEAT_WINDOW,
     RIGHTS_LOOKAHEAD,
@@ -72,7 +73,9 @@ def switches() -> OpsSwitches:
     except parameters.exceptions.GetParameterError:
         logger.exception("flags unreadable; using the defaults (every runbook in dry run)")
         return Flags().ops
-    return Flags.from_simplified(data if isinstance(data, dict) else {}).ops
+    document = data if isinstance(data, dict) else {}
+    logger.info("flags read", extra={"content_version": content_version(document)})  # the content's, not a header's
+    return Flags.from_simplified(document).ops
 
 
 def recent(runbook: Runbook) -> list[dict[str, Any]]:
