@@ -1,8 +1,10 @@
 """Agentic selling (M7): the seller, the buyer and governance agents and the sync function, beside the guidance."""
 
 import json
+import string
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import pytest
 
@@ -102,6 +104,22 @@ def test_the_seller_runs_the_pinned_image_with_its_bridge(deployment: GetDeploym
     assert "VpcOriginConfig" in origin
     [database] = resources(template, "AWS::RDS::DBInstance").values()
     assert (database["DBInstanceClass"], database["BackupRetentionPeriod"]) == ("db.t4g.micro", 0)
+
+
+def test_the_database_password_needs_no_url_encoding(deployment: GetDeployment) -> None:
+    """The seller does not decode the password in ``DATABASE_URL`` (W-8 A12): a ``^`` (``%5E``) failed a deploy."""
+    d = deployment(SELLING, extra=EXTRA)
+    template = d.template(d.stage.selling)
+    [generated] = [
+        s["GenerateSecretString"]
+        for s in resources(template, "AWS::SecretsManager::Secret").values()
+        if "salesagent" in s["GenerateSecretString"].get("SecretStringTemplate", "")
+    ]
+    assert generated["GenerateStringKey"] == "password"
+    excluded = set(generated["ExcludeCharacters"])
+    drawn = set(string.ascii_letters + string.digits + string.punctuation) - excluded
+    assert drawn == set(string.ascii_letters + string.digits + "-._")
+    assert all(quote(c, safe="") == c for c in drawn)
 
 
 def test_the_agents_run_on_agentcore_from_the_pinned_images(deployment: GetDeployment) -> None:

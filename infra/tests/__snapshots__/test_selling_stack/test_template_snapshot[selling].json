@@ -1220,7 +1220,7 @@
       "Type": "AWS::KMS::Key",
       "UpdateReplacePolicy": "Delete"
     },
-    "FastChannelsfastmSellingSellerDatabaseSecretD9C5098A2c3e3d58fdbda3e1e9375c4395c84f6c": {
+    "FastChannelsfastmSellingSellerDatabaseSecretD9C5098Ad321368f3139e0a1d2b89fc2c4b77f73": {
       "DeletionPolicy": "Delete",
       "Properties": {
         "Description": {
@@ -1235,12 +1235,11 @@
           ]
         },
         "GenerateSecretString": {
-          "ExcludeCharacters": " %+~`#$&*()|[]{}:;<>?!'/@\"\\,=",
+          "ExcludeCharacters": " !\"#$%&'()*+,/:;<=>?@[\\]^`{|}~",
           "GenerateStringKey": "password",
           "PasswordLength": 30,
           "SecretStringTemplate": "{\"username\":\"salesagent\"}"
         },
-        "Name": "fastm-seller-database",
         "Tags": [
           {
             "Key": "fast:app",
@@ -1556,7 +1555,7 @@
             [
               "{{resolve:secretsmanager:",
               {
-                "Ref": "FastChannelsfastmSellingSellerDatabaseSecretD9C5098A2c3e3d58fdbda3e1e9375c4395c84f6c"
+                "Ref": "FastChannelsfastmSellingSellerDatabaseSecretD9C5098Ad321368f3139e0a1d2b89fc2c4b77f73"
               },
               ":SecretString:password::}}"
             ]
@@ -1596,7 +1595,7 @@
     "SellerDatabaseSecretAttachmentBDDE0506": {
       "Properties": {
         "SecretId": {
-          "Ref": "FastChannelsfastmSellingSellerDatabaseSecretD9C5098A2c3e3d58fdbda3e1e9375c4395c84f6c"
+          "Ref": "FastChannelsfastmSellingSellerDatabaseSecretD9C5098Ad321368f3139e0a1d2b89fc2c4b77f73"
         },
         "TargetId": {
           "Ref": "SellerDatabase7FC5101F"

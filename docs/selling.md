@@ -167,6 +167,7 @@ Agent) where it lives, and listed with the repository's other workarounds in [wo
 | `W-8` A9 | Testing mode still dials the public reference creative agent | `CREATIVE_AGENT_URL` names a host that cannot resolve | `infra/.../selling/seller.py` | Drop the setting |
 | `W-8` A10 | Products authorized by property tags publish the tenant's host as their publisher domain | The bridge names the publisher domain in each product's properties | `vendor/.../fast/bridge.py` (`upsert_products`) | Authorize by tag |
 | `W-8` A11 | No ad server adapter for MediaTailor and the PDS | The bridge reads buys from the seller's database, and writes delivery to the mock adapter's seeded-delivery rows | `vendor/.../fast/bridge.py` | A `mediatailor_pds` adapter replaces the bridge |
+| `W-8` A12 | The seller does not percent-decode the password in `DATABASE_URL`, so a password that needs encoding fails to log in and the seller exits at boot | The generated database password is letters, digits and `-._` only | `infra/.../selling/seller.py` (`PASSWORD_EXCLUDE`) | Allow any password characters |
 
 ## What it does not do
 

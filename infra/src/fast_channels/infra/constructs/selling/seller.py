@@ -15,9 +15,12 @@ Workarounds of known seller issues, each to remove when upstream fixes it (docs/
 - ``OPTIMIZATION(oss): W-8 A8``: CloudFront sends ``Fly-Forwarded-Proto: https``, which the image's nginx prefers,
   because the load balancer overwrites ``X-Forwarded-Proto`` to ``http`` and the seller would sign for ``http://``;
 - ``OPTIMIZATION(oss): W-8 A9``: ``CREATIVE_AGENT_URL`` names a host that cannot resolve, because even in testing
-  mode the seller dials the public reference creative agent (``creative.adcontextprotocol.org``) for previews.
+  mode the seller dials the public reference creative agent (``creative.adcontextprotocol.org``) for previews;
+- ``OPTIMIZATION(oss): W-8 A12``: the database password is drawn from characters that need no URL encoding, because
+  the seller does not decode the password in ``DATABASE_URL``.
 """
 
+import string
 from typing import Final
 
 from aws_cdk import Duration, RemovalPolicy, Stack
@@ -40,8 +43,11 @@ DATABASE: Final = "salesagent"
 HEALTH: Final = "/health"
 START_PERIOD: Final = Duration.minutes(5)
 """Migrations on an empty database, then nginx and the servers (P0-13: about 45 s; upstream allows 300 s)."""
-PASSWORD_EXCLUDE: Final = " %+~`#$&*()|[]{}:;<>?!'/@\"\\,="
-"""Characters left out of the generated database password: it travels in a URL."""
+PASSWORD_EXCLUDE: Final = " " + "".join(c for c in string.punctuation if c not in "-._")
+"""Characters left out of the generated database password, so it is letters, digits and ``-._``: characters a URL
+carries as they are. ``OPTIMIZATION(oss): W-8 A12``: the seller reads the password from ``DATABASE_URL`` with
+``urlparse(...).password``, which does not percent-decode, so a password that needs encoding (``^`` as ``%5E``) fails
+to log in and the seller exits at its first database check."""
 
 
 class Seller(Construct):
@@ -86,9 +92,9 @@ class Seller(Construct):
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE4_GRAVITON, ec2.InstanceSize.MICRO),
             vpc=vpc,
             vpc_subnets=private,
-            credentials=rds.Credentials.from_generated_secret(
-                DATABASE, secret_name=f"{name}-database", exclude_characters=PASSWORD_EXCLUDE
-            ),
+            # OPTIMIZATION(oss): W-8 A12. Unnamed: a change of the characters replaces the secret, which a fixed name
+            # would refuse on a deployed stack.
+            credentials=rds.Credentials.from_generated_secret(DATABASE, exclude_characters=PASSWORD_EXCLUDE),
             database_name=DATABASE,
             allocated_storage=20,
             storage_type=rds.StorageType.GP3,
