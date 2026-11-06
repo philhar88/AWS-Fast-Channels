@@ -91,6 +91,22 @@ All notable changes to this project are documented here. The format follows
   - `contracts/personas.json` is the demo's eight personas with their sign-ins, genres and tiers, for the seed script
     and the viewer app.
 
+- **The reference viewer** (`viewer`, [ADR-0028](docs/adr/0028-reference-viewer-on-its-own-origin.md),
+  [docs/viewer.md](docs/viewer.md)).
+  - A second build of the `console/` package (`console/dist-viewer`) on its own CloudFront distribution, in the stack
+    `FastChannels-<prefix>-Viewer`. Its CSP names only the media CDN, Cognito's user-pools API and the two APIs it
+    calls.
+  - A persona picker: the demo personas of `contracts/personas.json` sign in to the viewer pool with its public
+    client, one persona per tab.
+  - A rule-based rail of recommended channels per persona, from the declared genres and the public EPG feeds. A
+    channel in an ad break ranks lower, and every tile says why it is there.
+  - A player that mints a playback ticket for every open and reopen, falls back to the anonymous playback plan,
+    and shows each ad, the slate after it and every break as played.
+  - With `modules.viewer.ad_panel`, a demo-only "why these ads" panel: an HTTP API with a JWT authorizer reads the
+    decision records of the viewer's own session with Logs Insights, and shows each break's privacy mode, tier,
+    ad-load policy and pod.
+  - The operator console's hosting is factored out as `StaticSite`; the operator templates are unchanged.
+
 ### Changed
 
 - **A tier-0 line must beat λ where a tier prices ad load** (`pds`). Where λ is 0, which is every break without a

@@ -32,6 +32,7 @@ from fast_channels.infra.stacks.ops import OpsStack
 from fast_channels.infra.stacks.pds import PdsStack
 from fast_channels.infra.stacks.release import ReleaseStack
 from fast_channels.infra.stacks.selling import SellingStack
+from fast_channels.infra.stacks.viewer import ViewerStack
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -50,8 +51,8 @@ def stage_id(prefix: str) -> str:
 
 class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
-    ``modules.crawl.enabled``, after Media), Identity (if ``modules.identity.enabled``, after Media), Ops (if
-    ``modules.ops.enabled``, after Data and Media), Edge (in
+    ``modules.crawl.enabled``, after Media), Identity (if ``modules.identity.enabled``, after Media), Viewer (if
+    ``modules.viewer.enabled``, after Identity), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
     us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (the
     account's Transaction Search, only with ``account_baseline``), DemandEdge (in us-east-1) and DemandBuild (if
     ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), Demand
@@ -152,6 +153,8 @@ class FastChannelsStage(Stage):
             self.identity = IdentityStack(self, "Identity", config=config, **stacks)
             self.identity.add_stack_dependency(self.media, "The mint reads /<prefix>/release/media-bucket")
 
+        self.viewer = self._viewer(config, stacks)
+
         self.edge: EdgeStack | None = None
         if env.region != EDGE_REGION:
             self.edge = EdgeStack(
@@ -173,6 +176,17 @@ class FastChannelsStage(Stage):
         Aspects.of(self).add(FunctionLogGroups(log_groups))
         for key, value in tags.items():
             Tags.of(self).add(key, value)
+
+    def _viewer(self, config: FastChannelsConfig, stacks: dict[str, Any]) -> ViewerStack | None:
+        """The reference viewer, after Identity (its viewer pool and playback API)."""
+        if not config.modules.viewer.enabled or self.identity is None:
+            return None
+        viewer = ViewerStack(self, "Viewer", config=config, media=self.media.exports, **stacks)
+        viewer.add_stack_dependency(self.media)
+        viewer.add_stack_dependency(
+            self.identity, "It reads the viewer pool and the playback API from /<prefix>/identity/*"
+        )
+        return viewer
 
     def _modules(self, config: FastChannelsConfig, env: Environment, stacks: dict[str, Any]) -> None:
         """The demand module's stacks (and Pds and Release beside the guidance), and the release module's guard."""

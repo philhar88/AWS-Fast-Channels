@@ -59,6 +59,10 @@
     },
     "identity": {
       "enabled": true
+    },
+    "viewer": {
+      "enabled": true,
+      "ad_panel": true
     }
   }
 }
