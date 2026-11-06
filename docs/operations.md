@@ -83,13 +83,15 @@ it costs.
 | `modules.demand.server_instances` | int | `2` | Prebid Server `server.http.server-instances`: one event loop per task vCPU. |
 | `modules.demand.dayparts` | list of object | `[]` | Scheduled task minimums ahead of busy dayparts; target tracking covers the time between them. |
 | `modules.demand.rate_limit_per_ip` | int | `20000` | Requests per client IP per 60 s above which the origin's web ACL blocks (an abuse cap, far above any MediaTailor egress address's rate). |
-| `modules.demand.ad_server` | `none` \| `mock` \| `gam` \| `freewheel` | `none` | Experimental in v4.0.0. Where the monetized pair siblings send a break's ad request: `none` (the default: Prebid Server answers the pod as VAST), `mock` (the demo's GAM-like ad server), `gam` or `freewheel` (`ad_server_tag`). With an ad server, a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the release module. |
+| `modules.demand.ad_server` | `none` or `mock` or `gam` or `freewheel` | `"none"` | Experimental in v4.0.0. Where the monetized pair siblings send a break's ad request: `none` (the default: Prebid Server answers the pod as VAST), `mock` (the demo's GAM-like ad server), `gam` or `freewheel` (`ad_server_tag`). With an ad server, a PRE_ADS auction caches the pod in Prebid Cache and the ad server's Prebid line items redirect to it. It needs the release module. |
 | `modules.demand.ad_server_tag` | str | `""` | `gam` and `freewheel`: the publisher's VAST tag URL, with `{prebid}` once where the targeting key-values go (inside `cust_params` for GAM, in the key-value section for FreeWheel); empty otherwise. |
 | `modules.demand.pod_cache_seconds` | int | `300` | How long Prebid Cache keeps a cached pod: longer than a prefetch's retrieval-to-break gap plus the break. |
+| `modules.demand.pod_cache_concurrency` | int | `8` | With an ad server: provisioned concurrency of the guidance's Prebid Cache function, whose writes are on an auction's deadline (a new instance takes about 1.4 s to start). A 100-session break in real time peaked at 6 instances (docs/demand.md, "The cache function"): about 0.06-0.08 per session of the largest break. 0: none. |
+| `modules.demand.pod_cache_memory_mb` | int | `1769` | With an ad server: the Prebid Cache function's memory. One vCPU: an instance's first cache connection took about 1 s at the guidance's 256 MB and about 250 ms at 1,769 MB. |
 | `modules.pds.enabled` | bool | `false` | Deploy the Pod Decision Service: the per-break policy, pod selection and own book (house ads and direct lines) that the Prebid Server module calls, with reservations, delivery states and a decision record per break. |
-| `modules.pds.policy_timeout_ms` | int | `50` | Timeout of the module's `/policy` call; on expiry the break is served from the own book alone. The PDS sidecar on the task's loopback answered 400-session break herds at p99 12-18 ms, max 36 ms at the module (ADR-0036). |
+| `modules.pds.policy_timeout_ms` | int | `50` | Timeout of the module's `/policy` call; on expiry the break is served from the own book alone. The sidecar on the task's loopback answered the 400-session herds at p99 12-18 ms, max 36 ms at the module (ADR-0036). |
 | `modules.pds.policy_group_timeout_ms` | int | `75` | Timeout of the hook group that holds the `/policy` call (at least `policy_timeout_ms`). |
-| `modules.pds.select_timeout_ms` | int | `200` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. `/select` reserves the pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-125 ms); 400-session break herds measured p99 65-134 ms, max 111-166 ms at the module, and at 150 ms one pod in 400 fell back (ADR-0036). |
+| `modules.pds.select_timeout_ms` | int | `200` | Timeout of the module's `/select` call; on expiry the pod is built from house bids. `/select` reserves the pod's line ads in one DynamoDB transaction first (p50 22-24 ms, p99 50-125 ms): 400-session break herds measured p99 65-134 ms, max 111-166 ms at the module, and at 150 ms one pod in 400 fell back (ADR-0036). |
 | `modules.pds.select_group_timeout_ms` | int | `250` | Timeout of the hook group that holds the `/select` call (at least `select_timeout_ms`). |
 | `modules.pds.demo_lines` | list of object | `[]` | Synthetic direct lines served by the own book in demo mode, at most 8 (they travel in the snapshot publisher's environment). Each line's budget is split over the own book's budget shards; a line stops serving once reservations hold all of it. |
 | `modules.pds.ad_load` | map of str to object | `{"light": {"max_ads": 1, "bar_cpm": "20"}}` | The ad load of each viewer tier (ADR-0037): `max_ads`, the most ads in one break, and `bar_cpm`, the accepted CPM a sold ad must beat (at most $20.50: λ_cap). Viewers get a tier from their profile; FULL and PSEUDONYMOUS breaks follow it, every other break and every other tier keeps the control plan (every slot, at the market floor). `standard` and `holdout` are the control plan and cannot be priced. The default is the demo's `light` tier: one ad per break, above $20. |
@@ -100,7 +102,7 @@ it costs.
 | `modules.release.probe_sibling` | bool | `true` | Create a house-only probe playback configuration per channel, for canaries and smoke tests. |
 | `modules.release.secret_rotation_days` | int | `90` | Days between rotations of the origin secret that MediaTailor sends to the demand origin (a daily check rotates once they have passed). |
 | `modules.release.prefetch.enabled` | bool | `true` | Create a SINGLE prefetch schedule for each of the next breaks of a running monetized channel, so MediaTailor asks the ad decision server minutes ahead, spread over a window, and transcodes new creatives before they air. Retrieval transcodes bill whether or not the break airs; the horizon stays short and re-planned breaks lose their schedules. |
-| `modules.release.prefetch.siblings` | str[] | `["a", "b", "k", "l"]` | Sibling letters that get schedules: the general pair and the kids pair (the probe `z` never does). |
+| `modules.release.prefetch.siblings` | list of str | `["a", "b", "k", "l"]` | Sibling letters that get schedules: the general pair and the kids pair (the probe `z` never does). |
 | `modules.release.prefetch.horizon_breaks` | int | `20` | Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration). |
 | `modules.release.prefetch.retrieval_lead_seconds` | int | `150` | Retrieval opens this long before the break. |
 | `modules.release.prefetch.retrieval_end_seconds` | int | `30` | Retrieval closes this long before the break (transcodes take about 20 s). |
@@ -113,9 +115,9 @@ it costs.
 | `modules.identity.redeem_window_seconds` | int | `120` | From mint to the latest redeem: the player opens the ticket's URL at once, in one session. |
 | `modules.identity.api_rate_limit` | int | `50` | Requests per second the identity API accepts (API Gateway stage throttling, every method). |
 | `modules.identity.api_burst_limit` | int | `100` | Burst of the identity API's throttling. |
-| `modules.selling.enabled` | bool | `false` | Deploy agentic selling: the Prebid Sales Agent as the stage's AdCP seller of record, a sandbox in its testing mode (simulated money), with the AWS reference buyer and governance agents on AgentCore Runtime. A buy that a buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP ([selling.md](selling.md)). |
-| `modules.selling.cpm` | decimal | `14.00` | Fixed price of each channel product, US dollars per 1,000 impressions (simulated). |
-| `modules.selling.creatives` | str[] | `["direct2"]` | Direct demo creatives (`crid`) that booked buys are served with, one per package while its buy runs: the AWS reference buyer sends no creatives. No demo line may serve them; a package left without one is not served. |
+| `modules.selling.enabled` | bool | `false` | Deploy agentic selling: the Prebid Sales Agent as the stage's AdCP seller of record, a sandbox in its testing mode (simulated money), with the AWS reference buyer and governance agents on AgentCore Runtime. A buy that a buyer agent books over AdCP becomes a direct line of the own book, and its delivery is reported back over AdCP (docs/selling.md). |
+| `modules.selling.cpm` | decimal | `"14.00"` | Fixed price of each channel product, US dollars per 1,000 impressions (simulated). |
+| `modules.selling.creatives` | list of str | `["direct2"]` | Direct demo creatives (`crid`) that booked buys are served with, one per package while its buy runs: the AWS reference buyer sends no creatives. No demo line may serve them; a package left without one is not served. |
 | `modules.selling.publisher_domain` | str | `"fast-channels.example"` | The publisher domain that the seller's products and properties name. |
 | `modules.selling.buyer_model` | str | `"{geo}.anthropic.claude-haiku-5-5"` | Bedrock model of the reference buyer agent (`{geo}` resolved as for the agent; one of `agent.allowed_models`). |
 | `modules.selling.buyer_brand` | str | `"acme-outdoor.example"` | The brand domain that the reference buyer books for (simulated). |
@@ -458,8 +460,11 @@ and reports what is left; the next poll, or the next `make destroy`, resumes whe
   `/aws/lambda/FastChannels-<prefix>-Oper-LogRetention…`.
   Find them with `aws logs describe-log-groups --log-group-name-pattern LogRetention` and delete both by hand with
   `aws logs delete-log-group`.
+- With the selling module, every deployment of the Selling stack leaves the same two log groups of its own when
+  `make destroy-demand` deletes the stack: `FastChannels-<prefix>-Selling-LogRetention…ResourceLogs…` and
+  `/aws/lambda/FastChannels-<prefix>-Sell-LogRetention…`. The command above finds them too; delete them the same way.
 - With the demand module, `make destroy-demand` leaves only the guidance's six KMS keys, scheduled for deletion with
-  the 7-day minimum ([demand.md](demand.md#deploy-and-destroy)).
+  the 7-day minimum ([demand.md](demand.md#deploy-and-destroy)), and with selling the log groups above.
 - With the release module, deleting the Release stack (`make destroy-demand`) first runs its reaper. The reaper deletes:
   - the siblings, with their prefetch schedules and log deliveries;
   - the Functions;
