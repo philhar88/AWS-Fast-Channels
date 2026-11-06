@@ -107,3 +107,23 @@ def test_a_pods_media_files() -> None:
         + "</Linear></Creative></Creatives></InLine></Ad></VAST>"
     )
     assert pod_media(vast) == ["https://cdn.example/sim1/m.m3u8", "https://cdn.example/house1/m.m3u8"]
+
+
+def test_a_fill_and_the_next_breaks_retrieval_under_one_request_id_each_go_to_their_break() -> None:
+    """Seen live (2026-11-06): one playlist request set off break 7's FILLED_AVAIL and, 80 ms later, break 8's
+    prefetch retrieval, both with requestId ``x``. Each belongs to the break its URL names."""
+
+    def event(kind: str, at: str, **fields: Any) -> dict[str, Any]:
+        return {"eventType": kind, "sessionId": "s", "requestId": "x", "eventTimestamp": at, **fields}
+
+    seven, eight = "https://mock.example/ads?sid=s&evid=7", "https://mock.example/ads?sid=s&evid=8"
+    events = [
+        event("MAKING_ADS_REQUEST", "2026-11-06T00:31:39.980Z", adsRequestUrl=eight, prefetchScheduleName="pf-8"),
+        event("FILLED_AVAIL", "2026-11-06T00:31:39.900Z", adsRequestUrl=seven, avail={"filledDuration": 30.03}),
+        event("VAST_REDIRECT", "2026-11-06T00:31:40.010Z", vastAd={"vastAdTagUri": "https://cdn.example/vast.xml"}),
+    ]
+    found = breaks(events)
+
+    assert set(found) == {("s", "7"), ("s", "8")}
+    assert (found[("s", "7")].events, found[("s", "7")].filled_seconds) == ({"FILLED_AVAIL"}, 30.03)
+    assert found[("s", "8")].events == {"MAKING_ADS_REQUEST", "VAST_REDIRECT"}

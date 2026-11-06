@@ -246,9 +246,11 @@ class View:
 
 _HIVE_TYPES: Final = {"varchar": "string", "bigint": "bigint", "double": "double", "timestamp(3)": "timestamp"}
 
-# Real-time ADS requests carry the break's SCTE-35 event id (evid=) and the content's UPID (upid=); the ad marker's
-# DATERANGE ID is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). FILLED_AVAIL joins its
-# MAKING_ADS_REQUEST by requestId within one personalization.
+# ADS requests carry the break's SCTE-35 event id (evid=) and the content's UPID (upid=); the ad marker's DATERANGE ID
+# is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). A FILLED_AVAIL belongs to the break
+# its own ad request URL names, never to whatever shares its requestId: MediaTailor gives one requestId to everything a
+# playlist request set off, which can be a break's FILLED_AVAIL and, milliseconds later, the next break's prefetch
+# retrieval (seen live, 2026-11-06). One without a URL takes the latest request of its requestId before it.
 _BREAK_EVENTS: Final = """
 WITH requests AS (
   SELECT originid AS configuration, sessionid AS session_id, requestid AS request_id,
@@ -265,11 +267,24 @@ markers AS (
     CAST(from_iso8601_timestamp(regexp_extract(admarkers, 'START-DATE="([^"]+)"', 1)) AS timestamp(3)) AS started_at
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'AD_MARKER_FOUND'
 ),
-fills AS (
-  SELECT requestid AS request_id,
+filled AS (
+  SELECT originid AS configuration, sessionid AS session_id, requestid AS request_id,
+    CAST(from_iso8601_timestamp(eventtimestamp) AS timestamp(3)) AS at,
+    TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint) AS evid,
     TRY_CAST(json_extract_scalar(avail, '$.originavailduration') AS double) AS avail_seconds,
     TRY_CAST(json_extract_scalar(avail, '$.filledduration') AS double) AS filled_seconds
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'FILLED_AVAIL'
+),
+fills AS (
+  SELECT f.configuration, f.session_id, f.at, coalesce(f.evid, max_by(r.evid, r.at)) AS evid,
+    f.avail_seconds, f.filled_seconds
+  FROM filled f LEFT JOIN requests r
+    ON f.evid IS NULL AND r.request_id = f.request_id AND r.session_id = f.session_id AND r.at <= f.at
+  GROUP BY f.configuration, f.session_id, f.request_id, f.at, f.evid, f.avail_seconds, f.filled_seconds
+),
+session_breaks AS (
+  SELECT configuration, session_id, evid, min(at) AS first_request_at
+  FROM requests WHERE evid IS NOT NULL GROUP BY configuration, session_id, evid
 )
 """
 
@@ -306,16 +321,19 @@ marked AS (
   SELECT evid, max(upid) AS upid, min(started_at) AS started_at FROM markers WHERE evid IS NOT NULL GROUP BY evid
 ),
 requested AS (
-  SELECT r.evid, max(r.upid) AS upid, max(r.channel) AS channel, min(r.at) AS first_request_at,
-    count(DISTINCT r.request_id) AS ads_requests, count(f.request_id) AS filled_avails,
-    max(f.avail_seconds) AS avail_seconds, sum(f.filled_seconds) AS filled_seconds
-  FROM requests r LEFT JOIN fills f ON f.request_id = r.request_id
-  WHERE r.evid IS NOT NULL GROUP BY r.evid
+  SELECT evid, max(upid) AS upid, max(channel) AS channel, min(at) AS first_request_at,
+    count(DISTINCT request_id) AS ads_requests
+  FROM requests WHERE evid IS NOT NULL GROUP BY evid
+),
+avails AS (
+  SELECT evid, count(*) AS filled_avails, max(avail_seconds) AS avail_seconds, sum(filled_seconds) AS filled_seconds
+  FROM fills WHERE evid IS NOT NULL GROUP BY evid
 )
 SELECT s.evid, coalesce(m.upid, q.upid) AS upid, q.channel, m.started_at, q.first_request_at, s.configurations,
-  s.sessions, coalesce(q.ads_requests, 0) AS ads_requests, coalesce(q.filled_avails, 0) AS filled_avails,
-  q.avail_seconds, q.filled_seconds
+  s.sessions, coalesce(q.ads_requests, 0) AS ads_requests, coalesce(a.filled_avails, 0) AS filled_avails,
+  a.avail_seconds, a.filled_seconds
 FROM seen s LEFT JOIN marked m ON m.evid = s.evid LEFT JOIN requested q ON q.evid = s.evid
+  LEFT JOIN avails a ON a.evid = s.evid
 """,
     ),
     View(
@@ -332,15 +350,24 @@ FROM seen s LEFT JOIN marked m ON m.evid = s.evid LEFT JOIN requested q ON q.evi
             ("filled_seconds", "double"),
             ("fill_rate", "double"),
         ),
-        _BREAK_EVENTS
+        _BREAK_EVENTS  # noqa: S608 - constant SQL, nothing from input
         + """
-SELECT r.configuration, date_trunc('hour', r.at) AS hour, count(DISTINCT r.evid) AS breaks,
-  count(DISTINCT r.session_id) AS sessions, count(DISTINCT r.request_id) AS ads_requests,
-  count(f.request_id) AS filled_avails, sum(f.avail_seconds) AS avail_seconds,
-  sum(f.filled_seconds) AS filled_seconds,
-  sum(f.filled_seconds) / nullif(sum(f.avail_seconds), 0) AS fill_rate
-FROM requests r LEFT JOIN fills f ON f.request_id = r.request_id
-GROUP BY r.configuration, date_trunc('hour', r.at)
+,
+asked AS (
+  SELECT configuration, date_trunc('hour', at) AS hour, count(DISTINCT evid) AS breaks,
+    count(DISTINCT session_id) AS sessions, count(DISTINCT request_id) AS ads_requests
+  FROM requests GROUP BY configuration, date_trunc('hour', at)
+),
+avails AS (
+  SELECT f.configuration, date_trunc('hour', coalesce(b.first_request_at, f.at)) AS hour,
+    count(*) AS filled_avails, sum(f.avail_seconds) AS avail_seconds, sum(f.filled_seconds) AS filled_seconds
+  FROM fills f LEFT JOIN session_breaks b
+    ON b.configuration = f.configuration AND b.session_id = f.session_id AND b.evid = f.evid
+  GROUP BY f.configuration, date_trunc('hour', coalesce(b.first_request_at, f.at))
+)
+SELECT q.configuration, q.hour, q.breaks, q.sessions, q.ads_requests, coalesce(a.filled_avails, 0) AS filled_avails,
+  a.avail_seconds, a.filled_seconds, a.filled_seconds / nullif(a.avail_seconds, 0) AS fill_rate
+FROM asked q LEFT JOIN avails a ON a.configuration = q.configuration AND a.hour = q.hour
 """,
     ),
     View(

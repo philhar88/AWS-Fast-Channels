@@ -209,7 +209,7 @@ adding; filter on the partition keys to keep scans small.
 | `mediatailor_ads` | Copies of every IaC playback configuration's ad decision server logs, JSON under `mediatailor/ads/`, without `requestHeaders` and `rawAdsRequest` | `datehour` (`yyyy/MM/dd/HH`, UTC) |
 | `mediatailor_manifest` | The same for the manifest service logs, under `mediatailor/manifest/`, without `mediaTailorPath`, `input` and `http` | `datehour` |
 | `v_breaks` | One row per aired break by SCTE-35 event id (`evid`): UPID, channel, the ad marker's `START-DATE`, the first ADS request, configurations, sessions, ADS requests, filled avails and seconds | — |
-| `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate | — |
+| `v_fill_by_pc` | Per playback configuration and hour: breaks, sessions, ADS requests, filled avails, avail and filled seconds, fill rate. A `FILLED_AVAIL` counts for the break its own ad request URL names (one without a URL, for its request's), never by `requestId` alone: MediaTailor can give one `requestId` to a break's fill and the next break's prefetch retrieval | — |
 | `v_zero_ads_sessions` | Sessions that saw at least three ad breaks and made no ad request, with the day, configuration and first and last break | — |
 | `ledger` | The ledger's archived records ([below](#ledger)) | `day` (`yyyy/MM/dd`) |
 | `pds_policy`, `pds_select`, `pds_delivery` | With `pds`: the Pod Decision Service's decision records, one row per call or tracker firing, with `decision_id`, `sid`, `evid` and `pc` ([pds.md](pds.md#decision-records)). Filter on `record = 'pds.<kind>'`: the objects hold an empty line between records | `datehour` |
