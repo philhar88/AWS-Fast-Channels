@@ -235,6 +235,7 @@ operations signal, never air time.
 | `identity` | A viewer is not signed in, or `POST /playback` fails | The viewer app plays the plan's anonymous URL, whose sessions are CONTEXTUAL |
 | `identity` | A ticket is replayed by another session, expired, unknown or for another configuration | `POST /redeem` answers 409 and leaves the row as it was, and the Pod Decision Service serves every break CONTEXTUAL with the reason |
 | `identity` | The PRE_SESSION redeem fails or times out | The session starts anyway. The Pod Decision Service binds a fresh ticket itself, inside its redeem window, with the same conditional update |
+| `identity` | The multivariant request fails (an origin error while a channel starts) and the player retries the same URL | MediaTailor created the first session and redeemed the ticket for it before the error, so the retry is a replay: CONTEXTUAL ads. A player mints a new ticket for each attempt ([identity.md](identity.md#post-playback)) |
 | `identity` | The ticket lookup fails (timeout, throttle) | That break is SAFE: own book and house ads only, never third parties for what may be a signed-in viewer |
 | `identity` | The edge rebuild throws | It catches every error and passes the emptied request on: an anonymous session, never CloudFront's 503. `<prefix>-identity-edge-errors` fires on any execution error |
 | `selling` | The seller, its bridge or the sync function is down | No new buy becomes a line, and the delivery the buyer reads stops advancing. Lines already published keep serving through the snapshot until their flight ends |

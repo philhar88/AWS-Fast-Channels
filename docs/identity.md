@@ -73,6 +73,10 @@ Content-Type: application/json
 
 - The URL is single-use. The player opens it within `expires_in` seconds (`modules.identity.redeem_window_seconds`),
   in one player session. Every new play, retry or channel change asks for a new ticket.
+- **A failed start uses the ticket up too.** MediaTailor creates the session, and runs the PRE_SESSION redeem, before
+  it reads the origin. So a multivariant request that fails (a 5xx while a channel is starting, for example) has
+  already bound the ticket to a session nobody plays. The same URL again is a replay, and its session is CONTEXTUAL.
+  When the multivariant request fails, mint again before retrying.
 - The URL names the channel's stable sibling, from its playback plan `/plan/playback/<channel>.json`.
 - `cid` is the mint's correlation id, also on the ticket row.
 
