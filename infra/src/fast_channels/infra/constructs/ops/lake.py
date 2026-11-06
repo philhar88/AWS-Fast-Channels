@@ -34,6 +34,7 @@ from fast_channels.core.mediatailor_logs import (
     EXCLUDED_MANIFEST_LOG_FIELDS,
     MANIFEST_LOG_FIELDS,
 )
+from fast_channels.core.monetization.prefetch import NAME_PREFIX
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.delivery import ACCESS_LOG_FIELDS, VIEWER_ACCESS_LOG_FIELDS
 from fast_channels.infra.constructs.logs import DELIVERY_PRINCIPAL, deliver
@@ -247,15 +248,23 @@ class View:
 _HIVE_TYPES: Final = {"varchar": "string", "bigint": "bigint", "double": "double", "timestamp(3)": "timestamp"}
 
 # ADS requests carry the break's SCTE-35 event id (evid=) and the content's UPID (upid=); the ad marker's DATERANGE ID
-# is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). A FILLED_AVAIL belongs to the break
-# its own ad request URL names, never to whatever shares its requestId: MediaTailor gives one requestId to everything a
-# playlist request set off, which can be a break's FILLED_AVAIL and, milliseconds later, the next break's prefetch
-# retrieval (seen live, 2026-11-06). One without a URL takes the latest request of its requestId before it.
+# is "<start epoch ms>-<segmentation type>-<event id in hex>" (seen live, 2026-10). An event belongs to the break its
+# prefetch schedule names (pf-<evid>, the release module's), else to the one its own ad request URL names, never to
+# whatever shares its requestId (all seen live, 2026-11-06):
+# - a FILLED_AVAIL from a retrieval can carry the previous break's URL, while its prefetchScheduleName is right;
+# - MediaTailor gives one requestId to everything a playlist request set off, which can be a break's FILLED_AVAIL and,
+#   milliseconds later, the next break's prefetch retrieval.
+# A fill with neither takes the latest request of its requestId before it.
+_SCHEDULE_EVID: Final = (
+    "TRY_CAST(regexp_extract(prefetchschedulename, '^" + NAME_PREFIX + "([0-9]{{1,10}})$', 1) AS bigint)"
+)
+"""The event id a prefetch schedule's name carries (``core.monetization.prefetch.event_id_of``), braces doubled for
+``str.format``."""
 _BREAK_EVENTS: Final = """
 WITH requests AS (
   SELECT originid AS configuration, sessionid AS session_id, requestid AS request_id,
     CAST(from_iso8601_timestamp(eventtimestamp) AS timestamp(3)) AS at,
-    TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint) AS evid,
+    coalesce(<SCHEDULE_EVID>, TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint)) AS evid,
     url_extract_parameter(adsrequesturl, 'upid') AS upid,
     url_extract_parameter(adsrequesturl, 'ch') AS channel
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'MAKING_ADS_REQUEST'
@@ -270,7 +279,7 @@ markers AS (
 filled AS (
   SELECT originid AS configuration, sessionid AS session_id, requestid AS request_id,
     CAST(from_iso8601_timestamp(eventtimestamp) AS timestamp(3)) AS at,
-    TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint) AS evid,
+    coalesce(<SCHEDULE_EVID>, TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint)) AS evid,
     TRY_CAST(json_extract_scalar(avail, '$.originavailduration') AS double) AS avail_seconds,
     TRY_CAST(json_extract_scalar(avail, '$.filledduration') AS double) AS filled_seconds
   FROM "{db}"."mediatailor_ads" WHERE eventtype = 'FILLED_AVAIL'
@@ -286,7 +295,7 @@ session_breaks AS (
   SELECT configuration, session_id, evid, min(at) AS first_request_at
   FROM requests WHERE evid IS NOT NULL GROUP BY configuration, session_id, evid
 )
-"""
+""".replace("<SCHEDULE_EVID>", _SCHEDULE_EVID)
 
 VIEWS: Final = (
     View(

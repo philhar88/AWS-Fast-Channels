@@ -276,16 +276,19 @@ def test_account_quota_alarms_exist_and_are_not_alarming(ops: Stage) -> None:
     assert all(alarm["TreatMissingData"] == "notBreaching" for alarm in alarms), alarms
 
 
-PAIRING_ROWS: Final = (  # originid, sessionid, requestid, eventtype, eventtimestamp, adsrequesturl, avail
-    ("pc", "s1", "R1", "MAKING_ADS_REQUEST", "2026-11-06T00:27:25.000Z", "https://a.example/?evid=100", None),
-    ("pc", "s1", "X", "FILLED_AVAIL", "2026-11-06T00:29:55.900Z", "https://a.example/?evid=100", "30.03"),
-    ("pc", "s1", "X", "MAKING_ADS_REQUEST", "2026-11-06T00:29:55.980Z", "https://a.example/?evid=200", None),
-    ("pc", "s1", "R3", "FILLED_AVAIL", "2026-11-06T00:31:38.000Z", "https://a.example/?evid=200", "120.12"),
-    ("pc", "s1", "R4", "MAKING_ADS_REQUEST", "2026-11-06T00:34:00.000Z", "https://a.example/?evid=300", None),
-    ("pc", "s1", "R4", "FILLED_AVAIL", "2026-11-06T00:34:46.000Z", None, "60.06"),
+PAIRING_ROWS: Final = (
+    # originid, sessionid, requestid, eventtype, eventtimestamp, adsrequesturl, prefetchschedulename, filled seconds
+    ("pc", "s1", "R1", "MAKING_ADS_REQUEST", "2026-11-06T00:27:25.000Z", "https://a.example/?evid=100", "pf-100", None),
+    ("pc", "s1", "X", "FILLED_AVAIL", "2026-11-06T00:29:55.900Z", "https://a.example/?evid=100", "pf-100", "30.03"),
+    ("pc", "s1", "X", "MAKING_ADS_REQUEST", "2026-11-06T00:29:55.980Z", "https://a.example/?evid=200", "pf-200", None),
+    ("pc", "s1", "R3", "FILLED_AVAIL", "2026-11-06T00:31:38.000Z", "https://a.example/?evid=100", "pf-200", "120.12"),
+    ("pc", "s1", "R4", "MAKING_ADS_REQUEST", "2026-11-06T00:34:00.000Z", "https://a.example/?evid=300", None, None),
+    ("pc", "s1", "R4", "FILLED_AVAIL", "2026-11-06T00:34:46.000Z", None, None, "60.06"),
 )
-"""One session's three breaks as MediaTailor logged them on 2026-11-06: the FILLED_AVAIL of break 100 and, 80 ms
-later, the prefetch retrieval of break 200 share the requestId ``X``; break 300's FILLED_AVAIL has no ad request URL."""
+"""One session's three breaks as MediaTailor logged them on 2026-11-06 (fastcih, fastcid): the FILLED_AVAIL of break 100
+and, 80 ms later, the prefetch retrieval of break 200 share the requestId ``X``; break 200's fill from its retrieval
+carries break 100's ad request URL but its own schedule ``pf-200``; break 300 was asked in real time, and its
+FILLED_AVAIL has no URL."""
 
 
 def _inline_ads(rows: tuple[tuple[str | None, ...], ...]) -> str:
@@ -295,20 +298,22 @@ def _inline_ads(rows: tuple[tuple[str | None, ...], ...]) -> str:
         return "CAST(NULL AS varchar)" if value is None else "'" + value.replace("'", "''") + "'"
 
     values = ", ".join(
-        f"({', '.join(text(v) for v in row[:6])}, "
-        + (text(f'{{"originavailduration": "{row[6]}", "filledduration": "{row[6]}"}}') if row[6] else text(None))
+        f"({', '.join(text(v) for v in row[:7])}, "
+        + (text(f'{{"originavailduration": "{row[7]}", "filledduration": "{row[7]}"}}') if row[7] else text(None))
         + ", CAST(NULL AS varchar), CAST(NULL AS varchar))"
         for row in rows
     )
     columns = (
-        "originid, sessionid, requestid, eventtype, eventtimestamp, adsrequesturl, avail, admarkers, segmentationupid"
+        "originid, sessionid, requestid, eventtype, eventtimestamp, adsrequesturl, prefetchschedulename, avail, "
+        "admarkers, segmentationupid"
     )
     return f"(SELECT * FROM (VALUES {values}) AS t({columns}))"
 
 
 def test_the_break_views_pair_each_fill_with_its_own_break(ops: Stage) -> None:
     """The deployed views' SQL on the lake's workgroup, over :data:`PAIRING_ROWS` instead of the table: each break
-    gets its own FILLED_AVAIL, whatever requestId it shares, and one without a URL its request's break."""
+    gets its own FILLED_AVAIL: by its prefetch schedule, whatever URL or requestId it carries, else by its URL, else
+    its request's."""
     database = ops.output(Module.OPS, "LakeDatabase")
     views = {view.name: view for view in VIEWS}
 

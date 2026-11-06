@@ -127,3 +127,30 @@ def test_a_fill_and_the_next_breaks_retrieval_under_one_request_id_each_go_to_th
     assert set(found) == {("s", "7"), ("s", "8")}
     assert (found[("s", "7")].events, found[("s", "7")].filled_seconds) == ({"FILLED_AVAIL"}, 30.03)
     assert found[("s", "8")].events == {"MAKING_ADS_REQUEST", "VAST_REDIRECT"}
+
+
+def test_a_fill_from_a_retrieval_belongs_to_its_schedules_break_whatever_url_it_carries() -> None:
+    """Seen live (2026-11-06): break 8's FILLED_AVAIL from its retrieval ``pf-8`` carried break 7's ad request URL."""
+
+    def event(kind: str, request: str, at: str, **fields: Any) -> dict[str, Any]:
+        return {"eventType": kind, "sessionId": "s", "requestId": request, "eventTimestamp": at, **fields}
+
+    seven, eight = "https://mock.example/ads?sid=s&evid=7", "https://mock.example/ads?sid=s&evid=8"
+    events = [
+        event("MAKING_ADS_REQUEST", "a", "2026-11-06T03:36:00.000Z", adsRequestUrl=eight, prefetchScheduleName="pf-8"),
+        event(
+            "FILLED_AVAIL",
+            "b",
+            "2026-11-06T03:39:05.295Z",
+            adsRequestUrl=seven,
+            prefetchScheduleName="pf-8",
+            avail={"filledDuration": 120.12},
+        ),
+    ]
+    found = breaks(events)
+
+    assert set(found) == {("s", "8")}
+    assert (found[("s", "8")].events, found[("s", "8")].filled_seconds) == (
+        {"MAKING_ADS_REQUEST", "FILLED_AVAIL"},
+        120.12,
+    )

@@ -289,7 +289,12 @@ def test_a_filled_avail_counts_for_the_break_its_own_url_names(name: str) -> Non
 
     assert "f.request_id = r.request_id" not in sql and "ON f.request_id" not in sql
     assert 'FROM "{db}"."mediatailor_ads" WHERE eventtype = \'FILLED_AVAIL\'' in sql
-    assert "coalesce(f.evid, max_by(r.evid, r.at)) AS evid" in sql, "the URL's evid, else its request's"
+    assert "coalesce(f.evid, max_by(r.evid, r.at)) AS evid" in sql, "its own evid, else its request's"
+    own = (
+        "coalesce(TRY_CAST(regexp_extract(prefetchschedulename, '^pf-([0-9]{{1,10}})$', 1) AS bigint), "
+        "TRY_CAST(url_extract_parameter(adsrequesturl, 'evid') AS bigint)) AS evid"
+    )
+    assert sql.count(own) == 2, "requests and fills: the prefetch schedule's break first, a stale URL second"
     assert "ON f.evid IS NULL AND r.request_id = f.request_id AND r.session_id = f.session_id AND r.at <= f.at" in sql
 
 

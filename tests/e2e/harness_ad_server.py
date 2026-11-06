@@ -21,6 +21,7 @@ from harness import Player, TransientResponseError
 from playback import media_segments
 
 from fast_channels.core.manifests import parse_multivariant
+from fast_channels.core.monetization.prefetch import event_id_of
 
 POLL_SECONDS: Final = 3.5
 SMART_TV_USER_AGENT: Final = "Mozilla/5.0 (SMART-TV; Linux) fast-channels-e2e/4.0"
@@ -142,16 +143,23 @@ def _evid(url: object) -> str:
     return parse_qs(urlsplit(str(url or "")).query).get("evid", [""])[0]
 
 
+def _break_of(event: Mapping[str, Any]) -> str:
+    """The event id of the break an ADS event names: its prefetch schedule's, else its URL's; "" for neither."""
+    scheduled = event_id_of(str(event.get("prefetchScheduleName") or ""))
+    return str(scheduled) if scheduled is not None else _evid(event.get("adsRequestUrl"))
+
+
 def breaks(events: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], Break]:
     """MediaTailor's ADS log as one break per session and event id (``evid`` of the ad server's request).
 
-    An event whose URL names a break (``evid``) belongs to that break. One without (following the Wrapper is a second
-    ``MAKING_ADS_REQUEST`` of the same request, without ``evid``) belongs to the break of the latest event of its
-    ``requestId`` before it, else of the first one after it. MediaTailor gives one ``requestId`` to everything a single
-    playlist request set off, which can be two breaks: a break's ``FILLED_AVAIL`` and, milliseconds later, the next
-    break's prefetch retrieval (seen live, 2026-11-06). With prefetch (M3-06) the retrieval is its own request, without
-    ``adBreakCorrelationId``, and the fill at the break another one, whose URL names the break again. Every session of
-    a break shares its ``adBreakCorrelationId``, so that id joins nothing here."""
+    An event belongs to the break its prefetch schedule names (``pf-<evid>``: a fill from a retrieval can carry the
+    previous break's URL, seen live 2026-11-06), else to the one its URL names (``evid``). One with neither (following
+    the Wrapper is a second ``MAKING_ADS_REQUEST`` of the same request, without ``evid``) belongs to the break of the
+    latest event of its ``requestId`` before it, else of the first one after it. MediaTailor gives one ``requestId``
+    to everything a single playlist request set off, which can be two breaks: a break's ``FILLED_AVAIL`` and,
+    milliseconds later, the next break's prefetch retrieval (seen live, 2026-11-06). With prefetch (M3-06) the
+    retrieval is its own request, without ``adBreakCorrelationId``, and the fill at the break another one. Every
+    session of a break shares its ``adBreakCorrelationId``, so that id joins nothing here."""
     by_request: dict[str, list[Mapping[str, Any]]] = {}
     for n, event in enumerate(events):
         by_request.setdefault(str(event.get("requestId") or f"#{n}"), []).append(event)
@@ -159,9 +167,7 @@ def breaks(events: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], Break]:
     for group in by_request.values():
         group.sort(key=lambda event: str(event.get("eventTimestamp") or ""))  # stable: log order without a time
         keys = [
-            (str(sid), evid)
-            if (sid := event.get("sessionId")) and (evid := _evid(event.get("adsRequestUrl")))
-            else None
+            (str(sid), evid) if (sid := event.get("sessionId")) and (evid := _break_of(event)) else None
             for event in group
         ]
         latest = next((key for key in keys if key is not None), None)

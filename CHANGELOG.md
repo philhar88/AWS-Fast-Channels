@@ -82,9 +82,10 @@ All notable changes to this project are documented here. The format follows
 - **The lake's break views pair a fill with its own break** (`v_breaks`, `v_fill_by_pc`). They joined `FILLED_AVAIL`
   to `MAKING_ADS_REQUEST` by `requestId`, but MediaTailor gives one `requestId` to everything a playlist request set
   off, which can be a break's `FILLED_AVAIL` and, 80 ms later, the next break's prefetch retrieval (seen live). That
-  fill then counted for the next break, and the break's own fill for none. A fill now belongs to the break its own ad
-  request URL names, and one without a URL to the latest request of its `requestId` before it. The ad-server leg's
-  e2e harness reads the ADS log by the same rule.
+  fill then counted for the next break, and the break's own fill for none. An event now belongs to the break its
+  prefetch schedule names (`pf-<evid>`: a fill from a retrieval can carry the previous break's ad request URL, also seen
+  live), else to the one its own URL names, and a fill with neither to the latest request of its `requestId` before
+  it. The ad-server leg's e2e harness reads the ADS log by the same rule.
 
 ## [4.0.0] - 2026-10-31
 
