@@ -11,7 +11,10 @@ The Release Controller's prefetcher builds them from Channel Assembly's schedule
    airs) or moved by more than :data:`MOVED_TOLERANCE` (no update exists, so a moved break's schedule is deleted
    and created again). A smaller shift keeps the schedule untouched: MediaTailor puts the retrieved ads in the first
    break of its consumption window whose ``scte.event_id`` matches, and deleting a retrieved schedule threw them
-   away and sent every session to a second auction at the break (fastcij 2026-10-30).
+   away and sent every session to a second auction at the break (fastcij 2026-10-30). A schedule whose consumption
+   window has opened is never deleted: once its break starts it leaves the schedule read, and a delete then threw
+   away what the sessions had retrieved before they reached the marker, some of them without any ad (fastcid
+   2026-11-06, ``pf-132526385`` deleted 7 s into its break).
 
 The schedule of record is the source of truth, and the plan is a function of it: a run over an unchanged schedule
 writes nothing. Late joiners and viewers who join during a break get real-time insertion, as accepted.
@@ -221,6 +224,9 @@ class Plan:
     """Why nothing is created (a RECURRING schedule is there)."""
     left_out: list[str] = field(default_factory=list)
     """Breaks of the horizon that get no schedule, and why."""
+    consuming: list[str] = field(default_factory=list)
+    """Schedules whose consumption window is open: never deleted or created again until it closes, whatever the
+    schedule of record says now (their break may be on air, and its sessions may not have reached its marker)."""
 
 
 def plan(
@@ -239,7 +245,11 @@ def plan(
     active = {i["Name"]: i for i in items if event_id_of(i["Name"]) is not None and i["Consumption"]["EndTime"] > now}
     scheduled = {b.event_id: b for b in breaks}
     delete = []
+    consuming: list[str] = []
     for name, schedule in active.items():
+        if (opens := schedule["Consumption"].get("StartTime")) is not None and opens <= now:
+            consuming.append(name)  # its break may be on air: only the sessions can still use what it retrieved
+            continue
         found = scheduled.get(event_id_of(name))  # type: ignore[arg-type]  # active holds only pf-<event id> names
         if found is None or _moved(schedule, found, policy):
             delete.append(name)
@@ -261,7 +271,9 @@ def plan(
             continue
         create.append(request)
         remaining += 1
-    return Plan(configuration, create=create, delete=sorted(delete), kept=kept, left_out=left_out)
+    return Plan(
+        configuration, create=create, delete=sorted(delete), kept=kept, left_out=left_out, consuming=sorted(consuming)
+    )
 
 
 def _stored(at: datetime) -> datetime:
