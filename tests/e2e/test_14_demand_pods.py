@@ -68,6 +68,7 @@ from harness_pods import (
     masked,
     milliseconds,
     objects,
+    playback_plan,
     pod_of,
     record_pattern,
     timestamp,
@@ -84,7 +85,6 @@ from fast_channels.core.demo_demand import demo_index_key
 from fast_channels.core.events import CatalogItemChanged, put_events_entry
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.prefetch import PrefetchPolicy, schedule_name
-from fast_channels.core.monetization.release import PlaybackPlan
 from fast_channels.core.pbs_config import tracker_host
 from fast_channels.core.pds.delivery import CDN_LOG_EVERY, CDN_LOG_LAG, Beacon, Credit, Source, beacon
 from fast_channels.core.pds.records import DELIVERY_RECORD, POLICY_RECORD, SELECT_RECORD
@@ -451,16 +451,6 @@ def schedule(tools: Tools, channel: str, asset_id: str) -> list[dict[str, Any]]:
         assert plan["publishable"], f"plan {plan['plan_id']} has errors: {plan['violations']}"
         programs += tools("schedule___publish", plan_id=plan["plan_id"])["programs"]
     return programs
-
-
-def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
-    """The channel's playback plan, read through the CDN as a player reads it."""
-    ssm = stage.session.client("ssm", region_name=stage.region)
-    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
-    with ipv4_client(timeout=10.0) as http:
-        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
-    response.raise_for_status()
-    return PlaybackPlan.model_validate_json(response.text)
 
 
 def read_logs(smoke: Smoke, sources: Sources) -> None:

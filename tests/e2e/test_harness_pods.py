@@ -466,6 +466,28 @@ def test_a_break_filled_from_its_retrieval_airs_the_retrieval() -> None:
     assert joined.rendered() == (["direct1"], ["sim1"])
 
 
+def test_one_request_id_for_two_breaks_files_each_event_under_its_own_break() -> None:
+    """MediaTailor gave one requestId to a 30 s break's FILLED_AVAIL and, 80 ms later, the next break's prefetch
+    retrieval (seen live, 2026-11-06): each event goes to the break its URL names, a URL-less one to the latest
+    before it."""
+    short = "https://pbs.example/openrtb2/auction?evid=7&dur=30000"
+    retrieval = "https://pbs.example/openrtb2/auction?evid=8&dur=120000"
+    events = [
+        ads_event("AD_MARKER_FOUND", "q1", "2026-11-06T01:06:42.546Z"),
+        ads_event("FILLED_AVAIL", "q1", "2026-11-06T01:06:42.714Z", adsRequestUrl=short),
+        ads_event("MAKING_ADS_REQUEST", "q1", "2026-11-06T01:06:42.793Z", adsRequestUrl=retrieval),
+        ads_event("RAW_ADS_RESPONSE", "q1", "2026-11-06T01:06:42.945Z", adsRequestUrl=retrieval),
+        ads_event("VAST_RESPONSE", "q1", "2026-11-06T01:06:42.949Z"),
+    ]
+
+    found = pods.breaks(events, [], [])
+
+    assert {key: found[key].event_types for key in found} == {
+        (SID, "7"): ["AD_MARKER_FOUND", "FILLED_AVAIL"],
+        (SID, "8"): ["MAKING_ADS_REQUEST", "RAW_ADS_RESPONSE", "VAST_RESPONSE"],
+    }
+
+
 def test_an_auction_holds_what_was_logged_from_just_before_its_request_until_the_next() -> None:
     events = [
         ads_event(

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
+import httpx
 import pytest
 import seed_personas
 from _stack import Module, Stage
@@ -38,6 +39,7 @@ from harness_pods import (
     ipv4_client,
     milliseconds,
     objects,
+    playback_plan,
     record_pattern,
     wait_until_ready,
     watch,
@@ -62,6 +64,9 @@ LONG_BREAKS: Final = {**BREAK_POLICY, "slate_gops": 60}
 """One 120.12 s break per program."""
 BREAK_SECONDS: Final = [120.12, 120.12]
 TAIL: Final = timedelta(seconds=90)
+SERVING_TIMEOUT_S: Final = 300
+"""How long a just-started channel may take to serve its playlist (its origin answers 404 until then)."""
+JOIN_ATTEMPTS: Final = 3
 LOGS_TIMEOUT_S: Final = 420
 LAKE_TIMEOUT_S: Final = 900
 """The decision records reach the lake through Firehose's buffer (up to 5 minutes) and the hour's partition."""
@@ -154,11 +159,9 @@ def run(
             wait_until_ready(stage, edge)
             windows = break_windows(schedule(tools, channel.name, asset.asset_id))
             assert [round((w.ends - w.starts).total_seconds(), 2) for w in windows] == BREAK_SECONDS, windows
+            wait_until_serving(http, playback_plan(stage, channel.name).playback["hls"])
             joined = datetime.now(UTC)
-            viewers = {
-                who: Viewer.join(Player(client=http), mint(stage, tokens[who], channel.name)["url"])
-                for who in PERSONAS  # minted and joined at once: a ticket must be redeemed within 120 s
-            }
+            viewers = {who: join(stage, http, tokens[who], channel.name) for who in PERSONAS}
             watch(list(viewers.values()), ends=windows[-1].ends + TAIL)
         finally:
             tools("channels___stop_channel", channel=channel.name)
@@ -176,6 +179,29 @@ def run(
     read_logs(found, Sources.of(stage, edge))
     print(report(found))
     yield found
+
+
+def wait_until_serving(http: httpx.Client, url: str) -> None:
+    """Until the channel's plain playback URL answers its multivariant playlist (a guest session)."""
+
+    def serving() -> bool | None:
+        return http.get(url).status_code == httpx.codes.OK or None
+
+    wait_for(serving, timeout=SERVING_TIMEOUT_S, interval=5, what=f"the channel to serve {url}")
+
+
+def join(stage: Stage, http: httpx.Client, token: str, channel: str) -> Viewer:
+    """A signed-in viewer's session, as the viewer app starts one: a ticket minted for each attempt, never a ticket
+    retried. A ticket binds the first session that redeems it, and MediaTailor creates (and redeems) the session
+    even when it answers the player an error, so a retry with the same ticket would be a replay."""
+    failures = []
+    for _ in range(JOIN_ATTEMPTS):
+        response = http.get(mint(stage, token, channel)["url"])  # minted and joined at once: redeemed within 120 s
+        if response.status_code == httpx.codes.OK:
+            return Viewer.of(Player(client=http), response)
+        failures.append(response.status_code)
+        time.sleep(5)
+    raise AssertionError(f"no session after {JOIN_ATTEMPTS} tickets: {failures}")
 
 
 def read_logs(run: Run, sources: Sources) -> None:
