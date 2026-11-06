@@ -175,6 +175,14 @@ class AsRunLogging(Construct):
             [library.table_arn],
             conditions={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": [f"CHANNEL#{prefix}-*"]}},
         )
+        # OPTIMIZATION(aws): W-2 1.31 the sweep reads the channels' StopChannel calls: delete with the lookup
+        # Channel Assembly can lose the AdBreakStart of a break on air shortly before StopChannel, so the sweep looks
+        # the stops up in CloudTrail's event history (functions.as_run_reconciler.channel_stops).
+        sweeper.allow(
+            ["cloudtrail:LookupEvents"],
+            ["*"],
+            why="LookupEvents has no resource-level permissions; the sweep reads StopChannel calls only",
+        )
         nag.acknowledge(
             sweeper,
             {nag.LAMBDA_DLQ: "Invoked by a schedule every 15 minutes; a failed sweep is repeated by the next one"},

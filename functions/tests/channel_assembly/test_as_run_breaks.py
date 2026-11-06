@@ -121,7 +121,13 @@ class Library:
         return None if item is None else dict(item)
 
     def decide(
-        self, item: dict[str, Any], index: int, status: reconciler.BreakStatus, *, aired_at: str | None = None
+        self,
+        item: dict[str, Any],
+        index: int,
+        status: reconciler.BreakStatus,
+        *,
+        aired_at: str | None = None,
+        stopped_at: str | None = None,
     ) -> bool:
         stored = self.items[item["name"]]["breaks"][index]
         if "status" in stored:
@@ -129,10 +135,43 @@ class Library:
         stored["status"] = status.value
         if aired_at is not None:
             stored["aired_at"] = aired_at
+        if stopped_at is not None:
+            stored["stopped_at"] = stopped_at
         return True
 
 
-def test_the_run_reconciles_20_aired_and_4_unaired_breaks(monkeypatch: pytest.MonkeyPatch, context: Any) -> None:
+def stop_event(at: str, channel: str = RUN["channel"], **record: Any) -> dict[str, Any]:
+    """A ``LookupEvents`` entry of a ``StopChannel`` call, as CloudTrail's event history returns it (2026-11-06)."""
+    cloudtrail = {
+        "eventSource": "mediatailor.amazonaws.com",
+        "eventName": "StopChannel",
+        "eventTime": at,
+        "requestParameters": {"ChannelName": channel},
+        **record,
+    }
+    return {
+        "EventId": f"e-{at}",
+        "EventName": "StopChannel",
+        "EventTime": datetime.fromisoformat(at),
+        "EventSource": cloudtrail["eventSource"],
+        "CloudTrailEvent": json.dumps(cloudtrail),
+    }
+
+
+def lookup(stub: Stub, *events: dict[str, Any]) -> None:
+    stub("cloudtrail").add_response(
+        "lookup_events",
+        {"Events": list(events)},
+        {
+            "LookupAttributes": [{"AttributeKey": "EventName", "AttributeValue": "StopChannel"}],
+            "StartTime": ANY,
+            "EndTime": ANY,
+        },
+    )
+
+
+def reconciled(monkeypatch: pytest.MonkeyPatch, context: Any) -> Library:
+    """The run's library after the reconciler read its as-run log: 20 breaks aired, the sweep not run yet."""
     library = Library()
     monkeypatch.setattr(reconciler, "_program", library.program)
     monkeypatch.setattr(reconciler, "_decide", library.decide)
@@ -140,8 +179,15 @@ def test_the_run_reconciles_20_aired_and_4_unaired_breaks(monkeypatch: pytest.Mo
         reconciler, "mark_aired", lambda start: library.items[start.program].update(aired_at=start.timestamp) or True
     )
     monkeypatch.setattr(reconciler, "_recent_programs", lambda since: iter(library.items.values()))
-
     reconciler.handler(subscription(*RUN["as_run"]), context)
+    monkeypatch.setattr(reconciler, "_now_ms", lambda: ms(RUN["stopped_at"]) + 3600_000)
+    return library
+
+
+def test_the_run_reconciles_20_aired_and_4_unaired_breaks(
+    monkeypatch: pytest.MonkeyPatch, stub: Stub, context: Any
+) -> None:
+    library = reconciled(monkeypatch, context)
     aired = {
         (name, i): b
         for name, item in library.items.items()
@@ -151,12 +197,75 @@ def test_the_run_reconciles_20_aired_and_4_unaired_breaks(monkeypatch: pytest.Mo
     assert len(aired) == 20
     for (name, i), stored in aired.items():
         assert stored["event_id"] == scte_event_id(name, i)
-    monkeypatch.setattr(reconciler, "_now_ms", lambda: ms(RUN["stopped_at"]) + 3600_000)
+    lookup(stub, stop_event(RUN["stopped_at"]))  # 46 s before the next break was due: it never aired
 
-    assert reconciler.sweep({}, context) == {"unaired": 4}
+    assert reconciler.sweep({}, context) == {"unaired": 4, "aired_before_stop": 0}
     last = library.items[RUN["programs"][3]["name"]]["breaks"]
     assert [b["status"] for b in last] == ["AIRED", "AIRED", "UNAIRED", "UNAIRED", "UNAIRED", "UNAIRED"]
-    assert reconciler.sweep({}, context) == {"unaired": 0}  # decided breaks stay decided
+    assert reconciler.sweep({}, context) == {"unaired": 0, "aired_before_stop": 0}  # decided breaks stay decided
+
+
+def test_a_break_the_channel_stopped_in_aired_without_its_break_start(
+    monkeypatch: pytest.MonkeyPatch, stub: Stub, context: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """W-2 1.31: had the run stopped 25 s into break 2 of its last program, the as-run log could lack the break's
+    ``AdBreakStart`` (as on 2026-10-29). The sweep marks it aired at its planned time, with the stop."""
+    library = reconciled(monkeypatch, context)
+    name = RUN["programs"][3]["name"]
+    on_air = "2026-10-27T22:10:58.468Z"  # break 2: the program's start plus its offset plus breaks 0 and 1
+    capsys.readouterr()
+    lookup(
+        stub,
+        stop_event("2026-10-27T22:11:23+00:00"),
+        stop_event("2026-10-27T22:11:00+00:00", eventSource="medialive.amazonaws.com"),  # another service's action
+        stop_event("2026-10-27T22:11:01+00:00", errorCode="ConflictException"),  # a stop that failed
+        stop_event("2026-10-27T22:11:02+00:00", channel="other-channel"),
+    )
+
+    assert reconciler.sweep({}, context) == {"unaired": 3, "aired_before_stop": 1}
+    third = library.items[name]["breaks"][2]
+    assert (third["status"], third["aired_at"], third["stopped_at"]) == (
+        "AIRED",
+        on_air,
+        "2026-10-27T22:11:23.000Z",
+    )
+    assert [b["status"] for b in library.items[name]["breaks"][3:]] == ["UNAIRED"] * 3
+    [metrics] = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"_aws"' in line]
+    assert (metrics["BreaksAiredBeforeStop"], metrics["BreaksUnaired"]) == ([1.0], [3.0])
+
+
+def test_without_access_to_cloudtrail_the_sweep_marks_them_unaired(
+    monkeypatch: pytest.MonkeyPatch,
+    stub: Stub,
+    client_error: Callable[..., dict[str, Any]],
+    context: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An SCP that denies ``cloudtrail:LookupEvents``: the sweep works as it did before the lookup."""
+    reconciled(monkeypatch, context)
+    stub("cloudtrail").add_client_error("lookup_events", **client_error("AccessDeniedException", status=400))
+
+    assert reconciler.sweep({}, context) == {"unaired": 4, "aired_before_stop": 0}
+    assert "cannot read the channels' stops from CloudTrail" in [r.getMessage() for r in caplog.records]
+
+
+def test_a_break_waits_for_cloudtrail_to_hold_its_stop(
+    monkeypatch: pytest.MonkeyPatch, stub: Stub, context: Any
+) -> None:
+    """A stop reaches CloudTrail's event history minutes late: a break is decided only once its minute and that lag
+    have passed."""
+    library = reconciled(monkeypatch, context)
+    name = RUN["programs"][3]["name"]
+    on_air = ms("2026-10-27T22:10:58.468Z")
+    settled = on_air + reconciler.STOP_LOSS_MS + reconciler.HISTORY_LAG_MS
+    monkeypatch.setattr(reconciler, "_now_ms", lambda: settled)  # break 2's end + 10 min have passed long before
+
+    assert reconciler.sweep({}, context) == {"unaired": 0, "aired_before_stop": 0}  # no lookup: nothing due
+    monkeypatch.setattr(reconciler, "_now_ms", lambda: settled + 1)
+    lookup(stub)
+
+    assert reconciler.sweep({}, context) == {"unaired": 1, "aired_before_stop": 0}
+    assert [b.get("status") for b in library.items[name]["breaks"][2:]] == ["UNAIRED", None, None, None]
 
 
 def test_a_skipped_programs_breaks_never_air(monkeypatch: pytest.MonkeyPatch, context: Any) -> None:
@@ -167,7 +276,7 @@ def test_a_skipped_programs_breaks_never_air(monkeypatch: pytest.MonkeyPatch, co
     monkeypatch.setattr(reconciler, "_recent_programs", lambda since: iter([skipped]))
     monkeypatch.setattr(reconciler, "_now_ms", lambda: RUN["programs"][1]["start_ms"])  # even before its time
 
-    assert reconciler.sweep({}, context) == {"unaired": len(skipped["breaks"])}
+    assert reconciler.sweep({}, context) == {"unaired": len(skipped["breaks"]), "aired_before_stop": 0}
 
 
 def test_a_break_start_at_no_breaks_time_is_ignored(monkeypatch: pytest.MonkeyPatch, context: Any) -> None:
@@ -199,7 +308,7 @@ def test_the_sweep_reads_every_channels_recent_programs(
         {"TableName": "library", "IndexName": "GSI1", "KeyConditionExpression": ANY, "ExclusiveStartKey": ANY},
     )
 
-    assert reconciler.sweep({}, context) == {"unaired": 0}
+    assert reconciler.sweep({}, context) == {"unaired": 0, "aired_before_stop": 0}
 
 
 def test_other_write_errors_fail_the_batch(

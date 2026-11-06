@@ -389,3 +389,25 @@ def test_with_ops_the_as_run_log_feeds_break_starts_and_a_sweep_decides_unaired_
     assert all(env["AS_RUN_BREAKS"] == "true" for env in reconcilers.values())
     assert schedule["ScheduleExpression"] == "rate(15 minutes)"
     assert default.stage.media.as_run.sweeper is None
+
+
+def test_only_the_sweep_reads_cloudtrail(ops: Any, default: Any) -> None:
+    """W-2 1.31: the sweep looks up StopChannel calls; ``LookupEvents`` takes no resource, so no other role gets it."""
+
+    def readers(template: Template) -> set[str]:
+        return {
+            role["Ref"]
+            for policy in resources(template, "AWS::IAM::Policy").values()
+            for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+            if "cloudtrail:LookupEvents" in json.dumps(statement["Action"])
+            for role in policy["Properties"]["Roles"]
+        }
+
+    media = ops.template(ops.stage.media)
+    sweeper = ops.stage.media.as_run.sweeper
+    assert sweeper is not None
+
+    assert readers(media) == {ops.stage.media.resolve(sweeper.function.role.role_name)["Ref"]}
+    assert all(
+        not readers(default.template(stack)) for stack in (default.stage.media, default.stage.data)
+    )  # without ops

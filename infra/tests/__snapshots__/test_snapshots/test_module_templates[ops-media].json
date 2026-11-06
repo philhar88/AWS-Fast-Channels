@@ -1057,6 +1057,7 @@
             },
             {
               "Action": [
+                "cloudtrail:LookupEvents",
                 "xray:PutTelemetryRecords",
                 "xray:PutTraceSegments"
               ],

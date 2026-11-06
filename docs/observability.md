@@ -327,7 +327,7 @@ every one: Powertools adds `service`, the function's handler module, to each met
 | `LadderProvisioningStarted`, `LadderReady`, `LadderFailed` | `service` = `ingest.kit` | Ladder provisioner |
 | `ToolSucceeded`, `ToolFailed` | `service` = `tools.<target>`, `tool` (`<target>___<tool>`) | Every agent tool call |
 | `ProgramsAired` | `service` = `as_run_reconciler` | As-run reconciler |
-| `BreaksAired`, `BreaksUnaired` | `service` = `as_run_reconciler` | As-run reconciler and its break sweep (ops module) |
+| `BreaksAired`, `BreaksUnaired`, `BreaksAiredBeforeStop` | `service` = `as_run_reconciler` | As-run reconciler and its break sweep (ops module). `BreaksAiredBeforeStop` counts breaks marked aired from a `StopChannel` that came at most 60 s after their start, because the as-run log can lose their `AdBreakStart` (W-2 1.31) |
 | `ChannelAlerts` | `service` = `ops.list_alerts` | Channel Assembly alerts poller (ops module) |
 | `ZeroAdsSessions` | `service` = `ops.zero_ads_sessions` | Zero-ad-sessions detector (ops module) |
 | `UnservedBreaks`, `RefilledBreaks` | `service` = `ops.zero_ads_sessions`, and a series with `ConfigurationName` (the sibling) too | Zero-ad-sessions detector, on the release module's siblings ([W-2 1.33, W-2 1.34](workarounds.md)) |
