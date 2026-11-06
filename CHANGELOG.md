@@ -122,8 +122,10 @@ All notable changes to this project are documented here. The format follows
 - **Unserved prefetched breaks are counted and alarmed** (`modules.release`). MediaTailor sometimes neither fills a
   prefetched break from its retrieval nor asks in real time, and logs nothing (`W-2 1.33`, seen in 3 of 33 sessions).
   The release module's zero-ads detector now counts each such break per sibling (`UnservedBreaks`) and alarms on any
-  (`<prefix>-release-unserved-breaks`). The silent-loss detector, which needs at least five markers a minute, could not
-  see one session's lost break. The e2e tests 18 and 20 tolerate exactly this case in at most one session in five.
+  (`<prefix>-release-unserved-breaks`). A break counts once per session, by its `DATERANGE` ID, and is served when any
+  of its sightings is: MediaTailor can meet a break's start marker three times, fill it from the retrieval, ask again
+  in real time and replace the pod, then do nothing (seen on a release-gate stage). The silent-loss detector, which
+  needs at least five markers a minute, could not see one session's lost break. The e2e tests 18 and 20 tolerate exactly this case in at most one session in five.
 - **The lake's break views pair a fill with its own break** (`v_breaks`, `v_fill_by_pc`). They joined `FILLED_AVAIL`
   to `MAKING_ADS_REQUEST` by `requestId`, but MediaTailor gives one `requestId` to everything a playlist request set
   off, which can be a break's `FILLED_AVAIL` and, 80 ms later, the next break's prefetch retrieval (seen live). That
