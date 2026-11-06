@@ -26,7 +26,7 @@ import pytest
 from _stack import Module, Stage
 from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
 from harness_demand import DemandEdge
-from harness_identity import SignedIn, mint, parameter, ticket_of, viewer
+from harness_identity import SignedIn, join, mint, parameter, ticket_of, viewer, wait_until_serving
 from harness_pods import Logs, Viewer, ipv4_client, json_object, prebid_tasks, record_pattern, warmups, watch
 from playback import Window, break_windows
 
@@ -174,16 +174,18 @@ def played(
                     assert planned["publishable"], f"plan {planned['plan_id']} has errors: {planned['violations']}"
                     windows = break_windows(tools("schedule___publish", plan_id=planned["plan_id"])["programs"])
                     plan = playback_plan(stage, channel.name)
-                    answer = mint(stage, signed_in.access_token, channel.name)
+                    wait_until_serving(http, plan.playback["hls"])  # a just-started channel answers 404 for a while
                     late = mint(stage, signed_in.access_token, channel.name)
+                    joined = datetime.now(UTC)
+                    signed, answer = join(stage, http, signed_in.access_token, channel.name)
                     tickets += [ticket_of(answer["url"]), ticket_of(late["url"])]
                     expire(stage, tickets[1])
-                    joined = datetime.now(UTC)
-                    sessions = {"signed_in": Viewer.join(Player(client=http), answer["url"])}
+                    sessions = {"signed_in": signed}
                     watch(list(sessions.values()), ends=datetime.now(UTC) + REPLAY_AFTER)
-                    sessions["replay"] = Viewer.join(Player(client=http), answer["url"])
+                    # The same ticket again, and the expired one: one request each, never retried.
+                    sessions["replay"] = Viewer.of(Player(client=http), http.get(answer["url"]))
                     sessions["guest"] = Viewer.join(Player(client=http), plan.playback["hls"])
-                    sessions["late"] = Viewer.join(Player(client=http), late["url"])
+                    sessions["late"] = Viewer.of(Player(client=http), http.get(late["url"]))
                     watch(list(sessions.values()), ends=windows[-1].ends + TAIL)
                 finally:
                     tools("channels___stop_channel", channel=channel.name)

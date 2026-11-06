@@ -28,8 +28,10 @@ from fast_channels.core.manifests import parse_multivariant
 from fast_channels.core.monetization import names
 from fast_channels.core.monetization.prefetch import event_id_of
 from fast_channels.core.monetization.release import PlaybackPlan
+from fast_channels.core.pds import names as pds_names
 from fast_channels.core.pds.book import Creative, house_creatives
 from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
+from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot
 
 if TYPE_CHECKING:
     from harness_demand import DemandEdge
@@ -682,3 +684,21 @@ def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
         response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
     response.raise_for_status()
     return PlaybackPlan.model_validate_json(response.text)
+
+
+def line_creatives(stage: Stage, channel: str) -> dict[str, str]:
+    """The own book's line creatives that ``/select`` can place on ``channel`` now, as the stage's PDS snapshot holds
+    them: each crid's line id. The demo lines of ``modules.pds.demo_lines``, and with ``modules.selling`` every booked
+    buy in its flight and sold on the channel."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    name = pds_names.parameter_name(stage.prefix, pds_names.Parameter.CONFIG_BUCKET)
+    bucket = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+    body = stage.session.client("s3", region_name=stage.region).get_object(Bucket=bucket, Key=SNAPSHOT_KEY)["Body"]
+    snapshot = Snapshot.model_validate_json(body.read())
+    now = datetime.now(UTC)
+    return {
+        crid: line.id
+        for line in snapshot.lines
+        if line.in_flight(now) and (not line.channels or channel in line.channels)
+        for crid in line.creatives
+    }
