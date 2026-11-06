@@ -1,7 +1,12 @@
 # 0037 — Ad load by viewer tier: a cap and a bar per tier, applied in `/select`
 
-**Status:** Proposed. It becomes Accepted once the end-to-end run on a fresh stage has shown two viewers of
-different tiers in one break getting their tiers' pods.
+**Status:** Accepted on 2026-11-06. On a fresh stage with the identity module, two signed-in viewers played the same
+two 120.12 s breaks (`tests/e2e/test_18_ad_load.py`). Both were bound, PSEUDONYMOUS.
+- Dana (`light`) got one ad, the $35 bid, and the slate. The $22.50 bid was turned away for the cap (`ad_load`), and
+  every bid under $20 for the bar (`below_bar`), the $8 tier-0 line among them.
+- Ben (`holdout`) got the four-ad pod of the control plan, his two line ads reserved and counted.
+- Both auctions asked the same bidders, no pod was empty, no break fell back, and `v_ad_load_kpis` showed both
+  tiers.
 
 ## Context
 
