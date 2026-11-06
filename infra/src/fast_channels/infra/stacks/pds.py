@@ -11,6 +11,7 @@ from aws_cdk import aws_ssm as ssm
 
 from fast_channels.core.pds import names
 from fast_channels.core.pds.book import Line
+from fast_channels.core.pds.delivery import release_after
 from fast_channels.core.pds.records import DeliveryRecord, PolicyRecord, SelectRecord
 from fast_channels.core.pds.snapshot import SnapshotBase, demo_demand
 from fast_channels.core.selling.names import BOOKED_LINES_KEY
@@ -229,6 +230,8 @@ class PdsStack(Stack):
             self.crawl_kpis = view_table(self, "CrawlKpis", KPIS, database_name=lake_database_name(prefix))
             for records in (self.policy_records, self.select_records, self.delivery_records):
                 self.crawl_kpis.node.add_dependency(records.table)
+        prefetch = config.modules.release.prefetch
+        lead = prefetch.retrieval_lead_seconds if config.modules.release.enabled and prefetch.enabled else 0
         self.sweeper = ReleaseSweeper(
             self,
             "Sweeper",
@@ -236,6 +239,7 @@ class PdsStack(Stack):
             group=self.publisher.group,
             alert_topic=alerts,
             log_retention=retention,
+            hold=release_after(lead),  # a prefetched break's reservations are made up to its lead before it
             removal_policy=removal,
         )
         outputs = {

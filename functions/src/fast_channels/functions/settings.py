@@ -105,6 +105,9 @@ class Settings:
     """JSON of what the deployment configures in the snapshot (``core.pds.snapshot.SnapshotBase``)."""
     pds_table: str = field(default_factory=lambda: _env("PDS_TABLE"))
     """The Pod Decision Service's table (``<prefix>-pds``: budgets, caps, reservations, delivery)."""
+    pds_release_after_seconds: int = field(default_factory=lambda: int(_env("PDS_RELEASE_AFTER_SECONDS") or 0))
+    """How long the sweeper leaves a reservation for its impression (``core.pds.delivery.release_after`` of the
+    stage's prefetch lead); 0: :data:`~fast_channels.core.pds.delivery.RELEASE_AFTER`."""
     pds_booked_lines_key: str = field(default_factory=lambda: _env("PDS_BOOKED_LINES_KEY"))
     """The config bucket's object of the lines booked over AdCP (selling module), which the publisher adds to the own
     book; unset without the module."""

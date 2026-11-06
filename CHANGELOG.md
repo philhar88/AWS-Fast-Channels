@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **An unplayed line ad gives its budget back 10 to 15 minutes after it was reserved, not after 2 hours** (`pds`).
+  - The sweeper now runs every 5 minutes, and releases a reservation that saw no impression in its hold. The hold
+    is twice the longest an impression takes: the prefetch's retrieval lead (150 s by default), the pod (120 s) and
+    the log's delay (13 s at the 99th percentile). Rounded up to the minute, it is 10 minutes, and never less; a
+    longer `modules.release.prefetch.retrieval_lead_seconds` holds longer.
+  - A burst of breaks that never air, such as viewers who leave before their prefetched break, no longer holds a
+    line's budget for two hours.
+  - An impression that arrives after its release is still credited, marked late in the ledger, with its price taken
+    again: a beacon MediaTailor retried, or one that only the CDN's logs counted (W-2 1.32), which are read 10 to 25
+    minutes after the firing (ADR-0022, ADR-0036).
+
 ## [4.1.0] - 2026-11-06
 
 Version 4.1.0 adds signed-in viewers (`identity`), ad load by viewer tier (`pds`), a reference viewer app

@@ -2,7 +2,7 @@
 
 **Status:** Accepted (the ledger with the ops module, the delivery states and counterparty billing with the Pod
 Decision Service's own book). Amended on 2026-11-05: delivery is also counted from the CDN's logs, because the ADS
-log can leave out a filled break (W-2 1.32; see "Counting").
+log can leave out a filled break (W-2 1.32; see "Counting"). Amended on 2026-11-06: an unplayed reservation is released 10 minutes after it was made, not two hours (see "Liability" under Consequences).
 
 ## Context
 
@@ -46,8 +46,8 @@ hour) or more than once. The buyer's own count, not ours, is what an insertion o
 ### Delivery states and billing
 
 - **States.** An own-book line ad that `/select` places goes through `RESERVED`, `DELIVERED` (our tracker's
-  impression in MediaTailor's `BEACON_FIRED` log event), `RELEASED` (no impression two hours after the reservation)
-  and later `RECONCILED`. A reservation is never released by DynamoDB's TTL, which only cleans up; an impression
+  impression in MediaTailor's `BEACON_FIRED` log event), `RELEASED` (no impression within the reservation's hold,
+  10 minutes with prefetch's default lead; two hours before the amendment of 2026-11-06) and later `RECONCILED`. A reservation is never released by DynamoDB's TTL, which only cleans up; an impression
   that arrives after its release is delivered anyway, marked late, and its price is taken again.
 - **Liability.** A reservation is one `TransactWriteItems`: the price (`cpm / 1000`) leaves one of the line's
   4 budget shards, whose `remaining` never goes below zero; the session's cap count goes up; the reservation is
@@ -78,13 +78,18 @@ hour) or more than once. The buyer's own count, not ours, is what an insertion o
   principal recorded in them, which the producer chooses).
 - A line can under-deliver near the end of its budget: a break reserves from one shard, so a break can be refused
   while another shard still has budget, and each shard can keep less than one impression's price unspent (under
-  4 impressions' worth per line). An undelivered reservation holds its price for two hours, and a session's cap
-  count is never given back. Recommended follow-up (measured in
-  [ADR-0036](0036-pds-sidecar-in-the-prebid-server-task.md#reservation-holds)): an impression's `BEACON_FIRED` reaches
-  delivery p99 13 s after it fires, and none arrived late in 14 days, so a release 10 minutes after the reservation
-  (its retrieval lead, the break and the log's delay, doubled) with the sweeper every 5 minutes would return an unaired
-  reservation's budget within 15 minutes instead of 2 hours 15, keeping the late credit for MediaTailor's beacon
-  retries.
+  4 impressions' worth per line). A released reservation gives its session's cap count back, and a late impression
+  takes it again.
+- **Liability (amendment of 2026-11-06).** An unplayed reservation holds its price for its hold, and the sweeper runs
+  every 5 minutes, so the price is back 10 to 15 minutes after the reservation, where it was 2 hours to 2 hours 15.
+  The hold is twice the longest an impression takes, in whole minutes and at least 10 (`release_after`): the
+  retrieval lead (150 s by default; a longer lead holds longer), the pod (120 s) and the log's delay (13 s, p99).
+  Measured ([ADR-0036](0036-pds-sidecar-in-the-prebid-server-task.md#reservation-holds)): `BEACON_FIRED` reached the log
+  p50 8.0 s and p99 12.5 s after the firing (76 events), the delivery record p50 8.4 s and p99 12.7 s (52 records),
+  and none of 775 line ads delivered in 14 days arrived late. The late path stays: an impression after its release
+  is credited `late` and its price taken again, even past the budget. That is a beacon MediaTailor retried, or a line ad
+  that only the CDN's logs counted (W-2 1.32), which are read 10 to 25 minutes after the firing: at most one ad's
+  price of overspend each, counted by `LateDeliveries`.
 - Delivery costs a few DynamoDB writes per impression and one Lambda invocation per log batch; reservations one
   transaction per break with line ads.
 - Evidence (delivery): against DynamoDB Local, 300 breaks racing for a $1 line at $6 CPM held exactly 164
