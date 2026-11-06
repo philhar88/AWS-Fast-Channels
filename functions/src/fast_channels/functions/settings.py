@@ -82,6 +82,9 @@ class Settings:
     """SSM parameter with the channel census's last count (ops module)."""
     ads_log_group: str = field(default_factory=lambda: _env("ADS_LOG_GROUP"))
     """The deployment's MediaTailor vended-log group (``/aws/vendedlogs/mediatailor/<prefix>``)."""
+    unserved_breaks: bool = field(default_factory=lambda: _env("UNSERVED_BREAKS") == "true")
+    """The zero-ads detector also counts unserved breaks: a break's first marker with neither a prefetch nor a
+    real-time request (the release module's siblings)."""
     as_run_breaks: bool = field(default_factory=lambda: _env("AS_RUN_BREAKS") == "true")
     """The as-run reconciler marks breaks aired (ops module)."""
     epg_break_ids: bool = field(default_factory=lambda: _env("EPG_BREAK_IDS") == "true")

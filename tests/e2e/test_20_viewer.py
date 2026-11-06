@@ -20,7 +20,7 @@ panel's answers. The browser walk-through of the same flow is docs/viewer.md's d
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Final
@@ -32,7 +32,18 @@ from botocore.exceptions import ClientError
 from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
 from harness_demand import DemandEdge
 from harness_identity import claims, credentials, sign_in
-from harness_pods import SMART_TV_USER_AGENT, Viewer, ipv4_client, wait_until_ready, watch
+from harness_pods import (
+    GAP_SESSION_SHARE,
+    SMART_TV_USER_AGENT,
+    Break,
+    Viewer,
+    gap_share,
+    ipv4_client,
+    read_unserved_prefetches,
+    retrieved_for,
+    wait_until_ready,
+    watch,
+)
 from playback import Window, break_windows
 
 from fast_channels.core.monetization.release import PlaybackPlan
@@ -81,6 +92,13 @@ class Run:
     """The panel's answer for each persona's own session."""
     refused: dict[str, int]
     """HTTP status of the panel for sessions that are not the caller's: ``other`` (another persona's) and ``guest``."""
+    unserved: dict[tuple[str, str], Break] = field(default_factory=dict)
+    """W-2 1.33's known gaps among the sessions' breaks (``harness_pods.unserved_prefetches``)."""
+
+    def unserved_in(self, persona: str, window: Window) -> Break | None:
+        """The persona's break of ``window`` if MediaTailor left it unserved (W-2 1.33), else None."""
+        sid = self.viewers[persona].sid
+        return next((b for (s, _), b in self.unserved.items() if s == sid and retrieved_for(b, window)), None)
 
 
 @pytest.fixture(scope="module")
@@ -176,6 +194,7 @@ def run(viewer_stage: Stage, channel: Channel, tools: Tools, request: pytest.Fix
             windows = break_windows(schedule(tools, channel.name, asset.asset_id))
             plan = PlaybackPlan.model_validate(http.get(f"{config['planBaseUrl']}/{channel.name}.json").json())
             wait_until_serving(http, plan.playback["hls"])
+            started = datetime.now(UTC)
             joined = {persona: join(http, playback_url, s, channel.name) for persona, s in signed.items()}
             tickets = {persona: ticket for persona, (ticket, _) in joined.items()}
             viewers = {persona: viewer for persona, (_, viewer) in joined.items()}
@@ -201,7 +220,9 @@ def run(viewer_stage: Stage, channel: Channel, tools: Tools, request: pytest.Fix
             "other": decisions(http, panel_url, signed[LIGHT], viewers[STANDARD].sid).status_code,
             "guest": decisions(http, panel_url, signed[LIGHT], viewers["guest"].sid).status_code,
         }
-    result = Run(site, config, signed, tickets, viewers, windows, panel, refused)
+    sids = {viewer.sid for viewer in viewers.values()}
+    unserved = read_unserved_prefetches(stage, sids, started - timedelta(minutes=1))
+    result = Run(site, config, signed, tickets, viewers, windows, panel, refused, unserved)
     for persona, answer in panel.items():
         for found in answer["breaks"]:
             print(
@@ -266,9 +287,24 @@ def test_the_light_tier_gets_one_ad_and_slate_and_the_standard_tier_the_full_pod
     for window in run.windows:
         light_ads, other = run.viewers[LIGHT].break_seconds(window.starts, BREAK_SECONDS)
         print(f"dana's break at {window.starts:%H:%M:%S}: {light_ads} s of ads, {other} s of other segments")
+        if (gap := run.unserved_in(LIGHT, window)) is not None:  # W-2 1.33: test_the_unserved_breaks_are_rare
+            print(f"  skipped: MediaTailor left break {gap.evid} unserved (W-2 1.33)")
+            continue
         assert 0 < light_ads <= 30.03 + SEGMENT_SLACK_S, light_ads
-    standard_ads, _ = run.viewers[STANDARD].break_seconds(run.windows[-1].starts, BREAK_SECONDS)
-    assert standard_ads >= 60.06 - SEGMENT_SLACK_S, standard_ads
+    last = run.windows[-1]
+    standard_ads, _ = run.viewers[STANDARD].break_seconds(last.starts, BREAK_SECONDS)
+    if (gap := run.unserved_in(STANDARD, last)) is not None:
+        print(f"marcus's last break skipped: MediaTailor left break {gap.evid} unserved (W-2 1.33)")
+    else:
+        assert standard_ads >= 60.06 - SEGMENT_SLACK_S, standard_ads
+
+
+# OPTIMIZATION(aws): W-2 1.33 drop this tolerance when MediaTailor serves every prefetched break
+def test_the_unserved_breaks_are_rare(run: Run) -> None:
+    """W-2 1.33's known gap (a prefetched break neither filled from its retrieval nor requested in real time) is
+    tolerated above, each case printed, in at most :data:`harness_pods.GAP_SESSION_SHARE` of the sessions."""
+    share = gap_share(set(run.unserved), {viewer.sid for viewer in run.viewers.values()})
+    assert share <= GAP_SESSION_SHARE, f"{share:.0%} of the sessions had an unserved break: {sorted(run.unserved)}"
 
 
 def test_the_panel_answers_only_for_the_callers_own_session(run: Run) -> None:

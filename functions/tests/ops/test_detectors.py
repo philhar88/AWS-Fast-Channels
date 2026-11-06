@@ -49,6 +49,8 @@ class FakeClients:
     query_status: list[str] = field(default_factory=lambda: ["Running", "Complete"])
     results: list[list[dict[str, str]]] = field(default_factory=list)
     queries: list[dict[str, Any]] = field(default_factory=list)
+    unserved_rows: list[dict[str, str]] = field(default_factory=list)
+    """What the unserved-breaks query finds in the whole hour; a query of a shorter window gets the rows inside it."""
 
     def get_paginator(self, operation: str) -> Pages:
         return Pages([{"Items": self.channels if operation == "list_channels" else self.alerts}])
@@ -66,7 +68,18 @@ class FakeClients:
         return {"queryId": "q-1"}
 
     def get_query_results(self, *, queryId: str) -> dict[str, Any]:  # noqa: N803
-        return {"status": self.query_status.pop(0), "results": self.results}
+        status = self.query_status.pop(0) if len(self.query_status) > 1 else self.query_status[0]
+        query = self.queries[-1]
+        if query["queryString"] != zero_ads_sessions.UNSERVED_QUERY:
+            return {"status": status, "results": self.results}
+        inside = [
+            row for row in self.unserved_rows if query["startTime"] <= _seconds(row["@timestamp"]) <= query["endTime"]
+        ]
+        return {"status": status, "results": [[{"field": k, "value": v} for k, v in row.items()] for row in inside]}
+
+
+def _seconds(timestamp: str) -> float:
+    return datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC).timestamp()
 
 
 @pytest.fixture
@@ -190,3 +203,110 @@ def test_the_query_counts_distinct_markers_and_requests_per_session() -> None:
     assert 'filter eventType in ["AD_MARKER_FOUND", "MAKING_ADS_REQUEST"]' in query
     assert "count_distinct(marker) as breaks" in query
     assert "filter breaks >= 3 and requests = 0" in query
+
+
+# --- unserved breaks ------------------------------------------------------------------------------------------------
+
+HOUR_START = SCHEDULED - timedelta(hours=1)
+
+
+def row(at: datetime, session: str, event: str, configuration: str = "fastm-demo-p-a") -> dict[str, str]:
+    return {
+        "@timestamp": f"{at:%Y-%m-%d %H:%M:%S}.{at.microsecond // 1000:03d}",
+        "sessionId": session,
+        "originId": configuration,
+        "eventType": event,
+    }
+
+
+def fastcid_hour() -> list[dict[str, str]]:
+    """fastcid leg B (2026-11-06), moved into the test's hour: two sessions on one sibling and one break. ca1f00b7
+    found the marker with its prefetch (its first marker carried ``prefetchScheduleName``, which the query leaves
+    out) and logged ``FILLED_AVAIL``; 876e6c26 found it 0.7 s later without one, then nothing. A third session fell
+    back to a real-time request 2.8 s after its marker, as MediaTailor should."""
+    marker = HOUR_START + timedelta(minutes=35, seconds=13, milliseconds=258)
+    return [
+        row(marker + timedelta(milliseconds=73), "ca1f00b7", "FILLED_AVAIL"),
+        row(marker + timedelta(milliseconds=680), "876e6c26", "AD_MARKER_FOUND"),
+        row(marker, "8537b4a3", "AD_MARKER_FOUND", "fastm-demo-p-b"),
+        row(marker + timedelta(seconds=2.8), "8537b4a3", "MAKING_ADS_REQUEST", "fastm-demo-p-b"),
+        row(marker + timedelta(seconds=2.9), "8537b4a3", "FILLED_AVAIL", "fastm-demo-p-b"),
+    ]
+
+
+def test_a_marker_that_no_request_or_fill_follows_is_an_unserved_break() -> None:
+    found = zero_ads_sessions.unserved(fastcid_hour(), start=HOUR_START, end=SCHEDULED)
+    assert [(u.session, u.configuration) for u in found] == [("876e6c26", "fastm-demo-p-a")]
+
+
+@pytest.mark.parametrize(
+    ("offset_s", "served"),
+    [(-0.5, True), (0.0, True), (9.9, True), (10.1, False), (-1.5, False)],
+)
+def test_a_request_or_fill_serves_the_marker_within_ten_seconds(offset_s: float, served: bool) -> None:
+    marker = HOUR_START + timedelta(minutes=10)
+    rows = [row(marker, "s-1", "AD_MARKER_FOUND"), row(marker + timedelta(seconds=offset_s), "s-1", "FILLED_AVAIL")]
+    assert (zero_ads_sessions.unserved(rows, start=HOUR_START, end=SCHEDULED) == []) is served
+
+
+def test_only_the_sessions_own_request_serves_it_and_only_the_windows_markers_count() -> None:
+    marker = HOUR_START + timedelta(minutes=10)
+    rows = [
+        row(marker, "s-1", "AD_MARKER_FOUND"),
+        row(marker + timedelta(seconds=1), "s-2", "MAKING_ADS_REQUEST"),
+        row(SCHEDULED + timedelta(seconds=2), "s-3", "AD_MARKER_FOUND"),  # the next hour's
+    ]
+    assert [u.session for u in zero_ads_sessions.unserved(rows, start=HOUR_START, end=SCHEDULED)] == ["s-1"]
+
+
+def test_the_query_leaves_out_prefetched_and_duration_markers() -> None:
+    query = zero_ads_sessions.UNSERVED_QUERY
+    assert "adMarkers not like /,DURATION=/" in query and "not ispresent(prefetchScheduleName)" in query
+    assert 'eventType in ["MAKING_ADS_REQUEST", "FILLED_AVAIL"]' in query
+    assert f"limit {zero_ads_sessions.ROWS_LIMIT}" in query
+
+
+def test_with_unserved_breaks_the_hour_is_counted_logged_and_published_per_sibling(
+    clients: FakeClients,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("UNSERVED_BREAKS", "true")
+    settings.cache_clear()
+    clients.unserved_rows = fastcid_hour()
+
+    answer = zero_ads_sessions.handler({"scheduled_time": "2026-10-29T03:00:00Z"}, Context())
+
+    assert answer == {"sessions": 0, "unserved_breaks": 1}
+    _, unserved = clients.queries
+    assert unserved["queryString"] == zero_ads_sessions.UNSERVED_QUERY
+    assert unserved["endTime"] - unserved["startTime"] == 3600 + 10, "requests and fills 10 s past the hour"
+    [record] = [r for r in caplog.records if "neither its prefetch" in r.getMessage()]
+    assert (record.session_id, record.configuration) == ("876e6c26", "fastm-demo-p-a")  # type: ignore[attr-defined]
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"_aws"' in line]
+    total = [line for line in lines if "UnservedBreaks" in line and "ConfigurationName" not in line]
+    by_sibling = [line for line in lines if "UnservedBreaks" in line and "ConfigurationName" in line]
+    assert [line["UnservedBreaks"] for line in total] == [[1.0]]
+    assert [(line["ConfigurationName"], line["UnservedBreaks"]) for line in by_sibling] == [("fastm-demo-p-a", [1.0])]
+
+
+def test_without_the_setting_no_second_query_runs(clients: FakeClients) -> None:
+    assert zero_ads_sessions.handler({"scheduled_time": "2026-10-29T03:00:00Z"}, Context()) == {"sessions": 0}
+    assert len(clients.queries) == 1
+
+
+def test_a_window_that_reaches_the_row_limit_is_read_in_halves(
+    clients: FakeClients, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(zero_ads_sessions, "ROWS_LIMIT", 4)
+    marker = HOUR_START + timedelta(minutes=29, seconds=58)  # its fill lands in the second half
+    clients.unserved_rows = [
+        row(HOUR_START + timedelta(minutes=m), f"s-{m}", "MAKING_ADS_REQUEST") for m in (40, 50)
+    ] + [row(marker, "s-x", "AD_MARKER_FOUND"), row(marker + timedelta(seconds=4), "s-x", "FILLED_AVAIL")]
+
+    found = zero_ads_sessions.unserved_breaks("/aws/vendedlogs/mediatailor/fastm-release", HOUR_START, SCHEDULED)
+
+    assert found == [], "the first half reads 10 s past its end, so the marker's fill is seen"
+    windows = [(q["startTime"], q["endTime"]) for q in clients.queries]
+    assert len(windows) == 3 and windows[0][1] - windows[0][0] == 3610, windows

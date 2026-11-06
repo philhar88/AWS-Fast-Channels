@@ -11,6 +11,7 @@ import httpx
 import pytest
 from harness import Player
 from harness_pods import Ad, Creatives, reconcile
+from playback import Window
 
 from fast_channels.core.demo_demand import demo_index
 from fast_channels.core.pds.book import Creative
@@ -639,3 +640,32 @@ def test_the_gap_share_is_of_sessions_not_breaks() -> None:
     assert pods.gap_share(gaps, {"s1", "s2", "s3", "s4", "s5", "s6", "s7"}) == 2 / 7
     assert pods.gap_share(gaps, set()) == 0.0
     assert pods.gap_share({("s1", "7")}, {f"s{n}" for n in range(1, 8)}) <= pods.GAP_SESSION_SHARE
+
+
+def _ads_event(at: datetime, sid: str, kind: str, request: str, **fields: Any) -> dict[str, Any]:
+    stamp = at.isoformat().replace("+00:00", "Z")
+    return {"eventTimestamp": stamp, "sessionId": sid, "eventType": kind, "requestId": request, **fields}
+
+
+def test_a_retrieved_break_neither_filled_nor_requested_is_the_known_unserved_gap() -> None:
+    """fastcid leg B (2026-11-06): 876e6c26 and ca1f00b7 retrieved pf-1183716241 alike; at the break ca1f00b7 filled
+    from it, 876e6c26 neither filled nor asked in real time. A session that fell back to a real-time request (and
+    filled) is served, and so is one that filled from its retrieval."""
+    url = "https://pbs.example/openrtb2/auction?evid=1183716241&upid=e2e-pattern&dur=120000"
+    schedule = {"prefetchScheduleName": "pf-1183716241"}
+    retrieval = datetime(2026, 11, 6, 9, 33, 18, tzinfo=UTC)
+    at_break = retrieval + timedelta(minutes=2)
+    events = [
+        _ads_event(retrieval, "876e6c26", "MAKING_ADS_REQUEST", "r1", adsRequestUrl=url, **schedule),
+        _ads_event(retrieval, "ca1f00b7", "MAKING_ADS_REQUEST", "r2", adsRequestUrl=url, **schedule),
+        _ads_event(at_break, "ca1f00b7", "FILLED_AVAIL", "r3", **schedule),
+        _ads_event(retrieval, "8537b4a3", "MAKING_ADS_REQUEST", "r4", adsRequestUrl=url, **schedule),
+        _ads_event(at_break, "8537b4a3", "MAKING_ADS_REQUEST", "r5", adsRequestUrl=url),
+        _ads_event(at_break + timedelta(seconds=1), "8537b4a3", "FILLED_AVAIL", "r5", adsRequestUrl=url),
+    ]
+    found = pods.breaks(events, [], [])
+    assert pods.unserved_prefetches(found.values()) == {("876e6c26", "1183716241")}
+    window = Window(retrieval + timedelta(seconds=97), retrieval + timedelta(seconds=217))
+    assert pods.retrieved_for(found["876e6c26", "1183716241"], window)
+    later = Window(window.starts + timedelta(minutes=5), window.ends + timedelta(minutes=5))
+    assert not pods.retrieved_for(found["876e6c26", "1183716241"], later)

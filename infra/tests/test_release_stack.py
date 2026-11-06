@@ -290,6 +290,28 @@ def test_every_sibling_has_the_hook_alarms_and_the_zero_ad_sessions_detector(dep
     variables = detector["Environment"]["Variables"]
     assert variables["POWERTOOLS_SERVICE_NAME"] == "ops.release_zero_ads_sessions"
     assert "/aws/vendedlogs/mediatailor/fastm-release" in json.dumps(variables)
+    assert variables["UNSERVED_BREAKS"] == "true", "the siblings' breaks are checked one by one"
+    [unserved] = [
+        a
+        for a in resources(template, "AWS::CloudWatch::Alarm").values()
+        if a["AlarmName"] == "fastm-release-unserved-breaks"
+    ]
+    assert (unserved["MetricName"], unserved["Threshold"], unserved["Period"]) == ("UnservedBreaks", 1, 3600)
+    assert {d["Name"]: d["Value"] for d in unserved["Dimensions"]} == {"service": "ops.release_zero_ads_sessions"}
+    assert unserved["AlarmActions"], "it notifies the alert topic"
+
+
+def test_the_ops_modules_detector_counts_no_unserved_breaks(deployment: GetDeployment) -> None:
+    """The deployment's own configurations do not prefetch: only the release module's detector reads breaks."""
+    d = deployment(RELEASE, extra=EXTRA)
+    ops = d.template(d.stage.ops)
+    [detector] = [
+        f
+        for f in resources(ops, "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.ops.zero_ads_sessions.handler"
+    ]
+    assert "UNSERVED_BREAKS" not in detector["Environment"]["Variables"]
+    assert not [a for a in resources(ops, "AWS::CloudWatch::Alarm").values() if "unserved" in a["AlarmName"]]
 
 
 def test_the_siblings_impressions_reach_the_pds_delivery_function(deployment: GetDeployment) -> None:

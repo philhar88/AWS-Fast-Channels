@@ -233,6 +233,7 @@ class ReleaseStack(Stack):
             log_retention=retention,
             removal_policy=removal,
             name="release-zero-ads-sessions",
+            unserved_breaks="release-unserved-breaks",
         )
         self.logs.grant_read(self.zero_ads.function.function.role)  # type: ignore[arg-type]
         self.reconciler = LogReconciler(
