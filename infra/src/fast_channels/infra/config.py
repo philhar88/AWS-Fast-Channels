@@ -862,6 +862,19 @@ class SellingModule(_Module):
         return _unique(creatives)
 
 
+class ViewerModule(_Module):
+    """The reference viewer app (``modules.viewer``)."""
+
+    enabled: bool = False
+    """Deploy the reference viewer: a web app on its own CloudFront distribution where the demo personas sign in to
+    the viewer pool, get a rule-based rail of recommended channels from their genres and the program guide, and play
+    each channel on a playback ticket of their own."""
+    ad_panel: bool = False
+    """Add the demo's "why these ads" panel: an API that reads the Pod Decision Service's decision records of the
+    signed-in viewer's own sessions and shows each break's privacy mode, tier, ad-load policy and pod. Demo only: it
+    shows viewers their value tier, which a production viewer app never does."""
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
@@ -869,6 +882,7 @@ _MODULE_NEEDS: Final = {
     "crawl": ("pds", "release"),
     "identity": ("release",),
     "selling": ("pds", "release"),
+    "viewer": ("identity",),
 }
 """Modules an enabled module builds on."""
 
@@ -890,6 +904,7 @@ class ModulesConfig(_Section):
     crawl: CrawlModule = CrawlModule()
     identity: IdentityModule = IdentityModule()
     selling: SellingModule = SellingModule()
+    viewer: ViewerModule = ViewerModule()
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""

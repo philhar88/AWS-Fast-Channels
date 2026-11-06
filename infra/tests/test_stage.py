@@ -412,9 +412,13 @@ MERGED_MODULES = ("models", "ops", "release", "demand")
 NEEDED_MODULES = ("pds",)
 """Modules a merged one needs on (``release`` needs ``pds``) whose code is not merged yet: they add nothing, so the
 comparison below still isolates the merged code."""
-MODULE_STACKS = {"Crawl": "FastChannels-fastm-Crawl", "Identity": "FastChannels-fastm-Identity"}
-"""Stacks of merged modules kept off in the comparison (``crawl`` and ``identity``, whose needs would turn every module
-on) ..."""
+MODULE_STACKS = {
+    "Crawl": "FastChannels-fastm-Crawl",
+    "Identity": "FastChannels-fastm-Identity",
+    "Viewer": "FastChannels-fastm-Viewer",
+}
+"""Stacks of merged modules kept off in the comparison (``crawl``, ``identity`` and ``viewer``, whose needs would turn
+every module on) ..."""
 MODULE_CHANGES = ("Media",)
 """... and the shared stacks they change: crawl adds its catalog-context bucket and route to Media. Their own tests
 pin those changes down (``test_crawl.py::test_the_module_changes_nothing_else_in_the_media_stack``)."""

@@ -17,7 +17,10 @@ if TYPE_CHECKING:
 
 FASTM: dict[str, Any] = json.loads((Path(__file__).resolve().parents[2] / "stages" / "fastm.json").read_text())
 """Every module on, as ``STAGE=fastm`` deploys them."""
-IDENTITY_OFF: dict[str, Any] = {**FASTM, "modules": {**FASTM["modules"], "identity": {"enabled": False}}}
+IDENTITY_OFF: dict[str, Any] = {
+    **FASTM,
+    "modules": {**FASTM["modules"], "identity": {"enabled": False}, "viewer": {"enabled": False}},
+}
 
 
 @pytest.fixture(scope="module")

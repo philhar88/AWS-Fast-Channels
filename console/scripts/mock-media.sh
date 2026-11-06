@@ -6,9 +6,11 @@
 #   channel/hls.m3u8  what MediaTailor SSAI serves for the `hls` output of a Channel Assembly channel: the break's
 #                     EXT-X-DATERANGE (AdMarkupType DATERANGE, SCTE35-OUT splice_insert, channel-assembly.md) with
 #                     the stitched ads behind EXT-X-DISCONTINUITY in its place (e2e.md §4.3)
+#   channel/hls-light.m3u8  the same break as a light pod (the viewer app's mock): one ad, then the channel's slate
+#                     for the seconds no ad filled
 set -euo pipefail
 cd "$(dirname "$0")/../mock/cdn"
-rm -rf assets ads channel
+rm -rf assets ads slate channel
 font=$(fc-match -f '%{file}' 'DejaVu Sans:bold')
 
 clip() {  # clip <dir> <seconds> <background> <label>
@@ -27,6 +29,7 @@ clip() {  # clip <dir> <seconds> <background> <label>
 clip assets/program 28 '#0f1b2a' 'PROGRAM'
 clip ads/cr-a 4 '#ec7211' 'AD A'
 clip ads/cr-b 4 '#0972d3' 'AD B'
+clip slate 4 '#5f6b7a' 'SLATE'
 
 segments() {  # segments <dir> <first> <last>
   for i in $(seq "$2" "$3"); do printf '#EXTINF:2.000,\n../%s/%03d.ts\n' "$1" "$i"; done
@@ -49,5 +52,6 @@ mkdir -p channel
   segments assets/program 6 13
   printf '#EXT-X-ENDLIST\n'
 } > channel/hls.m3u8
-rm assets/*/index.m3u8 ads/*/index.m3u8
+sed 's#\.\./ads/cr-b/#../slate/#' channel/hls.m3u8 > channel/hls-light.m3u8
+rm assets/*/index.m3u8 ads/*/index.m3u8 slate/index.m3u8
 du -sh .

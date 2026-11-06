@@ -424,7 +424,7 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed
 
 
-MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity", "selling")
+MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity", "selling", "viewer")
 RECS = "haiku-5-5-adaptive-8k"
 """The recommender's fixture eval record (``infra/tests/data/evals``)."""
 RECOMMENDER: dict[str, Any] = {
@@ -496,6 +496,11 @@ def test_shipped_model_registry_holds_the_scheduler_agent(load_config: Load) -> 
         ("pds", "pds needs ops and demand: enable them or turn pds off", ("ops", "demand")),
         ("release", "release needs ops, demand and pds: enable them", ("ops", "demand", "pds")),
         ("crawl", "crawl needs pds and release: enable them", ("ops", "demand", "pds", "release")),
+        (
+            "viewer",
+            "viewer needs identity: enable it or turn viewer off",
+            ("ops", "demand", "pds", "release", "identity"),
+        ),
     ],
 )
 def test_modules_need_the_modules_they_build_on(

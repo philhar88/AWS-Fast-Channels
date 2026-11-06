@@ -49,6 +49,7 @@ class Module(StrEnum):
     CRAWL = "Crawl"
     IDENTITY = "Identity"
     SELLING = "Selling"
+    VIEWER = "Viewer"
 
 
 type StackKind = Plane | Module

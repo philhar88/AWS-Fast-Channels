@@ -75,15 +75,16 @@ jobs:
   # and identity, the Prebid Server guidance on its own bootstrap, the synthetic edge tests, the release, crawl and
   # identity modules' tests, then viewers on the channel's stable sibling through MediaTailor, Prebid Server and the
   # Pod Decision Service (test_14_demand_pods.py), two signed-in viewers of different ad-load tiers in the same breaks
-  # (test_18_ad_load.py), and signed-in, replayed and guest sessions (test_19_identity_session.py); then everything
-  # destroyed and inventoried. Costs about US$3-5 per run.
+  # (test_18_ad_load.py), signed-in, replayed and guest sessions (test_19_identity_session.py), and the reference
+  # viewer's calls for two personas of different tiers (test_20_viewer.py); then everything destroyed and
+  # inventoried. Costs about US$3-5 per run.
   e2e-demand:
     if: inputs.leg == 'demand'
     runs-on: ubuntu-24.04-arm
     environment: e2e
     timeout-minutes: 240
     env:
-      MODULES: ops,demand,pds,release,crawl,identity
+      MODULES: ops,demand,pds,release,crawl,identity,viewer
     steps:
       - name: Check the prefix
         run: |
@@ -109,11 +110,16 @@ jobs:
         run: make deploy STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"
       - name: Deploy the demand module
         run: make deploy-demand STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"
+      - name: Seed the demo personas
+        run: uv run python scripts/seed_personas.py --prefix "$PREFIX"
       - name: Demand tests
         run: >-
           uv run pytest tests/e2e/test_11_demand_edge.py tests/e2e/test_12_release.py tests/e2e/test_13_crawl.py
           tests/e2e/test_14_demand_pods.py tests/e2e/test_18_ad_load.py tests/e2e/test_17_identity.py
-          tests/e2e/test_19_identity_session.py -m e2e --prefix "$PREFIX" -v
+          tests/e2e/test_19_identity_session.py tests/e2e/test_20_viewer.py -m e2e --prefix "$PREFIX" -v
+      - name: Remove the demo personas
+        if: always() && !inputs.keep
+        run: uv run python scripts/seed_personas.py --prefix "$PREFIX" --delete
       - name: Destroy the demand module
         if: always() && !inputs.keep
         run: make destroy-demand STAGE=fastci MODULES="$MODULES" PREFIX="$PREFIX"

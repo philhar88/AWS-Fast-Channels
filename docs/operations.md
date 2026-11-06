@@ -119,6 +119,8 @@ it costs.
 | `modules.selling.publisher_domain` | str | `"fast-channels.example"` | The publisher domain that the seller's products and properties name. |
 | `modules.selling.buyer_model` | str | `"{geo}.anthropic.claude-haiku-5-5"` | Bedrock model of the reference buyer agent (`{geo}` resolved as for the agent; one of `agent.allowed_models`). |
 | `modules.selling.buyer_brand` | str | `"acme-outdoor.example"` | The brand domain that the reference buyer books for (simulated). |
+| `modules.viewer.enabled` | bool | `false` | Deploy the reference viewer: a web app on its own CloudFront distribution where the demo personas sign in to the viewer pool, get a rule-based rail of recommended channels from their genres and the program guide, and play each channel on a playback ticket of their own. |
+| `modules.viewer.ad_panel` | bool | `false` | Add the demo's "why these ads" panel: an API that reads the Pod Decision Service's decision records of the signed-in viewer's own sessions and shows each break's privacy mode, tier, ad-load policy and pod. Demo only: it shows viewers their value tier, which a production viewer app never does. |
 
 `channels.iac[]`:
 

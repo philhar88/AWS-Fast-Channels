@@ -172,6 +172,10 @@
           "publisher_domain": "fast-channels.example",
           "buyer_model": "{geo}.anthropic.claude-haiku-5-5",
           "buyer_brand": "acme-outdoor.example"
+        },
+        "viewer": {
+          "enabled": false,
+          "ad_panel": false
         }
       }
     },

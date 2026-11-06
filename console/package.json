@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "dev:mock": "VITE_MOCK=1 vite",
-    "build": "tsc -b && vite build",
+    "dev:viewer": "vite --mode viewer --open /viewer.html",
+    "build": "tsc -b && vite build && vite build --mode viewer",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "lint": "eslint . --max-warnings 0",

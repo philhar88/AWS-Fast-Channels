@@ -38,7 +38,7 @@ install: ## Install Python (uv), CDK CLI and console dependencies
 	npm ci
 	cd console && npm ci
 
-console: ## Build the operator console (console/dist), required before synth/deploy
+console: ## Build the operator console and the viewer (console/dist, console/dist-viewer), required before synth/deploy
 	cd console && npm run build
 
 lint: ## Format check and lint (Python + console)
