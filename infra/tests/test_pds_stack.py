@@ -202,7 +202,7 @@ def test_the_publisher_runs_on_deploy_and_hourly_with_the_demo_demand(deployment
     assert base.breaks_ms == (30030, 60060, 90090, 120120), "the 30.03 s grid of the default ladder"
     assert base.ad_load == {"light": AdLoadPolicy(max_ads=1, bar_cpm=Decimal(20))}
     schedules = {s["ScheduleExpression"] for s in resources(template, "AWS::Scheduler::Schedule").values()}
-    assert schedules == {"rate(1 hour)", "rate(15 minutes)", "rate(5 minutes)"}  # publisher, sweeper, CDN logs
+    assert schedules == {"rate(1 hour)", "rate(5 minutes)"}  # the publisher; the sweeper and the CDN-log runs
     assert template.find_resources("Custom::Trigger")
     lined = deployment({**PDS, "modules.pds.demo_lines": LINES}, extra=EXTRA)
     _, publisher = function(lined.template(lined.stage.pds), "fast_channels.functions.pds.publisher.handler")
@@ -324,9 +324,50 @@ def test_the_sweeper_queries_only_the_pending_index(deployment: GetDeployment) -
     template = d.template(d.stage.pds)
     name, sweeper = function(template, SWEEPER)
 
-    assert sweeper["Timeout"] == 300
+    assert sweeper["Timeout"] == 240, "under the 5-minute schedule: runs never overlap"
     [query] = [s for s in statements(template, name[:-8] + "Role") if s["Action"] == "dynamodb:Query"]
     assert query["Resource"] == "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-pds/index/pending"
+
+
+@pytest.mark.parametrize(
+    ("settings", "hold_s"),
+    [
+        ({}, 600),  # no release module: real time only
+        ({"modules.release.enabled": True, "modules.release.channels": ["{prefix}-demo"]}, 600),  # the default lead
+        (
+            {
+                "modules.release.enabled": True,
+                "modules.release.channels": ["{prefix}-demo"],
+                "modules.release.prefetch.retrieval_lead_seconds": 600,
+            },
+            1500,
+        ),
+        (
+            {
+                "modules.release.enabled": True,
+                "modules.release.channels": ["{prefix}-demo"],
+                "modules.release.prefetch.enabled": False,
+                "modules.release.prefetch.retrieval_lead_seconds": 600,
+            },
+            600,
+        ),
+    ],
+)
+def test_the_sweeper_releases_an_unplayed_reservation_after_the_stages_hold_every_5_minutes(
+    deployment: GetDeployment, settings: dict[str, Any], hold_s: int
+) -> None:
+    d = deployment({**PDS, **settings}, extra=EXTRA)
+    template = d.template(d.stage.pds)
+    _, sweeper = function(template, SWEEPER)
+    [schedule] = [
+        s
+        for s in resources(template, "AWS::Scheduler::Schedule").values()
+        if "release reservations" in s.get("Description", "")
+    ]
+
+    assert sweeper["Environment"]["Variables"]["PDS_RELEASE_AFTER_SECONDS"] == str(hold_s)
+    assert schedule["ScheduleExpression"] == "rate(5 minutes)"
+    assert f"{hold_s // 60} minutes" in schedule["Description"]
 
 
 def test_policy_records_flow_into_the_lake(deployment: GetDeployment) -> None:

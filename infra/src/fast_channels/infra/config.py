@@ -748,7 +748,9 @@ class ReleasePrefetch(_Section):
     horizon_breaks: int = Field(default=20, ge=1, le=24)
     """Upcoming breaks with a schedule, at most (MediaTailor allows 25 active schedules per configuration)."""
     retrieval_lead_seconds: int = Field(default=150, ge=60, le=3600)
-    """Retrieval opens this long before the break."""
+    """Retrieval opens this long before the break. With the PDS a break's line ads are reserved at its retrieval, and
+    one that never airs is released after twice this, the longest pod and the log's delay, in whole minutes and at
+    least 10 (10 at the default; ``core.pds.delivery.release_after``)."""
     retrieval_end_seconds: int = Field(default=30, ge=10)
     """Retrieval closes this long before the break (transcodes take about 20 s)."""
     shaping_window_seconds: int = Field(default=90, ge=0)

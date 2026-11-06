@@ -11,11 +11,15 @@ from urllib.parse import urlsplit
 import pytest
 
 from fast_channels.core.ledger import CHAIN_ID_PATTERN
-from fast_channels.core.pbs_config import PbsSettings
+from fast_channels.core.monetization.prefetch import PrefetchPolicy
+from fast_channels.core.pbs_config import POD_MAX_SECONDS, PbsSettings
 from fast_channels.core.pds.delivery import (
     BUDGET_SHARDS,
     CDN_LOG_EVERY,
     CDN_LOG_LAG,
+    LOG_DELAY,
+    RELEASE_AFTER,
+    SWEEP_EVERY,
     Beacon,
     Ignored,
     Source,
@@ -30,6 +34,7 @@ from fast_channels.core.pds.delivery import (
     home_shard,
     impression_key,
     money,
+    release_after,
     reservation_key,
     shard_caps,
 )
@@ -337,3 +342,36 @@ def test_the_module_and_the_pds_render_the_same_path() -> None:
     assert template == f"https://{HOST}/ads/b/{{sid}}.{{evid}}/{{crid}}/{{enr}}.gif"
     rendered = template.format(sid=SID, evid="1234", crid="direct1", enr=0)
     assert rendered == tracker_url(TRACKER, f"{SID}.1234", "direct1")
+
+
+# Reservation holds (ADR-0022, ADR-0036).
+
+
+def test_the_default_hold_is_ten_minutes_and_an_unplayed_reservation_is_released_within_fifteen() -> None:
+    lead = PrefetchPolicy().retrieval_lead_s
+
+    assert lead == 150
+    assert release_after(lead) == RELEASE_AFTER == timedelta(minutes=10)
+    assert release_after() == RELEASE_AFTER, "real time only: the impression comes within the pod"
+    assert timedelta(minutes=15) == RELEASE_AFTER + SWEEP_EVERY
+
+
+@pytest.mark.parametrize(("lead", "minutes"), [(60, 10), (150, 10), (165, 10), (170, 11), (600, 25), (3600, 125)])
+def test_a_longer_prefetch_lead_holds_a_reservation_longer(lead: int, minutes: int) -> None:
+    assert release_after(lead) == timedelta(minutes=minutes)
+
+
+@pytest.mark.parametrize("lead", range(0, 3601, 30))
+def test_the_hold_is_twice_the_longest_an_impression_takes_in_whole_minutes(lead: int) -> None:
+    """The reservation at the retrieval's opening, the pod's last impression before it ends, then the log's delay."""
+    hold = release_after(lead)
+    longest = timedelta(seconds=lead + POD_MAX_SECONDS) + LOG_DELAY
+
+    assert hold >= 2 * longest
+    assert hold >= RELEASE_AFTER
+    assert hold.total_seconds() % 60 == 0
+    assert hold - 2 * longest < timedelta(minutes=1) or hold == RELEASE_AFTER
+
+
+def test_the_log_delay_covers_the_measured_p99() -> None:
+    assert timedelta(seconds=12.7) <= LOG_DELAY

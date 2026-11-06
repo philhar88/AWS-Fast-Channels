@@ -3399,45 +3399,6 @@
       },
       "Type": "AWS::SQS::QueuePolicy"
     },
-    "SweeperEvery15Minutes01B55B7E": {
-      "Properties": {
-        "Description": "PDS: release reservations with no impression after two hours",
-        "FlexibleTimeWindow": {
-          "Mode": "OFF"
-        },
-        "GroupName": "fastm-pds",
-        "ScheduleExpression": "rate(15 minutes)",
-        "ScheduleExpressionTimezone": "Etc/UTC",
-        "State": "ENABLED",
-        "Target": {
-          "Arn": {
-            "Fn::GetAtt": [
-              "SweeperFunctionCCDB2B02",
-              "Arn"
-            ]
-          },
-          "DeadLetterConfig": {
-            "Arn": {
-              "Fn::GetAtt": [
-                "SweeperDeadLettersD01FDB2E",
-                "Arn"
-              ]
-            }
-          },
-          "RetryPolicy": {
-            "MaximumEventAgeInSeconds": 900,
-            "MaximumRetryAttempts": 2
-          },
-          "RoleArn": {
-            "Fn::GetAtt": [
-              "SweeperScheduleRole355FA113",
-              "Arn"
-            ]
-          }
-        }
-      },
-      "Type": "AWS::Scheduler::Schedule"
-    },
     "SweeperFunctionCCDB2B02": {
       "DependsOn": [
         "SweeperFunctionRoleDefaultPolicyC98B2147",
@@ -3451,11 +3412,12 @@
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
           "S3Key": "<asset-hash>.zip"
         },
-        "Description": "PDS: release reservations that saw no impression in two hours",
+        "Description": "PDS: release reservations that saw no impression in 10 minutes",
         "Environment": {
           "Variables": {
             "FAST_PREFIX": "fastm",
             "LEDGER_TABLE": "fastm-ledger",
+            "PDS_RELEASE_AFTER_SECONDS": "600",
             "PDS_TABLE": "fastm-pds",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
             "POWERTOOLS_SERVICE_NAME": "pds.sweeper"
@@ -3493,7 +3455,7 @@
             "Value": "iac"
           }
         ],
-        "Timeout": 300,
+        "Timeout": 240,
         "TracingConfig": {
           "Mode": "Active"
         }
@@ -3658,6 +3620,45 @@
         ]
       },
       "Type": "AWS::IAM::Policy"
+    },
+    "SweeperRunsBAD58206": {
+      "Properties": {
+        "Description": "PDS: release reservations with no impression after 10 minutes",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "GroupName": "fastm-pds",
+        "ScheduleExpression": "rate(5 minutes)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "SweeperFunctionCCDB2B02",
+              "Arn"
+            ]
+          },
+          "DeadLetterConfig": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "SweeperDeadLettersD01FDB2E",
+                "Arn"
+              ]
+            }
+          },
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 900,
+            "MaximumRetryAttempts": 2
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "SweeperScheduleRole355FA113",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
     },
     "SweeperScheduleRole355FA113": {
       "Properties": {

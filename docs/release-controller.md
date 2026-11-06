@@ -304,7 +304,7 @@ Each schedule, `pf-<event id>`, tagged `fast:owner=release-controller`:
 - **On retrieval** the sibling's Functions run as at a break (PRE_ADS's content lookup included), and Prebid Server and
   the Pod Decision Service answer minutes ahead. MediaTailor rounds the duration to whole seconds (`60000`); the PDS
   checks the pod against the break of record ([pds.md](pds.md)). Reservations are taken at retrieval and delivered by
-  our tracker's impression; one whose break the session never watched is released by the sweeper after 2 hours.
+  our tracker's impression; one whose break the session never watched is released by the sweeper 10 to 15 minutes after it was reserved.
 - **Joins** use our tracker (`d=<sid>.<evid>`): prefetch events carry no `adBreakCorrelationId`, and a
   prefetch-consumed `FILLED_AVAIL` names the session's previous request URL.
 - A session that joins after a break's retrieval window gets real-time insertion for that break.
