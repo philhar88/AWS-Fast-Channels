@@ -247,10 +247,17 @@ channel (observed, not documented). The media library's `PROGRAM#` items are the
   Every 15 minutes a sweep marks `UNAIRED` the breaks whose time ended more than 10 minutes ago without a start, and
   the breaks of `SKIPPED` programs: Channel Assembly logs nothing for a break it skips, for example after the
   channel stopped. Channel Assembly writes as-run events in batches, 13–50 s after they happen (observed), and a
-  break that started less than about a minute before a `StopChannel` can be missing from the log. In one test a
-  session saw ads in a break that the channel stopped 25 s into, and the log has no `AdBreakStart` for it. The sweep
-  then marks such a break `UNAIRED`. The JSON feed's breaks then also carry their SCTE-35 `event_id` and `upid`, as
-  in the HLS `DATERANGE` and the ad request, so guides and buyers can join on them.
+  break that started less than about a minute before a `StopChannel` can be missing from the log
+  ([W-2 1.31](limitations.md#channel-assembly)). In one test a session saw ads in a break that the channel stopped
+  25 s into, and the log has no `AdBreakStart` for it. So before it marks a break `UNAIRED`, the sweep looks up the
+  channel's `StopChannel` calls in CloudTrail's event history, whoever made them (the auto-stop, the agent, the
+  console). A break that went on air at most 60 s before a stop is marked `AIRED` at its planned on-air time, with
+  the stop's time in `stopped_at` (metric `BreaksAiredBeforeStop`). A break due after the stop stays `UNAIRED`. The
+  sweep decides a break only 16 minutes after its on-air time, because CloudTrail's history lags the call by
+  minutes. Its role may call `cloudtrail:LookupEvents`, which has no resource-level permissions; if an SCP denies
+  the call, the sweep logs a warning and marks such breaks `UNAIRED`. The JSON feed's breaks then also carry their
+  SCTE-35 `event_id` and `upid`, as in the HLS `DATERANGE` and the ad request, so guides and buyers can join on
+  them.
 - Programs removed unaired when a channel starts late are `SKIPPED` ([Starting a channel late](#starting-a-channel-late)):
   listed with that status in the JSON feed, left out of the XMLTV feed.
 - `PROGRAM#` items expire 30 days after the program ends (DynamoDB TTL `expires_at`), so the history cannot grow

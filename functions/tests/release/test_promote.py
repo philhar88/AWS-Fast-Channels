@@ -14,7 +14,7 @@ from pydantic import SecretStr
 from fast_channels.core.crawl.functions import CrawlContribution
 from fast_channels.core.monetization.bundle import ChannelInput
 from fast_channels.core.monetization.playback import render
-from fast_channels.core.monetization.release import ReleaseStatus, applied, differences, kept_releases
+from fast_channels.core.monetization.release import ReleaseStatus, applied, content_version, differences, kept_releases
 from fast_channels.functions.release import apply, promote
 
 type Stub = Callable[[str], Stubber]
@@ -124,6 +124,7 @@ def test_point_deploys_the_pointer_naming_the_candidate(
     assert promote.point(2, "c2", [CANDIDATE]) == {
         "deployment": 7,
         "version": 3,
+        "content_version": content_version({"fastm-demo": "fastm-demo-p-b"}),  # what a reader logs (W-2 4.6)
         "pointer": {"fastm-demo": "fastm-demo-p-b"},
     }
     assert ledger.actions() == [("release/bundle", "release.point")]

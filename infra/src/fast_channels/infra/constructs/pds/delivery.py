@@ -5,12 +5,13 @@
   ``fast_channels.functions.pds.delivery``, which keeps our tracker's and credits them to their reservations. Every 5
   minutes a schedule runs it on the CDN's logs too (``CdnAccessTable``, with Athena), which counts the firings the
   ADS log left out (W-2 1.32).
-- ``ReleaseSweeper``: every 15 minutes ``fast_channels.functions.pds.sweeper`` releases the reservations that saw no
-  impression in two hours.
+- ``ReleaseSweeper``: every 5 minutes ``fast_channels.functions.pds.sweeper`` releases the reservations that saw no
+  impression in their hold (``core.pds.delivery.release_after``: 10 minutes with prefetch's default lead).
 
 Both write money events to the ledger (chains ``pds/*`` only) and dead-letter what fails after its retries.
 """
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Final
 
 from aws_cdk import Duration, Fn, RemovalPolicy, Stack
@@ -25,7 +26,7 @@ from constructs import Construct
 
 from fast_channels.core.ledger import ledger_table
 from fast_channels.core.naming import mediatailor_log_group
-from fast_channels.core.pds.delivery import CDN_LOG_EVERY, Source
+from fast_channels.core.pds.delivery import CDN_LOG_EVERY, RELEASE_AFTER, SWEEP_EVERY, Source
 from fast_channels.core.pds.names import (
     CDN_ACCESS_TABLE,
     DECISIONS_PREFIX,
@@ -57,7 +58,7 @@ if TYPE_CHECKING:
 
 DELIVERY_HANDLER: Final = "fast_channels.functions.pds.delivery.handler"
 SWEEPER_HANDLER: Final = "fast_channels.functions.pds.sweeper.handler"
-SWEEP_SCHEDULE: Final = "rate(15 minutes)"
+SWEEP_SCHEDULE: Final = f"rate({SWEEP_EVERY.seconds // 60} minutes)"
 RETRY_ATTEMPTS: Final = 2
 MAX_EVENT_AGE: Final = Duration.hours(6)
 """How long Lambda keeps retrying a failed batch of beacons before it is dead-lettered."""
@@ -321,10 +322,11 @@ class DeliveryCounter(Construct):
 
 
 class ReleaseSweeper(Construct):
-    """Releases the reservations that saw no impression in two hours, every 15 minutes (module docstring).
+    """Releases the reservations that saw no impression in their hold, every 5 minutes (module docstring).
 
     Args:
         prefix: the stage's prefix (its table and ledger).
+        hold: how long a reservation waits for its impression (``core.pds.delivery.release_after``).
         group: the PDS's schedule group.
         alert_topic: topic of the dead-letter alarm.
         log_retention, removal_policy: of the function's log group and the dead-letter queue.
@@ -342,21 +344,24 @@ class ReleaseSweeper(Construct):
         group: scheduler.IScheduleGroup,
         alert_topic: sns.ITopic,
         log_retention: logs.RetentionDays,
+        hold: timedelta = RELEASE_AFTER,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
+        minutes = int(hold.total_seconds() // 60)
         self.function = FastFunction(
             self,
             "Function",
             compiled=True,  # the Pds stack's one code asset: precompiled, for the endpoints' cold starts
             handler=SWEEPER_HANDLER,
-            description="PDS: release reservations that saw no impression in two hours",
+            description=f"PDS: release reservations that saw no impression in {minutes} minutes",
             environment={
                 "FAST_PREFIX": prefix,
                 "PDS_TABLE": table_name(prefix),
                 "LEDGER_TABLE": ledger_table(prefix),
+                "PDS_RELEASE_AFTER_SECONDS": str(int(hold.total_seconds())),
             },
-            timeout=Duration.minutes(5),
+            timeout=Duration.minutes(4),  # under SWEEP_EVERY: runs never overlap; the next carries on
             memory_size=256,
             log_retention=log_retention,
             removal_policy=removal_policy,
@@ -387,10 +392,10 @@ class ReleaseSweeper(Construct):
         )
         self.schedule = scheduler.Schedule(
             self,
-            "Every15Minutes",
+            "Runs",
             schedule=scheduler.ScheduleExpression.expression(SWEEP_SCHEDULE),
             schedule_group=group,
-            description="PDS: release reservations with no impression after two hours",
+            description=f"PDS: release reservations with no impression after {minutes} minutes",
             target=scheduler_targets.LambdaInvoke(
                 fn,
                 retry_attempts=RETRY_ATTEMPTS,

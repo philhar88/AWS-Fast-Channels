@@ -831,8 +831,9 @@ def wait_for_deliveries(smoke: Smoke) -> None:
 def test_delivery_is_counted_from_mediatailors_beacon_firings(smoke: Smoke) -> None:
     """Every stitched ad's tracker fired and is a ``pds.delivery`` record, with one impression per ad, counted from the
     ADS log's ``BEACON_FIRED`` or, where that log left it out, from the CDN's log (W-2 1.32); the direct lines' ads
-    are credited to their reservations, the others to none. With ``--cut-ads-delivery`` the firings during the cut are
-    counted from the CDN's log, and the others from the ADS log."""
+    are credited to their reservations (late when only the CDN's log counted them, past the hold), the others to
+    none. With ``--cut-ads-delivery`` the firings during the cut are counted from the CDN's log, and the others from
+    the ADS log."""
     wait_for_deliveries(smoke)
     counted, fired = smoke.counted(), smoke.fired()
     assert smoke.stitched() <= counted, f"stitched ads without a tracker hit: {smoke.stitched() - counted}"
@@ -843,7 +844,12 @@ def test_delivery_is_counted_from_mediatailors_beacon_firings(smoke: Smoke) -> N
         [first[key]] = [d for d in records if d["impression"]]
         line = smoke.lines.get(key[2])
         record = first[key]
-        assert (record.get("line"), record["credit"]) == (line, Credit.DELIVERED if line else Credit.UNRESERVED), record
+        # A firing that only the CDN's log counted is read 10 to 25 minutes later, past the reservation's 10-minute
+        # hold, so its line ad is delivered late (ADR-0022).
+        credits = {Credit.UNRESERVED}
+        if line:
+            credits = {Credit.DELIVERED, Credit.LATE} if record["source"] == Source.CDN_LOG else {Credit.DELIVERED}
+        assert record.get("line") == line and record["credit"] in credits, record
         assert record["pc"] == smoke.sibling, record
         if key not in fired:
             assert record["source"] == Source.CDN_LOG, f"counted but never fired: {record}"

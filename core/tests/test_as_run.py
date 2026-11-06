@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 
-from fast_channels.core.as_run import MATCH_TOLERANCE_MS, break_air_times, matching_break, unaired_breaks
+from fast_channels.core.as_run import (
+    MATCH_TOLERANCE_MS,
+    STOP_LOSS_MS,
+    break_air_times,
+    matching_break,
+    stopped_after,
+    unaired_breaks,
+)
 from fast_channels.core.timeline import PlannedBreak, scte_event_id
 
 RUN: dict[str, Any] = json.loads((Path(__file__).parent / "data" / "as-run-2026-10-27.json").read_text())
@@ -105,3 +112,26 @@ def test_an_event_far_from_every_break_matches_none(delta: int) -> None:
 
     assert matching_break(first + delta, start, BREAKS[name][:1]) is None
     assert matching_break(first, start, []) is None
+
+
+def test_a_break_on_air_up_to_a_minute_before_a_stop_aired() -> None:
+    """W-2 1.31: Channel Assembly can lose the ``AdBreakStart`` of a break that went on air up to about a minute
+    before ``StopChannel`` (stops 3.5 s and 25 s into a break lost it, 2026-10-29)."""
+    name = RUN["programs"][3]["name"]
+    start = program_starts()[name]
+    third = break_air_times(start, BREAKS[name])[2]
+    pending = [2, 3, 4, 5]
+
+    assert stopped_after(start, BREAKS[name], pending, [third + 3_500]) == {2: third + 3_500}
+    assert stopped_after(start, BREAKS[name], pending, [third + 25_000, third + 40_000]) == {2: third + 25_000}
+    assert stopped_after(start, BREAKS[name], pending, [third + STOP_LOSS_MS]) == {2: third + STOP_LOSS_MS}
+    assert stopped_after(start, BREAKS[name], pending, [third + STOP_LOSS_MS + 1]) == {}
+    assert stopped_after(start, BREAKS[name], pending, [third - 1]) == {}  # stopped before it: it never aired
+    assert stopped_after(start, BREAKS[name], [3, 4, 5], [third + 3_500]) == {}  # only pending breaks
+
+
+def test_the_runs_stop_came_before_its_unaired_breaks() -> None:
+    """The live run stopped 46 s before break 2 of its last program was due: the four stay unaired."""
+    name = RUN["programs"][3]["name"]
+
+    assert stopped_after(program_starts()[name], BREAKS[name], [2, 3, 4, 5], [ms(RUN["stopped_at"])]) == {}
