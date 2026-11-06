@@ -46,7 +46,7 @@ viewer who joined during a break the slate for the rest of it.
 The user guide documents (b) as "partial ad break fills when a session starts mid-break": MediaTailor personalizes
 the part of the break after the live edge and not the part before it.
 
-**The measurement** (2026-10-30, throwaway rig `fastcie-exp-mbj`, the P0-25 way) used:
+**The measurement** (2026-10-30, a throwaway rig, the P0-25 way) used:
 - a BASIC Channel Assembly channel, a 60 s manifest window and 120.12 s breaks;
 - a VAST ADS of 30.03 s ads, threshold 121 and server-side reporting;
 - joins about 30 s and about 76 s into a break, four each per candidate over two breaks, by players that fetch every
