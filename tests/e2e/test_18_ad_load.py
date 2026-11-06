@@ -19,7 +19,7 @@ line ads reserved, and its pod the viewer's tier's. The lake view ``v_ad_load_kp
 
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -30,15 +30,19 @@ from harness import BREAK_POLICY, LEAD, Channel, Tools, wait_for
 from harness_demand import DemandEdge
 from harness_identity import join, sign_in, wait_until_serving
 from harness_pods import (
+    GAP_SESSION_SHARE,
     SMART_TV_USER_AGENT,
+    Break,
     Logs,
     Sources,
     event_line,
+    gap_share,
     ipv4_client,
     line_creatives,
     milliseconds,
     objects,
     playback_plan,
+    read_unserved_prefetches,
     record_pattern,
     wait_until_ready,
     watch,
@@ -87,6 +91,8 @@ class Run:
     deliveries: list[dict[str, Any]]
     module: list[dict[str, Any]]
     """The fast-ctv module's ``fast-ctv-pod`` lines of both sessions."""
+    unserved: dict[tuple[str, str], Break] = field(default_factory=dict)
+    """W-2 1.33's known gaps among the sessions' breaks (``harness_pods.unserved_prefetches``)."""
 
     def of(self, who: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [r for r in records if r.get("sid") == self.sids[who]]
@@ -173,6 +179,7 @@ def run(
         module=[],
     )
     read_logs(found, Sources.of(stage, edge))
+    found.unserved = read_unserved_prefetches(stage, set(found.sids.values()), joined - timedelta(minutes=1))
     print(report(found))
     yield found
 
@@ -310,10 +317,21 @@ def test_every_line_ad_in_a_pod_is_reserved_and_counted(run: Run) -> None:
         )
     counted = {(d["sid"], d["evid"], d["crid"]): d for d in run.deliveries}
     for record in run.selects:
+        if (record["sid"], str(record["evid"])) in run.unserved:  # W-2 1.33: test_the_unserved_breaks_are_rare
+            print(f"{record['decision_id']}: not counted, MediaTailor left the break unserved (W-2 1.33)")
+            continue
         for crid in set(record["reserved"]) & {by["crid"] for by in won(record)}:
             delivery = counted.get((record["sid"], record["evid"], crid))
             assert delivery is not None, f"{record['decision_id']}: {crid} reserved, never counted"
             assert delivery["credit"] in {"delivered", "repeat"}, delivery
+
+
+# OPTIMIZATION(aws): W-2 1.33 drop this tolerance when MediaTailor serves every prefetched break
+def test_the_unserved_breaks_are_rare(run: Run) -> None:
+    """W-2 1.33's known gap (a prefetched break neither filled from its retrieval nor requested in real time) is
+    tolerated above, each case printed, in at most :data:`harness_pods.GAP_SESSION_SHARE` of the sessions."""
+    share = gap_share(set(run.unserved), set(run.sids.values()))
+    assert share <= GAP_SESSION_SHARE, f"{share:.0%} of the sessions had an unserved break: {sorted(run.unserved)}"
 
 
 def _athena(stage: Stage, sql: str) -> list[dict[str, str | None]]:

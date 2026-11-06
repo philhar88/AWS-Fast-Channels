@@ -20,7 +20,7 @@ import httpx
 from _demand import PREBID_CONTAINER, prebid_log_group
 from _stack import Module, Stage
 from harness import Player, TransientResponseError, wait_for
-from playback import Segment, Splice, media_segments, splices
+from playback import Segment, Splice, Window, media_segments, splices
 
 from fast_channels.core.demand import simulator_function, warmup_project
 from fast_channels.core.demo_demand import DemoIndex
@@ -596,6 +596,47 @@ def log_gaps(found: Iterable[Break], played: Collection[tuple[str, str]]) -> set
     return {
         (b.sid, b.evid) for b in found if b.policy and b.select and (b.sid, b.evid) in played and not logged_whole(b)
     }
+
+
+# OPTIMIZATION(aws): W-2 1.33 MediaTailor skips a prefetched break silently: drop this tolerance with the fix
+def unserved_prefetches(found: Iterable[Break]) -> set[tuple[str, str]]:
+    """The session-breaks, ``(sid, evid)``, of W-2 1.33's known gap: MediaTailor retrieved the break ahead (a
+    ``MAKING_ADS_REQUEST`` of its prefetch schedule), then neither filled it from the retrieval nor asked in real
+    time: no real-time request and no ``FILLED_AVAIL`` at all (fastcid 2026-11-06, 3 of 33 sessions; the release
+    module's ``<prefix>-release-unserved-breaks`` alarm counts them). The checks that expect a break's ads skip them,
+    below :data:`GAP_SESSION_SHARE` of the sessions, and print each one."""
+    return {
+        (b.sid, b.evid)
+        for b in found
+        if b.requests and all(request.prefetch is not None for request in b.requests) and b.filled is None
+    }
+
+
+RETRIEVAL_AHEAD: Final = timedelta(minutes=3)
+"""How far ahead of its break a prefetch retrieval happens at most (its window opens 150 s before the break)."""
+
+
+def read_unserved_prefetches(stage: Stage, sids: Collection[str], since: datetime) -> dict[tuple[str, str], Break]:
+    """:func:`unserved_prefetches` of the sessions ``sids`` since ``since``, read from the siblings' ADS log, each
+    printed. Read it once the sessions have stopped: the log trails by seconds."""
+    logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms=milliseconds(since))
+    group = stage.output(Module.RELEASE, "SiblingLogGroup")
+    events = [json_object(str(e["message"])) for e in logs.events(group, f"{{ {any_of('sessionId', sids)} }}")]
+    found = breaks([e for e in events if e is not None], [], [])
+    gaps = {key: found[key] for key in sorted(unserved_prefetches(found.values()))}
+    for (sid, evid), item in gaps.items():
+        print(
+            f"W-2 1.33 known gap: session {sid} break {evid} retrieved at {item.requested_at:%H:%M:%S} by "
+            f"{[r.prefetch for r in item.requests]}, then neither filled from it nor requested in real time"
+        )
+    return gaps
+
+
+def retrieved_for(item: Break, window: Window) -> bool:
+    """Whether ``item``'s retrieval was for the break airing in ``window`` (it came within :data:`RETRIEVAL_AHEAD`
+    before the window)."""
+    at = item.requested_at
+    return at is not None and window.starts - RETRIEVAL_AHEAD <= at <= window.starts
 
 
 def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:

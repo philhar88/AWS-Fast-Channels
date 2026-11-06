@@ -155,6 +155,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
                     "counts": counts,  # not top-level: "created" is a LogRecord attribute
                     "created_names": [r["Name"] for r in result.create],
                     "deleted_names": result.delete,
+                    "consuming_names": result.consuming,
                     "left_out": result.left_out[:20],
                 },
             )

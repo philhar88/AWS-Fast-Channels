@@ -291,6 +291,34 @@ def test_a_run_over_an_unchanged_schedule_writes_nothing() -> None:
     assert again.kept == [b.name for b in breaks if b.start >= at(3) + timedelta(seconds=60)]
 
 
+def test_a_break_on_air_keeps_its_schedule_until_its_window_closes() -> None:
+    """fastcid leg B (2026-11-06), ``pf-132526385`` on ``fastcid-demo-p-a``: created 08:55:14Z for a 60.06 s break at
+    08:58:16.054Z, retrieved by three sessions 08:56:09-08:56:51Z. The prefetcher's run of 08:58:23Z no longer found
+    the break in the schedule it read (the break had started) and deleted the schedule, 5-7 s before the sessions
+    reached the marker: two asked again in real time, one got no ads. A schedule whose consumption window has opened
+    is kept, whatever the schedule of record says, until the window closes."""
+    on_air = Break(132526385, "e2e-pattern", datetime(2026, 11, 6, 8, 58, 16, 54_000, tzinfo=UTC), 60060, "p-e2e")
+    schedule = existing(on_air)
+    run = datetime(2026, 11, 6, 8, 58, 23, tzinfo=UTC)
+    assert schedule["Consumption"]["StartTime"] < run < schedule["Consumption"]["EndTime"]
+    for read in ([], [on_air], [Break(on_air.event_id, on_air.upid, on_air.start + timedelta(seconds=30), 60060, "p")]):
+        result = plan(read, [schedule], configuration=SIBLING, policy=POLICY, now=run, tags=TAGS)
+        assert (result.delete, result.create, result.consuming) == ([], [], ["pf-132526385"]), read
+    closed = schedule["Consumption"]["EndTime"] + timedelta(seconds=1)
+    assert plan([], [schedule], configuration=SIBLING, policy=POLICY, now=closed, tags=TAGS).consuming == []
+
+
+def test_a_window_opens_at_its_consumption_start() -> None:
+    """One second before its consumption window opens a re-planned break's schedule is still deleted; from its start
+    on, it is kept."""
+    gone = brk(1, 5)
+    schedule = existing(gone)
+    opens = schedule["Consumption"]["StartTime"]
+    before = plan([], [schedule], configuration=SIBLING, policy=POLICY, now=opens - timedelta(seconds=1), tags=TAGS)
+    at_start = plan([], [schedule], configuration=SIBLING, policy=POLICY, now=opens, tags=TAGS)
+    assert (before.delete, at_start.delete, at_start.consuming) == (["pf-1"], [], ["pf-1"])
+
+
 def test_expired_and_foreign_schedules_are_left_alone() -> None:
     expired = existing(brk(9, -30))
     foreign = {"Name": "operator-test", "ScheduleType": "SINGLE", "Consumption": {"EndTime": at(30)}}

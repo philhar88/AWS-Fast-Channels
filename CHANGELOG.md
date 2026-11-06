@@ -114,6 +114,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The prefetcher never deletes a schedule whose consumption window has opened** (`modules.release`). A break that
+  has started leaves the schedule the prefetcher reads, which took it for a re-planned break and deleted its schedule
+  (seen 7 s into a break, before the sessions reached its marker). What the sessions had retrieved was thrown away:
+  some asked again in real time, and one got no ads for the break. Such a schedule is now kept until its window
+  closes, and the run lists it as `consuming_names`.
+- **Unserved prefetched breaks are counted and alarmed** (`modules.release`). MediaTailor sometimes neither fills a
+  prefetched break from its retrieval nor asks in real time, and logs nothing (`W-2 1.33`, seen in 3 of 33 sessions).
+  The release module's zero-ads detector now counts each such break per sibling (`UnservedBreaks`) and alarms on any
+  (`<prefix>-release-unserved-breaks`). The silent-loss detector, which needs at least five markers a minute, could not
+  see one session's lost break. The e2e tests 18 and 20 tolerate exactly this case in at most one session in five.
 - **The lake's break views pair a fill with its own break** (`v_breaks`, `v_fill_by_pc`). They joined `FILLED_AVAIL`
   to `MAKING_ADS_REQUEST` by `requestId`, but MediaTailor gives one `requestId` to everything a playlist request set
   off, which can be a break's `FILLED_AVAIL` and, 80 ms later, the next break's prefetch retrieval (seen live). That
