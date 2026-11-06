@@ -253,7 +253,15 @@ def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
     }
 
 
-PDS_PARAMETERS = ("config-bucket", "lake-bucket", "media-bucket", "content-base-url", "ladder-version")
+PDS_PARAMETERS = (
+    "config-bucket",
+    "lake-bucket",
+    "media-bucket",
+    "logs-bucket",
+    "content-base-url",
+    "distribution-id",
+    "ladder-version",
+)
 
 
 def test_the_pds_needs_the_parameters_of_the_data_and_media_stacks(stage: _demand.DemandStage, stub: Any) -> None:

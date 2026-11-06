@@ -28,7 +28,7 @@ FIXTURES = Path(__file__).resolve().parents[3] / "contracts" / "fixtures" / "pds
 SID = "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d"
 EVID = "820461826"
 SLOT_MS = 30030  # a 30 s ad on the 29.97 fps grid
-TRACKER = "https://cdn.example.com/ads/b.gif"
+TRACKER = "https://cdn.example.com/ads/b"
 TIER0 = PodContext(tier0_deals=frozenset({"fast-direct-1"}))
 
 
@@ -422,16 +422,16 @@ def test_select_response_sequences_the_pod_and_tracks_every_ad() -> None:
     assert [(ad.impid, ad.ref, ad.sequence) for ad in answer.pod] == [("s1", "direct1", 1), ("s2", "sim2", 2)]
     assert [(ad.impid, ad.ref) for ad in answer.standalone] == [("s1", "sim1"), ("s2", "h2")]
     assert set(answer.trackers) == {"direct1", "sim2", "sim1", "h2"}
-    assert answer.trackers["h2"] == [f"{TRACKER}?d={SID}.{EVID}&c=house2&e=impression&enr=1"]
+    assert answer.trackers["h2"] == [f"{TRACKER}/{SID}.{EVID}/house2/1.gif"]
 
 
 def test_tracker_url_encodes_third_party_creative_ids() -> None:
     url = tracker_url(TRACKER, "s.1", "a b&c=/d")
-    assert url == f"{TRACKER}?d=s.1&c=a%20b%26c%3D%2Fd&e=impression&enr=0"
+    assert url == f"{TRACKER}/s.1/a%20b%26c%3D%2Fd/0.gif", "each value one path segment"
 
 
 @pytest.mark.parametrize(
-    "base", ["http://cdn.example.com/ads/b.gif", "https:///b.gif", f"{TRACKER}?x=1", f"{TRACKER}#f"]
+    "base", ["http://cdn.example.com/ads/b", "https:///b", f"{TRACKER}?x=1", f"{TRACKER}#f", f"{TRACKER}/"]
 )
 def test_tracker_base_is_a_plain_https_url(base: str) -> None:
     with pytest.raises(ValueError, match="https URL"):

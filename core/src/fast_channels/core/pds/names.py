@@ -64,6 +64,18 @@ def decision_stream(prefix: str, record: str) -> str:
     return f"{prefix}-pds-{record}"
 
 
+def database_name(prefix: str) -> str:
+    """The PDS's own Glue database, ``<prefix>_pds``: not the lake. Its table :data:`CDN_ACCESS_TABLE` has the CDN
+    logs' query strings, which the lake leaves out (they carry session parameters), so only the delivery function
+    reads it."""
+    return f"{prefix}_pds"
+
+
+CDN_ACCESS_TABLE: Final = "cdn_access"
+"""The CDN's logs with the query string: the time, path, query and status of every request (the delivery function
+queries our tracker's)."""
+
+
 def decision_table(record: str) -> str:
     """The lake table of one kind of decision record: ``pds_policy``, ``pds_select``, ``pds_delivery``."""
     return f"pds_{record}"
@@ -81,8 +93,12 @@ class Parameter(StrEnum):
     LAKE_BUCKET = "lake-bucket"
     MEDIA_BUCKET = "media-bucket"
     """The media bucket, which holds the ladder kits' ads (Data stack)."""
+    LOGS_BUCKET = "logs-bucket"
+    """The logs bucket, which holds the CDN's logs that the delivery function reads (Data stack)."""
     CONTENT_BASE_URL = "content-base-url"
     """The CDN's content base URL, our tracker's host (Media stack)."""
+    DISTRIBUTION_ID = "distribution-id"
+    """The CDN's distribution, whose logs the delivery function reads (Media stack)."""
     LADDER_VERSION = "ladder-version"
     """The default ladder's version, whose kit the own book bids (Media stack; read at every publish)."""
     CATALOG_CONTEXT_BUCKET = "catalog-context-bucket"

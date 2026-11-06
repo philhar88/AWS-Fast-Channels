@@ -60,7 +60,7 @@ import static org.prebid.server.hooks.modules.fast.ctv.Fixtures.vast;
 
 public class FastCtvVastHookTest {
 
-    private static final String OUR_TRACKER = "https://cdn.example/ads/b.gif?d=" + SID + "." + EVID + "&c=";
+    private static final String OUR_TRACKER = "https://cdn.example/ads/b/" + SID + "." + EVID + "/";
 
     private final HttpClient httpClient = mock(HttpClient.class);
     private final List<String> log = new ArrayList<>();
@@ -104,8 +104,8 @@ public class FastCtvVastHookTest {
         // The service's tracker where it lists one, the module's own (enr 0) where it lists none: every ad has ours.
         assertThat(payload.responseBody()).contains("<Impression><![CDATA[" + pdsTracker("sim1") + "]]>")
                 .contains("<Impression><![CDATA[" + pdsTracker("house1") + "]]>")
-                .doesNotContain(OUR_TRACKER + "sim1&e=impression&enr=0")
-                .contains("<Impression><![CDATA[" + OUR_TRACKER + "house2&e=impression&enr=0]]>");
+                .doesNotContain(OUR_TRACKER + "sim1/0.gif")
+                .contains("<Impression><![CDATA[" + OUR_TRACKER + "house2/0.gif]]>");
         assertThat(log).singleElement().satisfies(line -> assertThat(line)
                 .contains("\"winners\":[\"amt:sim1\",\"amt:sim2\"]").doesNotContain(TICKET));
     }
@@ -131,7 +131,7 @@ public class FastCtvVastHookTest {
             final String vast = body(call(pod(2), auction()));
 
             assertThat(ads(vast)).containsExactly("house1#1", "house2#2");
-            assertThat(vast).contains(OUR_TRACKER + "house1&e=impression&enr=0");
+            assertThat(vast).contains(OUR_TRACKER + "house1/0.gif");
             assertThat(log.getFirst()).contains("SELECT_FALLBACK");
         }
     }
@@ -180,7 +180,7 @@ public class FastCtvVastHookTest {
         final String vast = body(call(withHousePod, pod(2), response(), TIMED_OUT));
 
         assertThat(ads(vast)).containsExactly("kit1#1", "kit2#2");
-        assertThat(vast).contains("<Impression><![CDATA[" + OUR_TRACKER + "kit1&e=impression&enr=0]]>");
+        assertThat(vast).contains("<Impression><![CDATA[" + OUR_TRACKER + "kit1/0.gif]]>");
         assertThat(log).singleElement().satisfies(line -> assertThat(line)
                 .contains("\"select\":\"empty HOUSE_CONFIG\"", "\"safe\":true",
                         "\"winners\":[\"fast-ctv:kit1\",\"fast-ctv:kit2\"]",

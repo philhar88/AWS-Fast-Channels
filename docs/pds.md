@@ -162,12 +162,20 @@ The same demand without the simulator (own book only) gives `direct1, house2, ho
 Every ad in the answer gets the PDS's own impression tracker, the CDN's no-store beacon:
 
 ```
-https://<cdn>/ads/b.gif?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>
+https://<cdn>/ads/b/<sid>.<evid>/<crid>/<enr>.gif
 ```
 
-MediaTailor fires it server-side and logs each firing as a `BEACON_FIRED` event with these parameters, which is how
-delivery is counted: fills deduplicated by `(sid, evid)`, ad impressions by `(sid, evid, crid)`, because a pod holds
-several ads. The counterparty's count is what bills; ours is a seller-side server count. `enr` is the content-enrichment
+Each segment is percent-encoded. The parameters are in the path because the CDN's access logs keep it: with the
+identity module they leave out the query, which holds the playback ticket. With the demand module the CDN answers
+`/ads/b/*` with a 1x1 GIF (`no-store`) from a viewer-request function, without the origin
+([delivery-and-multi-cdn.md](delivery-and-multi-cdn.md#routing-table)). The fast-ctv module's own tracker, on the
+house fallback, has the same form (`hooks.fast-ctv.tracker-template`).
+
+MediaTailor fires it server-side and logs each firing as a `BEACON_FIRED` event with these parameters, and the CDN
+logs each request of it. Delivery is counted from both: fills deduplicated by `(sid, evid)`, ad impressions by
+`(sid, evid, crid)`, because a pod holds several ads. The former form,
+`https://<cdn>/ads/b.gif?d=<sid>.<evid>&c=<crid>&e=impression&enr=<0|1>`, is still read, because a pod rendered before
+the change can still fire it; both forms of one firing count once. The counterparty's count is what bills; ours is a seller-side server count. `enr` is the content-enrichment
 arm of the break: 1 enriched, 0 in the `crawl-v1` holdout or with the crawl module off
 ([content-enrichment.md](content-enrichment.md#measuring-the-uplift)).
 
@@ -217,10 +225,37 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
 - **Delivery.** A subscription filter on the stage's MediaTailor log group (`/aws/vendedlogs/mediatailor/<prefix>`),
   and with the release module one on the siblings' log group (`<prefix>-pds-delivery-release`,
   [release-controller.md](release-controller.md#the-siblings-logs)), sends the impression beacons (`BEACON_FIRED`, `trackingEvent` impression) to the delivery function. Only our tracker
-  counts: the CDN's host and `/ads/b.gif` with a `d` parameter (the kit's own pod beacons and billing notices have
-  none), fired in the session it names. The parameters come from `beaconInfo.beaconUri`, so the count does not depend
-  on CloudFront's logs. Fills count once per `(sid, evid)` and impressions once per `(sid, evid, crid)`, however often
-  MediaTailor fires the beacon. A batch that fails is retried, then dead-lettered (`<prefix>-pds-delivery-dead-letters`).
+  counts: the CDN's host and `/ads/b/<sid>.<evid>/<crid>/<enr>.gif`, or the former `/ads/b.gif` with a `d`
+  parameter (the kit's own pod beacons and billing notices have none), fired in the session it names, with the
+  parameters from `beaconInfo.beaconUri`. Fills count once per
+  `(sid, evid)` and impressions once per `(sid, evid, crid)`, however often MediaTailor fires the beacon. A batch that
+  fails is retried, then dead-lettered (`<prefix>-pds-delivery-dead-letters`).
+- **Delivery from the CDN's logs.** The ADS log can leave out a whole break that MediaTailor filled (W-2 1.32), so
+  the delivery function also counts our tracker's requests in the CDN's standard logs, the Parquet files in the logs
+  bucket, from their path (`cs-uri-stem`). The former form's query is read where the logs have it; with the identity
+  module they do not, and that form counts from the ADS log only. Every 5 minutes EventBridge Scheduler runs it with its scheduled time `t`, and one Athena query (the lake's
+  workgroup) reads the files that arrived in `[t-15m, t-10m)` by their S3 time (`$file_modified_time`): every file
+  once, however late, as long as it arrives within 2 hours of its requests. Each request goes through the same count
+  as a beacon, so whichever source reads a firing first counts it, and the other counts nothing more.
+  - **Forged requests.** The tracker is a public URL, so a request counts only when its break's `pds.select` record
+    placed that creative (a won or standalone bid): a forged request can name a real ad at most, which counts once.
+  - **Privacy.** The table `cdn_access`, with the path and, without the identity module, the query, is in the PDS's
+    own Glue database `<prefix>_pds`, which only the delivery function reads. The lake's `cloudfront_access` leaves
+    the query out, because it carries session parameters. It keeps the path, so a tracker request puts its break
+    (`<sid>.<evid>`) and creative in the lake, as the manifest paths already put the session id. No ticket or viewer
+    parameter ever goes in the tracker's path.
+  - **Probes.** A probe's pod is never fired by MediaTailor, and the query leaves out probe breaks.
+  - **The reconciliation.** By the time a file is read, the ADS log has delivered its beacons, so what a CDN-log run
+    counts is what the ADS log left out: its metric `CdnLogOnlyImpressions`. `CdnLogBeacons` counts the firings it
+    read. The records and the `IMP#` and `FILL#` items name their source (`ads_log`, `cdn_log`).
+  - **Cost.** One Athena query per run, 288 a day. The CDN side reads only the window's files: Athena skips the
+    others by `$file_modified_time`, so a 5-minute file costs about 400 bytes. The select side reads about 4 hours of
+    `pds.select` records (JSON, read whole), which grows with the breaks served and the warm-ups' probes (7,500 per
+    new task). Measured on a demo stage, a run scans 0.5 to 1.1 MB, under Athena's 10 MB minimum per query. So a stage
+    pays the minimum: about $0.015 a day ($5 per TB).
+  - **Limits.** A file that arrives more than 2 hours after its requests, or whose breaks' select records are not in
+    the lake, is not counted. A run that fails is retried and then dead-lettered, and a redriven run reads its own
+    window again.
 - **Sweeper.** Every 15 minutes the release sweeper reads the table's `pending` index (open reservations by time) and
   releases those reserved more than two hours ago.
 - **Billing.** Our count is a seller-side server count, not an accredited measurement. What bills is the
@@ -238,8 +273,8 @@ Each own-book line ad that `/select` places is reserved, and our tracker's impre
   counted), the pod, the standalones, the filled duration, latency;
 - **`pds.delivery`**: the break and the creative, the configuration that fired it, when, the tracker's HTTP status,
   what it did to the reservation (`delivered`, `late`, `unreserved` for a house or third-party ad, `repeat`) with
-  the line and its price, and whether it was the first firing seen for the ad (`impression`) and for the break
-  (`fill`). A failed batch is retried, so count fills and impressions as distinct keys rather than by the flags.
+  the line and its price, whether it was the first firing seen for the ad (`impression`) and for the break
+  (`fill`), and where it was read (`source`: `ads_log` or `cdn_log`). A failed batch is retried, so count fills and impressions as distinct keys rather than by the flags.
 
 Records never hold the ticket, the viewer's address, User-Agent or headers, or the catalog context itself.
 
@@ -273,7 +308,7 @@ call on the task's loopback. Its code is the workspace member `pds` (`fast_chann
 | Metrics and stats | In the `FastChannels` namespace, by `service` (`pds`), emitted every minute: `PolicyDecisions` (by `mode`), `PolicyNoViewerIp`, `PolicyNoSnapshot`, `PolicyRefused` (a 400), `PolicyErrors` (a 500); `SelectDecisions` (by `reason`), `LineAdsReserved`, `LineAdsRefused` (by `reason`: `budget`, `cap`, `conflict`), `ReservationErrors`, `ReservationsTooLate`, `SelectNoSnapshot`, `SelectRefused`, `SelectErrors`; `OwnBookBids`, `OwnBookRefused`, `OwnBookErrors`; `Shed` (by endpoint); `LoopLagMaxMs`. Each minute a `pds stats` line per task gives each endpoint's latency (count, p50, p99, max), the reservations' and the budget reads' DynamoDB round trips, the pool's queue wait, the event loop's lag, the process's CPU share of one vCPU and its peak memory |
 | Image | `<prefix>-pds:<context hash>`: the package and its locked dependencies for x86 with deterministic bytecode, on a digest-pinned `python:3.14-slim`, run as uid 1000 on a read-only root filesystem, restarted in place if it exits. Built by the stage's x86 CodeBuild project (`deploy-demand`, `build-image`) |
 | Grants | On the task role, which Prebid Server's container shares: `s3:GetObject` on the snapshot; `dynamodb:BatchGetItem` on `BUDGET#*`, `UpdateItem` on `BUDGET#*` and `CAP#*`, `PutItem` on `RES#*`; `PutItem` on the ledger's `pds/*` chains; with `modules.crawl`, listing and reading the catalog-context objects (`core.pds.sidecar`). The S3 reads also join the guidance VPC's S3 gateway endpoint policy |
-| Delivery function | On the subscription to the MediaTailor log group. It writes `IMP#`, `FILL#`, the reservations and budget shards, and appends to the ledger's `pds/*` chains; metrics `Impressions`, `Fills`, `LineAdsDelivered`, `LateDeliveries`. Its records go to the lake as `pds_delivery` |
+| Delivery function | On the subscription to the MediaTailor log group, and every 5 minutes on the CDN's logs (EventBridge Scheduler, Athena). It writes `IMP#`, `FILL#`, the reservations and budget shards, and appends to the ledger's `pds/*` chains; metrics `Impressions`, `Fills`, `LineAdsDelivered`, `LateDeliveries`, and for the CDN's logs `CdnLogBeacons` and `CdnLogOnlyImpressions`. It reads only the lake's workgroup, the table `<prefix>_pds.cdn_access` and the `pds.select` records. Its records go to the lake as `pds_delivery` |
 | Release sweeper | Every 15 minutes (EventBridge Scheduler), with a dead-letter queue and alarm |
 | Fallback alarms | Metric filters on Prebid Server's container log (`deploy-demand` reads its group from the task definition) count the module's `fast-ctv-pod` lines, those whose `/policy` patch was not applied (`POLICY_…`, `NO_POLICY_HOOK`), those whose pod is the house fallback (`SELECT_FALLBACK`), the module's errors (an empty VAST) the pods of the kit's house ads from the module's configuration (`HOUSE_CONFIG`: a break that would otherwise have been empty) and the breaks the module rejected (`REJECTED <code>`: `PodsRejected`, `PodsRejectedOutOfRange` for a length outside 30-120 s, `PodsRejectedUnreadable` for one it cannot read; they air the slate, and no alarm counts them), leaving out the warm-up's and the herd's synthetic auctions, in `FastChannels/PrebidServer/<prefix>`. `<prefix>-pds-policy-fallbacks` fires above 1% of breaks in 5 minutes and `<prefix>-pds-select-fallbacks` above 0.5% (house fallbacks and errors); below 20 auctions in 5 minutes either fires once 5 breaks fell back, so a stage with few viewers still learns the PDS is down |
 | Snapshot | `snapshot/current.json` in the private config bucket (never the CDN, never the ingest bucket), with each version kept 30 days under `snapshot/history/`. It holds the demand allow-list (in demo mode the guidance's bidder simulator, `amt`), shed bidders, the floor, CloudFront's origin-facing networks from `ip-ranges.json`, which the viewer-IP rule needs, and the own book (lines, their creatives, the house ads; the publisher reads only the kits' `vast.xml` and `demo/creatives.json` in the media bucket, and sets the lines' budget shards). The publisher writes it when the stack deploys and every hour, and only when its content changed. The sidecar reads it before it listens and then every 30 seconds in the background with a conditional GET, so no request waits on S3 |
@@ -283,9 +318,10 @@ call on the task's loopback. Its code is the workspace member `pds` (`fast_chann
 log group) and the sidecar's log group, so `scripts/prebid_guidance.py deploy` deploys it after the guidance and the
 Demand stack, and `destroy` deletes it first ([docs/demand.md](demand.md#deploy-and-destroy)). Its state is the Data
 stack's: the table `<prefix>-pds` and the private config bucket exist with `modules.pds.enabled` and stay until
-`make destroy`. The Data stack writes the config, lake and media bucket names to `/<prefix>/pds/config-bucket`,
-`/<prefix>/pds/lake-bucket` and `/<prefix>/pds/media-bucket`, and the Media stack the CDN's content base URL and the
-default ladder to `/<prefix>/pds/content-base-url` and `/<prefix>/pds/ladder-version`. The Pds stack resolves them
+`make destroy`. The Data stack writes the config, lake, media and logs bucket names to `/<prefix>/pds/config-bucket`,
+`/<prefix>/pds/lake-bucket`, `/<prefix>/pds/media-bucket` and `/<prefix>/pds/logs-bucket`, and the Media stack the
+CDN's content base URL, its distribution and the default ladder to `/<prefix>/pds/content-base-url`,
+`/<prefix>/pds/distribution-id` and `/<prefix>/pds/ladder-version`. The Pds stack resolves them
 at deploy (the ladder at every publish), and the guidance's deploy reads the config and catalog-context buckets' for
 the sidecar: no cross-stack reference to those stacks, whose own deploys (`make deploy`) never see the guidance.
 `deploy-demand` refuses to deploy while one is missing.

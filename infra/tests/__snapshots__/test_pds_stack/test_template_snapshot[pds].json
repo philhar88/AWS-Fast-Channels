@@ -48,8 +48,16 @@
       "Default": "/fastm/pds/content-base-url",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
+    "SsmParameterValuefastmpdsdistributionidC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/distribution-id",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
     "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
       "Default": "/fastm/pds/lake-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdslogsbucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/logs-bucket",
       "Type": "AWS::SSM::Parameter::Value<String>"
     },
     "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
@@ -164,6 +172,168 @@
       },
       "Type": "AWS::IAM::Role"
     },
+    "CdnAccessDatabase0FAD7CE7": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseInput": {
+          "Description": "FAST Channels (fastm) Pod Decision Service: the delivery function's tables (not the lake)",
+          "Name": "fastm_pds"
+        }
+      },
+      "Type": "AWS::Glue::Database",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "CdnAccessTableBB7E8D60": {
+      "Properties": {
+        "CatalogId": "123456789012",
+        "DatabaseName": {
+          "Ref": "CdnAccessDatabase0FAD7CE7"
+        },
+        "TableInput": {
+          "Description": "CloudFront standard logs v2 of the media distribution: time, path, query string and status (the delivery function reads our tracker's requests)",
+          "Name": "cdn_access",
+          "Parameters": {
+            "classification": "parquet",
+            "has_encrypted_data": true,
+            "projection.day.digits": "2",
+            "projection.day.range": "1,31",
+            "projection.day.type": "integer",
+            "projection.enabled": "true",
+            "projection.hour.digits": "2",
+            "projection.hour.range": "0,23",
+            "projection.hour.type": "integer",
+            "projection.month.digits": "2",
+            "projection.month.range": "1,12",
+            "projection.month.type": "integer",
+            "projection.year.format": "yyyy",
+            "projection.year.interval": "1",
+            "projection.year.interval.unit": "YEARS",
+            "projection.year.range": "NOW-1YEARS,NOW",
+            "projection.year.type": "date",
+            "storage.location.template": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "SsmParameterValuefastmpdslogsbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=",
+                  {
+                    "Ref": "SsmParameterValuefastmpdsdistributionidC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/year=${year}/month=${month}/day=${day}/hour=${hour}/"
+                ]
+              ]
+            }
+          },
+          "PartitionKeys": [
+            {
+              "Name": "year",
+              "Type": "string"
+            },
+            {
+              "Name": "month",
+              "Type": "string"
+            },
+            {
+              "Name": "day",
+              "Type": "string"
+            },
+            {
+              "Name": "hour",
+              "Type": "string"
+            }
+          ],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "timestamp_ms",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_uri_stem",
+                "Type": "string"
+              },
+              {
+                "Name": "cs_uri_query",
+                "Type": "string"
+              },
+              {
+                "Name": "sc_status",
+                "Type": "string"
+              }
+            ],
+            "Compressed": false,
+            "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  {
+                    "Ref": "SsmParameterValuefastmpdslogsbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=",
+                  {
+                    "Ref": "SsmParameterValuefastmpdsdistributionidC96584B6F00A464EAD1953AFF4B05118Parameter"
+                  },
+                  "/"
+                ]
+              ]
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+            },
+            "StoredAsSubDirectories": false
+          },
+          "TableType": "EXTERNAL_TABLE"
+        }
+      },
+      "Type": "AWS::Glue::Table"
+    },
+    "DeliveryCdnLogRunsC995146C": {
+      "Properties": {
+        "Description": "PDS: count our tracker's impressions in the CDN's logs (W-2 1.32)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "GroupName": "fastm-pds",
+        "ScheduleExpression": "rate(5 minutes)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "State": "ENABLED",
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "DeliveryFunctionDB1DAB77",
+              "Arn"
+            ]
+          },
+          "DeadLetterConfig": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "DeliveryDeadLettersA8B3558F",
+                "Arn"
+              ]
+            }
+          },
+          "Input": "{\"source\":\"cdn_log\",\"scheduled\":\"<aws.scheduler.scheduled-time>\"}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 900,
+            "MaximumRetryAttempts": 2
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "DeliveryScheduleRoleCBB86633",
+              "Arn"
+            ]
+          }
+        }
+      },
+      "Type": "AWS::Scheduler::Schedule"
+    },
     "DeliveryDeadLettersA8B3558F": {
       "DeletionPolicy": "Delete",
       "Properties": {
@@ -192,7 +362,7 @@
         "AlarmActions": [
           "arn:aws:sns:us-east-1:123456789012:fastm-alerts"
         ],
-        "AlarmDescription": "Beacons from the MediaTailor log could not be counted after their retries: impressions and deliveries are missing (redrive the queue)",
+        "AlarmDescription": "Beacons from the MediaTailor log, or a window of the CDN's logs, could not be counted after their retries: impressions and deliveries are missing (redrive the queue)",
         "AlarmName": "fastm-pds-delivery-dead-letters",
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "Dimensions": [
@@ -279,17 +449,20 @@
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
           "S3Key": "<asset-hash>.zip"
         },
-        "Description": "PDS: count our tracker's impressions (BEACON_FIRED) and deliver their reservations",
+        "Description": "PDS: count our tracker's impressions (BEACON_FIRED, the CDN's logs) and deliver reservations",
         "Environment": {
           "Variables": {
+            "CDN_LOG_TABLE": "fastm_pds.cdn_access",
             "CONTENT_BASE_URL": {
               "Ref": "SsmParameterValuefastmpdscontentbaseurlC96584B6F00A464EAD1953AFF4B05118Parameter"
             },
             "FAST_PREFIX": "fastm",
+            "LAKE_WORKGROUP": "fastm-lake",
             "LEDGER_TABLE": "fastm-ledger",
             "PDS_TABLE": "fastm-pds",
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
-            "POWERTOOLS_SERVICE_NAME": "pds.delivery"
+            "POWERTOOLS_SERVICE_NAME": "pds.delivery",
+            "SELECT_TABLE": "fastm_lake.pds_select"
           }
         },
         "Handler": "fast_channels.functions.pds.delivery.handler",
@@ -324,7 +497,7 @@
             "Value": "iac"
           }
         ],
-        "Timeout": 60,
+        "Timeout": 180,
         "TracingConfig": {
           "Mode": "Active"
         }
@@ -454,6 +627,124 @@
               },
               "Effect": "Allow",
               "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-ledger"
+            },
+            {
+              "Action": [
+                "athena:GetQueryExecution",
+                "athena:GetQueryResults",
+                "athena:StartQueryExecution"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:athena:us-east-1:123456789012:workgroup/fastm-lake"
+            },
+            {
+              "Action": [
+                "glue:GetDatabase",
+                "glue:GetTable"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                "arn:aws:glue:us-east-1:123456789012:catalog",
+                "arn:aws:glue:us-east-1:123456789012:database/fastm_lake",
+                "arn:aws:glue:us-east-1:123456789012:database/fastm_pds",
+                "arn:aws:glue:us-east-1:123456789012:table/fastm_lake/pds_select",
+                "arn:aws:glue:us-east-1:123456789012:table/fastm_pds/cdn_access"
+              ]
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/pds/select/*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:aws:s3:::",
+                      {
+                        "Ref": "SsmParameterValuefastmpdslogsbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=",
+                      {
+                        "Ref": "SsmParameterValuefastmpdsdistributionidC96584B6F00A464EAD1953AFF4B05118Parameter"
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket"
+              ],
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "AWSLogs/aws-account-id=123456789012/CloudFront/DistributionId=",
+                          {
+                            "Ref": "SsmParameterValuefastmpdsdistributionidC96584B6F00A464EAD1953AFF4B05118Parameter"
+                          },
+                          "/*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdslogsbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket"
+              ],
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "pds/select/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdslakebucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    }
+                  ]
+                ]
+              }
             }
           ],
           "Version": "2012-10-17"
@@ -941,6 +1232,10 @@
                 "Type": "string"
               },
               {
+                "Name": "source",
+                "Type": "string"
+              },
+              {
                 "Name": "timestamp",
                 "Type": "string"
               },
@@ -981,6 +1276,103 @@
         }
       },
       "Type": "AWS::Glue::Table"
+    },
+    "DeliveryScheduleRoleCBB86633": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "PublisherGroup492B30FA",
+                      "Arn"
+                    ]
+                  }
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "EventBridge Scheduler: run the PDS delivery function on the CDN's logs",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "pds"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "DeliveryScheduleRoleDefaultPolicyCEFD9CC5": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "DeliveryFunctionDB1DAB77",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "DeliveryFunctionDB1DAB77",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "sqs:SendMessage",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeliveryDeadLettersA8B3558F",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "DeliveryScheduleRoleDefaultPolicyCEFD9CC5",
+        "Roles": [
+          {
+            "Ref": "DeliveryScheduleRoleCBB86633"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
     },
     "ModuleAlarmsHouseFromConfig6E5D5CAC": {
       "Properties": {

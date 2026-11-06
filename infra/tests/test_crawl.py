@@ -139,7 +139,8 @@ def test_the_route_reaches_only_objects_under_catalog_ctx(media: Template) -> No
     assert "OriginAccessControlId" in origin and origin["S3OriginConfig"] == {"OriginAccessIdentity": ""}
     assert _catalog_bucket(media) in json.dumps(origin["DomainName"])
     paths = [b["PathPattern"] for b in config["CacheBehaviors"]]
-    assert paths == ["/tm/*", "/v1/*", CATALOG_CONTEXT_PATH]  # ahead of the default route (the media bucket)
+    # ahead of the default route (the media bucket); the demand module's tracker route comes first
+    assert paths == ["/tm/*", "/v1/*", "/ads/b/*", CATALOG_CONTEXT_PATH]
 
 
 def test_the_path_contract_names_the_route_and_its_origin() -> None:

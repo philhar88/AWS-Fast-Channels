@@ -109,6 +109,12 @@ class Settings:
     """The snapshot publisher's function, which the selling module's sync runs when the booked lines change."""
     selling_products: str = field(default_factory=lambda: _env("SELLING_PRODUCTS"))
     """JSON of the selling module's product terms (``functions.selling.sync.Terms``)."""
+    lake_workgroup: str = field(default_factory=lambda: _env("LAKE_WORKGROUP"))
+    """The lake's Athena workgroup (``<prefix>-lake``), which the delivery function's CDN-log runs query in."""
+    cdn_log_table: str = field(default_factory=lambda: _env("CDN_LOG_TABLE"))
+    """``<database>.<table>`` of the CDN's logs with the query string (``<prefix>_pds.cdn_access``)."""
+    select_table: str = field(default_factory=lambda: _env("SELECT_TABLE"))
+    """``<database>.<table>`` of the ``pds.select`` decision records (``<prefix>_lake.pds_select``)."""
     release_bucket: str = field(default_factory=lambda: _env("RELEASE_BUCKET"))
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
     release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))

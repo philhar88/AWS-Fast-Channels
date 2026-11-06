@@ -123,7 +123,7 @@ def test_the_pod_with_its_line_ad_reserved_and_our_trackers(
     answer = SelectResponse.model_validate_json(response.body)
     assert [ad.ref for ad in answer.pod] == ["ownbook-s1-direct1", "amt-s2-sim2", "amt-s3-sim3", "ownbook-s4-house2"]
     decision = request()["decision_id"]
-    assert answer.trackers["ownbook-s1-direct1"] == [f"{CDN}/ads/b.gif?d={decision}&c=direct1&e=impression&enr=0"]
+    assert answer.trackers["ownbook-s1-direct1"] == [f"{CDN}/ads/b/{decision}/direct1/0.gif"]
     [asked] = stubbed
     assert (asked["decision"], asked["sid"], asked["table"], asked["ledger_table"]) == (
         decision,
@@ -146,7 +146,7 @@ def test_the_trackers_carry_the_crawl_arm(
     monkeypatch.setenv("CRAWL_HOLDOUT_PERCENT", holdout)
     settings.cache_clear()
     answer = SelectResponse.model_validate_json(ask(json.dumps(request())).body)
-    assert {url.rsplit("&", 1)[1] for urls in answer.trackers.values() for url in urls} == {f"enr={enr}"}
+    assert {url.rsplit("/", 1)[1] for urls in answer.trackers.values() for url in urls} == {f"{enr}.gif"}
 
 
 def test_the_contract_examples_are_answered_as_they_say(
@@ -230,7 +230,7 @@ def test_the_helpers_read_the_configuration(monkeypatch: pytest.MonkeyPatch) -> 
     state.budgets.cache_clear()
     state.dynamodb.cache_clear()
     try:
-        assert select.tracker_base() == f"{CDN}/ads/b.gif"
+        assert select.tracker_base() == f"{CDN}/ads/b"
         assert select.budgets()._table == "fastm-pds"
         config = select.dynamodb().meta.config
         assert (config.read_timeout, config.max_pool_connections) == (0.1, state.WORKERS)

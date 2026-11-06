@@ -25,7 +25,7 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 
-from fast_channels.core.pbs_config import TRACKER_PATH
+from fast_channels.core.pbs_config import TRACKER_PREFIX
 from fast_channels.core.pds.models import SelectRequest
 from fast_channels.core.pds.pod import scheduled_ms, select_response, tracker_url
 from fast_channels.core.pds.records import select_record
@@ -58,13 +58,13 @@ RESERVE_BEFORE_S: Final = 0.05
 
 @cache
 def tracker_base() -> str:
-    """Our impression tracker on the CDN: ``<content base URL>/ads/b.gif``.
+    """Our impression tracker's prefix on the CDN: ``<content base URL>/ads/b`` (``pbs_config.TRACKER_PREFIX``).
 
     Raises:
         ValueError: it is not an https URL (the tracker cannot be built).
     """
     settings().require("content_base_url")
-    base = f"{settings().content_base_url.rstrip('/')}{TRACKER_PATH}"
+    base = f"{settings().content_base_url.rstrip('/')}{TRACKER_PREFIX.rstrip('/')}"
     tracker_url(base, "sid.0", "crid")  # raises on a base no tracker can be built on
     return base
 

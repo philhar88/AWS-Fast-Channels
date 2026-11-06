@@ -6,7 +6,7 @@
         "fast-direct-1"
       ]
     },
-    "tracker_base": "https://cdn.example.com/ads/b.gif",
+    "tracker_base": "https://cdn.example.com/ads/b",
     "enr": 0
   },
   "request": {

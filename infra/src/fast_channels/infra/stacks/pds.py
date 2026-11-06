@@ -19,7 +19,13 @@ from fast_channels.infra.config import DemandMode
 from fast_channels.infra.constructs.alerts import alert_topic_arn
 from fast_channels.infra.constructs.crawl.kpis import KPIS
 from fast_channels.infra.constructs.ops.lake import lake_database_name, view_table
-from fast_channels.infra.constructs.pds import DecisionLog, DeliveryCounter, ReleaseSweeper, SnapshotPublisher
+from fast_channels.infra.constructs.pds import (
+    CdnAccessTable,
+    DecisionLog,
+    DeliveryCounter,
+    ReleaseSweeper,
+    SnapshotPublisher,
+)
 from fast_channels.infra.constructs.pds.alarms import ModuleAlarms
 
 if TYPE_CHECKING:
@@ -107,9 +113,19 @@ class PdsStack(Stack):
                 self, names.parameter_name(prefix, names.Parameter.MEDIA_BUCKET)
             ),
         )
-        # The Media stack's CDN, by SSM parameter too (our tracker's host).
+        logs_bucket = s3.Bucket.from_bucket_name(
+            self,
+            "LogsBucket",
+            ssm.StringParameter.value_for_string_parameter(
+                self, names.parameter_name(prefix, names.Parameter.LOGS_BUCKET)
+            ),
+        )
+        # The Media stack's CDN, by SSM parameter too (our tracker's host, and the distribution whose logs count it).
         content_base_url = ssm.StringParameter.value_for_string_parameter(
             self, names.parameter_name(prefix, names.Parameter.CONTENT_BASE_URL)
+        )
+        distribution_id = ssm.StringParameter.value_for_string_parameter(
+            self, names.parameter_name(prefix, names.Parameter.DISTRIBUTION_ID)
         )
         self.publisher = SnapshotPublisher(
             self,
@@ -148,11 +164,18 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        self.cdn_access = CdnAccessTable(
+            self, "CdnAccess", prefix=prefix, logs_bucket=logs_bucket, distribution_id=distribution_id
+        )
         self.delivery = DeliveryCounter(
             self,
             "Delivery",
             prefix=prefix,
             content_base_url=content_base_url,
+            group=self.publisher.group,
+            cdn_access=self.cdn_access,
+            logs_bucket=logs_bucket,
+            lake_bucket=lake,
             alert_topic=alerts,
             log_retention=retention,
             removal_policy=removal,

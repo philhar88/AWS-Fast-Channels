@@ -47,7 +47,11 @@ __all__ = [
     "QUERY_SCAN_LIMIT_BYTES",
     "Lake",
     "LakeBucket",
+    "cloudfront_log_location",
+    "cloudfront_partitions",
     "lake_database_name",
+    "lake_workgroup_name",
+    "parquet_column",
 ]
 
 EXCLUDED_ACCESS_LOG_FIELDS: Final = VIEWER_ACCESS_LOG_FIELDS
@@ -83,6 +87,32 @@ def lake_database_name(prefix: str) -> str:
     """Glue database of the deployment's lake: ``<prefix>_lake``, which Athena needs no quotes for (the prefix has no
     hyphen, ``core.naming.PREFIX_PATTERN``)."""
     return f"{prefix}_lake"
+
+
+def lake_workgroup_name(prefix: str) -> str:
+    """Athena workgroup of the deployment's lake: ``<prefix>-lake``."""
+    return f"{prefix}-lake"
+
+
+def cloudfront_log_location(account: str, distribution_id: str) -> str:
+    """Key prefix of one distribution's standard logs v2 in the logs bucket (``CdnAccessLogs``), with no slash."""
+    return f"AWSLogs/aws-account-id={account}/CloudFront/DistributionId={distribution_id}"
+
+
+def cloudfront_partitions() -> dict[str, glue.PartitionProjectionConfiguration]:
+    """Partition projection of a table of CloudFront's Parquet logs: ``year`` (this year and last: the logs bucket
+    keeps CloudFront logs for days, not years), ``month``, ``day``, ``hour``."""
+    return {
+        "year": glue.PartitionProjectionConfiguration.date(
+            format="yyyy",
+            min="NOW-1YEARS",
+            max="NOW",
+            step=glue.DateProjectionStep(interval=1, interval_unit=glue.DateIntervalUnit.YEARS),
+        ),
+        "month": glue.PartitionProjectionConfiguration.integer(min=1, max=12, digits=2),
+        "day": glue.PartitionProjectionConfiguration.integer(min=1, max=31, digits=2),
+        "hour": glue.PartitionProjectionConfiguration.integer(min=0, max=23, digits=2),
+    }
 
 
 class LakeBucket(Construct):
@@ -394,7 +424,7 @@ class Lake(Construct):
             removal_policy=removal_policy,
         )
         self.tables: dict[str, glue.S3Table] = {}
-        access = f"AWSLogs/aws-account-id={stack.account}/CloudFront/DistributionId={distribution_id}"
+        access = cloudfront_log_location(stack.account, distribution_id)
         self.tables["cloudfront_access"] = glue.S3Table(
             self,
             "CloudFrontAccess",
@@ -406,23 +436,12 @@ class Lake(Construct):
             s3_prefix=f"{access}/",
             data_format=glue.DataFormat.PARQUET,
             columns=[
-                glue.Column(name=_parquet_column(f), type=glue.Schema.STRING)
+                glue.Column(name=parquet_column(f), type=glue.Schema.STRING)
                 for f in ACCESS_LOG_FIELDS
                 if f not in EXCLUDED_ACCESS_LOG_FIELDS
             ],
             partition_keys=[glue.Column(name=key, type=glue.Schema.STRING) for key in ("year", "month", "day", "hour")],
-            partition_projection={
-                # This year and last: the logs bucket keeps CloudFront logs for days, not years.
-                "year": glue.PartitionProjectionConfiguration.date(
-                    format="yyyy",
-                    min="NOW-1YEARS",
-                    max="NOW",
-                    step=glue.DateProjectionStep(interval=1, interval_unit=glue.DateIntervalUnit.YEARS),
-                ),
-                "month": glue.PartitionProjectionConfiguration.integer(min=1, max=12, digits=2),
-                "day": glue.PartitionProjectionConfiguration.integer(min=1, max=31, digits=2),
-                "hour": glue.PartitionProjectionConfiguration.integer(min=0, max=23, digits=2),
-            },
+            partition_projection=cloudfront_partitions(),
             parameters={
                 "storage.location.template": Fn.join(
                     "",
@@ -503,7 +522,7 @@ class Lake(Construct):
         self.workgroup = athena.CfnWorkGroup(
             self,
             "WorkGroup",
-            name=f"{prefix}-lake",
+            name=lake_workgroup_name(prefix),
             description=f"FAST Channels ({prefix}) lake queries",
             recursive_delete_option=True,
             state="ENABLED",
@@ -564,7 +583,7 @@ def view_table(scope: Construct, id: str, view: View, *, database_name: str) -> 
     )
 
 
-def _parquet_column(field: str) -> str:
+def parquet_column(field: str) -> str:
     """CloudFront's Parquet column name of a standard-logs field: ``cs(User-Agent)`` -> ``cs_User_Agent``,
     ``timestamp(ms)`` -> ``timestamp_ms``, lowercased for Glue."""
     return field.replace("(", "_").replace(")", "").replace("-", "_").lower()

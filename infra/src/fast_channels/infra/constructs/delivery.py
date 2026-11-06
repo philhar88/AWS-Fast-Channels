@@ -24,6 +24,7 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
+from fast_channels.core.pbs_config import TRACKER_PREFIX
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.alerts import CLOUDFRONT_REGION
 from fast_channels.infra.constructs.logs import deliver
@@ -273,13 +274,47 @@ def _ticketed(route: Route) -> Route:
     )
 
 
-def routes(*, catalog_context: bool = False, ticketed: bool = False) -> tuple[Route, ...]:
-    """The routing table of a deployment: :data:`ROUTES`, with the catalog-context route before the default one when
-    the ``crawl`` module is on, and the ``/v1/*`` route behind the edge rebuild when the ``identity`` module is."""
+TRACKER_GIF: Final = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+"""Base64 of the 1x1 GIF the tracker route answers: the kit's beacon object's bytes (``ingest.kit.BEACON_GIF``)."""
+TRACKER_FUNCTION_CODE: Final = (
+    "function handler(event) {\n"
+    "  return {\n"
+    "    statusCode: 200,\n"
+    "    statusDescription: 'OK',\n"
+    "    headers: {'content-type': {value: 'image/gif'}, 'cache-control': {value: 'no-store'}},\n"
+    f"    body: {{encoding: 'base64', data: '{TRACKER_GIF}'}},\n"
+    "  };\n"
+    "}\n"
+)
+"""The tracker route's viewer-request function (cloudfront-js-2.0): the GIF, for every request, without the origin."""
+TRACKER_ROUTE: Final = Route(
+    f"{TRACKER_PREFIX}*",
+    Origin.MEDIA,  # never reached: the function answers
+    CACHING_DISABLED,
+    None,
+    Cors.MEDIA,
+    compress=False,
+    methods=Methods.READ,
+    purpose=(
+        "Our impression tracker, /ads/b/<sid>.<evid>/<crid>/<enr>.gif, which MediaTailor fires server-side: its "
+        "parameters are in the path, which the access logs keep (delivery counts from them, W-2 1.32)"
+    ),
+    viewer_request="Answers a 1x1 GIF (image/gif, Cache-Control: no-store) to every request, without the origin",
+)
+"""The ``demand`` module's route: the fast-ctv module and the Pod Decision Service render our tracker on it. The path
+does not exist in the media bucket, whose answer would be a 403 that MediaTailor retries; the access logs record the
+request's path as the viewer sent it."""
+
+
+def routes(*, catalog_context: bool = False, ticketed: bool = False, tracker: bool = False) -> tuple[Route, ...]:
+    """The routing table of a deployment: :data:`ROUTES`, with the ``/v1/*`` route behind the edge rebuild when the
+    ``identity`` module is on, and the tracker route (the ``demand`` module) and the catalog-context route (the
+    ``crawl`` module) before the default one."""
     table = tuple(_ticketed(r) if ticketed and r.path == MEDIATAILOR_PATH else r for r in ROUTES)
-    if not catalog_context:
+    extra = (*((TRACKER_ROUTE,) if tracker else ()), *((CATALOG_CONTEXT_ROUTE,) if catalog_context else ()))
+    if not extra:
         return table
-    return (*table[:-1], CATALOG_CONTEXT_ROUTE, table[-1])
+    return (*table[:-1], *extra, table[-1])
 
 
 def path_contract(*, region: str, media_host: str, table: tuple[Route, ...] = ROUTES) -> dict[str, Any]:
@@ -370,6 +405,7 @@ class MediaDistribution(Construct):
         publish_additional_metrics: CloudFront's paid per-distribution metrics (cache hit rate, origin latency).
         edge_rebuild: the ``identity`` module's viewer-request function; puts the ``/v1/*`` route behind it, reads
             only (``constructs.identity.edge``).
+        tracker: the ``demand`` module's tracker route (:data:`TRACKER_ROUTE`) and its CloudFront Function.
 
     Attributes:
         distribution: the CloudFront distribution.
@@ -394,9 +430,23 @@ class MediaDistribution(Construct):
         price_class: cf.PriceClass = cf.PriceClass.PRICE_CLASS_ALL,
         publish_additional_metrics: bool = False,
         edge_rebuild: cf.IFunction | None = None,
+        tracker: bool = False,
     ) -> None:
         super().__init__(scope, id)
-        self.edge_rebuild = edge_rebuild
+        self.functions: dict[str, cf.IFunction] = {}
+        """The viewer-request function of each route that has one, by path."""
+        if edge_rebuild is not None:
+            self.functions[MEDIATAILOR_PATH] = edge_rebuild
+        if tracker:
+            # OPTIMIZATION(aws): W-2 1.32 the tracker's parameters in a path the logs keep: the ADS log can drop a break
+            self.functions[TRACKER_ROUTE.path] = cf.Function(
+                self,
+                "TrackerFunction",
+                comment="FAST Channels: our impression tracker /ads/b/*, a 1x1 GIF at the edge (no origin)",
+                code=cf.FunctionCode.from_inline(TRACKER_FUNCTION_CODE),
+                runtime=cf.FunctionRuntime.JS_2_0,
+                auto_publish=True,
+            )
         if (content_domain is None) != (certificate_arn is None):
             raise ValueError("content_domain and certificate_arn must be given together")
         stack = Stack.of(self)
@@ -419,7 +469,9 @@ class MediaDistribution(Construct):
             server_timing_sampling_rate=100,
         )
         targets = _origins(media_bucket, region=stack.region, catalog_bucket=catalog_bucket)
-        self.routes = routes(catalog_context=catalog_bucket is not None, ticketed=edge_rebuild is not None)
+        self.routes = routes(
+            catalog_context=catalog_bucket is not None, ticketed=edge_rebuild is not None, tracker=tracker
+        )
         behaviours = {route.path: self._behaviour(route, targets) for route in self.routes}
         self.distribution = cf.Distribution(
             self,
@@ -455,6 +507,7 @@ class MediaDistribution(Construct):
 
     def _behaviour(self, route: Route, targets: Mapping[Origin, cf.IOrigin]) -> cf.BehaviorOptions:
         cors = self.cors_policy if route.cors is Cors.MEDIA else _PREFLIGHT_HEADERS
+        viewer_request = self.functions.get(route.path)
         return cf.BehaviorOptions(
             origin=targets[route.origin],
             cache_policy=route.cache.policy,
@@ -465,9 +518,9 @@ class MediaDistribution(Construct):
             cached_methods=_CACHED_METHODS[route.methods],
             viewer_protocol_policy=cf.ViewerProtocolPolicy.HTTPS_ONLY,
             function_associations=[
-                cf.FunctionAssociation(function=self.edge_rebuild, event_type=cf.FunctionEventType.VIEWER_REQUEST)
+                cf.FunctionAssociation(function=viewer_request, event_type=cf.FunctionEventType.VIEWER_REQUEST)
             ]
-            if route.viewer_request and self.edge_rebuild is not None
+            if viewer_request is not None
             else None,
         )
 
