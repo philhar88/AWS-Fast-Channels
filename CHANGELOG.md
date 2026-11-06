@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-06
+
+Version 4.1.0 adds signed-in viewers (`identity`), ad load by viewer tier (`pds`), a reference viewer app
+(`viewer`) and agentic ad selling over AdCP (`selling`), and lists every workaround of AWS behaviour in
+[docs/workarounds.md](docs/workarounds.md). Every new module is off by default; with every module off a deployment
+is v3.0.0's, which snapshot tests of every shipped template check.
+
 ### Added
 
 - **Workarounds to remove** ([docs/workarounds.md](docs/workarounds.md)): every place the code works around AWS
@@ -798,7 +805,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
-[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v1.0.0...v2.0.0
