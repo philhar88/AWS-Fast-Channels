@@ -1,0 +1,296 @@
+[
+ {
+  "@timestamp": "2026-11-06 08:40:32.300",
+  "sessionId": "c80a1954-6ab7-494a-90b6-4450edca3420",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-1077712281"
+ },
+ {
+  "@timestamp": "2026-11-06 08:41:03.444",
+  "sessionId": "a83dec9b-2ec8-4201-8cba-fc031425b7da",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-1077712281"
+ },
+ {
+  "@timestamp": "2026-11-06 08:42:37.897",
+  "sessionId": "a83dec9b-2ec8-4201-8cba-fc031425b7da",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01",
+  "marker": "1793954544761-34-403C9599"
+ },
+ {
+  "@timestamp": "2026-11-06 08:42:38.127",
+  "sessionId": "c80a1954-6ab7-494a-90b6-4450edca3420",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "prefetchScheduleName": "pf-1077712281",
+  "marker": "1793954544761-34-403C9599"
+ },
+ {
+  "@timestamp": "2026-11-06 08:42:38.371",
+  "sessionId": "c80a1954-6ab7-494a-90b6-4450edca3420",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "prefetchScheduleName": "pf-1077712281"
+ },
+ {
+  "@timestamp": "2026-11-06 08:43:20.299",
+  "sessionId": "c80a1954-6ab7-494a-90b6-4450edca3420",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-1929944272"
+ },
+ {
+  "@timestamp": "2026-11-06 08:43:37.443",
+  "sessionId": "a83dec9b-2ec8-4201-8cba-fc031425b7da",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-1929944272"
+ },
+ {
+  "@timestamp": "2026-11-06 08:45:43.398",
+  "sessionId": "a83dec9b-2ec8-4201-8cba-fc031425b7da",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "ea5d2f1c-4608-332e-87d3-aa3d998e5135",
+  "marker": "1793954730947-34-73089CD0"
+ },
+ {
+  "@timestamp": "2026-11-06 08:45:43.723",
+  "sessionId": "c80a1954-6ab7-494a-90b6-4450edca3420",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "prefetchScheduleName": "pf-1929944272",
+  "marker": "1793954730947-34-73089CD0"
+ },
+ {
+  "@timestamp": "2026-11-06 08:45:43.968",
+  "sessionId": "c80a1954-6ab7-494a-90b6-4450edca3420",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "prefetchScheduleName": "pf-1929944272"
+ },
+ {
+  "@timestamp": "2026-11-06 08:56:09.430",
+  "sessionId": "8537b4a3-e4c9-42c2-a5af-c383c7f2befd",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-132526385"
+ },
+ {
+  "@timestamp": "2026-11-06 08:56:40.353",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-132526385"
+ },
+ {
+  "@timestamp": "2026-11-06 08:56:51.065",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-132526385"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:04.967",
+  "sessionId": "8537b4a3-e4c9-42c2-a5af-c383c7f2befd",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-364678632"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:28.824",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01",
+  "marker": "1793955496054-34-7E63131"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:28.870",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:28.966",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:29.435",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01",
+  "marker": "1793955496054-34-7E63131"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:29.530",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:29.771",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:30.098",
+  "sessionId": "8537b4a3-e4c9-42c2-a5af-c383c7f2befd",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01",
+  "marker": "1793955496054-34-7E63131"
+ },
+ {
+  "@timestamp": "2026-11-06 08:58:56.838",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-364678632"
+ },
+ {
+  "@timestamp": "2026-11-06 08:59:07.573",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-364678632"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:34.795",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "prefetchScheduleName": "pf-364678632",
+  "marker": "1793955622180-34-15BC8DE8"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:34.844",
+  "sessionId": "f95e1028-4e88-4535-941a-58ca7688d254",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "prefetchScheduleName": "pf-364678632"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:35.386",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "prefetchScheduleName": "pf-364678632",
+  "marker": "1793955622180-34-15BC8DE8"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:35.631",
+  "sessionId": "62e2aafe-2f67-41a2-9b69-7bb94c1088e6",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "prefetchScheduleName": "pf-364678632"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:36.226",
+  "sessionId": "8537b4a3-e4c9-42c2-a5af-c383c7f2befd",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "a684ecee-e76f-3522-b732-86a895bc8436",
+  "marker": "1793955622180-34-15BC8DE8"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:39.034",
+  "sessionId": "8537b4a3-e4c9-42c2-a5af-c383c7f2befd",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "adBreakCorrelationId": "b53b3a3d-6ab9-3ce0-a682-29151c9bde11"
+ },
+ {
+  "@timestamp": "2026-11-06 09:00:39.227",
+  "sessionId": "8537b4a3-e4c9-42c2-a5af-c383c7f2befd",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "adBreakCorrelationId": "b53b3a3d-6ab9-3ce0-a682-29151c9bde11"
+ },
+ {
+  "@timestamp": "2026-11-06 09:32:46.361",
+  "sessionId": "ca1f00b7-8813-43b7-b2f5-b23224b52b69",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-1183716241"
+ },
+ {
+  "@timestamp": "2026-11-06 09:33:18.173",
+  "sessionId": "876e6c26-dfb1-44b3-a1cd-75a9a931e49f",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-1183716241"
+ },
+ {
+  "@timestamp": "2026-11-06 09:35:13.258",
+  "sessionId": "ca1f00b7-8813-43b7-b2f5-b23224b52b69",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "prefetchScheduleName": "pf-1183716241",
+  "marker": "1793957700406-34-468E1391"
+ },
+ {
+  "@timestamp": "2026-11-06 09:35:13.331",
+  "sessionId": "ca1f00b7-8813-43b7-b2f5-b23224b52b69",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "prefetchScheduleName": "pf-1183716241"
+ },
+ {
+  "@timestamp": "2026-11-06 09:35:13.938",
+  "sessionId": "876e6c26-dfb1-44b3-a1cd-75a9a931e49f",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "6364d3f0-f495-36ab-9dcf-8d3b5c6e0b01",
+  "marker": "1793957700406-34-468E1391"
+ },
+ {
+  "@timestamp": "2026-11-06 09:35:48.511",
+  "sessionId": "876e6c26-dfb1-44b3-a1cd-75a9a931e49f",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-344026722"
+ },
+ {
+  "@timestamp": "2026-11-06 09:36:09.307",
+  "sessionId": "ca1f00b7-8813-43b7-b2f5-b23224b52b69",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "MAKING_ADS_REQUEST",
+  "prefetchScheduleName": "pf-344026722"
+ },
+ {
+  "@timestamp": "2026-11-06 09:38:18.766",
+  "sessionId": "ca1f00b7-8813-43b7-b2f5-b23224b52b69",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "prefetchScheduleName": "pf-344026722",
+  "marker": "1793957886592-34-14816E62"
+ },
+ {
+  "@timestamp": "2026-11-06 09:38:18.814",
+  "sessionId": "ca1f00b7-8813-43b7-b2f5-b23224b52b69",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "FILLED_AVAIL",
+  "prefetchScheduleName": "pf-344026722"
+ },
+ {
+  "@timestamp": "2026-11-06 09:38:19.282",
+  "sessionId": "876e6c26-dfb1-44b3-a1cd-75a9a931e49f",
+  "originId": "fastcid-demo-p-a",
+  "eventType": "AD_MARKER_FOUND",
+  "adBreakCorrelationId": "ea5d2f1c-4608-332e-87d3-aa3d998e5135",
+  "marker": "1793957886592-34-14816E62"
+ }
+]
