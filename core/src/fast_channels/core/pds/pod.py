@@ -19,7 +19,11 @@ Deterministic and exact for the stored requests' equal 30 s slots:
    Channel Assembly's break slate plays them (MediaTailor keeps a partial pod at a personalization threshold of
    121 s).
 4. **Standalones.** Per winner, the best remaining candidate of the same imp and duration: what MediaTailor's ad
-   buffet plays in that slot if the winner fails. The pod stays within the break even if every winner fails.
+   buffet plays in that slot if the winner fails. The pod stays within the break even if every winner fails. A
+   registered creative not yet WARM (``PodContext.cold``; ``core.creatives``) is no standalone, and wins its slot
+   only with one: a first sight skips it in every session of a synchronized break (P0-09 a), and a standalone
+   replaces such a skip in its slot (P0-09 e). Without one it is ``unbacked`` and the pod is selected again.
+   OPTIMIZATION(aws): W-2 FR-2: MediaTailor does not coalesce concurrent first sights, and has no readiness API.
 5. **Minimum load.** A tier never empties a pod: if its rules leave nothing, the pod is selected under the control
    plan with at most one ad (``PodDecision.min_load``).
 6. **Empty pod** for an avail under 30 s (the tail of a break a session joined late).
@@ -96,6 +100,8 @@ class Outcome(StrEnum):
     OFF_TARGET = "off_target"
     """An own-book line ad outside its line's flight, or of a line not sold on the break's channel
     (``core.pds.selection``)."""
+    UNBACKED = "unbacked"
+    """A registered creative not yet WARM that no standalone could back in its slot (ad buffet; rule 4)."""
 
 
 class PodContext(BaseModel):
@@ -111,6 +117,10 @@ class PodContext(BaseModel):
     )
     floor_cpm: Decimal = Field(default=Decimal(0), ge=0, description="Price floor for paid bids, CPM.")
     recent_crids: frozenset[str] = Field(default=frozenset(), description="Creatives of the session's recent breaks.")
+    cold: frozenset[str] = Field(
+        default=frozenset(),
+        description="Registered creatives not yet WARM: placed only where a standalone backs their slot (rule 4).",
+    )
     scheduled_ms: int | None = Field(default=None, gt=0, description="Duration of the break in the schedule of record.")
     ad_load: AdLoadPolicy = Field(default=CONTROL, description="The ad load of the viewer's tier.")
     lambdas: tuple[Annotated[Decimal, Field(ge=0)], ...] = Field(
@@ -392,31 +402,55 @@ def select_pod(request: SelectRequest, context: PodContext = DEFAULT_CONTEXT) ->
     return replace(control, min_load=True) if control.pod else decision
 
 
+def _fill(
+    pod: _Pod, candidates: list[_Candidate], cold: frozenset[str]
+) -> tuple[dict[str, Outcome], list[_Candidate], list[_Candidate], frozenset[str]]:
+    """Place ``candidates`` (rule 3), then back each winner with a standalone (rule 4); returns the outcomes, the
+    winners and standalones in slot order, and the cold winners left without a standalone."""
+    placed = {candidate.bid.ref: pod.place(candidate) for candidate in candidates}
+    winners = [pod.winners[index] for index in sorted(pod.winners)]
+    standalones: list[_Candidate] = []
+    unbacked: set[str] = set()
+    for winner in winners:
+        if (backup := next((c for c in candidates if c.crid not in cold and pod.backs(winner, c)), None)) is not None:
+            pod.back(winner, backup)
+            standalones.append(backup)
+            placed[backup.bid.ref] = Outcome.STANDALONE
+        elif winner.crid in cold:
+            unbacked.add(winner.bid.ref)
+    return placed, winners, standalones, frozenset(unbacked)
+
+
 def _select(
     request: SelectRequest, context: PodContext, lambdas: tuple[Decimal, ...], max_ads: int | None
 ) -> PodDecision:
     slots = request.slots
-    pod = _Pod(
-        poddur=min(slot.poddur for slot in slots),
-        budget=limit_ms(request.dur_ms, context.scheduled_ms),
-        max_ads=max_ads,
-    )
+
+    def empty() -> _Pod:
+        return _Pod(
+            poddur=min(slot.poddur for slot in slots),
+            budget=limit_ms(request.dur_ms, context.scheduled_ms),
+            max_ads=max_ads,
+        )
+
+    pod = empty()
     tier0, below_floor = tier0_bids(request, context), below_floor_bids(request, context)
     if request.dur_ms < MIN_AVAIL_MS:
-        outcomes = dict.fromkeys((bid.ref for bid in request.bids), Outcome.SHORT_AVAIL)
-        return PodDecision(PodReason.SHORT_AVAIL, pod.budget, pod.poddur, (), (), outcomes, tier0, below_floor)
+        short = dict.fromkeys((bid.ref for bid in request.bids), Outcome.SHORT_AVAIL)
+        return PodDecision(PodReason.SHORT_AVAIL, pod.budget, pod.poddur, (), (), short, tier0, below_floor)
 
-    outcomes = {}
+    outcomes: dict[str, Outcome] = {}
     candidates = _candidates(request, context, lambdas, outcomes)
-    for candidate in candidates:
-        outcomes[candidate.bid.ref] = pod.place(candidate)
-    winners = [pod.winners[index] for index in sorted(pod.winners)]
-    standalones: list[_Candidate] = []
-    for winner in winners:
-        if (backup := next((c for c in candidates if pod.backs(winner, c)), None)) is not None:
-            pod.back(winner, backup)
-            standalones.append(backup)
-            outcomes[backup.bid.ref] = Outcome.STANDALONE
+    left_out: set[str] = set()  # cold winners no standalone could back (rule 4)
+    while True:
+        placed, winners, standalones, unbacked = _fill(
+            pod, [c for c in candidates if c.bid.ref not in left_out], context.cold
+        )
+        if not unbacked:
+            break
+        left_out |= unbacked
+        pod = empty()
+    outcomes |= placed | dict.fromkeys(left_out, Outcome.UNBACKED)
 
     return PodDecision(
         reason=_reason(len(winners), len(slots)),

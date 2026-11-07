@@ -12,6 +12,7 @@ import pytest
 from botocore.response import StreamingBody
 from botocore.stub import ANY, Stubber
 
+from fast_channels.core.creatives.registry import ReadyCreatives, RegisteredCreative
 from fast_channels.core.pds.book import Line
 from fast_channels.core.pds.snapshot import PublishedLines
 from fast_channels.core.selling.products import Terms
@@ -189,3 +190,55 @@ def test_the_request_is_checked() -> None:
     with pytest.raises(ValueError, match="action"):
         sync.handler({"action": "book"}, Context())
     assert json.loads(sync.Request(action="sync").model_dump_json()) == {"action": "sync", "buys": []}
+
+
+def test_with_the_creatives_module_a_buy_is_served_with_its_brands_ready_creative(
+    stubs: dict[str, Stubber], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDS_CREATIVES_KEY", "creatives/ready.json")
+    settings.cache_clear()
+    ready = ReadyCreatives(
+        ladder_version="standard@843ed1d05a",
+        creatives=(
+            RegisteredCreative(
+                crid="cr-0123456789ab",
+                creative_id="cr-0123456789ab-x",
+                hls_uri="https://d111111abcdef8.cloudfront.net/ads/s/cr-0123456789ab-x/main.m3u8",
+                duration_ms=30030,
+                width=1920,
+                height=1080,
+                advertiser="Acme Outdoor",
+                adomain="acme-outdoor.example",
+            ),
+        ),
+    )
+    stubs["s3"].add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    stubs["s3"].add_response(
+        "get_object", body(ready.model_dump_json().encode()), {"Bucket": BUCKET, "Key": "creatives/ready.json"}
+    )
+    written: list[bytes] = []
+    stubs["s3"].add_response(
+        "put_object", {}, {"Bucket": BUCKET, "Key": KEY, "Body": ANY, "ContentType": "application/json"}
+    )
+    stubs["lambda"].add_response(
+        "invoke", {"StatusCode": 202}, {"FunctionName": PUBLISHER, "InvocationType": "Event", "Payload": b"{}"}
+    )
+    shards(stubs, {})
+    events = aws.client("s3").meta.events
+
+    def capture(params: dict[str, Any], **_: Any) -> None:
+        written.append(params["Body"])
+
+    events.register("before-parameter-build.s3.PutObject", capture)
+    try:
+        sync.handler({"action": "sync", "buys": [BUY]}, Context())
+    finally:
+        events.unregister("before-parameter-build.s3.PutObject", capture)
+
+    [line] = PublishedLines.model_validate_json(written[0]).lines
+    assert line.creatives == ("cr-0123456789ab",)
+
+
+def test_without_ready_creatives_yet_the_pool_serves(stubs: dict[str, Stubber]) -> None:
+    stubs["s3"].add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    assert sync.registered(BUCKET, "creatives/ready.json") == {}

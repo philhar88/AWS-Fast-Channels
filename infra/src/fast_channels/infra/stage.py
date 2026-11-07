@@ -19,6 +19,7 @@ from fast_channels.infra.constructs.release.guards import ReleaseGuard
 from fast_channels.infra.stacks.as_run import AsRunRouterStack
 from fast_channels.infra.stacks.baseline import AccountBaselineStack
 from fast_channels.infra.stacks.crawl import CrawlStack
+from fast_channels.infra.stacks.creatives import CreativesStack
 from fast_channels.infra.stacks.data import DataStack
 from fast_channels.infra.stacks.demand import DemandStack
 from fast_channels.infra.stacks.demand_build import DemandBuildStack
@@ -245,6 +246,7 @@ class FastChannelsStage(Stage):
         self.pds: PdsStack | None = None
         self.release: ReleaseStack | None = None
         self.selling: SellingStack | None = None
+        self.creatives: CreativesStack | None = None
         if config.modules.demand.enabled:
             self._demand_stacks(config, env, stacks)
         if config.modules.release.enabled:
@@ -271,6 +273,12 @@ class FastChannelsStage(Stage):
             self.pds.add_stack_dependency(self.data, "The PDS's table and config bucket are the Data stack's")
             if self.ops is not None:
                 self.pds.add_stack_dependency(self.ops, "The decision records' tables are in the lake's database")
+            if config.modules.creatives.enabled:
+                self.creatives = CreativesStack(self, "Creatives", config=config, **stacks)
+                self.creatives.add_stack_dependency(
+                    self.pds, "READY creatives go to the own book (its publisher's parameter)"
+                )
+                self.creatives.add_stack_dependency(self.media, "Creatives are encoded by its ingest pipeline")
         if config.modules.release.enabled:
             self.release = ReleaseStack(self, "Release", config=config, network=network, **stacks)
             for stack, why in (
@@ -290,6 +298,7 @@ class FastChannelsStage(Stage):
             needs: tuple[tuple[Stack | None, str], ...] = (
                 (self.pds, "Booked lines serve through the PDS own book (its publisher's parameter)"),
                 (self.release, "Its products are the monetized channels"),
+                (self.creatives, "Booked buys are served with their brands' READY creatives"),
             )
             for need, why in needs:
                 if need is not None:

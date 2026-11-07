@@ -97,6 +97,8 @@ class SnapshotPublisher(Construct):
         log_retention, removal_policy: of the function's log group and the dead-letter queue.
         booked_lines_key: the config bucket's object of the lines booked over AdCP, which the publisher adds to the
             own book (the selling module's; None without it).
+        creatives_key: the config bucket's object of the registry's READY creatives, which the publisher adds to
+            the own book (the creatives module's; None without it).
 
     Attributes:
         function: the publisher. group: the PDS's schedule group. schedule: the hourly run. dead_letters: failed
@@ -116,6 +118,7 @@ class SnapshotPublisher(Construct):
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         booked_lines_key: str | None = None,
+        creatives_key: str | None = None,
     ) -> None:
         super().__init__(scope, id)
         self.dead_letters = dead_letter_queue(self, "DeadLetters", removal_policy=removal_policy)
@@ -134,6 +137,7 @@ class SnapshotPublisher(Construct):
                 "PDS_TABLE": table_name(prefix),
                 "LEDGER_TABLE": ledger_table(prefix),
                 **({"PDS_BOOKED_LINES_KEY": booked_lines_key} if booked_lines_key else {}),
+                **({"PDS_CREATIVES_KEY": creatives_key} if creatives_key else {}),
             },
             timeout=Duration.minutes(1),
             memory_size=256,
@@ -156,6 +160,8 @@ class SnapshotPublisher(Construct):
         self.function.allow(["s3:GetObject"], [bucket.arn_for_objects(SNAPSHOT_KEY)])
         if booked_lines_key:  # the selling module's booked lines (its sync function writes them)
             self.function.allow(["s3:GetObject"], [bucket.arn_for_objects(booked_lines_key)])
+        if creatives_key:  # the creatives module's READY creatives (its readiness function writes them)
+            self.function.allow(["s3:GetObject"], [bucket.arn_for_objects(creatives_key)])
         self.function.allow(
             ["s3:PutObject"],
             [bucket.arn_for_objects(SNAPSHOT_KEY), bucket.arn_for_objects(f"{HISTORY_PREFIX}*")],

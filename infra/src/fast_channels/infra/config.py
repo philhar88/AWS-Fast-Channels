@@ -892,6 +892,20 @@ class SellingModule(_Module):
         return _unique(creatives)
 
 
+class CreativesModule(_Module):
+    """The creatives module (``modules.creatives``; docs/creatives.md)."""
+
+    enabled: bool = False
+    """Deploy the creative registry: advertisers' own creatives, each moderated, conditioned to the stage's default
+    ladder by the ingest pipeline, checked for ladder conformance and then bid by the PDS own book once READY. With
+    selling on, a buy booked over AdCP is served with its brand's READY creative; the demo creative is the fallback."""
+    moderation: bool = True
+    """Moderate each creative with Amazon Rekognition before it is conditioned. A creative with a moderation label at
+    or above ``min_confidence`` waits for a person's review (``scripts/creatives.py approve|reject``)."""
+    min_confidence: float = Field(default=80.0, ge=50, le=100)
+    """The moderation label confidence (percent) that sends a creative to review."""
+
+
 class ViewerModule(_Module):
     """The reference viewer app (``modules.viewer``)."""
 
@@ -979,6 +993,7 @@ _MODULE_NEEDS: Final = {
     "agents": ("ops",),
     "understanding": ("models",),
     "recs": ("models", "identity"),
+    "creatives": ("pds",),
 }
 """Modules an enabled module builds on."""
 
@@ -1004,6 +1019,7 @@ class ModulesConfig(_Section):
     agents: AgentsModule = AgentsModule()
     understanding: UnderstandingModule = UnderstandingModule()
     recs: RecsModule = RecsModule()
+    creatives: CreativesModule = CreativesModule()
 
     @model_validator(mode="before")
     @classmethod

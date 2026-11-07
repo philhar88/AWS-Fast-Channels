@@ -438,6 +438,7 @@ MODULES = (
     "agents",
     "understanding",
     "recs",
+    "creatives",
 )
 DESCRIBE: dict[str, Any] = {
     "model": "{geo}.amazon.nova-2-lite-v1:0",
@@ -490,6 +491,18 @@ def test_selling_resolves_the_buyers_model(load_config: Load) -> None:
     selling = load_config(with_shipped(**SELLING), region="us-east-1").modules.selling
 
     assert (selling.buyer_model, selling.creatives, selling.cpm) == (US_HAIKU, ("direct2",), 14)
+
+
+def test_creatives_need_pds_and_moderate_by_default(load_config: Load) -> None:
+    message = config_error(load_config, with_shipped(**modules_on("creatives")))
+
+    assert "  - fast-channels.modules: creatives needs pds: enable it" in message
+    creatives = load_config(with_shipped(**modules_on("ops", "demand", "pds", "creatives"))).modules.creatives
+    assert (creatives.enabled, creatives.moderation, creatives.min_confidence) == (True, True, 80)
+    assert "min_confidence" in config_error(
+        load_config,
+        with_shipped(**modules_on("ops", "demand", "pds", "creatives"), **{"modules.creatives.min_confidence": 20}),
+    )
 
 
 def test_shipped_modules_are_off_and_at_their_defaults(load_config: Load) -> None:

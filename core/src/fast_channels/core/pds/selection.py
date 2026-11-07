@@ -50,9 +50,16 @@ def pod_context(
     scheduled: int | None = None,
     ad_load: AdLoadPolicy = CONTROL,
 ) -> PodContext:
-    """The pod rules' context: the own book's tier-0 deals, the floor, the break of record and the viewer's ad load.
-    No session history yet (``recent_crids``), no creative approved for kids breaks, every bidder's ads accepted."""
-    return PodContext(tier0_deals=book.tier0_deals, floor_cpm=floor_cpm, scheduled_ms=scheduled, ad_load=ad_load)
+    """The pod rules' context: the own book's tier-0 deals and its registered creatives not yet WARM, the floor, the
+    break of record and the viewer's ad load. No session history yet (``recent_crids``), no creative approved for
+    kids breaks, every bidder's ads accepted."""
+    return PodContext(
+        tier0_deals=book.tier0_deals,
+        cold=book.cold,
+        floor_cpm=floor_cpm,
+        scheduled_ms=scheduled,
+        ad_load=ad_load,
+    )
 
 
 def _off_target(line: Line, configuration: str, now: datetime | None) -> bool:

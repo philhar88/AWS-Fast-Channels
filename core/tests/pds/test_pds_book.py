@@ -8,6 +8,7 @@ from xml.etree import ElementTree as ET
 import pytest
 from pydantic import ValidationError
 
+from fast_channels.core.creatives.registry import ReadyCreatives, RegisteredCreative
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index
 from fast_channels.core.pds.book import (
     AD_SYSTEM,
@@ -25,6 +26,7 @@ from fast_channels.core.pds.book import (
     response,
 )
 from fast_channels.core.pds.models import OWN_BOOK
+from fast_channels.core.pds.selection import pod_context
 from fast_channels.core.specs import Creative as KitCreative
 from fast_channels.core.specs import vast_pod
 
@@ -277,3 +279,54 @@ def test_unset_flight_and_channels_stay_out_of_the_snapshot() -> None:
     starts, ends = FLIGHT
     flighted = DIRECT2.model_copy(update={"starts": starts, "ends": ends, "channels": ("fastm-demo",)})
     assert Line.model_validate_json(flighted.model_dump_json()) == flighted
+
+
+# --- registered creatives (M5) ---------------------------------------------------------------------------------------
+
+REGISTERED = "cr-0123456789ab"
+READY = ReadyCreatives(
+    ladder_version=LADDER,
+    creatives=(
+        RegisteredCreative(
+            crid=REGISTERED,
+            creative_id=f"{REGISTERED}-standard_843ed1d05a-20d4b4",
+            hls_uri=f"{CDN}/ads/standard_843ed1d05a/{REGISTERED}-standard_843ed1d05a-20d4b4/main.m3u8",
+            duration_ms=30030,
+            width=1920,
+            height=1080,
+            advertiser="Acme Outdoor",
+            adomain="acme-outdoor.example",
+        ),
+    ),
+)
+BOOKED = Line(
+    id="adcp-buy-1-1",
+    advertiser="AWS reference buyer",
+    adomain="acme-outdoor.example",
+    creatives=(REGISTERED,),
+    cpm=Decimal(40),
+    budget=Decimal(50),
+)
+
+
+def test_a_line_serves_a_ready_registered_creative_on_the_books_ladder() -> None:
+    own = book((DIRECT1, BOOKED), ladder_version=LADDER, house=HOUSE, index=INDEX, registered=READY)
+    by_crid = {c.crid: c for c in own.creatives}
+    assert by_crid[REGISTERED].registered and not by_crid["direct1"].registered
+    assert by_crid[REGISTERED].advertiser == "AWS reference buyer"
+    assert own.cold == pod_context(own).cold == frozenset({REGISTERED})
+    [placed] = [b for b in bids(request([30]), own) if b["crid"] == REGISTERED]
+    assert placed["adomain"] == ["acme-outdoor.example"] and placed["ext"]["fast"] == {"line": BOOKED.id}
+
+
+def test_registered_creatives_of_another_ladder_are_not_bid() -> None:
+    other = READY.model_copy(update={"ladder_version": "standard@0000000000"})
+    own = book((BOOKED,), ladder_version=LADDER, house=HOUSE, index=INDEX, registered=other)
+    assert own.creatives == () and own.cold == frozenset()
+
+
+def test_the_registered_flag_stays_out_of_a_snapshot_without_registered_creatives() -> None:
+    assert "registered" not in OWN.creatives[0].model_dump(mode="json")
+    own = book((BOOKED,), ladder_version=LADDER, house=HOUSE, index=INDEX, registered=READY)
+    assert own.creatives[0].model_dump(mode="json")["registered"] is True
+    assert Book.model_validate_json(own.model_dump_json()) == own

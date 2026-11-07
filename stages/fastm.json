@@ -105,6 +105,9 @@
     },
     "recs": {
       "enabled": true
+    },
+    "creatives": {
+      "enabled": true
     }
   }
 }

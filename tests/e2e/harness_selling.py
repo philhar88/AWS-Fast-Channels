@@ -1,15 +1,40 @@
 """The agentic-selling module's end-to-end harness (M7): the seller over A2A 1.0, the buyer agent on AgentCore Runtime,
-and the scripted buyer journey (``test_21_selling``)."""
+the scripted buyer journey, and the booking's line and breaks (``test_21_selling``, ``test_24_creatives``)."""
 
 import json
+import re
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import httpx
+from _stack import Module, Stage
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
+from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
+from harness_demand import DemandEdge
+from harness_pods import (
+    SMART_TV_USER_AGENT,
+    Logs,
+    Viewer,
+    ipv4_client,
+    json_object,
+    prebid_tasks,
+    record_pattern,
+    warmups,
+    watch,
+)
+
+from fast_channels.core.demand import warmup_project
+from fast_channels.core.monetization import names as release_names
+from fast_channels.core.monetization.release import PlaybackPlan
+from fast_channels.core.pds import names as pds_names
+from fast_channels.core.pds.records import DELIVERY_RECORD, SELECT_RECORD
+from fast_channels.core.pds.snapshot import SNAPSHOT_KEY, Snapshot
+from fast_channels.core.selling.booking import line_id
 
 BRAND: Final = "acme-outdoor.example"
 """The brand the reference buyer books for (``modules.selling.buyer_brand``, the default); each run books for a
@@ -134,3 +159,229 @@ def delivery_question(media_buy_id: str) -> str:
         f'Call adcp_get_media_buy_delivery with seller_id "{SELLER_ID}" and media_buy_id "{media_buy_id}". Reply with '
         "one line: IMPRESSIONS=<total impressions> SPEND=<total spend>."
     )
+
+
+# --- a booking, its line and its breaks -------------------------------------------------------------------------------
+
+BUDGET: Final = 50.0
+"""The booked budget, US dollars (simulated): 1,250 impressions at the fastcisell stage's $40 CPM."""
+FLIGHT_LEAD: Final = timedelta(minutes=4)
+"""The flight starts this long after the journey: create_media_buy refuses a start in the past."""
+TURNS: Final = 3
+"""Turns the buyer gets to book (it may stop to report a step)."""
+LINE_TIMEOUT_S: Final = 300
+"""The bridge syncs every minute, then the publisher runs (seconds) and the sidecars read the snapshot (30 s)."""
+READY_TIMEOUT_S: Final = 1500
+LOGS_TIMEOUT_S: Final = 420
+VIEWERS: Final = 2
+BREAKS: Final = 2
+TAIL: Final = timedelta(seconds=90)
+MEDIA_BUY: Final = re.compile(r"MEDIA_BUY_ID=(buy_[0-9a-f]+)")
+
+
+def seller_of(stage: Stage) -> Seller:
+    """The stage's seller, as the reference buyer's principal (its bearer token)."""
+    secrets = stage.session.client("secretsmanager", region_name=stage.region)
+    token = secrets.get_secret_value(SecretId=stage.output(Module.SELLING, "BuyerTokenSecret"))["SecretString"]
+    return Seller(stage.output(Module.SELLING, "SellerUrl"), token)
+
+
+def buyer_of(stage: Stage) -> Buyer:
+    """The stage's reference buyer agent."""
+    return Buyer(
+        stage.session,
+        stage.output(Module.SELLING, "BuyerRuntimeArn"),
+        stage.output(Module.SELLING, "BuyerSessionsTable"),
+    )
+
+
+def run_brand() -> str:
+    """A brand domain of this run's own (a subdomain of :data:`BRAND`)."""
+    return f"e2e-{uuid.uuid4().hex[:8]}.{BRAND}"
+
+
+def account(brand: str) -> dict[str, Any]:
+    """The account the buyer's journey syncs: its brand, which is also its operator."""
+    return {"brand": {"domain": brand}, "operator": brand}
+
+
+@dataclass
+class Booking:
+    """What the buyer booked, as the seller and the own book know it."""
+
+    media_buy_id: str
+    session_id: str
+    calls: list[dict[str, Any]]
+    line: str
+    starts: datetime
+    brand: str
+
+
+def seller_buy(seller: Seller, media_buy_id: str, brand: str) -> dict[str, Any] | None:
+    """The seller's media buy (its account is the brand's), or None."""
+    found = seller.call("get_media_buys", account=account(brand), media_buy_ids=[media_buy_id]).get("media_buys") or []
+    return next((buy for buy in found if buy["media_buy_id"] == media_buy_id), None)
+
+
+def book(seller: Seller, buyer: Buyer, *, brand: str, product: str) -> Booking:
+    """The scripted journey, run by the buyer agent for ``brand``; the buy it made, read back from the seller."""
+    starts = (datetime.now(UTC) + FLIGHT_LEAD).replace(microsecond=0)
+    prompt = journey(
+        brand=brand,
+        product_id=product,
+        plan_id=f"plan-e2e-{uuid.uuid4().hex[:8]}",
+        budget=BUDGET,
+        starts=starts,
+        ends=starts + timedelta(days=1),
+    )
+    session_id = f"fast-e2e-selling-{uuid.uuid4().hex}"
+    text, media_buy_id = "", None
+    for turn in range(TURNS):
+        answer = buyer.turn(prompt if turn == 0 else "Continue the steps and reply with MEDIA_BUY_ID.", session_id)
+        text = reply(answer)
+        print(f"buyer turn {turn + 1}: {text[:600]}")
+        if (said := MEDIA_BUY.search(text)) and seller_buy(seller, said[1], brand) is not None:
+            media_buy_id = said[1]
+            break
+    assert media_buy_id, f"the seller has no buy the buyer named after {TURNS} turns: {text[:1000]}"
+    return Booking(media_buy_id, session_id, buyer.calls(session_id), line_id(media_buy_id, 1), starts, brand)
+
+
+def snapshot(stage: Stage) -> Snapshot:
+    """The PDS's published snapshot."""
+    s3 = stage.session.client("s3", region_name=stage.region)
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    name = pds_names.parameter_name(stage.prefix, pds_names.Parameter.CONFIG_BUCKET)
+    bucket = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+    return Snapshot.model_validate_json(s3.get_object(Bucket=bucket, Key=SNAPSHOT_KEY)["Body"].read())
+
+
+def snapshot_line(stage: Stage, line: str, *, crid: str | None = None) -> dict[str, Any]:
+    """The booked ``line`` once the snapshot has it (serving ``crid``, when given)."""
+
+    def published() -> dict[str, Any] | None:
+        found = next((candidate for candidate in snapshot(stage).lines if candidate.id == line), None)
+        if found is None or (crid is not None and crid not in found.creatives):
+            return None
+        return found.model_dump(mode="json")
+
+    return wait_for(published, timeout=LINE_TIMEOUT_S, interval=10, what=f"line {line} in the snapshot")
+
+
+@dataclass
+class Aired:
+    """What the viewers' breaks did with the booked line."""
+
+    crid: str
+    creative_id: str
+    stitched: list[dict[str, Any]]
+    """The viewers' ``FILLED_AVAIL`` events."""
+    deliveries: list[dict[str, Any]]
+    """The ``pds.delivery`` records of the viewers' sessions."""
+    selects: list[dict[str, Any]]
+    """The ``pds.select`` records of the viewers' sessions."""
+
+
+def air(
+    stage: Stage,
+    booking: Booking,
+    channel: Channel,
+    tools: Tools,
+    ingest: Callable[[], Any],
+    *,
+    crid: str,
+    creative_id: str,
+) -> Aired:
+    """Air the pattern with two 60.06 s breaks to two smart-TV viewers on the stable sibling, once the booking's flight
+    started; stop the channel; read what the viewers' breaks stitched, decided and delivered."""
+    edge = DemandEdge(stage.prefix, stage.session)
+    with ipv4_client(follow_redirects=True, timeout=20.0, headers={"User-Agent": SMART_TV_USER_AGENT}) as http:
+        try:
+            tools("channels___start_channel", channel=channel.name)
+            asset = ingest()  # while Prebid Server scales out
+            wait_until_ready(stage, edge)
+            wait_for(
+                lambda: True if datetime.now(UTC) >= booking.starts else None,
+                timeout=FLIGHT_LEAD.total_seconds() + 60,
+                interval=10,
+                what="the flight's start",
+            )
+            ends = schedule(tools, channel.name, asset.asset_id)
+            plan = playback_plan(stage, channel.name)
+            joined = datetime.now(UTC)
+            viewers = [Viewer.join(Player(client=http), plan.playback["hls"]) for _ in range(VIEWERS)]
+            watch(viewers, ends=ends + TAIL)
+        finally:
+            tools("channels___stop_channel", channel=channel.name)
+    sids = {viewer.sid for viewer in viewers}
+    logs = Logs(
+        stage.session.client("logs", region_name=stage.region), start_ms=int(joined.timestamp() * 1000) - 60_000
+    )
+    ads_group = stage.output(Module.RELEASE, "SiblingLogGroup")
+    delivery_group = function_log_group(stage, stage.output(Module.PDS, "DeliveryFunction"))
+    deadline = time.monotonic() + LOGS_TIMEOUT_S
+    while True:
+        stitched = [
+            found
+            for event in logs.events(ads_group, '{ $.eventType = "FILLED_AVAIL" }')
+            if (found := json_object(str(event["message"]))) and found.get("sessionId") in sids
+        ]
+        deliveries = [
+            found
+            for event in logs.events(delivery_group, record_pattern(DELIVERY_RECORD, sids))
+            if (found := json_object(str(event["message"])))
+        ]
+        if any(d.get("line") == booking.line for d in deliveries) or time.monotonic() > deadline:
+            break
+        time.sleep(20)
+    selects = [
+        found
+        for event in logs.events(pds_names.sidecar_log_group(stage.prefix), record_pattern(SELECT_RECORD, sids))
+        if (found := json_object(str(event["message"])))
+    ]
+    return Aired(crid, creative_id, stitched, deliveries, selects)
+
+
+def wait_until_ready(stage: Stage, edge: DemandEdge) -> None:
+    """Until Prebid Server runs and every running task's warm-up succeeded (the PDS is their sidecar)."""
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+
+    def ready() -> bool | None:
+        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        return True if tasks and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"} else None
+
+    wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server")
+
+
+def schedule(tools: Tools, channel: str, asset_id: str) -> datetime:
+    """The pattern twice, each with a 60.06 s break, starting in a few minutes; when the last program ends."""
+    start = (datetime.now(UTC) + LEAD).replace(microsecond=0)
+    plan = tools(
+        "schedule___plan",
+        channel=channel,
+        picks=[asset_id] * BREAKS,
+        start=start.isoformat(),
+        break_policy=BREAK_POLICY,
+    )
+    assert plan["publishable"], f"plan {plan['plan_id']} has errors: {plan['violations']}"
+    programs = tools("schedule___publish", plan_id=plan["plan_id"])["programs"]
+    return max(datetime.fromisoformat(str(p["end"])) for p in programs)
+
+
+def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
+    """The channel's playback plan, read through the CDN as a player reads it."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    name = release_names.parameter_name(stage.prefix, release_names.Parameter.CDN_BASE_URL)
+    cdn = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+    with ipv4_client(timeout=10.0) as http:
+        response = http.get(f"{cdn.rstrip('/')}/{release_names.plan_key(channel)}")
+    response.raise_for_status()
+    return PlaybackPlan.model_validate_json(response.text)
+
+
+def function_log_group(stage: Stage, function: str) -> str:
+    configuration = stage.session.client("lambda", region_name=stage.region).get_function_configuration(
+        FunctionName=function
+    )
+    return str(configuration["LoggingConfig"]["LogGroup"])

@@ -52,6 +52,7 @@ class Module(StrEnum):
     VIEWER = "Viewer"
     UNDERSTANDING = "Understanding"
     RECS = "Recs"
+    CREATIVES = "Creatives"
 
 
 type StackKind = Plane | Module

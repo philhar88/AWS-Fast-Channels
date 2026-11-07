@@ -308,7 +308,8 @@ def test_shipped_stages() -> None:
 
 
 SELLING_STAGE = "fastcisell"
-"""The agentic-selling stage (M7): the module and what it needs, with free direct demo creatives (no demo lines)."""
+"""The agentic-selling stage (M7, and M5's registered creatives): the modules and what they need, with free direct demo
+creatives (no demo lines)."""
 AGENTS_STAGE = "fastciagent"
 """The agent roster's stage (M9): the module and ops, with its demo channel always-on (the roster's e2e)."""
 
@@ -324,7 +325,7 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
     assert config.prefix == name
     on = {module for module in ModulesConfig.model_fields if config.modules.enabled(module)}
     if name == SELLING_STAGE:
-        assert on == {"ops", "demand", "pds", "release", "selling"}
+        assert on == {"ops", "demand", "pds", "release", "selling", "creatives"}
         assert (config.modules.pds.demo_lines, config.modules.selling.creatives) == ((), ("direct1", "direct2"))
     elif name == AGENTS_STAGE:
         assert on == {"ops", "agents"}

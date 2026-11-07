@@ -1,0 +1,1011 @@
+{
+  "Description": "FAST Channels (fastm): creatives",
+  "Outputs": {
+    "QuarantineBucket": {
+      "Description": "Creative sources, under incoming/<crid>/",
+      "Value": {
+        "Ref": "ReadinessQuarantine34172DE7"
+      }
+    },
+    "ReadinessFunction": {
+      "Description": "The readiness steps",
+      "Value": {
+        "Ref": "ReadinessFunction81FE4C03"
+      }
+    },
+    "RegistryTable": {
+      "Description": "The creative registry",
+      "Value": {
+        "Ref": "ReadinessRegistry29B0DE4A"
+      }
+    },
+    "StateMachineArn": {
+      "Description": "Readiness: register a creative",
+      "Value": {
+        "Ref": "ReadinessStateMachine91B64FFD"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/config-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/media-bucket",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    },
+    "SsmParameterValuefastmpdspublisherfunctionC96584B6F00A464EAD1953AFF4B05118Parameter": {
+      "Default": "/fastm/pds/publisher-function",
+      "Type": "AWS::SSM::Parameter::Value<String>"
+    }
+  },
+  "Resources": {
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092"
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Lambda function for auto-deleting objects in ",
+              {
+                "Ref": "ReadinessQuarantine34172DE7"
+              },
+              " S3 bucket."
+            ]
+          ]
+        },
+        "Handler": "index.handler",
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs5E5D1456"
+          }
+        },
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 900
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs5E5D1456": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderHandlerLogs5E5D1456"
+      ],
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ReadinessFunction81FE4C03": {
+      "DependsOn": [
+        "ReadinessFunctionRoleDefaultPolicy266C3983",
+        "ReadinessFunctionRoleA2648BB6"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+          "S3Key": "<asset-hash>.zip"
+        },
+        "Description": "Creatives: the readiness steps (register, copy, moderate, condition, check, publish)",
+        "Environment": {
+          "Variables": {
+            "CREATIVES_LADDER": "{\"id\":\"standard\",\"description\":\"AVC + AAC-LC muxed in MPEG-TS, up to 1080p, 29.97 fps\",\"frame_rate\":{\"numerator\":30000,\"denominator\":1001},\"gop_seconds\":2.0,\"segment_seconds\":6.0,\"video\":[{\"name\":\"avc-720p\",\"width\":1280,\"height\":720,\"qvbr\":7,\"max_kbps\":3400,\"hrd_kbps\":null,\"profile\":\"HIGH\"},{\"name\":\"avc-1080p\",\"width\":1920,\"height\":1080,\"qvbr\":8,\"max_kbps\":6000,\"hrd_kbps\":null,\"profile\":\"HIGH\"},{\"name\":\"avc-360p\",\"width\":640,\"height\":360,\"qvbr\":6,\"max_kbps\":800,\"hrd_kbps\":800,\"profile\":\"HIGH\"}],\"audio\":{\"kbps\":128},\"options\":{\"allow_frame_rate_conversion\":false}}",
+            "CREATIVES_MIN_CONFIDENCE": "80",
+            "CREATIVES_MODERATION": "true",
+            "CREATIVES_QUARANTINE_BUCKET": {
+              "Ref": "ReadinessQuarantine34172DE7"
+            },
+            "CREATIVES_TABLE": {
+              "Ref": "ReadinessRegistry29B0DE4A"
+            },
+            "MEDIA_BUCKET": {
+              "Ref": "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "PDS_CONFIG_BUCKET": {
+              "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "PDS_CREATIVES_KEY": "creatives/ready.json",
+            "PDS_PUBLISHER_FUNCTION": {
+              "Ref": "SsmParameterValuefastmpdspublisherfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+            },
+            "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
+            "POWERTOOLS_SERVICE_NAME": "creatives.readiness"
+          }
+        },
+        "Handler": "fast_channels.functions.creatives.readiness.handler",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "INFO",
+          "LogFormat": "JSON",
+          "LogGroup": {
+            "Ref": "ReadinessFunctionLogs2D021306"
+          },
+          "SystemLogLevel": "INFO"
+        },
+        "MemorySize": 1024,
+        "RecursiveLoop": "Terminate",
+        "Role": {
+          "Fn::GetAtt": [
+            "ReadinessFunctionRoleA2648BB6",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "Timeout": 300,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "ReadinessFunctionLogs2D021306": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ReadinessFunctionRoleA2648BB6": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "ReadinessFunctionRoleDefaultPolicy266C3983": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ReadinessFunctionLogs2D021306",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "rekognition:GetContentModeration",
+                "rekognition:StartContentModeration",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:UpdateItem"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ReadinessRegistry29B0DE4A",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:Query",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ReadinessRegistry29B0DE4A",
+                        "Arn"
+                      ]
+                    },
+                    "/index/by-state"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "ReadinessQuarantine34172DE7",
+                        "Arn"
+                      ]
+                    },
+                    "/incoming/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ReadinessQuarantine34172DE7",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsmediabucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/ads/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:PutObject",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:s3:::",
+                    {
+                      "Ref": "SsmParameterValuefastmpdsconfigbucketC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    },
+                    "/creatives/ready.json"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "arn:aws:lambda:us-east-1:123456789012:function:",
+                    {
+                      "Ref": "SsmParameterValuefastmpdspublisherfunctionC96584B6F00A464EAD1953AFF4B05118Parameter"
+                    }
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ReadinessFunctionRoleDefaultPolicy266C3983",
+        "Roles": [
+          {
+            "Ref": "ReadinessFunctionRoleA2648BB6"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ReadinessLogs4CAAA01D": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": "/aws/vendedlogs/states/fastm-creatives",
+        "RetentionInDays": 7,
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ReadinessQuarantine34172DE7": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "BucketName": "fastm-creatives-123456789012-us-east-1",
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "ExpirationInDays": 30,
+              "Id": "sources",
+              "Prefix": "incoming/",
+              "Status": "Enabled"
+            },
+            {
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              },
+              "Id": "abort-incomplete-uploads",
+              "Status": "Enabled"
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true"
+          },
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ReadinessQuarantineAutoDeleteObjectsCustomResourceC799AE4F": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ReadinessQuarantinePolicy1D955143"
+      ],
+      "Properties": {
+        "BucketName": {
+          "Ref": "ReadinessQuarantine34172DE7"
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "Custom::S3AutoDeleteObjects",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ReadinessQuarantinePolicy1D955143": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "ReadinessQuarantine34172DE7"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ReadinessQuarantine34172DE7",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ReadinessQuarantine34172DE7",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "NumericLessThan": {
+                  "s3:TlsVersion": 1.2
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ReadinessQuarantine34172DE7",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ReadinessQuarantine34172DE7",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:DeleteObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:PutBucketPolicy"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ReadinessQuarantine34172DE7",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ReadinessQuarantine34172DE7",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "Type": "AWS::S3::BucketPolicy"
+    },
+    "ReadinessRegistry29B0DE4A": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "crid",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "state",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "by-state",
+            "KeySchema": [
+              {
+                "AttributeName": "state",
+                "KeyType": "HASH"
+              },
+              {
+                "AttributeName": "crid",
+                "KeyType": "RANGE"
+              }
+            ],
+            "Projection": {
+              "ProjectionType": "ALL"
+            }
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "crid",
+            "KeyType": "HASH"
+          }
+        ],
+        "Replicas": [
+          {
+            "GlobalSecondaryIndexes": [
+              {
+                "IndexName": "by-state"
+              }
+            ],
+            "PointInTimeRecoverySpecification": {
+              "PointInTimeRecoveryEnabled": true
+            },
+            "Region": "us-east-1",
+            "Tags": [
+              {
+                "Key": "fast:app",
+                "Value": "fastm"
+              },
+              {
+                "Key": "fast:module",
+                "Value": "creatives"
+              },
+              {
+                "Key": "fast:owner",
+                "Value": "iac"
+              }
+            ]
+          }
+        ],
+        "TableName": "fastm-creatives"
+      },
+      "Type": "AWS::DynamoDB::GlobalTable",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ReadinessStateMachine91B64FFD": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "ReadinessStateMachineRoleDefaultPolicy0B9EE20F",
+        "ReadinessStateMachineRoleF6629240"
+      ],
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"StartAt\":\"Action\",\"States\":{\"Action\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.action = 'register' %}\",\"Next\":\"Received\"}],\"Default\":\"Decide\"},\"Decide\":{\"Next\":\"Decided\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"decide\",\"input\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"crid\":\"{% $states.input.crid %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Decided\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.next = 'condition' %}\",\"Next\":\"Conditioning\"},{\"Condition\":\"{% $states.input.next = 'publish' %}\",\"Next\":\"Publish\"}],\"Default\":\"Done\"},\"Done\":{\"Type\":\"Succeed\",\"Output\":\"{% $states.input %}\"},\"Conditioning\":{\"Next\":\"Ingest\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"conditioning\",\"crid\":\"{% $crid %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Moderated\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.status = 'IN_PROGRESS' %}\",\"Next\":\"WaitForModeration\"},{\"Condition\":\"{% $states.input.state = 'APPROVED' %}\",\"Next\":\"Conditioning\"}],\"Default\":\"AwaitingReview\"},\"Moderate\":{\"Next\":\"Moderated\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"moderate\",\"crid\":\"{% $crid %}\",\"job\":\"{% $job %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"job\":\"{% $states.result.Payload.job %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"WaitForModeration\":{\"Type\":\"Wait\",\"Seconds\":15,\"Next\":\"Moderate\"},\"Fetch\":{\"Next\":\"Moderate\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"fetch\",\"crid\":\"{% $crid %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Received\":{\"Next\":\"Fetch\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"received\",\"input\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"crid\":\"{% $states.input.crid %}\"},\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"RecordFailure\":{\"Next\":\"Failed\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"failed\",\"input\":\"{% $states.context.Execution.Input %}\",\"execution\":\"{% $states.context.Execution.Name %}\",\"error\":\"{% $states.input %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Publish\":{\"Next\":\"Ready\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"publish\",\"crid\":\"{% $crid %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Conformant\":{\"Type\":\"Choice\",\"Choices\":[{\"Condition\":\"{% $states.input.state = 'CONDITIONED' %}\",\"Next\":\"Publish\"}],\"Default\":\"Rejected\"},\"Conform\":{\"Next\":\"Conformant\",\"Retry\":[{\"ErrorEquals\":[\"Lambda.ClientExecutionTimeoutException\",\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"FunctionName\":\"",
+              {
+                "Fn::GetAtt": [
+                  "ReadinessFunction81FE4C03",
+                  "Arn"
+                ]
+              },
+              "\",\"Payload\":{\"step\":\"conform\",\"crid\":\"{% $crid %}\",\"asset\":\"{% $states.input %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::lambda:invoke\"},\"Ingest\":{\"Next\":\"Conform\",\"Catch\":[{\"ErrorEquals\":[\"States.ALL\"],\"Next\":\"RecordFailure\"}],\"Type\":\"Task\",\"Arguments\":{\"Input\":{\"source_uri\":\"{% $states.input.source_uri %}\",\"kind\":\"{% $states.input.kind %}\",\"asset_id\":\"{% $states.input.asset_id %}\",\"ladder_version\":\"{% $states.input.ladder_version %}\",\"correlation_id\":\"{% $states.input.correlation_id %}\",\"metadata\":\"{% $states.input.metadata %}\",\"AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID\":\"{% $states.context.Execution.Id %}\"},\"StateMachineArn\":\"arn:aws:states:us-east-1:123456789012:stateMachine:fastm-ingest\",\"Name\":\"{% $states.input.correlation_id %}\"},\"Output\":\"{% $states.result.Output %}\",\"Resource\":\"arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":states:::states:startExecution.sync:2\"},\"Rejected\":{\"Type\":\"Succeed\",\"Output\":\"{% $states.input %}\"},\"Ready\":{\"Type\":\"Succeed\",\"Output\":\"{% $states.input %}\"},\"Failed\":{\"Type\":\"Fail\",\"Error\":\"{% $states.input.error %}\",\"Cause\":\"{% $states.input.cause %}\"},\"AwaitingReview\":{\"Type\":\"Succeed\",\"Output\":\"{% $states.input %}\"}},\"TimeoutSeconds\":7200,\"Comment\":\"Register, moderate, condition, check and publish a creative (docs/creatives.md)\",\"QueryLanguage\":\"JSONata\"}"
+            ]
+          ]
+        },
+        "LoggingConfiguration": {
+          "Destinations": [
+            {
+              "CloudWatchLogsLogGroup": {
+                "LogGroupArn": {
+                  "Fn::GetAtt": [
+                    "ReadinessLogs4CAAA01D",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ],
+          "IncludeExecutionData": true,
+          "Level": "ALL"
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "ReadinessStateMachineRoleF6629240",
+            "Arn"
+          ]
+        },
+        "StateMachineName": "fastm-creatives",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "TracingConfiguration": {
+          "Enabled": true
+        }
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "ReadinessStateMachineRoleDefaultPolicy0B9EE20F": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ReadinessFunction81FE4C03",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ReadinessFunction81FE4C03",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "states:StartExecution",
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:123456789012:stateMachine:fastm-ingest"
+            },
+            {
+              "Action": [
+                "states:DescribeExecution",
+                "states:StopExecution"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:states:us-east-1:123456789012:execution:fastm-ingest*"
+            },
+            {
+              "Action": [
+                "events:DescribeRule",
+                "events:PutRule",
+                "events:PutTargets"
+              ],
+              "Effect": "Allow",
+              "Resource": "arn:aws:events:us-east-1:123456789012:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+            },
+            {
+              "Action": [
+                "logs:CreateLogDelivery",
+                "logs:DeleteLogDelivery",
+                "logs:DescribeLogGroups",
+                "logs:DescribeResourcePolicies",
+                "logs:GetLogDelivery",
+                "logs:ListLogDeliveries",
+                "logs:PutResourcePolicy",
+                "logs:UpdateLogDelivery",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "xray:PutTelemetryRecords",
+                "xray:PutTraceSegments"
+              ],
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "ReadinessStateMachineRoleDefaultPolicy0B9EE20F",
+        "Roles": [
+          {
+            "Ref": "ReadinessStateMachineRoleF6629240"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Policy"
+    },
+    "ReadinessStateMachineRoleF6629240": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": "arn:aws:states:us-east-1:123456789012:stateMachine:*"
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": "123456789012"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:module",
+            "Value": "creatives"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}
