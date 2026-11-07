@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-07
+
+A feature release. It adds four optional modules: advertisers' own creatives (`creatives`), agents that operate a
+stage inside an autonomy envelope (`agents`), a model-ranked rail for each signed-in viewer (`recs`) and content
+understanding (`understanding`). It also adds guests, consent and kids profiles to `identity`. Every new module is off
+by default, and with every module off a deployment is still v3.0.0's. A signed-in viewer with no recorded consent now
+plays SAFE: run `scripts/seed_personas.py` again on a deployed stage.
+
 ### Added
 
 - **Advertisers' own creatives in the own book (`modules.creatives`, off by default;
@@ -1057,7 +1065,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
-[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.1...HEAD
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.1...v4.2.0
 [4.1.1]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0

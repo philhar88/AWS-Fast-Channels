@@ -795,7 +795,7 @@ wheels = [
 
 [[package]]
 name = "fast-channels"
-version = "4.1.1"
+version = "4.2.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -832,7 +832,7 @@ docs = [{ name = "diagrams", specifier = ">=0.25" }]
 
 [[package]]
 name = "fast-channels-agent"
-version = "4.1.1"
+version = "4.2.0"
 source = { editable = "agent" }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -857,7 +857,7 @@ requires-dist = [
 
 [[package]]
 name = "fast-channels-core"
-version = "4.1.1"
+version = "4.2.0"
 source = { editable = "core" }
 dependencies = [
     { name = "pydantic" },
@@ -868,7 +868,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.12,<3" }]
 
 [[package]]
 name = "fast-channels-functions"
-version = "4.1.1"
+version = "4.2.0"
 source = { editable = "functions" }
 dependencies = [
     { name = "aws-lambda-powertools", extra = ["parser"] },
@@ -887,7 +887,7 @@ requires-dist = [
 
 [[package]]
 name = "fast-channels-infra"
-version = "4.1.1"
+version = "4.2.0"
 source = { editable = "infra" }
 dependencies = [
     { name = "aws-cdk-lib" },
@@ -910,7 +910,7 @@ requires-dist = [
 
 [[package]]
 name = "fast-channels-pds"
-version = "4.1.1"
+version = "4.2.0"
 source = { editable = "pds" }
 dependencies = [
     { name = "fast-channels-core" },
