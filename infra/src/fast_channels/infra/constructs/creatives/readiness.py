@@ -287,7 +287,8 @@ class Readiness(Construct):
         register = step(
             "Received",
             {"step": "received", "input": "{% $states.input %}", "execution": execution},
-            assign={"crid": "{% $states.input.crid %}", "job": None},
+            # A JSONata null, not None (which CDK leaves out): Moderate reads $job, which must be bound.
+            assign={"crid": "{% $states.input.crid %}", "job": "{% null %}"},
         ).next(step("Fetch", {"step": "fetch", "crid": "{% $crid %}"}).next(moderate))
         decide = step(
             "Decide",

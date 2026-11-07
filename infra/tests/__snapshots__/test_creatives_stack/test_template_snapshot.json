@@ -770,7 +770,7 @@
                   "Arn"
                 ]
               },
-              "\",\"Payload\":{\"step\":\"received\",\"input\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"crid\":\"{% $states.input.crid %}\"},\"Resource\":\"arn:",
+              "\",\"Payload\":{\"step\":\"received\",\"input\":\"{% $states.input %}\",\"execution\":\"{% $states.context.Execution.Name %}\"}},\"Output\":\"{% $states.result.Payload %}\",\"Assign\":{\"crid\":\"{% $states.input.crid %}\",\"job\":\"{% null %}\"},\"Resource\":\"arn:",
               {
                 "Ref": "AWS::Partition"
               },
