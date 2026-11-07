@@ -12,10 +12,11 @@ from fast_channels.core.naming import agentcore_name
 from fast_channels.functions.tools.registry import gateway_tool_schema
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
-from fast_channels.infra.constructs.operator.cedar import gateway_policies
+from fast_channels.infra.constructs.operator.cedar import AgentPrincipal, gateway_policies
 from fast_channels.infra.constructs.operator.identity import AGENT_SCOPE, OperatorIdentity
 
 if TYPE_CHECKING:
+    from fast_channels.core.agents.envelope import AgentEnvelope, Role
     from fast_channels.infra.constructs.operator.tools import ToolTarget
 
 MCP_VERSIONS: Final = (agentcore.MCPProtocolVersion.MCP_2025_03_26, agentcore.MCPProtocolVersion.MCP_2025_06_18)
@@ -72,6 +73,8 @@ class AgentGateway(Construct):
         agent_channel_prefix: name prefix of agent-owned channels (``<prefix>-agent-``).
         autopilot_channels: channels the autopilot client may plan and publish on (it needs
             ``identity.autopilot_client``).
+        agents: each roster agent's envelope (resolved), by role; each needs its ``identity.agent_clients``
+            entry.
 
     Attributes:
         gateway: the Gateway.
@@ -92,11 +95,18 @@ class AgentGateway(Construct):
         targets: Sequence[ToolTarget],
         agent_channel_prefix: str,
         autopilot_channels: Sequence[str] = (),
+        agents: Mapping[Role, AgentEnvelope] | None = None,
     ) -> None:
         super().__init__(scope, id)
         autopilot = identity.autopilot_client
         if autopilot is None and autopilot_channels:
             raise ValueError("autopilot_channels need the identity's autopilot (machine) client")
+        if missing := sorted(role.value for role in agents or {} if role not in identity.agent_clients):
+            raise ValueError(f"agents {missing} need their machine clients (OperatorIdentity(agents=...))")
+        principals = [
+            AgentPrincipal(role, identity.agent_clients[role].user_pool_client_id, envelope)
+            for role, envelope in (agents or {}).items()
+        ]
         self.role = iam.Role(
             self,
             "ServiceRole",
@@ -150,6 +160,7 @@ class AgentGateway(Construct):
             agent_channel_prefix=agent_channel_prefix,
             autopilot_client_id=autopilot.user_pool_client_id if autopilot else None,
             autopilot_channels=autopilot_channels,
+            agents=principals,
         ):
             resource = self.policy_engine.add_policy(
                 policy.name.title().replace("_", ""),

@@ -159,12 +159,25 @@ def prompt_for(request: AutopilotRequest) -> str:
 
 
 @dataclass(slots=True)
+class ToolCall:
+    """One tool call of a run, from its TOOL_CALL_START, TOOL_CALL_ARGS and TOOL_CALL_RESULT events."""
+
+    name: str
+    arguments: str = ""
+    """The arguments' JSON text, as streamed."""
+    result: str | None = None
+    """The result's content (an ``{"ok": false}`` envelope for a failure); None before it arrives."""
+
+
+@dataclass(slots=True)
 class RunOutcome:
     """What one AG-UI run produced."""
 
     text: dict[str, str] = field(default_factory=dict)
     """Assistant text by message id, in arrival order."""
     tools: list[str] = field(default_factory=list)
+    calls: dict[str, ToolCall] = field(default_factory=dict)
+    """Each tool call by its id, in arrival order."""
     approvals: list[dict[str, Any]] = field(default_factory=list)
     """``approval_required`` values the run paused on."""
     error: str | None = None
@@ -182,6 +195,12 @@ class RunOutcome:
                 self.text[key] = self.text.get(key, "") + str(event.get("delta", ""))
             case "TOOL_CALL_START":
                 self.tools.append(str(event.get("toolCallName", "")))
+                self.calls[str(event.get("toolCallId", ""))] = ToolCall(str(event.get("toolCallName", "")))
+            case "TOOL_CALL_ARGS" if (call := self.calls.get(str(event.get("toolCallId", "")))) is not None:
+                call.arguments += str(event.get("delta", ""))
+            case "TOOL_CALL_RESULT":  # a call resumed after its approval started in an earlier run: no name here
+                call_id = str(event.get("toolCallId", ""))
+                self.calls.setdefault(call_id, ToolCall("")).result = str(event.get("content", ""))
             case "CUSTOM" if event.get("name") == APPROVAL_EVENT:
                 self.approvals.append(dict(event.get("value") or {}))
             case "RUN_ERROR":

@@ -407,7 +407,7 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-MERGED_MODULES = ("models", "ops", "release", "demand")
+MERGED_MODULES = ("models", "ops", "release", "demand", "agents")
 """Modules whose code is merged; a module's pull request adds it here, with tests of what it synthesizes."""
 NEEDED_MODULES = ("pds",)
 """Modules a merged one needs on (``release`` needs ``pds``) whose code is not merged yet: they add nothing, so the

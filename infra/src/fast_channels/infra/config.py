@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 
 from fast_channels.core.ad_server import AdServer
 from fast_channels.core.adload import CONTROL_TIERS, TIER_PATTERN, AdLoadPolicy
+from fast_channels.core.agents.envelope import Envelope
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
@@ -879,6 +880,21 @@ class ViewerModule(_Module):
     shows viewers their value tier, which a production viewer app never does."""
 
 
+class AgentsModule(_Module):
+    """The agents module (``modules.agents``; M9, ADR-0023, docs/agents.md)."""
+
+    enabled: bool = False
+    """Deploy the agent roster: each agent of the envelope that is on gets a machine principal of the operator
+    plane (a Cognito client-credentials client), Cedar policies generated from its envelope, and a runner that holds
+    its unattended conversations with the scheduler agent's Runtime, answers its approval-gated tool calls from the
+    envelope and its caps, records every tool call and every refusal in the ledger (chain ``agents/<role>``) and
+    escalates a refusal to the alert topic."""
+    envelope: Envelope = Envelope()
+    """The autonomy envelope v1 (``core.agents.envelope``): the always-on channels, and per agent its level, the tools
+    it may call unattended (with their channels and per-hour caps), its actions an hour and the tools that need a
+    human. Not signed in v1; each deploy records its version in the ledger."""
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
@@ -887,6 +903,7 @@ _MODULE_NEEDS: Final = {
     "identity": ("release",),
     "selling": ("pds", "release"),
     "viewer": ("identity",),
+    "agents": ("ops",),
 }
 """Modules an enabled module builds on."""
 
@@ -909,6 +926,7 @@ class ModulesConfig(_Section):
     identity: IdentityModule = IdentityModule()
     selling: SellingModule = SellingModule()
     viewer: ViewerModule = ViewerModule()
+    agents: AgentsModule = AgentsModule()
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""
@@ -1072,6 +1090,20 @@ class FastChannelsConfig(_Section):
                 f"{where}.ops.ledger_lock: compliance-mode records cannot be deleted before their retention ends, "
                 "which removal=destroy needs; use governance or removal=retain"
             )
+        if modules.agents.enabled:
+            if not self.agent.enabled:
+                problems.append(
+                    f"{where}.agents: the roster runs on the operator plane's Runtime and Gateway; agent.enabled "
+                    "is false"
+                )
+            envelope = modules.agents.envelope.resolved(self.prefix)
+            named = set(envelope.always_on) | {
+                channel for agent in envelope.agents.values() for grant in agent.grants for channel in grant.channels
+            }
+            problems += [
+                f"{where}.agents.envelope: {name!r} is not an IaC channel (channels.iac: {iac})"
+                for name in sorted(named - set(iac))
+            ]
         if modules.selling.enabled:
             allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
             if (model := modules.selling.buyer_model) not in allowed:
