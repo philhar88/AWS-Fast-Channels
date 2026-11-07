@@ -176,10 +176,11 @@ DESCRIBE: Final[dict[str, tuple[str, str, str, Callable[[str], str]]]] = {
     "dynamodb": ("dynamodb", "describe_table", "TableName", lambda arn: arn.rsplit("/", 1)[1]),
     "states": ("stepfunctions", "describe_state_machine", "stateMachineArn", lambda arn: arn),
     "s3": ("s3", "head_bucket", "Bucket", lambda arn: arn.rsplit(":", 1)[1]),
+    "cloudfront": ("cloudfront", "get_distribution", "Id", lambda arn: arn.rsplit("/", 1)[1]),
 }
-"""Other services whose deleted resources the tagging index lists for a while (the selling module's pool and tables,
-the creatives module's registry, state machine and quarantine): (client, the describe call, its parameter, the
-parameter's value of an ARN). The call fails once the resource is gone."""
+"""Other services whose deleted resources the tagging index lists for a while (the selling module's pool, tables and
+the seller's distribution, the creatives module's registry, state machine and quarantine): (client, the describe call,
+its parameter, the parameter's value of an ARN). The call fails once the resource is gone."""
 TAGS: Final = {"fast:owner": "iac", names.MODULE_TAG: names.MODULE}
 """Tags of everything the demand module deploys, besides ``fast:app``."""
 _LOCK_GROUPS: Final = {"main", "local", "dev"}

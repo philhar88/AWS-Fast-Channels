@@ -751,6 +751,14 @@ def test_a_deleted_user_pool_is_not_residue(stage: _demand.DemandStage, stub: An
             {},
             "404",
         ),
+        (
+            "cloudfront",
+            "arn:aws:cloudfront::123456789012:distribution/E2EXAMPLE12345",
+            "get_distribution",
+            {"Id": "E2EXAMPLE12345"},
+            {"ETag": "E2EXAMPLE"},
+            "NoSuchDistribution",
+        ),
     ],
 )
 def test_the_creatives_modules_deleted_resources_are_not_residue(
