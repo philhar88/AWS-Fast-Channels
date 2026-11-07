@@ -170,6 +170,10 @@ class OpsStack(Stack):
             },
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,
+            # R12 starts the always-on channels the agents' envelope lists (the operations agent acts on them)
+            always_on=config.modules.agents.envelope.resolved(prefix).always_on
+            if config.modules.agents.enabled
+            else (),
         )
         self.exports = OpsExports(
             appconfig_application=self.appconfig.application,

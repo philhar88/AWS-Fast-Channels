@@ -30,6 +30,7 @@ from fast_channels.core.agents.envelope import Envelope, Refusal, Role, verdict
 from fast_channels.core.agents.names import ESCALATIONS_METRIC
 from fast_channels.core.ledger import Json, LedgerKind
 from fast_channels.functions import aws
+from fast_channels.functions.agents import operations
 from fast_channels.functions.agents.caps import take
 from fast_channels.functions.autopilot import (
     APPROVAL_EVENT,
@@ -341,9 +342,32 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def request_of(event: Mapping[str, Any]) -> RunRequest:
-    """The run a trigger asks for: a :class:`RunRequest` as the event itself (a direct invocation)."""
-    return RunRequest.model_validate(event)
+def request_of(cfg: RunnerSettings, event: Mapping[str, Any]) -> RunRequest | str:
+    """The run a trigger asks for, or why there is none.
+
+    An operations trigger (``functions.agents.operations``) becomes a run only when an always-on channel is
+    stopped, read here before any model call; any other event is a :class:`RunRequest` itself (a direct
+    invocation)."""
+    found = operations.trigger_of(event)
+    if found is None:
+        return RunRequest.model_validate(event)
+    kind, facts = found
+    if cfg.role is not Role.OPERATIONS:
+        return f"the {cfg.role.value} agent has no {kind} trigger"
+    if (kind, facts.get("running" if kind == "census" else "state")) not in {("census", 0), ("alarm", "ALARM")}:
+        return f"the {kind} trigger is not an off-air signal: {facts}"
+    if not cfg.envelope.always_on:
+        return "no channel is always-on"
+    states = operations.channel_states(cfg.envelope.always_on)
+    stopped = [name for name, state in states.items() if state == "STOPPED"]
+    if not stopped:
+        return f"no always-on channel is stopped: {states}"
+    return RunRequest(
+        prompt=operations.prompt(kind, facts, stopped),
+        channel=stopped[0],
+        correlation_id=str(event.get("id") or event.get("time") or kind),
+        facts={"trigger": kind, **facts, "states": dict(states)},
+    )
 
 
 @metrics.log_metrics
@@ -351,7 +375,10 @@ def request_of(event: Mapping[str, Any]) -> RunRequest:
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     """One unattended conversation of the runner's agent about ``event``."""
     cfg = runner_settings()
-    request = request_of(event)
+    request = request_of(cfg, event)
+    if isinstance(request, str):
+        logger.info("nothing for the agent to do", extra={"role": cfg.role.value, "reason": request})
+        return {"role": cfg.role.value, "skipped": request}
     session_id = session_id_for(cfg.role, request.correlation_id)
     logger.set_correlation_id(request.correlation_id)
     logger.append_keys(role=cfg.role.value, session_id=session_id)

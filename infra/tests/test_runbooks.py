@@ -169,3 +169,26 @@ def test_the_off_air_alarm_needs_two_failed_runs(ops: Template) -> None:
     assert (alarm["MetricName"], alarm["Namespace"]) == ("SuccessPercent", "CloudWatchSynthetics")
     assert (alarm["EvaluationPeriods"], alarm["Threshold"], alarm["TreatMissingData"]) == (2, 100, "notBreaching")
     assert alarm["ComparisonOperator"] == "LessThanThreshold"
+
+
+def runbook_environment(template: Template) -> dict[str, str]:
+    [handler] = [
+        f["Properties"]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f["Properties"].get("Handler") == "fast_channels.functions.ops.runbooks.handler"
+    ]
+    variables: dict[str, str] = handler["Environment"]["Variables"]
+    return variables
+
+
+def test_r12_knows_the_always_on_channels_of_the_agents_envelope(ops: Template, deployment: GetDeployment) -> None:
+    d = deployment(
+        {
+            "modules.ops.enabled": True,
+            "modules.agents.enabled": True,
+            "modules.agents.envelope": {"always_on": ["{prefix}-demo"]},
+        }
+    )
+
+    assert runbook_environment(d.template(d.stage.ops))["ALWAYS_ON_CHANNELS"] == "fast-demo"
+    assert "ALWAYS_ON_CHANNELS" not in runbook_environment(ops), "without the agents module, no always-on list"

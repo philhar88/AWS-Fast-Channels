@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows
     under a cap of one: one approved).
   - Every decision and tool call goes to the ledger chain `agents/<role>`, and every deployed envelope to
     `agents/envelope`. A refusal is escalated to the alert topic.
+  - The operations agent wakes on the census's `Census Changed` to zero and on the probe's off-air alarm, reads
+    the always-on channels' states first, and starts a stopped one through the channels tool; runbook R12 knows the
+    always-on list too.
   - v1 ships the operations agent's envelope: it restarts each always-on channel at most once an hour, and stopping,
     creating or deleting a channel needs a human. The default lists no always-on channel. The envelope is not signed
     yet.

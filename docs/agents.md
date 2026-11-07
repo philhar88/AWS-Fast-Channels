@@ -75,13 +75,35 @@ envelope names must be an IaC channel. The resources go into the Operator stack:
 About nothing while idle: an on-demand table, functions that run only when triggered, and two alarms per agent ($0.20 a
 month). Each run costs a few Bedrock calls through the scheduler agent's task and its Runtime time.
 
+## The operations agent
+
+- **Triggers.** Two triggers start the operations agent's runner:
+  - The channel census puts `Census Changed` on the stage's bus when the count of running channels drops to zero. It
+    runs every 5 minutes, so it sees a stop at most one census interval later.
+  - The probe canary's off-air alarm `<prefix>-probe-off-air` goes to ALARM (runbook R12's trigger). The census stops
+    the canary when the last channel stops, so this alarm rarely fires for a stop.
+- **Facts first.** The runner reads each always-on channel's state before any model call. When none is stopped, there
+  is no conversation, and nothing is recorded but the runner's log.
+- **The run.** The agent is asked to read each stopped always-on channel, start it with `channels___start_channel`, and
+  read it again. The runner approves the start inside the envelope: an always-on channel, at most once an hour.
+  - A second stop within the hour gets its restart refused by the cap and escalated, so a channel that keeps
+    stopping comes to a human.
+  - Stopping, creating or deleting a channel is never the agent's.
+- **Runbook R12.** With the module, R12 knows the always-on list too, and its dry-run record says it would start the
+  channel. The agent is the one that acts.
+- **Auto-stop.** `channels___start_channel` keeps the deployment's auto-stop (`channels.max_runtime_hours`). An
+  always-on channel the agent starts is stopped again after that many hours, and the agent restarts it at most once an
+  hour. Set the auto-stop to 0 for a stage whose channels are meant to stay on.
+- **Measured.** On a throwaway stage, an unplanned `StopChannel` was seen by the census and the agent 5 min 11 s later.
+  The channel ran again 5 min 24 s after the stop. A second stop within the hour was refused by the cap and
+  escalated, and the channel stayed stopped (`tests/e2e/test_23_agents.py`).
+- **Detection limit.** The census signals only at zero running channels. On a stage where other channels still run, a
+  stopped always-on channel is seen only through the probe alarm; per-channel detection is a follow-up.
+
 ## What comes next
 
-Each agent comes with its own triggers:
+- The programming agent: the autopilot's ticks under the envelope.
+- The sales agent: hourly pacing, proposing only.
+- The opt-in AWS DevOps Agent (`AWS::DevOpsAgent::AgentSpace`, read-only, advice only).
 
-- the operations agent: the census's `Census Changed` to zero, and the R12 probe alarm;
-- the programming agent: the autopilot's ticks, under the envelope;
-- the sales agent: hourly pacing.
-
-The opt-in AWS DevOps Agent (`AWS::DevOpsAgent::AgentSpace`, read-only, advice only) comes with them. Until then a runner
-is invoked directly with a `RunRequest` (`prompt`, `channel`, `correlation_id`, `facts`).
+A runner can also be invoked directly with a `RunRequest` (`prompt`, `channel`, `correlation_id`, `facts`).

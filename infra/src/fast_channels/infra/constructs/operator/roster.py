@@ -5,7 +5,10 @@
 - One runner per agent (``fast_channels.functions.agents.runner``): it authenticates as the agent's machine client
   (``OperatorIdentity(agents=...)``), holds the agent's unattended conversations with the scheduler agent's Runtime,
   answers its approval-gated calls from the envelope and the caps, appends every decision and tool call to the
-  ledger chain ``agents/<role>`` and escalates refusals to the alert topic. Its triggers come with each agent.
+  ledger chain ``agents/<role>`` and escalates refusals to the alert topic.
+- The operations agent's triggers (``functions.agents.operations``): the census's ``Census Changed`` to zero
+  running channels on the stage's bus, and the probe canary's off-air alarm (runbook R12's trigger) going to
+  ALARM. Its runner reads the always-on channels' states first, and starts a conversation only for a stopped one.
 - The envelope's record (``fast_channels.functions.agents.envelope_record``), run on every deploy that changes the
   envelope: ``envelope.apply`` in the ledger chain ``agents/envelope``.
 
@@ -17,11 +20,14 @@ from typing import TYPE_CHECKING, Final
 from aws_cdk import Duration, RemovalPolicy, triggers
 from aws_cdk import aws_cloudwatch as cw
 from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_events as events
+from aws_cdk import aws_events_targets as events_targets
 from aws_cdk import aws_lambda_destinations as destinations
 from constructs import Construct
 
 from fast_channels.core.agents.envelope import ENVELOPE_CHAIN, Envelope, Role
 from fast_channels.core.agents.names import table_name
+from fast_channels.core.events import DETAIL_TYPES, CensusChanged, event_source
 from fast_channels.core.ledger import ledger_table
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
@@ -73,6 +79,8 @@ class AgentRoster(Construct):
         identity: the operator plane's Cognito pool, with a machine client per agent that is on.
         runtime_invoke_url: the scheduler agent Runtime's invocation URL.
         alert_topic: where refusals are escalated (the stage's alert topic).
+        event_bus: the stage's bus (the census's events).
+        off_air_alarm: the probe canary's alarm (runbook R12's trigger).
         log_retention, removal_policy: of the functions' log groups, the queues and the table.
 
     Attributes:
@@ -93,6 +101,8 @@ class AgentRoster(Construct):
         identity: OperatorIdentity,
         runtime_invoke_url: str,
         alert_topic: sns.ITopic,
+        event_bus: events.IEventBus,
+        off_air_alarm: str,
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
@@ -146,6 +156,8 @@ class AgentRoster(Construct):
             )
             _allow_ledger(runner, prefix, role.chain_id)
             alert_topic.grant_publish(runner.function)
+            if role is Role.OPERATIONS:
+                self._operations(prefix, envelope, runner, event_bus, off_air_alarm)
             self.runners[role] = runner
             self.dead_letters[role] = queue
             self._alarm_on(prefix, role, runner, queue, alert_topic)
@@ -171,6 +183,50 @@ class AgentRoster(Construct):
             timeout=Duration.minutes(1),
             execute_on_handler_change=True,
         )
+
+    def _operations(
+        self,
+        prefix: str,
+        envelope: Envelope,
+        runner: FastFunction,
+        event_bus: events.IEventBus,
+        off_air_alarm: str,
+    ) -> None:
+        """The operations agent's triggers and its reads of the always-on channels' states."""
+        if envelope.always_on:
+            runner.allow(
+                ["mediatailor:DescribeChannel"],
+                [arn(self, "mediatailor", "channel", name) for name in envelope.always_on],
+            )
+        target = events_targets.LambdaFunction(runner.function, retry_attempts=2, max_event_age=MAX_EVENT_AGE)
+        for rule in (
+            events.Rule(
+                self,
+                "OperationsCensusTrigger",
+                description="Agents: the operations agent looks at the always-on channels when none runs",
+                event_bus=event_bus,
+                event_pattern=events.EventPattern(
+                    source=[event_source(prefix)],
+                    detail_type=[DETAIL_TYPES[CensusChanged]],
+                    detail={"running": [0]},
+                ),
+                targets=[target],
+            ),
+            events.Rule(
+                self,
+                "OperationsOffAirTrigger",
+                description="Agents: the operations agent looks at the always-on channels when the probe is off air",
+                event_pattern=events.EventPattern(
+                    source=["aws.cloudwatch"],
+                    detail_type=["CloudWatch Alarm State Change"],
+                    detail={"alarmName": [off_air_alarm], "state": {"value": ["ALARM"]}},
+                ),
+                targets=[target],
+            ),
+        ):
+            nag.acknowledge(
+                rule, {"Serverless-EventBusDLQ": "Failed runs go to the runner's dead-letter queue; the trigger stays"}
+            )
 
     def _alarm_on(self, prefix: str, role: Role, runner: FastFunction, queue: sqs.Queue, topic: sns.ITopic) -> None:
         name = f"{prefix}-agent-{role.value}-errors"
