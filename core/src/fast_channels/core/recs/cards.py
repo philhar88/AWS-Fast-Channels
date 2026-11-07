@@ -21,13 +21,14 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict
 
 from fast_channels.core.crawl.taxonomy import GenreMap, default_genre_map, load_taxonomy
+from fast_channels.core.understanding.record import MOODS
+from fast_channels.core.understanding.record import VERSION as UNDERSTANDING_VERSION
 
 SYNOPSIS_MAX: Final = 300
 TITLE_MAX: Final = 80
 MAX_CATEGORIES: Final = 5
 MAX_MOODS: Final = 3
 MAX_KEYWORDS: Final = 10
-UNDERSTANDING_VERSION: Final = 1
 _WORD: Final = re.compile(r"^[a-z][a-z' -]{0,29}$")
 _CONTROL: Final = re.compile(r"[\x00-\x1f\x7f]+")
 
@@ -125,7 +126,7 @@ def card(
         synopsis=_text(meta.get("synopsis") or understood.get("synopsis"), SYNOPSIS_MAX),
         genres=genres,
         categories=tuple(dict.fromkeys(categories))[:MAX_CATEGORIES],
-        moods=_words(understood.get("moods"), MAX_MOODS),
+        moods=tuple(m for m in _words(understood.get("moods"), MAX_KEYWORDS) if m in MOODS)[:MAX_MOODS],
         keywords=tuple(dict.fromkeys(keywords))[:MAX_KEYWORDS],
         rating=_text(meta.get("rating"), 10) or None,
         minutes=minutes or None,

@@ -437,6 +437,7 @@ MODULES = (
     "viewer",
     "agents",
     "understanding",
+    "recs",
 )
 DESCRIBE: dict[str, Any] = {
     "model": "{geo}.amazon.nova-2-lite-v1:0",

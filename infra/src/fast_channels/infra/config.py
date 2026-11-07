@@ -12,6 +12,7 @@ Every attribute docstring below is the field's documentation (also exported in t
 import json
 import os
 import re
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -33,6 +34,8 @@ from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSet
 from fast_channels.core.monetization.names import sibling_pattern
 from fast_channels.core.naming import PREFIX_PATTERN, agent_namespace, check_prefix, is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
+from fast_channels.core.recs import REGISTRY_DEFAULT as RECOMMENDER_DEFAULT
+from fast_channels.core.recs import TASK as RECOMMENDER_TASK
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
 from fast_channels.core.understanding.record import TASK as UNDERSTANDING_TASK
@@ -54,6 +57,10 @@ SCHEDULER_EVAL: Final = "haiku-5-5-adaptive-16k"
 SCHEDULER_DAILY_CAP_USD: Final = 5
 """The scheduler agent's daily spend cap, about ten times a busy demo day: four autopilot runs a day on each of five
 channels and 50 operator turns at about $0.005 each (``make eval``) is about $0.4."""
+DEFAULT_TASKS: Final[Mapping[str, Mapping[str, Any]]] = {
+    SCHEDULER_TASK: {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD, "eval": SCHEDULER_EVAL}
+}
+"""``modules.models.tasks`` when cdk.json sets none: the scheduler agent's entry."""
 DEFAULT_ALLOWED_MODELS: Final = (
     DEFAULT_MODEL,
     f"{GEO_PLACEHOLDER}.anthropic.claude-sonnet-5-5",
@@ -518,9 +525,7 @@ class ModelsModule(_Module):
     inference profile and spend cap. Entries choose only among ``agent.allowed_models``."""
     tasks: dict[str, ModelTask] = Field(
         # Validated like a value from cdk.json, so that {geo} resolves for the region.
-        default_factory=lambda: {
-            "scheduler.plan": {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD, "eval": SCHEDULER_EVAL}
-        },
+        default_factory=lambda: dict(DEFAULT_TASKS),
         validate_default=True,
     )
     """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
@@ -939,6 +944,30 @@ class UnderstandingModule(_Module):
         return analyses
 
 
+class RecsModule(_Module):
+    """The rail recommender (``modules.recs``; ADR-0027)."""
+
+    enabled: bool = False
+    """Deploy the rail recommender: ``GET /rail`` answers each signed-in viewer's "Recommended for you" rail, which
+    the ``recommender`` model task picks and explains from deterministic candidates and a validator; hourly cohort
+    rails for guests; the rule-based rail on every model error, timeout or cap. Adds a default ``recommender``
+    registry entry (Claude Haiku 5.5, thinking disabled) unless ``models.tasks`` names one."""
+    holdout_percent: int = Field(default=10, ge=0, le=50)
+    """Share of viewers in the rail holdout (bucket ``rail-v1``), who get the rule-based rail: the baseline the model
+    rail is measured against."""
+    cohorts: tuple[str, ...] = Field(default=("web-en",), min_length=1)
+    """``<device>-<language>`` of each hourly cohort rail, e.g. ``web-en`` or ``tv-es``."""
+    refresh_hours: int = Field(default=20, ge=1, le=35)
+    """A viewer's model rail older than this is rebuilt on their next request."""
+
+    @field_validator("cohorts")
+    @classmethod
+    def _cohorts(cls, cohorts: tuple[str, ...]) -> tuple[str, ...]:
+        if bad := [c for c in cohorts if not re.fullmatch(r"[a-z]{2,10}-[a-z]{2}", c)]:
+            raise ValueError(f"cohorts are <device>-<language> (e.g. web-en), got {bad}")
+        return cohorts
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
@@ -949,6 +978,7 @@ _MODULE_NEEDS: Final = {
     "viewer": ("identity",),
     "agents": ("ops",),
     "understanding": ("models",),
+    "recs": ("models", "identity"),
 }
 """Modules an enabled module builds on."""
 
@@ -973,6 +1003,25 @@ class ModulesConfig(_Section):
     viewer: ViewerModule = ViewerModule()
     agents: AgentsModule = AgentsModule()
     understanding: UnderstandingModule = UnderstandingModule()
+    recs: RecsModule = RecsModule()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _recommender_entry(cls, data: Any) -> Any:
+        """With ``recs`` on, ``models.tasks`` gains the ``recommender`` entry ``modules.recs`` deploys
+        (:data:`fast_channels.core.recs.REGISTRY_DEFAULT`) unless it names one; with ``recs`` off, nothing changes."""
+        if not isinstance(data, dict):
+            return data
+        recs = data.get("recs")
+        if not (recs.enabled if isinstance(recs, RecsModule) else isinstance(recs, dict) and recs.get("enabled")):
+            return data
+        models = data.get("models") or {}
+        if isinstance(models, ModelsModule):
+            models = models.model_dump(mode="json")
+        tasks = dict(models.get("tasks") or DEFAULT_TASKS)
+        if RECOMMENDER_TASK in tasks:
+            return data
+        return {**data, "models": {**models, "tasks": {**tasks, RECOMMENDER_TASK: dict(RECOMMENDER_DEFAULT)}}}
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""

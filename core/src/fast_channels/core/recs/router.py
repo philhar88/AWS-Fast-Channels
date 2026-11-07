@@ -66,6 +66,10 @@ class Reason(StrEnum):
     """Too few of the model rail's titles still air; a new one is being built."""
     COHORT = "cohort"
     """A cohort rail (guests read it from the CDN)."""
+    NO_TASTE = "no_taste"
+    """No taste facts for the viewer yet: the cohort rail, no model call."""
+    UNAVAILABLE = "unavailable"
+    """The rail this request routes to does not exist yet (a cohort rail before its first build)."""
 
 
 class Personalization(StrEnum):

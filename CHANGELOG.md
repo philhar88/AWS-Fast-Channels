@@ -25,7 +25,25 @@ All notable changes to this project are documented here. The format follows
   - v1 ships the operations agent's envelope: it restarts each always-on channel at most once an hour, and stopping,
     creating or deleting a channel needs a human. The default lists no always-on channel. The envelope is not signed
     yet.
-- **The rail recommender's deterministic core and its eval suite** (`recs`, M10a part 1; [ADR-0027](docs/adr/0027-llm-rail-recommender.md), Proposed).
+- **The `recs` module: a model-ranked rail for each signed-in viewer** (off by default; needs `models` and
+  `identity`; [docs/recs.md](docs/recs.md), [ADR-0027](docs/adr/0027-llm-rail-recommender.md)).
+  - `GET /rail` answers the viewer's "Recommended for you" rail with how it was made and why. No model runs while
+    the viewer waits.
+  - **Model rails.** Claude Haiku 5.5 (the `recommender` task, thinking disabled) picks and explains each signed-in
+    adult's rail in the background, from deterministic candidates and a validator. Identical requests share one call.
+  - **Cohort rails** are built hourly to `plan/rail/<device>-<language>-<daypart>.json` for guests and for viewers who
+    get no personalization.
+  - **The router.** Kids profiles, opted-out viewers, viewers without consent, the 10% holdout and first sessions never
+    reach the model.
+  - **The fallback.** Every model error, timeout, cap or invalid rail serves the rule-based rail, with the reason, for
+    an hour before the next try.
+  - **Metrics:** model cost, tokens and latency; validator drops and replaced reasons; rails by strategy and reason.
+    The dead-letter queue has an alarm.
+  - **Config:** `modules.recs` (`holdout_percent`, `cohorts`, `refresh_hours`) adds the default `recommender` registry
+    entry and makes the recommender the `recs` flag's default.
+  - **The viewer app** shows the rail, labelled with its strategy, and falls back to its own rule-based rail if
+    `GET /rail` fails.
+- **The rail recommender's deterministic core and its eval suite** (`recs`; [ADR-0027](docs/adr/0027-llm-rail-recommender.md)).
   - `fast_channels.core.recs` holds the deterministic parts:
     - the router that runs before any model call;
     - the candidates, which are the next 24 hours of the guides filtered by rating ceiling and child-directed

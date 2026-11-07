@@ -1,7 +1,7 @@
 # 0027 — An LLM rail recommender behind a deterministic router, candidates and validator
 
-**Status:** Proposed (amends [0029](0029-per-task-model-registry.md)). It is accepted when the `recs` module passes
-its end-to-end leg.
+**Status:** Accepted (amends [0029](0029-per-task-model-registry.md)): the `recs` module passed its end-to-end leg
+(`tests/e2e/test_26_recs.py`) on a development stage in November 2026.
 
 ## Context
 The reference viewer ranks its rails by rule ([0028](0028-reference-viewer-on-its-own-origin.md)): a persona's

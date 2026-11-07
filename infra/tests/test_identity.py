@@ -20,7 +20,12 @@ FASTM: dict[str, Any] = json.loads((Path(__file__).resolve().parents[2] / "stage
 """Every module on, as ``STAGE=fastm`` deploys them."""
 IDENTITY_OFF: dict[str, Any] = {
     **FASTM,
-    "modules": {**FASTM["modules"], "identity": {"enabled": False}, "viewer": {"enabled": False}},
+    "modules": {
+        **FASTM["modules"],
+        "identity": {"enabled": False},
+        "viewer": {"enabled": False},
+        "recs": {"enabled": False},
+    },
 }
 
 
@@ -68,7 +73,8 @@ def test_it_reads_the_media_bucket_by_parameter_and_changes_no_stack_but_media(
     assert "FastChannels-fastm-Data" not in text and "FastChannels-fastm-Media" not in text, "no weak reference"
     ssm = {p["Default"] for p in identity.to_json()["Parameters"].values() if p["Type"].startswith("AWS::SSM::")}
     assert ssm - {"/cdk-bootstrap/hnb659fds/version"} == {"/fastm/release/media-bucket"}
-    on, off = deployment(FASTM), deployment(IDENTITY_OFF)
+    on = deployment({**FASTM, "modules": {**FASTM["modules"], "recs": {"enabled": False}}})  # recs sets a flag in Ops
+    off = deployment(IDENTITY_OFF)
     for name in ("data", "ops", "crawl", "operator", "models"):
         assert on.template(getattr(on.stage, name)).to_json() == off.template(getattr(off.stage, name)).to_json(), name
 

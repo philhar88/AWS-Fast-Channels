@@ -115,9 +115,14 @@ is called (`console/src/viewer/rail.ts`).
   first, each title once.
 - Without declared genres (the guest), channels rank by whether they air something now, then by name.
 
-The model registry's recommender tasks are not used: a recommender task needs an eval record with the recommender's
-checks ([agent.md](agent.md#model-registry)), and the demo catalog's four titles give a model nothing to choose among.
-The ranking is one pure function, so a recommender can replace it.
+With the `recs` module ([recs.md](recs.md)), "Recommended for you" replaces "Up next for you". The app asks
+`GET /rail` (`config.json`'s `railUrl`) with the viewer's access token and shows that rail.
+- **The header** says how the rail was made and why: "Recommended by Claude Haiku 5.5", "Picked for this audience
+  (no personal data)", or "Rule-based rail from your genres", each with its reason, such as the holdout or a model
+  rail being built.
+- **Each tile** shows the model's reason, or its evidence's template where the validator replaced it.
+- **When `GET /rail` fails,** the app falls back to its own rule-based rail. The recommender's fallback is a Python
+  port of the same function, kept identical by `contracts/fixtures/rail/program-rail.json`.
 
 ## Playback
 
@@ -184,6 +189,7 @@ is warm ([modules.md](modules.md#how-each-module-fails-safe)). Open the app's UR
 | 6:00–8:00 | Open "Why these ads" in both | Dana: FULL, tier `light`, "at most 1 ad, only bids above $20.00 CPM", one $35 ad, the bids below the bar. Marcus: tier `standard`, every slot at the market floor | Fewer, higher-priced ads for a high-value, ad-sensitive viewer; the tier and the bar never travel on the wire |
 | 8:00–9:00 | Switch the second window to Ben | Ben: tier `holdout`, the full pod | The holdout is how we would know we were wrong |
 | 9:00–10:00 | Switch to Guest | A guest ticket, CONTEXTUAL, no panel | Without a sign-in a session gets the control plan and no identifier reaches a bidder |
+| With `recs` | Sign Dana in a second time | "Recommended by Claude Haiku 5.5": a model rail, each tile with its reason. Ben's says "Rule-based rail from your genres: you are in the rule-based holdout" if his `vid` falls in it | The model picks and explains; deterministic code chooses the candidates and checks every reason. A first session gets the audience rail, so a sign-up buys no model call |
 
 ## What it costs
 
@@ -195,7 +201,8 @@ is warm ([modules.md](modules.md#how-each-module-fails-safe)). Open the app's UR
 
 ## Limits
 
-- The rail is the genre baseline, not a recommender: it uses no viewing history and is not measured.
+- Without the `recs` module, the rail is the genre baseline, not a recommender. With it, the model rail is wired,
+  not proven ([recs.md](recs.md#what-it-does-not-do)).
 - The panel reads at most 400 records of a session from the last six hours.
 - The app shows a tier only while `ad_panel` is on, and only to the viewer it belongs to.
 

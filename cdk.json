@@ -228,6 +228,12 @@
           "enabled": false,
           "analyses": ["transcript", "shots", "technical_cues", "labels", "moderation"],
           "task": "understanding.describe"
+        },
+        "recs": {
+          "enabled": false,
+          "holdout_percent": 10,
+          "cohorts": ["web-en"],
+          "refresh_hours": 20
         }
       }
     },

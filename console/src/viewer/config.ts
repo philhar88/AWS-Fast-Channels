@@ -41,6 +41,8 @@ export interface ViewerConfig {
   readonly planBaseUrl: string;
   /** The demo's "why these ads" API, or `null` when `modules.viewer.ad_panel` is off. */
   readonly adPanelUrl: string | null;
+  /** The recommender's `GET /rail` (the recs module); absent without it, when the app ranks its own rule-based rail. */
+  readonly railUrl?: string;
   readonly channels: readonly ViewerChannel[];
   readonly personas: readonly Persona[];
 }

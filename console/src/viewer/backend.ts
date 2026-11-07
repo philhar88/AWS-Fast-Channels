@@ -1,6 +1,6 @@
 /**
  * Everything the viewer app calls, behind one interface so mock mode can stand in: Cognito sign-in, the playback
- * API and plans, the viewer's consent, the public EPG feeds and the demo's ad panel API.
+ * API and plans, the viewer's consent, the public EPG feeds, the recommender and the demo's ad panel API.
  */
 import { createContext, use } from "react";
 import { fetchEpg, type Epg } from "../lib/schedule";
@@ -9,6 +9,7 @@ import { refreshTokens, signIn, type Tokens } from "./auth";
 import type { ViewerChannel, ViewerConfig } from "./config";
 import { consentUrlOf, readConsent, writeConsent, type ConsentChoice, type ConsentRecord } from "./consent";
 import { openChannel, type Source } from "./playback";
+import { fetchRail, type RailAnswer } from "./railClient";
 
 export interface ViewerBackend {
   readonly config: ViewerConfig;
@@ -22,6 +23,8 @@ export interface ViewerBackend {
   epg(channel: string, signal?: AbortSignal): Promise<Epg | null>;
   /** The PDS decisions of the viewer's own session `sid`; only when `config.adPanelUrl` is set. */
   decisions(sid: string, accessToken: string, signal?: AbortSignal): Promise<SessionDecisions>;
+  /** The recommender's rail for the signed-in viewer (`GET /rail`); only when `config.railUrl` is set. */
+  rail(accessToken: string, query: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<RailAnswer>;
 }
 
 export function awsBackend(config: ViewerConfig): ViewerBackend {
@@ -39,6 +42,12 @@ export function awsBackend(config: ViewerConfig): ViewerBackend {
         return Promise.reject(new Error("The ad panel is not deployed (modules.viewer.ad_panel)"));
       }
       return fetchDecisions(config.adPanelUrl, accessToken, sid, signal);
+    },
+    rail: (accessToken, query, signal) => {
+      if (!config.railUrl) {
+        return Promise.reject(new Error("The recommender is not deployed (modules.recs)"));
+      }
+      return fetchRail(config.railUrl, accessToken, query, signal);
     },
   };
 }

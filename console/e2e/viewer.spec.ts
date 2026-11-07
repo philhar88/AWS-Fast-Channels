@@ -44,9 +44,25 @@ test("each persona gets their own rail", async ({ page }) => {
   await page.goto("/?mock#/personas");
   await signIn(page, "Luis Moreno");
   await expect.poll(() => railChannels(page)).toEqual(["fast-anim", "fast-demo"]);
-  await expect(page.getByRole("region", { name: "Up next for you" }).getByText("Elephants Dream").first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Recommended for you" }).getByText("Elephants Dream").first()).toBeVisible();
   expect(problems).toEqual([]);
 });
+
+test("the recommender's rail shows its reasons and how it was made", async ({ page }) => {
+  const problems = await open(page);
+  await signIn(page, "Dana Reyes");
+  const rail = page.getByRole("region", { name: "Recommended for you" });
+  await expect(rail.getByText("Recommended by Claude Haiku 5.5")).toBeVisible();
+  await expect(rail.getByText("Tears of Steel").first()).toBeVisible();
+  await expect(rail.getByText(/A sci-fi and action pick, as you like it/).first()).toBeVisible();
+  await screenshot(page, "viewer-recommended");
+
+  await page.goto("/?mock#/personas");
+  await signIn(page, "Ben Okafor");
+  await expect(page.getByText(/Rule-based rail from your genres: you are in the rule-based holdout/)).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
 
 test("a light-tier viewer gets one ad and slate, and the panel says why", async ({ page }) => {
   const problems = await open(page);
@@ -117,6 +133,7 @@ test("a kids profile signs in on its account and plays KIDS with no ticket", asy
   await page.getByRole("textbox", { name: "Password" }).fill("demo-password");
   await page.getByRole("dialog").getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { name: "Mia", exact: true })).toBeVisible();
+  await expect(page.getByText("The kids lineup: no recommender, no personal data.")).toBeVisible();
   await page.getByRole("link", { name: "Watch fast-demo" }).click();
   await expect(page.getByText("Mia (kids profile)")).toBeVisible();
   await expect(page.getByText("KIDS, no ticket")).toBeVisible();
