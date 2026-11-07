@@ -28,7 +28,7 @@ import json
 import threading
 import time
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -141,8 +141,9 @@ def watch(url: str, until_at: datetime, seen: Counter[str], run_id: str) -> None
             time.sleep(POLL_S)
 
 
-def schedules(stage: Stage, configuration: str) -> dict[int, dict[str, Any]]:
-    """The prefetcher's active schedules of ``configuration`` by event id."""
+def schedules(stage: Stage, configuration: str, *, events: Collection[int]) -> dict[int, dict[str, Any]]:
+    """The prefetcher's schedules of ``configuration`` for the breaks ``events`` (this run's), by event id. An earlier
+    test's schedules can still be listed, after their breaks: never this run's to replace."""
     mediatailor = stage.session.client("mediatailor", region_name=stage.region)
     items = [
         item
@@ -151,7 +152,7 @@ def schedules(stage: Stage, configuration: str) -> dict[int, dict[str, Any]]:
         )
         for item in page.get("Items", [])
     ]
-    return {e: dict(item) for item in items if (e := event_id_of(item["Name"])) is not None}
+    return {e: dict(item) for item in items if (e := event_id_of(item["Name"])) is not None and e in events}
 
 
 def without_shaping(stage: Stage, item: Mapping[str, Any]) -> None:
@@ -192,11 +193,9 @@ def keep_deleted(stage: Stage, configuration: str, name: str, until_at: datetime
 def on_air(tools: Tools, channel: Channel, stage: Stage) -> Iterator[datetime]:
     """The channel started, with Prebid Server up and warm; stopped at the end. Only this run's breaks may air: an
     earlier run's upcoming programs come off the schedule first, while the channel is stopped (Channel Assembly
-    refuses to delete a program that is about to play)."""
-    now = datetime.now(UTC)
-    guide = tools("schedule___get_schedule", channel=channel.name)["programs"]
-    if upcoming := [p["name"] for p in guide if datetime.fromisoformat(p["start"]) > now]:
-        tools("schedule___remove_programs", channel=channel.name, programs=upcoming)
+    refuses to delete a program that is about to play). So do this run's when it ends: a failure part-way would leave
+    them for the next test's plan to overlap."""
+    clear_upcoming(tools, channel.name)
     tools("channels___start_channel", channel=channel.name)
     try:
         wait_for(lambda: running_tasks(stage) >= 2 or None, timeout=900, interval=15, what="two Prebid Server tasks")
@@ -204,6 +203,15 @@ def on_air(tools: Tools, channel: Channel, stage: Stage) -> Iterator[datetime]:
         yield datetime.now(UTC)
     finally:
         tools("channels___stop_channel", channel=channel.name)
+        clear_upcoming(tools, channel.name)
+
+
+def clear_upcoming(tools: Tools, channel: str) -> None:
+    """Take ``channel``'s programs that have not started off its schedule."""
+    now = datetime.now(UTC)
+    guide = tools("schedule___get_schedule", channel=channel)["programs"]
+    if upcoming := [p["name"] for p in guide if datetime.fromisoformat(p["start"]) > now]:
+        tools("schedule___remove_programs", channel=channel, programs=upcoming)
 
 
 def test_prefetch_removes_first_sight_and_spreads_the_ads_herd(
@@ -232,14 +240,15 @@ def test_prefetch_removes_first_sight_and_spreads_the_ads_herd(
     totals = json.loads(lam.invoke(FunctionName=release["PrefetchFunction"])["Payload"].read())
     print("prefetcher", totals)
 
-    on_b = schedules(stage, b)
+    ours = {brk["event_id"] for program in plan["programs"] for brk in program["breaks"]}
+    on_b = schedules(stage, b, events=ours)
     breaks = {
         e: datetime.fromisoformat(str(i["Consumption"]["StartTime"])) + timedelta(seconds=20) for e, i in on_b.items()
     }
     order = sorted(breaks, key=breaks.__getitem__)
     assert len(order) >= PROGRAMS, f"{len(order)} schedules on {b}: {totals}"
     first, unshaped = order[0], order[2:4]
-    on_a = schedules(stage, a)
+    on_a = schedules(stage, a, events=ours)
     keeper = keep_deleted(stage, a, f"pf-{first}", breaks[first])
     for event_id in unshaped:
         without_shaping(stage, on_a[event_id])
