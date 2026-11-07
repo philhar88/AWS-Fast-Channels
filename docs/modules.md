@@ -84,8 +84,9 @@ monetization path, and `crawl` rides on it. Each module fails toward the stage w
   end-to-end leg runs it. `mock`, a GAM-like ad server that the stage deploys, passed its own leg. `gam` and
   `freewheel` are configuration and setup instructions, untested live. While the mode is enabled, its pre-warmed
   Prebid Cache function costs about $124 a month.
-- **The models registry serves one task.** It carries the scheduler agent's `scheduler.plan`. The recommender's
-  tasks and eval suite are defined but not built.
+- **The models registry serves one task.** It carries the scheduler agent's `scheduler.plan`. The recommender's eval
+  suite and record are committed (`make eval TASK=recommender`), but the `recs` module that deploys the task is not
+  built yet.
 
 ## Turning modules on
 

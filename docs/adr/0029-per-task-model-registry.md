@@ -1,6 +1,6 @@
 # 0029 — A per-task model registry over Bedrock Converse
 
-**Status:** Accepted (amends [0012](0012-default-model.md))
+**Status:** Accepted (amends [0012](0012-default-model.md)); the recommender's default amended by [0027](0027-llm-rail-recommender.md)
 
 ## Context
 [0012](0012-default-model.md) gave the scheduling agent one model spec in SSM: a model from an IAM allow-list, an
@@ -52,8 +52,10 @@ Building the registry (M13-01 to M13-03) measured two more facts:
 - **Viewer data stays in its geography.** A task with `data_class: viewer` must use a geographic profile (`us.`,
   `eu.`, ...), never `global.`.
 - **Thinking and the output schema never change per call.** `thinking` is a field of the task: `adaptive` omits it,
-  `disabled` turns it off. The recommender's default is Claude Haiku 5.5 with thinking on (`adaptive`) and
-  `max_tokens` 8,000.
+  `disabled` turns it off. The recommender's default was Claude Haiku 5.5 with thinking on (`adaptive`) and
+  `max_tokens` 8,000; [0027](0027-llm-rail-recommender.md) reverses it to thinking disabled and 4,000, because
+  structured output with thinking on spent the budget and returned no rail, and the larger budget that avoids it
+  costs three times as much and is four times slower.
 - **Caps are circuit breakers.** They are set at about ten times expected use, and the owner treats cost as no
   issue.
   - A deterministic token counter per task and UTC day (`<prefix>-models`) admits a run and each model call only

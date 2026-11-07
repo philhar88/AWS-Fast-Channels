@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Epg, EpgProgram } from "../lib/schedule";
 import type { ViewerChannel } from "./config";
 import { affinity, breakWindows, channelRail, genreWeights, IN_BREAK_FACTOR, programRail, type ChannelGuide } from "./rail";
+import sharedFixture from "../../../contracts/fixtures/rail/program-rail.json?raw";
 
 const T0 = Date.parse("2026-11-05T20:00:00Z");
 const MIN = 60_000;
@@ -98,5 +99,24 @@ describe("programRail", () => {
     ]);
     expect(programRail([], [SCIFI], T0 + MIN)).toHaveLength(2);
     expect(programRail(DANA, [SCIFI, ANIMATION], T0 + MIN, 1).map((t) => t.program.title)).toEqual(["Tears of Steel"]);
+  });
+});
+
+/** contracts/fixtures/rail/program-rail.json: the same cases run against the recommender's Python port. */
+interface SharedCase {
+  readonly name: string;
+  readonly genres: readonly string[];
+  readonly now: string;
+  readonly guides: readonly string[];
+  readonly limit?: number;
+  readonly expected: readonly { channel: string; name: string }[];
+}
+const SHARED = JSON.parse(sharedFixture) as { cases: SharedCase[]; epg: Record<string, EpgProgram[]> };
+
+describe("programRail on the shared fixture", () => {
+  it.each(SHARED.cases.map((c) => [c.name, c] as const))("%s", (_, c) => {
+    const guides = c.guides.map((name) => guide(name, SHARED.epg[name] ?? []));
+    const rail = programRail(c.genres, guides, Date.parse(c.now), c.limit);
+    expect(rail.map((t) => ({ channel: t.channel.name, name: t.program.name }))).toEqual(c.expected);
   });
 });

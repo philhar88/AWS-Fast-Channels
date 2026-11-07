@@ -381,11 +381,21 @@ with the change that uses it. `make eval TASK=scheduler.plan MODEL=<id>` runs th
 task's settings from `cdk.json` (effort, thinking, `max_tokens`) and writes the record, passing or not; its key reads
 like `haiku-5-5-adaptive-16k`. With the registry on, synth fails while any task's `eval` names no passing record for
 its model and settings: removing the record, switching `scheduler.plan` to Sonnet 5.5 or changing its `max_tokens`
-each needs a new record. Any routing of the tested model qualifies (`us.`, `eu.`, `global.`). Tasks without a suite
-here (the recommender's ships with its module) need their own: a recommender record must report `schema_valid`,
-`faithfulness` (the deterministic check that each tile's reason cites only facts of the input), `policy_violations`
-and `cost_per_rail`, and a judge sample runs before any default flip. Swapping the model of a task with viewer data
-needs a human's approval.
+each needs a new record. Any routing of the tested model qualifies (`us.`, `eu.`, `global.`).
+
+The rail recommender has its own suite: `make eval TASK=recommender MODEL=<id>` (add `--judge 8` through
+`scripts/eval_model.py` for an Opus judge sample).
+- **What it runs.** Twelve golden cases, three times each, on a fixed 36-title fixture: the demo personas, edge
+  cases and two cohorts. Each case goes through the real prompt, Converse request and validator.
+- **Where the settings come from.** `cdk.json`'s `recommender` entry, or the entry `modules.recs` deploys.
+- **What a recommender record reports:**
+  - `schema_valid`;
+  - `faithfulness`: the deterministic check that each tile's reason cites only facts of the input;
+  - `policy_violations`;
+  - `cost_per_rail`;
+  - the expectations the cases meet (`golden_ranks`).
+
+A judge sample runs before any default flip. Swapping the model of a task with viewer data needs a human's approval.
 
 ### Conformance suite and bringing your own model
 

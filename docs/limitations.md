@@ -434,5 +434,5 @@ relies on the documentation can be surprised.
 - **`W-7 Q9` Thinking and `maxTokens`.** With Claude Haiku 5.5's adaptive thinking, `effort` low, a JSON output
   schema and `maxTokens` 4,000, 59 of 206 Converse requests (29 %) returned `stopReason=max_tokens` with an empty
   text block; with thinking disabled, all 206 were valid. A change to the thinking setting, or a per-request output
-  schema, rewrote the prompt cache. The recommender runs with thinking on and `max_tokens` 8,000, sized by trial
-  ([ADR-0029](adr/0029-per-task-model-registry.md)).
+  schema, rewrote the prompt cache. The recommender runs with thinking disabled and `max_tokens` 4,000
+  ([ADR-0027](adr/0027-llm-rail-recommender.md)): every rail of its eval record was valid.
