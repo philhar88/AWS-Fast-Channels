@@ -208,7 +208,7 @@
               "Arn"
             ]
           },
-          "Format": "{\"requestId\": \"$context.requestId\", \"time\": \"$context.requestTimeEpoch\", \"method\": \"$context.httpMethod\", \"resource\": \"$context.resourcePath\", \"status\": \"$context.status\", \"latencyMs\": \"$context.responseLatency\", \"integrationLatencyMs\": \"$context.integration.latency\", \"error\": \"$context.error.messageString\", \"authorizerError\": \"$context.authorizer.error\"}"
+          "Format": "{\"requestId\": \"$context.requestId\", \"time\": \"$context.requestTimeEpoch\", \"method\": \"$context.httpMethod\", \"resource\": \"$context.resourcePath\", \"status\": \"$context.status\", \"latencyMs\": \"$context.responseLatency\", \"integrationLatencyMs\": \"$context.integration.latency\", \"error\": \"$context.error.responseType\", \"authorizerError\": \"$context.authorizer.error\"}"
         },
         "DeploymentId": {
           "Ref": "ApiDeploymentFE1E7282fb7d070326194c99eca93f5246081f89"

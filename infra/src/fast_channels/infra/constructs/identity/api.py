@@ -65,10 +65,17 @@ ACCESS_LOG: Final = {
     "status": "$context.status",
     "latencyMs": "$context.responseLatency",
     "integrationLatencyMs": "$context.integration.latency",
-    "error": "$context.error.messageString",
+    "error": "$context.error.responseType",
     "authorizerError": "$context.authorizer.error",
 }
-"""What an access-log line holds: no address, header, body or token claim."""
+"""What an access-log line holds: no address, header, body or token claim. The error is its gateway response type
+(``UNAUTHORIZED``, ``WAF_FILTERED``, ...), a token: ``$context.error.messageString`` arrives quoted, so quoting it in
+the format wrote ``"error": ""Unauthorized""``, which is not JSON (fastm, 2026-11-07)."""
+
+
+def access_log_format() -> str:
+    """:data:`ACCESS_LOG` as the stage's JSON access-log format."""
+    return json.dumps(ACCESS_LOG)
 
 
 def redeem_template(table: str) -> str:
@@ -138,7 +145,7 @@ class IdentityApi(Construct):
                 throttling_burst_limit=burst_limit,
                 tracing_enabled=True,
                 access_log_destination=apigw.LogGroupLogDestination(access_logs),
-                access_log_format=apigw.AccessLogFormat.custom(json.dumps(ACCESS_LOG)),
+                access_log_format=apigw.AccessLogFormat.custom(access_log_format()),
             ),
         )
         for name, kind in (

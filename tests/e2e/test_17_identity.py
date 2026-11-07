@@ -234,6 +234,7 @@ def test_the_access_log_holds_no_address_or_ticket(identity: Identity, viewer: S
             break
         time.sleep(5)
     assert messages, f"no access log in {group} after 2 minutes"
+    assert all(isinstance(json.loads(m), dict) for m in messages), "every line is JSON (its error unquoted twice)"
     assert not [m for m in messages if ticket in m or viewer.sub in m or re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", m)]
 
 

@@ -11,6 +11,7 @@ from aws_cdk.assertions import Template
 
 from fast_channels.core.identity.ticket import REDEEM_CONDITION, REDEEM_UPDATE
 from fast_channels.infra.config import ConfigError, FastChannelsConfig
+from fast_channels.infra.constructs.identity.api import ACCESS_LOG, access_log_format
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -227,3 +228,15 @@ def test_the_parameters_and_outputs(identity: Template) -> None:
 
 def test_template_snapshot(identity: Template, normalized: Any, snapshot_json: SnapshotAssertion) -> None:
     assert normalized(identity) == snapshot_json
+
+
+def test_an_access_log_line_is_json_and_names_no_quoted_variable() -> None:
+    """``$context.error.messageString`` arrives quoted (``"Unauthorized"``): a format that quoted it again wrote
+    ``"error": ""Unauthorized""``, which no JSON reader takes (seen on fastm, 2026-11-07). The format holds tokens
+    only, so a line is the format with its variables substituted."""
+    assert "messageString" not in access_log_format()
+    line = access_log_format()
+    for variable in ACCESS_LOG.values():
+        line = line.replace(variable, "UNAUTHORIZED" if variable == "$context.error.responseType" else "x")
+    assert json.loads(line)["error"] == "UNAUTHORIZED"
+    assert set(json.loads(line)) == set(ACCESS_LOG)
