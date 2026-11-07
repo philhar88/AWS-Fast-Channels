@@ -308,7 +308,9 @@ so it costs nothing while the channels are stopped. Each run plays every running
 viewer would:
 
 - the multivariant playlist resolves;
-- the media sequence advances between two polls a target duration and a half apart;
+- the newest segment advances between two polls a target duration and a half apart. Its number is the media
+  sequence plus the segments listed, because a channel that has just started keeps media sequence 0 while its
+  playlist fills its window, for about a minute;
 - the newest segment resolves;
 - every `EXT-X-DATERANGE` has an `ID` and a valid `START-DATE`.
 
