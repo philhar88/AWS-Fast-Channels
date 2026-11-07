@@ -61,6 +61,14 @@ class IdentityValues:
     vid_key_arn: str
 
 
+def _list_prefixes(function: FastFunction, bucket: s3.IBucket, prefixes: Sequence[str]) -> None:
+    """Let ``function`` list ``prefixes`` of ``bucket``, so that a missing object (the guide of a channel that has none
+    yet) is a 404, not a 403 (measured on fastm, 2026-11-07: the hourly cohort run failed on a new channel's guide)."""
+    function.allow(
+        ["s3:ListBucket"], [bucket.bucket_arn], conditions={"StringLike": {"s3:prefix": [f"{p}*" for p in prefixes]}}
+    )
+
+
 class RailRecommender(Construct):
     """The recommender's table, functions, API and schedule.
 
@@ -181,6 +189,7 @@ class RailRecommender(Construct):
         self.builder.allow(
             ["s3:GetObject"], [media_bucket.arn_for_objects(f"{EPG_PREFIX}*")], why="Every channel's guide"
         )
+        _list_prefixes(self.builder, media_bucket, [EPG_PREFIX])
         self.builder.allow(
             ["s3:PutObject"], [media_bucket.arn_for_objects(f"{COHORT_PREFIX}*")], why="One cohort rail per cohort"
         )
@@ -224,6 +233,7 @@ class RailRecommender(Construct):
             [media_bucket.arn_for_objects(f"{EPG_PREFIX}*"), media_bucket.arn_for_objects(f"{COHORT_PREFIX}*")],
             why="Every channel's guide and every cohort rail",
         )
+        _list_prefixes(self.api_function, media_bucket, [EPG_PREFIX, COHORT_PREFIX])
         self.api_function.allow(["lambda:InvokeFunction"], [build.function_arn])
         if appconfig is not None:
             self.api_function.allow(

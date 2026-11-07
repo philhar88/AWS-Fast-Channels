@@ -178,3 +178,12 @@ def test_the_viewer_reads_get_rail_only_with_the_module(deployment: Callable[...
     assert (
         ViewerConfig(**base, rail_url="https://rail.example/rail").document()["railUrl"] == "https://rail.example/rail"
     )
+
+
+def test_a_missing_guide_is_a_404_for_both_functions(recs: Template) -> None:
+    for handler, prefixes in (
+        ("fast_channels.functions.recs.api.handler", ["epg/*", "plan/rail/*"]),
+        ("fast_channels.functions.recs.builder.handler", ["epg/*"]),
+    ):
+        listing = next(s for s in role_statements(recs, handler) if s["Action"] == "s3:ListBucket")
+        assert listing["Condition"] == {"StringLike": {"s3:prefix": prefixes}}, handler
