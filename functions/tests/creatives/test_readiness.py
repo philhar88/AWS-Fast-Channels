@@ -213,7 +213,7 @@ def test_a_registered_upload_goes_from_received_to_ready_and_the_own_book_is_tol
     assert started["MinConfidence"] == 80
     fakes.rekognition.pages = [{"JobStatus": "IN_PROGRESS"}, {"JobStatus": "SUCCEEDED", "ModerationLabels": []}]
     assert readiness.moderate(CRID, "job-1")["status"] == "IN_PROGRESS"
-    assert readiness.moderate(CRID, "job-1") == {"status": "SUCCEEDED", "state": "APPROVED"}
+    assert readiness.moderate(CRID, "job-1") == {"status": "SUCCEEDED", "state": "APPROVED", "job": "job-1"}
 
     request = readiness.conditioning(CRID, "exec-1")
     assert request == {
@@ -280,7 +280,7 @@ def test_a_flagged_creative_waits_for_a_person_who_approves_or_rejects_it(fakes:
     register()
     readiness.fetch(CRID)
     fakes.rekognition.pages = [labelled(("Alcohol", 91.24), ("Alcohol", 85.0), ("Smoking", 40.0))]
-    assert readiness.moderate(CRID, "job-1") == {"status": "SUCCEEDED", "state": "REVIEW"}
+    assert readiness.moderate(CRID, "job-1") == {"status": "SUCCEEDED", "state": "REVIEW", "job": "job-1"}
     record = fakes.table.items[CRID]
     assert record["moderation"]["labels"] == {"Alcohol": Decimal("91.2")}
     assert record["history"][-1]["note"] == "Alcohol 91%"
@@ -296,7 +296,7 @@ def test_with_moderation_off_a_creative_is_approved(fakes: Fakes, monkeypatch: p
     settings.cache_clear()
     upload(fakes)
     register()
-    assert readiness.moderate(CRID, None) == {"status": "SUCCEEDED", "state": "APPROVED"}
+    assert readiness.moderate(CRID, None) == {"status": "SUCCEEDED", "state": "APPROVED", "job": None}
     assert fakes.rekognition.started == []
 
 

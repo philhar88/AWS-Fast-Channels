@@ -271,7 +271,7 @@ def moderate(crid: str, job: str | None) -> dict[str, Any]:
     record = _item(crid)
     if not config.creatives_moderation:
         _move(record, State.APPROVED, by="readiness", note="moderation off")
-        return {"status": "SUCCEEDED", "state": State.APPROVED.value}
+        return {"status": "SUCCEEDED", "state": State.APPROVED.value, "job": None}
     rekognition = aws.client("rekognition")
     if job is None:
         parts = urlsplit(str(record["object"]))
@@ -310,7 +310,7 @@ def moderate(crid: str, job: str | None) -> dict[str, Any]:
             }
         },
     )
-    return {"status": "SUCCEEDED", "state": state.value}
+    return {"status": "SUCCEEDED", "state": state.value, "job": job}
 
 
 def decide(decision: Decision, execution: str) -> dict[str, str]:
