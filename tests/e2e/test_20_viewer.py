@@ -33,11 +33,11 @@ from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
 from harness_demand import DemandEdge
 from harness_identity import claims, credentials, sign_in
 from harness_pods import (
-    GAP_SESSION_SHARE,
     SMART_TV_USER_AGENT,
     Break,
     Viewer,
-    gap_share,
+    gap_sessions_allowed,
+    gapped_sessions,
     ipv4_client,
     read_unserved_prefetches,
     retrieved_for,
@@ -302,9 +302,13 @@ def test_the_light_tier_gets_one_ad_and_slate_and_the_standard_tier_the_full_pod
 # OPTIMIZATION(aws): W-2 1.33 drop this tolerance when MediaTailor serves every prefetched break
 def test_the_unserved_breaks_are_rare(run: Run) -> None:
     """W-2 1.33's known gap (a prefetched break neither filled from its retrieval nor requested in real time) is
-    tolerated above, each case printed, in at most :data:`harness_pods.GAP_SESSION_SHARE` of the sessions."""
-    share = gap_share(set(run.unserved), {viewer.sid for viewer in run.viewers.values()})
-    assert share <= GAP_SESSION_SHARE, f"{share:.0%} of the sessions had an unserved break: {sorted(run.unserved)}"
+    tolerated above, each case printed, in at most :func:`harness_pods.gap_sessions_allowed` of the sessions: one
+    of this run's three, since a fifth of three is none."""
+    sessions = {viewer.sid for viewer in run.viewers.values()}
+    gapped = gapped_sessions(set(run.unserved), sessions)
+    assert len(gapped) <= gap_sessions_allowed(sessions), (
+        f"{len(gapped)} of {len(sessions)} sessions had an unserved break: {sorted(run.unserved)}"
+    )
 
 
 def test_the_panel_answers_only_for_the_callers_own_session(run: Run) -> None:

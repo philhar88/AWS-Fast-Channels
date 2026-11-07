@@ -7,6 +7,7 @@ The readers and checks are pure functions over log events, unit-tested in ``test
 """
 
 import json
+import math
 import re
 import time
 from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -642,6 +643,18 @@ def retrieved_for(item: Break, window: Window) -> bool:
 def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:
     """The share of ``sessions`` with at least one known ADS log gap."""
     return len({sid for sid, _ in gaps} & set(sessions)) / len(sessions) if sessions else 0.0
+
+
+def gap_sessions_allowed(sessions: Collection[str]) -> int:
+    """How many of a run's ``sessions`` may have a known gap: :data:`GAP_SESSION_SHARE` of them, and at least one, so
+    that a run of a few sessions survives one occurrence (W-2 1.33 left one of three viewer sessions unserved on
+    2026-11-07, 33% of that run, at a day's rate of about 5 in 17)."""
+    return max(1, math.floor(GAP_SESSION_SHARE * len(sessions)))
+
+
+def gapped_sessions(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> set[str]:
+    """The ``sessions`` with at least one known gap."""
+    return {sid for sid, _ in gaps} & set(sessions)
 
 
 # --- the run's log groups and Prebid Server's readiness (the demand smokes') ---------------------------------------

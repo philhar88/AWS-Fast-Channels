@@ -642,6 +642,15 @@ def test_the_gap_share_is_of_sessions_not_breaks() -> None:
     assert pods.gap_share({("s1", "7")}, {f"s{n}" for n in range(1, 8)}) <= pods.GAP_SESSION_SHARE
 
 
+def test_a_small_run_may_have_one_gapped_session() -> None:
+    gaps = {("s1", "7"), ("s1", "8"), ("s9", "7")}
+
+    assert pods.gapped_sessions(gaps, {"s1", "s2", "s3"}) == {"s1"}
+    assert pods.gap_sessions_allowed({"s1", "s2", "s3"}) == 1  # a fifth of three is none: one is allowed
+    assert pods.gap_sessions_allowed({f"s{n}" for n in range(10)}) == 2
+    assert pods.gap_sessions_allowed(set()) == 1
+
+
 def _ads_event(at: datetime, sid: str, kind: str, request: str, **fields: Any) -> dict[str, Any]:
     stamp = at.isoformat().replace("+00:00", "Z")
     return {"eventTimestamp": stamp, "sessionId": sid, "eventType": kind, "requestId": request, **fields}
