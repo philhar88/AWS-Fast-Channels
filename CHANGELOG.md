@@ -65,6 +65,14 @@ All notable changes to this project are documented here. The format follows
   - Nova 2 Lite has list prices.
   - The agent's `caps` module keeps its API.
 
+### Fixed
+
+- **The scheduler agent's Runtime starts again.** Its code zip is the agent package's locked closure, which lacked
+  `fast_channels.core` after the spend counter moved there: the Runtime failed at import (`No module named
+  'fast_channels.core'`), and every console, autopilot and agent run failed. The agent package now depends on the
+  core package, and a test installs each bundled package (agent, functions, PDS) alone and imports every one of its
+  modules, besides checking that each closure holds every workspace package its code imports.
+
 ## [4.1.1] - 2026-11-06
 
 A patch release: unplayed line ads give their budget back after 10 to 15 minutes, the as-run sweep counts a break

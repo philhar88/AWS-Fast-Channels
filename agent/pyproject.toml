@@ -4,6 +4,7 @@ version = "4.1.1"
 description = "Amazon Bedrock AgentCore Runtime app: the FAST channel scheduling agent (Strands Agents, AG-UI)."
 requires-python = ">=3.14"
 dependencies = [
+    "fast-channels-core",
     "ag-ui-protocol>=1.0,<2",
     "aws-opentelemetry-distro>=0.21",
     "bedrock-agentcore>=1.25.2,<2",
@@ -18,6 +19,9 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "fast_channels.agent"
+
+[tool.uv.sources]
+fast-channels-core = { workspace = true }
 
 [tool.uv]
 # Non-editable builds (the Runtime code zip) reuse a cached wheel unless a cache key changes; by default only

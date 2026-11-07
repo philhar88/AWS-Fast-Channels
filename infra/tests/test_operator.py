@@ -1040,7 +1040,7 @@ def test_agent_zip_has_the_shim_at_its_root_and_the_package(tmp_path: Path) -> N
     assert (tmp_path / "bin" / "opentelemetry-instrument").stat().st_mode & 0o777 == 0o755
     assert (tmp_path / "main.py").stat().st_mode & 0o777 == 0o644
     assert not (tmp_path / "requirements.txt").exists()
-    assert not list(tmp_path.glob("fast_channels/core"))  # the agent does not depend on core
+    assert (tmp_path / "fast_channels" / "core" / "model_spend.py").is_file()  # the spend counter it imports
 
 
 def test_start_channel_may_skip_missed_programs_on_every_deployment_channel(everything: Template) -> None:
