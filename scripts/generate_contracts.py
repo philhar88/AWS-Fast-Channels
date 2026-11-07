@@ -4,9 +4,10 @@
     uv run python scripts/generate_contracts.py --check  # exit 1 if they are out of date
 
 Outputs: ``ingest-request.schema.json``, ``events.schema.json``, ``model-registry.schema.json``,
-``eval-record.schema.json``, ``catalog-context.schema.json`` and ``monetization-bundle.schema.json`` (JSON Schema
-2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the bring-your-own-CMS contract) and ``catalog.gateway.openapi.json``
-(the same contract as an AgentCore Gateway OpenAPI target reads it). The OpenAPI documents are flattened for Gateway
+``eval-record.schema.json``, ``catalog-context.schema.json``, ``content-understanding.schema.json`` and
+``monetization-bundle.schema.json`` (JSON Schema 2020-12), ``catalog.openapi.yaml`` (OpenAPI 3.1, the
+bring-your-own-CMS contract) and ``catalog.gateway.openapi.json`` (the same contract as an AgentCore Gateway OpenAPI
+target reads it). The OpenAPI documents are flattened for Gateway
 targets: every schema is inline, optional fields drop their ``null`` branch, and no ``$ref``/``anyOf``/``oneOf``/
 ``allOf`` remains (agentcore.md §5.2); operationIds become the tool names.
 
@@ -40,6 +41,7 @@ from fast_channels.core.pds.models import PolicyRequest, PolicyResponse, SelectR
 from fast_channels.core.pds.pod import PodContext, select_pod, select_response
 from fast_channels.core.pds.policy import Demand, decide
 from fast_channels.core.personas import PERSONA_LIST, PersonaList
+from fast_channels.core.understanding import Understanding
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -47,6 +49,8 @@ if TYPE_CHECKING:
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts"
 FIXTURES = CONTRACTS / "fixtures" / "pds"
 """Hand-written inputs of the PDS examples (read from the repository even when ``CONTRACTS`` points elsewhere)."""
+RECOMMENDER_RECORD = Path(__file__).resolve().parents[1] / "evals/records/recommender/haiku-5-5-disabled-4k.json"
+"""The committed record of the recommender's default registry entry: the eval record schema's example."""
 JSON_SCHEMA = "https://json-schema.org/draft/2020-12/schema"
 VERSION = "3.0.0"
 
@@ -59,6 +63,11 @@ def ingest_request_schema() -> dict[str, Any]:
 def catalog_context_schema() -> dict[str, Any]:
     """JSON Schema of the catalog context object ``catalog/ctx/v1/<content_id>.json`` (immutable: v2 is a new file)."""
     return {"$schema": JSON_SCHEMA, **CatalogContext.model_json_schema(mode="serialization")}
+
+
+def content_understanding_schema() -> dict[str, Any]:
+    """JSON Schema of a title's ``UNDERSTANDING`` item in the catalog table (the understanding module)."""
+    return {"$schema": JSON_SCHEMA, **Understanding.model_json_schema(mode="serialization")}
 
 
 def events_schema() -> dict[str, Any]:
@@ -208,29 +217,9 @@ def monetization_bundle_schema() -> dict[str, Any]:
 
 def eval_record_schema() -> dict[str, Any]:
     """JSON Schema of an eval record, ``evals/records/<task>/<key>.json``: the evidence that qualifies a model for a
-    registry task. The example is the record format of the Phase-2 recommender, whose suite must report the
+    registry task. The example is the committed record of the recommender's default entry, whose suite reports the
     deterministic faithfulness check."""
-    example = EvalRecord.model_validate(
-        {
-            "task": "recommender",
-            "key": "haiku-5-5-adaptive-8k",
-            "model": "us.anthropic.claude-haiku-5-5",
-            "effort": "low",
-            "thinking": "adaptive",
-            "max_tokens": 8000,
-            "suite": "recommender conformance v1: 300 synthetic viewers, 8 personas",
-            "runs": 1,
-            "passed": True,
-            "checks": [
-                {"name": "schema_valid", "passed": True, "value": 1.0, "threshold": ">= 0.99"},
-                {"name": "faithfulness", "passed": True, "value": 0.933, "threshold": ">= 0.90"},
-                {"name": "policy_violations", "passed": True, "value": 0, "threshold": "== 0"},
-                {"name": "cost_per_rail", "passed": True, "value": 0.0024, "threshold": "<= 0.01"},
-            ],
-            "cost_usd": "0.49",
-            "recorded_at": "2026-10-27T22:00:00Z",
-        }
-    )
+    example = EvalRecord.model_validate_json(RECOMMENDER_RECORD.read_text())
     required = "; ".join(f"{task}: {', '.join(checks)}" for task, checks in REQUIRED_CHECKS.items())
     return {
         "$schema": JSON_SCHEMA,
@@ -375,6 +364,7 @@ def render() -> dict[str, str]:
         "model-registry.schema.json": as_json(model_registry_schema()),
         "eval-record.schema.json": as_json(eval_record_schema()),
         "catalog-context.schema.json": as_json(catalog_context_schema()),
+        "content-understanding.schema.json": as_json(content_understanding_schema()),
         "monetization-bundle.schema.json": as_json(monetization_bundle_schema()),
         "catalog.openapi.yaml": header + "\n".join(_yaml(catalog_openapi())) + "\n",
         "catalog.gateway.openapi.json": as_json(catalog_gateway_openapi()),

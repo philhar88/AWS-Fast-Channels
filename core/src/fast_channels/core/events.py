@@ -109,6 +109,16 @@ class DesiredStateRendered(BaseModel):
     correlation_id: str = Field(description="The CloudFormation request that rendered it.")
 
 
+class ContentUnderstood(BaseModel):
+    """A title was analysed (understanding module): its ``UNDERSTANDING`` item in the catalog table is new or
+    changed. The module also puts ``Catalog Item Changed`` for the title, so the crawl module republishes it."""
+
+    content_id: str = Field(pattern=CONTENT_ID_PATTERN, max_length=64, description="The title's catalog id.")
+    asset_id: str = Field(description="The encode that was analysed.")
+    status: Literal["complete", "partial"] = Field(description="partial: an analysis or the model step failed.")
+    correlation_id: str = Field(description="The analysis's workflow execution.")
+
+
 DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     IngestRequest: "Ingest Requested",
     AssetReady: "Asset Ready",
@@ -121,6 +131,7 @@ DETAIL_TYPES: Final[dict[type[BaseModel], str]] = {
     CensusChanged: "Census Changed",
     ChannelAlert: "Channel Alert",
     DesiredStateRendered: "Desired State Rendered",
+    ContentUnderstood: "Content Understood",
 }
 
 

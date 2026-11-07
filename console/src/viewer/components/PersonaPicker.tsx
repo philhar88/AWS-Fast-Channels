@@ -14,6 +14,7 @@ import { errorMessage } from "../../lib/errors";
 import { useViewerBackend } from "../backend";
 import type { Persona } from "../config";
 import { viewerHref } from "../router";
+import { signInEmail } from "../profiles";
 import { useViewer } from "../viewer";
 
 const KIND: Record<Persona["signIn"], string> = {
@@ -73,8 +74,8 @@ export function PersonaPicker() {
             {
               id: "action",
               content: (persona) =>
-                persona.signIn === "kids_profile" ? (
-                  <Box color="text-status-inactive">Kids profiles need a child-directed channel, which this demo does not have.</Box>
+                persona.signIn === "kids_profile" && !signInEmail(persona, config.personas) ? (
+                  <Box color="text-status-inactive">This kids profile names no account to sign in with.</Box>
                 ) : (
                   <Button
                     variant={viewer.persona?.id === persona.id ? "normal" : "primary"}
@@ -104,6 +105,9 @@ export function PersonaPicker() {
 
 function SignInModal({ persona, onClose }: { persona: Persona; onClose: () => void }) {
   const viewer = useViewer();
+  const { config } = useViewerBackend();
+  const email = signInEmail(persona, config.personas);
+  const account = config.personas.find((p) => p.id === persona.account);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -124,7 +128,7 @@ function SignInModal({ persona, onClose }: { persona: Persona; onClose: () => vo
   };
 
   return (
-    <Modal visible header={`Sign in as ${persona.name}`} onDismiss={onClose}>
+    <Modal visible header={account ? `Sign in to ${account.name}'s account for ${persona.name}` : `Sign in as ${persona.name}`} onDismiss={onClose}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -145,7 +149,7 @@ function SignInModal({ persona, onClose }: { persona: Persona; onClose: () => vo
         >
           <SpaceBetween size="m">
             <FormField label="Email">
-              <Input value={persona.email ?? ""} readOnly ariaLabel="Email" onChange={() => undefined} />
+              <Input value={email ?? ""} readOnly ariaLabel="Email" onChange={() => undefined} />
             </FormField>
             <FormField label="Password" description="From the demo users' secret (docs/viewer.md)">
               <Input

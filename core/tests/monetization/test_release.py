@@ -24,6 +24,8 @@ from fast_channels.core.monetization.release import (
     promoted,
     rolled_back,
     targets,
+    twin,
+    with_twins,
 )
 
 AT = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
@@ -230,3 +232,43 @@ def test_the_probe_follows_the_stable_release_and_keeps_no_history() -> None:
         state.idle,
         state.siblings["fastm-demo-p-a"],
     )
+
+
+def test_the_kids_twins_follow_the_general_pair(kit: SimpleNamespace) -> None:
+    bundle = kit.make_bundle(kids_pairs=True)
+    every = [s.name for s in targets(bundle, {})]
+    assert every == ["fastm-demo-p-a", "fastm-demo-p-b", "fastm-demo-p-k", "fastm-demo-p-l", "fastm-demo-p-z"]
+    state = applied(None, channel="fastm-demo", siblings=every, release=1, digest=DIGEST, change_id="c1", at=AT)
+    assert [s.name for s in targets(bundle, {"fastm-demo": state})] == ["fastm-demo-p-b", "fastm-demo-p-l"]
+    state = applied(
+        state,
+        channel="fastm-demo",
+        siblings=["fastm-demo-p-b", "fastm-demo-p-l"],
+        release=2,
+        digest=DIGEST,
+        change_id="c2",
+        at=AT,
+    )
+    state = promoted(state)
+    assert (state.stable, twin(state.stable)) == ("fastm-demo-p-b", "fastm-demo-p-l")
+    assert [s.name for s in targets(bundle, {"fastm-demo": state})] == ["fastm-demo-p-a", "fastm-demo-p-k"]
+    assert last_good(state, "fastm-demo-p-l") == 1, "the twin rolls back with its sibling"
+    assert with_twins(["fastm-demo-p-b"], state.siblings) == ["fastm-demo-p-b", "fastm-demo-p-l"]
+    assert with_twins(["fastm-demo-p-b", "fastm-demo-p-z"], {}) == ["fastm-demo-p-b", "fastm-demo-p-z"]
+    with pytest.raises(ValueError, match="not a general sibling"):
+        twin("fastm-demo-p-z")
+
+
+def test_the_plan_names_the_kids_twin_only_when_there_is_one() -> None:
+    plain = playback_plan(channel="fastm-demo", configuration="fastm-demo-p-a", release=3, playback={"hls": "u"}, at=AT)
+    assert "kids" not in plain.model_dump(exclude_none=True)
+    kids = playback_plan(
+        channel="fastm-demo",
+        configuration="fastm-demo-p-a",
+        release=3,
+        playback={"hls": "u"},
+        at=AT,
+        kids=("fastm-demo-p-k", 3, {"hls": "k"}),
+    )
+    assert kids.kids is not None and (kids.kids.configuration, kids.kids.release) == ("fastm-demo-p-k", "r0003")
+    assert PlaybackPlan.model_validate_json(kids.model_dump_json()) == kids

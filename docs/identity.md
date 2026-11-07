@@ -1,8 +1,9 @@
 # Viewer identity (`modules.identity`)
 
-The identity module lets a signed-in viewer's play carry who they are to the ad decision, while nothing the viewer
-can change reaches MediaTailor. The player asks for a single-use **playback ticket**, and the ticket is the only
-viewer value in the playback URL. No token, viewer id, tier or consent value ever travels in a URL. The design is
+The identity module lets a signed-in viewer's play carry who they are, and what they consented to, to the ad
+decision, while nothing the viewer can change reaches MediaTailor. The player asks for a single-use **playback
+ticket**, and the ticket is the only viewer value in the playback URL. No token, viewer id, tier or consent value ever
+travels in a URL. A guest gets a ticket too, which carries their consent platform's GPP string. The design is
 [ADR-0018](adr/0018-opaque-playback-ticket.md).
 
 The module is off by default. It needs `modules.release`, because a ticket is minted for a monetized channel's stable
@@ -18,16 +19,19 @@ Pod Decision Service's sidecar the ticket lookup.
 
 A play goes like this:
 
-1. **Mint.** The viewer app sends the viewer's access token to `POST /playback` and gets the stable sibling's
-   playback URL with a 22-character ticket, `?ads.t=<t>` ([below](#post-playback)).
+1. **Mint.** The viewer app sends the viewer's access token to `POST /playback`, or a guest's request to
+   `POST /playback/guest`, and gets the stable sibling's playback URL with a 22-character ticket, `?ads.t=<t>`
+   ([below](#post-playback)).
 2. **Edge rebuild.** The CDN's viewer-request function empties the init request's query and puts back only that
    ticket ([below](#the-edge-rebuild)).
 3. **Bind at init.** The sibling's PRE_SESSION Function redeems the ticket for its session
    ([below](#the-pre_session-redeem)).
 4. **Decide per break.** The Pod Decision Service reads the ticket's row on every break and treats the session as the
-   viewer's only if the row is bound to that session and configuration ([below](#the-pod-decision-service)).
+   viewer's only if the row is bound to that session and configuration ([below](#the-pod-decision-service)). A
+   signed-in viewer's mode then follows their consent ([below](#consent)), read on every break too.
 
-A guest, a viewer whose mint failed, a replayed or late ticket all play the same channel with contextual ads.
+A guest, a viewer whose mint failed, a replayed or late ticket all play the same channel with contextual ads. **A
+signed-in viewer who has not recorded their consent plays SAFE:** own-book and house ads only, no third-party bidder.
 
 ## What it deploys
 
@@ -37,14 +41,15 @@ A guest, a viewer whose mint failed, a replayed or late ticket all play the same
 | Resource server and scope | `fast`, `fast/playback` | The scope `POST /playback` requires |
 | App client | `UserPoolClientId` output | Public, no secret, SRP and password sign-in. It may read `custom:persona` |
 | Pre-token-generation trigger (v2) | | Adds `fast/playback` and the claim `fast:persona` to every access token |
-| DynamoDB table | `<prefix>-identity` | One row `T#<t>` per ticket, deleted by TTL a day after the longest binding |
+| DynamoDB table | `<prefix>-identity` | One row `T#<t>` per ticket, deleted by TTL a day after the longest binding; one row `C#<vid>` per viewer who recorded their consent, kept until they change it |
 | KMS HMAC key | `alias/<prefix>-identity-vid` | The viewer id `vid` |
-| REST API, stage `v1` | `<prefix>-identity` | `POST /playback` (the mint) and `POST /redeem` (the binding) |
+| REST API, stage `v1` | `<prefix>-identity` | `POST /playback` and `POST /playback/guest` (the mints), `GET` and `PUT /consent`, and `POST /redeem` (the binding) |
+| AWS WAF web ACL (regional) | `<prefix>-identity` | On the API's stage: one rate-based rule that blocks an address minting more than `modules.identity.guest_rate_limit` guest tickets in 5 minutes. It keeps no sampled requests |
 | SSM parameters | `/<prefix>/identity/<name>` | `user-pool-id`, `client-id`, `e2e-client-id`, `issuer`, `vid-key`, `table`, `playback-url`, `redeem-url` |
 | CloudFront Function (Media stack) | `<prefix>-identity-edge` | The edge rebuild on the `/v1/*` behaviour, which then allows GET, HEAD and OPTIONS only |
 | Alarm (Media stack, or Edge outside us-east-1) | `<prefix>-identity-edge-errors` | Any `FunctionExecutionErrors` of the edge rebuild |
 | Release bundle | `<p>_<sibling>_ps_redeem` | The pair siblings' PRE_SESSION redeem, and their `X-Fast-T` header |
-| Sidecar grants | | `GetItem` and `UpdateItem` on the `T#` items of `<prefix>-identity`, through the DynamoDB gateway endpoint |
+| Sidecar grants | | `GetItem` and `UpdateItem` on the `T#` items of `<prefix>-identity`, and `GetItem` on its `C#` items, through the DynamoDB gateway endpoint |
 
 ## Signing in
 
@@ -93,23 +98,98 @@ Content-Type: application/json
 CORS allows any origin, with the headers `Authorization` and `Content-Type`. It is a bearer-token API without cookies.
 The gateway's own 4xx and 5xx answers carry the CORS header too.
 
-On any error, and for a guest, the player plays the anonymous URL of the plan (`playback.hls`), whose sessions are
-CONTEXTUAL.
+On any error, the player plays the anonymous URL of the plan (`playback.hls`), whose sessions are CONTEXTUAL.
+
+## `POST /playback/guest`
+
+```http
+POST {PlaybackApiUrl}playback/guest
+Content-Type: application/json
+Sec-GPC: 1
+
+{"channel": "<monetized channel name>", "gpp": "<GPP string>", "gpp_sid": [7], "gpc": false}
+```
+
+A guest's ticket, with no token. `gpp` and `gpp_sid` are the consent platform's GPP string and applicable sections
+(`__gpp('ping')`), both optional. `gpc` or the browser's `Sec-GPC: 1` header means the guest opted out with Global
+Privacy Control. The answer, the errors (but 401 and 403) and the single use are `POST /playback`'s.
+
+The row has no `vid` and no persona. Its mode `pm` is `CONTEXTUAL`, or `OPTED_OUT` with Global Privacy Control
+(`fast_channels.core.identity.consent.guest_mode`), and it carries the GPP string. A guest's breaks are CONTEXTUAL
+either way: no identifier or user data reaches a bidder, and the GPP string travels in `regs.gpp` for Prebid Server's
+own privacy enforcement. Only the reason differs: `bound`, or `opted_out`.
+
+The route has no authorizer. The web ACL blocks an address that mints more than `modules.identity.guest_rate_limit`
+(default 100) guest tickets in 5 minutes; a household or an office shares an address, and every play mints one. The
+stage's throttling caps the whole API besides.
+
+## Consent
+
+A signed-in viewer's consent is one row `C#<vid>` of `<prefix>-identity`, which they write and read with their access
+token:
+
+```http
+PUT {PlaybackApiUrl}consent
+Authorization: Bearer <access token>
+Content-Type: application/json
+
+{"opt_out": false, "vppa": true, "gpp": "<GPP string>", "gpp_sid": [7]}
+```
+
+**200** answers the record as stored, with `updated_at` (epoch milliseconds). `GET {PlaybackApiUrl}consent` answers the
+same, or **404** `no_consent` when the viewer has none. A body of other fields or shapes is a 400; the token rules are
+`POST /playback`'s.
+
+| The record | The viewer's breaks |
+|---|---|
+| `opt_out: true` (opted out of sale and sharing) | CONTEXTUAL, `opted_out`: no identifier or user data; the GPP string passed |
+| `vppa: true` (the separate video-privacy consent) | FULL |
+| Neither | PSEUDONYMOUS |
+| No record, or one older than 395 days (the TCF asks again after 13 months) | SAFE, `consent_unavailable`: own-book and house ads only |
+
+The GPP and TCF strings are stored as given, and Prebid Server's Activity Controls interpret them
+(`fast_channels.core.identity.consent`); nothing decodes them here.
+
+The Pod Decision Service reads the record on every break of the viewer's bound session and keeps it 5 seconds, so a
+change reaches the next break within that. If the read fails, an answer read under a minute ago still counts; after
+that the break is SAFE.
+
+## Kids
+
+A kids profile has no sign-in or viewer id of its own. The viewer app signs in on the profile's account and asks for
+the profile on every play:
+
+```json
+{"channel": "<monetized channel name>", "profile": "kids"}
+```
+
+The answer is the playback plan's kids twin (`<channel>-p-k` or `-p-l`, `modules.release.kids_pairs`), **with no
+ticket**: the URL is the plan's, `cid` is the request's correlation id, and `expires_in` is `null`. A channel without
+kids twins answers 409 `no_kids_configuration`. A **child-directed channel** (`modules.release.child_directed`)
+answers its plan's URL with no ticket to everyone, from `POST /playback` and `POST /playback/guest` alike.
+
+Nothing about the viewer travels: the mint computes no `vid` and writes no row. The configuration makes the session
+KIDS, never a client flag: the Pod Decision Service treats every break on a kids twin or on any sibling of a
+child-directed channel as KIDS, without a ticket lookup (`CHILD_DIRECTED_CHANNELS` in the sidecar's environment).
+KIDS sets `regs.coppa`, adds no bidder, and the pod holds house ads and creatives approved for children only.
 
 ## What the mint computes
 
-Everything is computed server-side; the request body names only the channel.
+Everything is computed server-side; the request body names only the channel (and a guest's privacy signals).
 
 - **`vid`**: `HMAC-SHA256(k, iss | sub)` with the KMS HMAC key, truncated to 128 bits and written as 32 hex characters
   (`fast_channels.core.identity.vid.viewer_id`). The key never leaves KMS. The raw `sub` is not written to the row, a
   log or the lake.
-- **Privacy mode** `pm`: `PSEUDONYMOUS` for every signed-in viewer (no consent store yet).
+- **Privacy mode** `pm`: a guest's only ([above](#post-playbackguest)). A signed-in viewer's mode is their consent,
+  which the Pod Decision Service reads on every break; tickets minted before the consent store carry a `pm` that it
+  no longer reads.
 - **Persona**: the access token's `fast:persona` claim, the viewer's `custom:persona`, a demo persona id.
 - **Configuration** `pc`: the channel's stable sibling.
 - **Ticket** `t`: `secrets.token_urlsafe(16)`, 22 URL-safe characters, redrawn while it contains `--` or `__`.
 
-The row `T#<t>` is `{pc, pm, cid, iat, redeem_by, ttl, vid, persona}`. Times are epoch milliseconds, except `ttl`
-(epoch seconds, for DynamoDB). Tiers are not on the row: the Pod Decision Service reads them from its own store.
+The row `T#<t>` is `{pc, cid, iat, redeem_by, ttl, vid, persona}` for a signed-in viewer and
+`{pc, pm, cid, iat, redeem_by, ttl, gpp?, gpp_sid?}` for a guest. Times are epoch milliseconds, except `ttl` (epoch
+seconds, for DynamoDB). Tiers are not on the row: the Pod Decision Service reads them from its own store.
 
 ## `POST /redeem`
 
@@ -177,7 +257,7 @@ On every break the fast-ctv module sends the ticket to `/policy` as `t`. With th
 
 | The row | The break |
 |---|---|
-| Bound to this session (`redeemedBy`) and this configuration (`pc`), last seen under 2 hours ago, bound under 24 hours ago | The viewer's: the mode follows the row's privacy mode (`PSEUDONYMOUS` today), reason `bound` |
+| Bound to this session (`redeemedBy`) and this configuration (`pc`), last seen under 2 hours ago, bound under 24 hours ago | The viewer's: a signed-in viewer's mode follows their [consent](#consent), a guest's is CONTEXTUAL; reason `bound` (or `opted_out`, `consent_unavailable`) |
 | Not redeemed, inside its redeem window | Bound to this session by the sidecar itself (the same conditional update as `POST /redeem`), then the viewer's |
 | Bound to another session | CONTEXTUAL, `replay` |
 | For another configuration | CONTEXTUAL, `pc_mismatch` |
@@ -187,11 +267,13 @@ On every break the fast-ctv module sends the ticket to `/policy` as `t`. With th
 | The read failed (timeout, throttle) | SAFE, `consent_unavailable`: own book and house ads only, because it may be a signed-in viewer |
 
 A bound row's `last_seen` is renewed at most every 10 minutes. The sidecar counts `BindingLookups` (by reason),
-`BindingReplays`, `BindingSelfRedeems` and `BindingErrors` in its metrics.
+`BindingReplays`, `BindingSelfRedeems`, `BindingErrors`, `ConsentLookups` (by consent) and `ConsentErrors` in its
+metrics.
 
-Each `pds.policy` decision record of a bound viewer's break carries `vid` and the ticket's `cid`; every other record
-has them `null` (in the sidecar's log the keys are left out, as Powertools leaves out empty values). The `vid` never reaches Prebid Server or a bidder: the `/policy` answer has no viewer id. The lake
-keeps the records for its retention.
+Each `pds.policy` decision record of a bound viewer's FULL or PSEUDONYMOUS break carries `vid` and the ticket's
+`cid`; a bound guest's or an opted-out viewer's carries the `cid` only, and every other record has them `null` (in the
+sidecar's log the keys are left out, as Powertools leaves out empty values). The `vid` never reaches Prebid Server or
+a bidder: the `/policy` answer has no viewer id. The lake keeps the records for its retention.
 
 ## Residual risk
 
@@ -209,8 +291,9 @@ uv run python scripts/seed_personas.py --prefix <prefix> --persona dana     # or
 uv run python scripts/seed_personas.py --prefix <prefix> --delete
 ```
 
-Each persona becomes the user `<id>@personas.example.com` with `custom:persona=<id>` and a generated password. The
-guest and kids profiles get no user. The passwords are in the Secrets Manager secret `<prefix>/identity/demo-users`,
+Each persona becomes the user `<id>@personas.example.com` with `custom:persona=<id>` and a generated password, and
+records the consent its mode stands for: FULL the video-privacy consent, PSEUDONYMOUS neither. The guest and kids
+profiles get no user. A `--persona` outside the contract gets no consent, so it plays SAFE until it records one. The passwords are in the Secrets Manager secret `<prefix>/identity/demo-users`,
 as `{"<persona>": {"email": ..., "password": ...}}`; a re-run keeps them. The script prints each persona's `vid`.
 
 No stack owns the secret: run `--delete` before `make destroy`, or the secret outlives the stage. `make destroy`
@@ -222,7 +305,8 @@ To sign a persona in from a script or a test, read the secret, take the client i
 
 ## Logs
 
-- The mint logs the correlation id, the channel and the configuration. It never logs the ticket, the `vid` or a claim.
+- The mint logs the correlation id, the channel, the configuration and whether the ticket is a guest's. It never
+  logs the ticket, the `vid`, a GPP string or a claim. A consent change logs its two choices only.
 - The API's access log holds the request id, time, method, path, status and latencies. It holds no address, header,
   body or claim.
 - **The access log needs the account's API Gateway CloudWatch role.** A REST API writes its logs through one role
@@ -254,4 +338,6 @@ To sign a persona in from a script or a test, read the secret, take the client i
 - The edge rebuild: CloudFront Functions bill $0.10 per million invocations, on every `/v1/*` request (playlists and
   ad segment redirects, a few per segment duration per session).
 - The ticket lookup: one consistent DynamoDB read per break of a ticketed session, and a write every 10 minutes.
+- The web ACL: $5 a month, $1 for its rule, and $0.60 per million requests to the API.
+- The consent read: one consistent DynamoDB read per bound signed-in viewer every 5 seconds at most, during breaks.
 - One alarm ($0.10 a month).

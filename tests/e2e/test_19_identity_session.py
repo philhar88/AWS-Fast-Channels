@@ -24,27 +24,32 @@ from typing import Any, Final
 
 import pytest
 from _stack import Module, Stage
-from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
+from harness import BREAK_POLICY, LEAD, Channel, Player, Tools
 from harness_demand import DemandEdge
-from harness_identity import SignedIn, join, mint, parameter, ticket_of, viewer, wait_until_serving
-from harness_pods import Logs, Viewer, ipv4_client, json_object, prebid_tasks, record_pattern, warmups, watch
+from harness_identity import (
+    SignedIn,
+    decision_records,
+    join,
+    mint,
+    parameter,
+    playback_plan,
+    record_consent,
+    ticket_of,
+    viewer,
+    wait_until_ready,
+    wait_until_serving,
+)
+from harness_pods import Viewer, ipv4_client, start_settled, watch
 from playback import Window, break_windows
 
-from fast_channels.core.demand import warmup_project
 from fast_channels.core.identity.names import Parameter
 from fast_channels.core.identity.ticket import key
 from fast_channels.core.identity.vid import viewer_id
-from fast_channels.core.monetization import names
-from fast_channels.core.monetization.release import PlaybackPlan
-from fast_channels.core.pds.names import sidecar_log_group
 from fast_channels.core.pds.records import POLICY_RECORD, SELECT_RECORD
 
 pytestmark = pytest.mark.e2e
 
 PERSONA: Final = "e2e-session"
-READY_TIMEOUT_S: Final = 1500
-"""Census lag, Prebid Server's scale-out and warm-up, with room (as ``test_14``)."""
-RECORDS_TIMEOUT_S: Final = 300
 TAIL: Final = timedelta(seconds=60)
 """How long the sessions keep playing after the break's scheduled end: the live playlist lags the wall clock."""
 REPLAY_AFTER: Final = timedelta(seconds=10)
@@ -88,28 +93,6 @@ def stage_with_identity(stage: Stage) -> Stage:
     return stage
 
 
-def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
-    """The channel's playback plan, read through the CDN as a player reads it."""
-    ssm = stage.session.client("ssm", region_name=stage.region)
-    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
-    with ipv4_client(timeout=10.0) as http:
-        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
-    response.raise_for_status()
-    return PlaybackPlan.model_validate_json(response.text)
-
-
-def wait_until_ready(stage: Stage, edge: DemandEdge) -> None:
-    """Until Prebid Server runs and every running task's warm-up succeeded (the PDS is its sidecar)."""
-    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
-
-    def ready() -> bool | None:
-        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
-        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
-        return (bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}) or None
-
-    wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server")
-
-
 def expire(stage: Stage, ticket: str) -> None:
     """Put ``ticket`` past its redeem window, as if its player opened it too late."""
     table = stage.session.resource("dynamodb", region_name=stage.region).Table(parameter(stage, Parameter.TABLE))
@@ -118,27 +101,6 @@ def expire(stage: Stage, ticket: str) -> None:
         UpdateExpression="SET redeem_by = :past",
         ExpressionAttributeValues={":past": int(time.time() * 1000) - 1_000},
     )
-
-
-def decision_records(
-    stage: Stage, sessions: dict[str, Viewer], since: datetime, record: str
-) -> dict[str, list[dict[str, Any]]]:
-    """Every role's ``record`` lines (``pds.policy``, ``pds.select``), read again until each session has one or the
-    timeout passed."""
-    logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms=int(since.timestamp() * 1000))
-    roles = {session.sid: role for role, session in sessions.items()}
-    found: dict[str, list[dict[str, Any]]] = {}
-
-    def complete() -> bool | None:
-        events = logs.events(sidecar_log_group(stage.prefix), record_pattern(record, roles))
-        found.clear()
-        for event in events:
-            if (line := json_object(event["message"])) is not None:
-                found.setdefault(roles[line["sid"]], []).append(line)
-        return set(found) == set(sessions) or None
-
-    wait_for(complete, timeout=RECORDS_TIMEOUT_S, interval=15, what=f"every session's {record} records")
-    return found
 
 
 @pytest.fixture(scope="module")
@@ -150,6 +112,7 @@ def played(
         pytest.skip(f"stage {stage.prefix} has no demand module deployed (make deploy-demand)")
     kms = stage.session.client("kms")
     with viewer(stage, f"e2e-session-{run_id.lower()}@personas.example.com", persona=PERSONA) as signed_in:
+        record_consent(stage, signed_in.access_token, opt_out=False)  # PSEUDONYMOUS: no consent is SAFE
         vid = viewer_id(
             kms,
             key_id=parameter(stage, Parameter.VID_KEY),
@@ -160,7 +123,7 @@ def played(
         try:
             with ipv4_client(follow_redirects=True, timeout=20.0) as http:
                 try:
-                    tools("channels___start_channel", channel=channel.name)
+                    start_settled(stage, tools, channel.name)
                     asset = request.getfixturevalue("ingested")  # while Prebid Server scales out
                     wait_until_ready(stage, edge)
                     start = (datetime.now(UTC) + LEAD).replace(microsecond=0)

@@ -103,6 +103,7 @@ from fast_channels.core.monetization.playback import (
     POD_SECONDS_FIELD,
     ROLE_LETTERS,
     SEQUENCING,
+    STORED_REQUEST,
     TICKET_LOG_EVENTS,
     TICKET_TEMPLATE,
     AdsRoute,
@@ -838,6 +839,23 @@ def check_headers(sibling: Sibling) -> list[Violation]:
 _POD_SECONDS_TEMPLATE: Final = re.compile(r"\{\{\s*session\.avail_duration_secs\s*\}\}")
 
 
+def _ext(body: str | None) -> dict[str, Any]:
+    """The ``ext`` object of an ADS body, or ``{}``."""
+    try:
+        data = json.loads(body or "")
+    except ValueError:
+        data = None
+    ext = data.get("ext") if isinstance(data, dict) else None
+    return ext if isinstance(ext, dict) else {}
+
+
+def _named_stored_request(body: str | None) -> Any:
+    """``ext.prebid.storedrequest.id`` of an ADS body, or None."""
+    prebid = _ext(body).get("prebid")
+    stored = prebid.get("storedrequest") if isinstance(prebid, dict) else None
+    return stored.get("id") if isinstance(stored, dict) else None
+
+
 def check_stored_requests(
     body: str | None, *, stored_requests: Collection[str], grid_seconds: Collection[int], where: str = "body"
 ) -> list[Violation]:
@@ -845,15 +863,9 @@ def check_stored_requests(
     break's whole seconds as ``ext.fast.pod_s`` = ``{{session.avail_duration_secs}}``, from which the fast-ctv module
     shapes the pod. A zero or missing (300 s) duration is outside the module's range: it answers an empty pod, and
     the slate plays."""
-    try:
-        data = json.loads(body or "")
-    except ValueError:
-        data = None
-    ext = data.get("ext") if isinstance(data, dict) else None
-    ext = ext if isinstance(ext, dict) else {}
-    prebid, fast = ext.get("prebid"), ext.get("fast")
-    stored = prebid.get("storedrequest") if isinstance(prebid, dict) else None
-    named = stored.get("id") if isinstance(stored, dict) else None
+    ext = _ext(body)
+    fast = ext.get("fast")
+    named = _named_stored_request(body)
     found = []
     if named not in stored_requests:
         found.append(
@@ -1084,9 +1096,27 @@ def _check_channel(channel: MonetizedChannel, siblings: Iterable[Sibling]) -> It
     where = f"channel {channel.name}"
     if channel.policy_source_arns != (channel.name, f"{channel.name}{SIBLING_PATTERN}"):
         yield _violation(Rule.C1, where, "the policy admits the channel and <channel>-p-? only")
-    general = sorted(s.letter for s in siblings if s.channel == channel.name and s.role is SiblingRole.GENERAL)
+    own = [s for s in siblings if s.channel == channel.name]
+    general = sorted(s.letter for s in own if s.role is SiblingRole.GENERAL)
     if general != sorted(ROLE_LETTERS[SiblingRole.GENERAL]):
         yield _violation(Rule.P6, where, f"has the sibling pair a/b, which swap stable and idle; found {general}")
+    kids = sorted(s.letter for s in own if s.role is SiblingRole.KIDS)
+    if kids and (kids != sorted(ROLE_LETTERS[SiblingRole.KIDS]) or channel.child_directed or channel.lab):
+        yield _violation(
+            Rule.P6,
+            where,
+            f"kids twins are k and l together, on a general channel only (not lab or kids); found {kids}",
+        )
+    for sibling in own:
+        named = _named_stored_request(sibling.playback.body)
+        wanted = STORED_REQUEST[channel.child_directed or sibling.role is SiblingRole.KIDS]
+        if sibling.route is AdsRoute.PBS and named is not None and named != wanted:
+            yield _violation(
+                Rule.P5,
+                f"sibling {sibling.name}",
+                f"names stored request {named!r}; a {sibling.role} sibling of "
+                f"{'a child-directed' if channel.child_directed else 'this'} channel names {wanted!r} (COPPA)",
+            )
 
 
 def check_prefetch_schedule(request: Mapping[str, Any]) -> list[Violation]:

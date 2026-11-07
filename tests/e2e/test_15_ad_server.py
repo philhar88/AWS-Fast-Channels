@@ -44,6 +44,7 @@ from harness_ad_server import (
     warmups,
     watch,
 )
+from harness_pods import start_settled
 from playback import break_windows
 
 from fast_channels.core.demand import Parameter, origin_secret, parameter_path, warmup_project
@@ -136,7 +137,7 @@ def run(ad_server: AdServerStage, tv: Player, channel: Channel, tools: Tools, re
     pattern three times with a break each, and play viewers on the stable sibling through the breaks."""
     stage = ad_server.stage
     try:
-        tools("channels___start_channel", channel=channel.name)
+        start_settled(stage, tools, channel.name)
         asset = request.getfixturevalue("ingested")  # while the census gate scales Prebid Server out
         wait_until_warm(ad_server)
         start = (datetime.now(UTC) + LEAD).replace(microsecond=0)

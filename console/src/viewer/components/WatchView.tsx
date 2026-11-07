@@ -60,8 +60,8 @@ function Watching({
     if (!channel) {
       return Promise.reject(new Error(`no channel ${channelName}`));
     }
-    return backend.open(channel, accessToken, signal);
-  }, [accessToken, backend, channel, channelName]);
+    return backend.open(channel, accessToken, signal, persona.signIn === "kids_profile" ? "kids" : undefined);
+  }, [accessToken, backend, channel, channelName, persona.signIn]);
   const onSource = useCallback((value: Source) => {
     setSource(value);
     setSid(value.sid);
@@ -97,11 +97,24 @@ function Watching({
           <Container header={<Header variant="h2">This session</Header>}>
             <KeyValuePairs
               items={[
-                { label: "Watching as", value: `${persona.name}${accessToken ? "" : " (guest)"}` },
+                {
+                  label: "Watching as",
+                  value: `${persona.name}${persona.signIn === "kids_profile" ? " (kids profile)" : accessToken ? "" : " (guest)"}`,
+                },
                 {
                   label: "Playback",
-                  value: source ? (source.cid ? `Ticket ${source.cid}` : `Anonymous: ${source.anonymous ?? "no ticket"}`) : "Opening…",
-                  info: source && !source.cid ? <Box variant="small">Contextual ads on the control plan</Box> : undefined,
+                  value: source
+                    ? source.kids
+                      ? "KIDS, no ticket"
+                      : source.cid
+                        ? `Ticket ${source.cid}`
+                        : `Anonymous: ${source.anonymous ?? "no ticket"}`
+                    : "Opening…",
+                  info: source?.kids ? (
+                    <Box variant="small">House ads only: COPPA set, no viewer id, no third-party bidder</Box>
+                  ) : source && !source.cid ? (
+                    <Box variant="small">Contextual ads on the control plan</Box>
+                  ) : undefined,
                 },
                 { label: "MediaTailor session", value: sid ?? "Not known yet" },
                 {
@@ -123,8 +136,13 @@ function Watching({
               ]}
             />
           </Container>
-          {backend.config.adPanelUrl !== null && accessToken && <AdPanel sid={sid} accessToken={accessToken} />}
-          {backend.config.adPanelUrl !== null && !accessToken && (
+          {backend.config.adPanelUrl !== null && accessToken && !source?.kids && <AdPanel sid={sid} accessToken={accessToken} />}
+          {backend.config.adPanelUrl !== null && source?.kids && (
+            <Container header={<Header variant="h2">Why these ads</Header>}>
+              <Box>A KIDS session has no viewer id, so there are no decisions of a viewer to show: every break is house ads.</Box>
+            </Container>
+          )}
+          {backend.config.adPanelUrl !== null && !accessToken && !source?.kids && (
             <Container header={<Header variant="h2">Why these ads</Header>}>
               <Box>A guest's session is CONTEXTUAL: contextual ads on the control plan, the same for every guest. Sign in to see a viewer's decisions.</Box>
             </Container>

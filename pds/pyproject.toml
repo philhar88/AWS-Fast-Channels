@@ -1,6 +1,6 @@
 [project]
 name = "fast-channels-pds"
-version = "4.1.1"
+version = "4.2.0"
 description = "The Pod Decision Service: /policy, /select and the own book, a sidecar in each Prebid Server task."
 requires-python = ">=3.14"
 dependencies = [
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.13.6,<0.14"]
+requires = ["uv_build>=0.13.7,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]

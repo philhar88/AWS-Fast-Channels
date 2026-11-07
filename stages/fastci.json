@@ -5,13 +5,38 @@
     "log_retention_days": 7,
     "as_run": "shared"
   },
+  "channels": {
+    "iac": [
+      {"name": "{prefix}-demo", "ladder": "standard", "outputs": ["hls"], "tier": "BASIC", "autopilot_cron": null, "brief": null},
+      {"name": "{prefix}-kids", "ladder": "standard", "outputs": ["hls"], "tier": "BASIC", "autopilot_cron": null, "brief": null}
+    ]
+  },
+  "agent": {
+    "allowed_models": [
+      "{geo}.anthropic.claude-haiku-5-5",
+      "{geo}.anthropic.claude-sonnet-5-5",
+      "global.anthropic.claude-haiku-5-5",
+      "global.anthropic.claude-sonnet-5-5",
+      "{geo}.amazon.nova-2-lite-v1:0"
+    ]
+  },
   "modules": {
     "ops": {
       "enabled": true,
       "ledger_retention_days": 1
     },
     "models": {
-      "enabled": true
+      "enabled": true,
+      "tasks": {
+        "understanding.describe": {
+          "model": "{geo}.amazon.nova-2-lite-v1:0",
+          "effort": "low",
+          "thinking": "disabled",
+          "max_tokens": 4000,
+          "daily_cap_usd": 5,
+          "eval": "amazon.nova-2-lite-v1-0-disabled-4k"
+        }
+      }
     },
     "demand": {
       "enabled": true,
@@ -48,8 +73,13 @@
     "release": {
       "enabled": true,
       "channels": [
-        "{prefix}-demo"
+        "{prefix}-demo",
+        "{prefix}-kids"
       ],
+      "child_directed": [
+        "{prefix}-kids"
+      ],
+      "kids_pairs": true,
       "strategy": "demo"
     },
     "crawl": {
@@ -63,6 +93,21 @@
     "viewer": {
       "enabled": true,
       "ad_panel": true
+    },
+    "agents": {
+      "enabled": true,
+      "envelope": {
+        "always_on": []
+      }
+    },
+    "understanding": {
+      "enabled": true
+    },
+    "recs": {
+      "enabled": true
+    },
+    "creatives": {
+      "enabled": true
     }
   }
 }

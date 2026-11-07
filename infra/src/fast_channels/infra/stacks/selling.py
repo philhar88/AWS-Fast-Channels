@@ -14,6 +14,7 @@ from aws_cdk import aws_ecr as ecr
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.creatives import names as creatives_names
 from fast_channels.core.pds import names as pds_names
 from fast_channels.core.selling import names
 from fast_channels.core.selling.products import Terms
@@ -153,6 +154,7 @@ class SellingStack(Stack):
                 "PDS_BOOKED_LINES_KEY": names.BOOKED_LINES_KEY,
                 "PDS_TABLE": pds_names.table_name(prefix),
                 "PDS_PUBLISHER_FUNCTION": publisher,
+                **({"PDS_CREATIVES_KEY": creatives_names.READY_KEY} if config.modules.creatives.enabled else {}),
             },
             timeout=Duration.seconds(30),
             memory_size=256,
@@ -164,6 +166,8 @@ class SellingStack(Stack):
             ["s3:GetObject", "s3:PutObject"],
             [bucket.arn_for_objects(names.BOOKED_LINES_KEY)],
         )
+        if config.modules.creatives.enabled:  # the brands' READY creatives (the creatives module's)
+            sync.allow(["s3:GetObject"], [bucket.arn_for_objects(creatives_names.READY_KEY)])
         # A GetObject of a missing key is a 404 only with ListBucket: the first sync tells "none yet" from "denied".
         sync.allow(["s3:ListBucket"], [bucket.bucket_arn])
         sync.allow(["dynamodb:Scan"], [arn(self, "dynamodb", "table", context.catalog_table)])

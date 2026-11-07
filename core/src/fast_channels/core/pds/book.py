@@ -12,23 +12,27 @@ imp it bids every house ad, and every creative of each line with budget left, wh
   leaves it out of other channels' pods (``core.pds.selection``).
 
 Each ``adm`` is an inline VAST 4.2 ad of a creative preconditioned on the stage's default ladder (``ads/<ladder>/…`` on
-the CDN). It carries no impression, and the bid no ``burl``: Prebid Server sends bidders neither the session nor the
-break, so the own book cannot build our tracker. The fast-ctv module puts the tracker on every ad it renders, and that
-is what delivery counts. The reservation that ``/select`` makes enforces a line's budget; the own book only stops
-bidding a line once its budget is reserved.
+the CDN): a house ad or demo creative of the ladder's kit, or with the creatives module a READY creative of the
+registry (``Creative.registered``). It carries no impression, and the bid no ``burl``: Prebid Server sends bidders
+neither the session nor the break, so the own book cannot build our tracker. The fast-ctv module puts the tracker on
+every ad it renders, and that is what delivery counts. The reservation that ``/select`` makes enforces a line's
+budget; the own book only stops bidding a line once its budget is reserved.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Final, Self
+from typing import TYPE_CHECKING, Any, Final, Self
 from xml.etree import ElementTree as ET
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from fast_channels.core.demo_demand import DemoIndex, vast_ad
+from fast_channels.core.demo_demand import DemoIndex, InlineCreative, vast_ad
 from fast_channels.core.pds.models import NAME_PATTERN, OWN_BOOK, Money
 from fast_channels.core.timeline import whole_seconds
+
+if TYPE_CHECKING:
+    from fast_channels.core.creatives.registry import ReadyCreatives
 
 HOUSE_PRICE: Final = Decimal("0.01")
 """A house ad's bid: below any paid bid, so a filler never takes a slot that a sale could fill."""
@@ -64,6 +68,13 @@ class Creative(BaseModel):
     width: int = Field(default=1920, gt=0)
     height: int = Field(default=1080, gt=0)
     advertiser: str = Field(default="", max_length=100)
+    # Left out of the snapshot when unset, so a snapshot without registered creatives reads (and hashes) as before.
+    registered: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description="A creative of the registry (``core.creatives``), not the kit's: not yet WARM, so it is placed "
+        "only where a standalone backs its slot.",
+    )
 
     @property
     def seconds(self) -> int:
@@ -146,6 +157,12 @@ class Book(BaseModel):
     def tier0_deals(self) -> frozenset[str]:
         return frozenset(deal_id(line.id) for line in self.lines if line.tier0)
 
+    @property
+    def cold(self) -> frozenset[str]:
+        """The registered creatives, none of them WARM yet (``core.creatives.registry``): the pod rules place each
+        only where a standalone backs its slot."""
+        return frozenset(c.crid for c in self.creatives if c.registered)
+
     def line_of(self, crid: str) -> Line | None:
         """The line that serves ``crid``, if any."""
         return next((line for line in self.lines if crid in line.creatives), None)
@@ -188,14 +205,25 @@ def house_creatives(document: str) -> tuple[Creative, ...]:
     return tuple(seen.values())
 
 
-def book(lines: Sequence[Line], *, ladder_version: str, house: Sequence[Creative], index: DemoIndex | None) -> Book:
-    """The own book of ``lines`` on one ladder's kit: its house ads and its demo creatives (``index``; None when the
-    kit has none). A line creative that the kit did not encode is left out, and a line left with none bids nothing.
+def book(
+    lines: Sequence[Line],
+    *,
+    ladder_version: str,
+    house: Sequence[Creative],
+    index: DemoIndex | None,
+    registered: ReadyCreatives | None = None,
+) -> Book:
+    """The own book of ``lines`` on one ladder's kit: its house ads, its demo creatives (``index``; None when the
+    kit has none) and the registry's READY creatives on that ladder (``registered``; the creatives module's). A line
+    creative that neither holds is left out, and a line left with none bids nothing.
 
     Raises:
         pydantic.ValidationError: two lines serve one creative, or share an id.
     """
-    encoded = {c.crid: c for c in index.creatives} if index is not None else {}
+    encoded: dict[str, InlineCreative] = {c.crid: c for c in index.creatives} if index is not None else {}
+    ready = registered.creatives if registered is not None and registered.ladder_version == ladder_version else ()
+    own = frozenset(c.crid for c in ready)
+    encoded |= {c.crid: c for c in ready}
     creatives = tuple(
         Creative(
             crid=c.crid,
@@ -205,6 +233,7 @@ def book(lines: Sequence[Line], *, ladder_version: str, house: Sequence[Creative
             width=c.width,
             height=c.height,
             advertiser=line.advertiser,
+            registered=crid in own,
         )
         for line in lines
         for crid in line.creatives

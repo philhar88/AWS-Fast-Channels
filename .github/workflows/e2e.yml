@@ -75,9 +75,10 @@ jobs:
   # and identity, the Prebid Server guidance on its own bootstrap, the synthetic edge tests, the release, crawl and
   # identity modules' tests, then viewers on the channel's stable sibling through MediaTailor, Prebid Server and the
   # Pod Decision Service (test_14_demand_pods.py), two signed-in viewers of different ad-load tiers in the same breaks
-  # (test_18_ad_load.py), signed-in, replayed and guest sessions (test_19_identity_session.py), and the reference
-  # viewer's calls for two personas of different tiers (test_20_viewer.py); then everything destroyed and
-  # inventoried. Costs about US$3-5 per run.
+  # (test_18_ad_load.py), signed-in, replayed and guest sessions (test_19_identity_session.py), the reference
+  # viewer's calls for two personas of different tiers (test_20_viewer.py), and guests, consent and kids on the
+  # monetized and the child-directed channel (test_25_identity_kids.py); then everything destroyed and inventoried.
+  # Costs about US$4-6 per run.
   e2e-demand:
     if: inputs.leg == 'demand'
     runs-on: ubuntu-24.04-arm
@@ -116,7 +117,8 @@ jobs:
         run: >-
           uv run pytest tests/e2e/test_11_demand_edge.py tests/e2e/test_12_release.py tests/e2e/test_13_crawl.py
           tests/e2e/test_14_demand_pods.py tests/e2e/test_18_ad_load.py tests/e2e/test_17_identity.py
-          tests/e2e/test_19_identity_session.py tests/e2e/test_20_viewer.py -m e2e --prefix "$PREFIX" -v
+          tests/e2e/test_19_identity_session.py tests/e2e/test_20_viewer.py tests/e2e/test_25_identity_kids.py
+          -m e2e --prefix "$PREFIX" -v
       - name: Remove the demo personas
         if: always() && !inputs.keep
         run: uv run python scripts/seed_personas.py --prefix "$PREFIX" --delete

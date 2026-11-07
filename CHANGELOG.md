@@ -6,6 +6,219 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-07
+
+A feature release. It adds four optional modules: advertisers' own creatives (`creatives`), agents that operate a
+stage inside an autonomy envelope (`agents`), a model-ranked rail for each signed-in viewer (`recs`) and content
+understanding (`understanding`). It also adds guests, consent and kids profiles to `identity`. Every new module is off
+by default, and with every module off a deployment is still v3.0.0's. A signed-in viewer with no recorded consent now
+plays SAFE: run `scripts/seed_personas.py` again on a deployed stage.
+
+### Added
+
+- **Advertisers' own creatives in the own book (`modules.creatives`, off by default;
+  [docs/creatives.md](docs/creatives.md), ADR-0005 amended).** A registry (`<prefix>-creatives`) and a readiness
+  state machine take a creative from registration to READY:
+  - its source (a local MP4, or an https MP4 or VAST document) goes to a quarantine bucket of its own, never the
+    ingest bucket;
+  - Amazon Rekognition moderates it, and a person approves or rejects what it flags;
+  - the stage's own ingest pipeline conditions it to the default ladder (`kind: ad`), as for the kit's house ads;
+  - a ladder-conformance check (variants, resolution, codec, `BANDWIDTH`, a duration on the 30.03 s grid) admits it;
+  - READY creatives go to the own book through the snapshot publisher.
+
+  A registered creative not yet WARM wins its slot only where a standalone backs it (ad buffet), and is never a
+  standalone (`unbacked` otherwise; `OPTIMIZATION(aws): W-2 FR-2`); the module as a whole works around W-2 FR-3.
+  With `selling`, a buy booked for a brand is served with the brand's READY creative, the demo creative being the
+  fallback. `scripts/creatives.py` registers, reviews, suspends and resumes creatives (`OPTIMIZATION(aws): W-10
+  item 6`). The `fastm`, `fastci`, `fastciads` and `fastcisell` stages turn it on;
+  `tests/e2e/test_24_creatives.py` proves it end to end.
+
+- **The `agents` module (off by default; needs `ops`): the agent roster inside an autonomy envelope v1**
+  ([docs/agents.md](docs/agents.md), [ADR-0023](docs/adr/0023-machine-principals.md) amendment).
+  - Each agent of the roster that the envelope turns on is a machine principal of the operator plane, with its own
+    Cognito client.
+  - `modules.agents.envelope` says what each agent may do unattended:
+    - its level;
+    - the tools it may call, with their channels, per-hour caps and publish lead;
+    - its approval-gated actions an hour;
+    - what always needs a human.
+  - Three enforcement points follow the envelope:
+    - **Cedar.** The Gateway's policies are generated from it.
+    - **The Gateway's request interceptor.** It checks every non-READ call an agent's token makes and takes the
+      caps there, in one conditional DynamoDB transaction (two concurrent restarts under a cap of one: one reaches
+      the tool). A call outside the envelope is refused before it reaches the tool, with or without the runner.
+    - **The runner.** It answers approval-gated calls from the same verdict and a read of the caps.
+  - Every decision and tool call goes to the ledger chain `agents/<role>`, and every deployed envelope to
+    `agents/envelope`. A refusal is escalated to the alert topic.
+  - **The operations agent** (R12) wakes on the census's `Census Changed` to zero and on the probe's off-air alarm.
+    It reads the always-on channels' states first and starts a stopped one, at most once an hour. Stopping,
+    creating or deleting a channel needs a human. Runbook R12 knows the always-on list too.
+  - **The programming agent** (R6) works the envelope's `programmed` channels, each with no autopilot schedule.
+    - It wakes hourly and reads each channel's schedule first.
+    - When one runs out within 6 hours, it plans and publishes blocks that start at least 2 hours ahead.
+    - Nearer edits need a human.
+  - **The sales agent** (L1, with `modules.pds`) works through the Gateway target `sales`:
+    - `sales___line_pacing` reads each own-book line's budget, spend and pace;
+    - `sales___propose` records a proposal in the ledger chain `sales/proposals` and changes nothing.
+
+    It wakes hourly for off-pace lines, and each proposal is escalated to a human. Demo lines can carry a flight
+    (`starts`, `ends`).
+  - **`modules.agents.devops_agent`** (off) adds AWS DevOps Agent: an Agent Space with elevated actions off, a
+    read-only role (the AWS managed access policy, minus support cases) and this account's `monitor` association.
+    It investigates and advises; it never acts.
+  - The default lists no always-on or programmed channel. The envelope is not signed yet.
+- **The `recs` module: a model-ranked rail for each signed-in viewer** (off by default; needs `models` and
+  `identity`; [docs/recs.md](docs/recs.md), [ADR-0027](docs/adr/0027-llm-rail-recommender.md)).
+  - `GET /rail` answers the viewer's "Recommended for you" rail with how it was made and why. No model runs while
+    the viewer waits.
+  - **Model rails.** Claude Haiku 5.5 (the `recommender` task, thinking disabled) picks and explains each signed-in
+    adult's rail in the background, from deterministic candidates and a validator. Identical requests share one call.
+  - **Cohort rails** are built hourly to `plan/rail/<device>-<language>-<daypart>.json` for guests and for viewers who
+    get no personalization.
+  - **The router.** Kids profiles, opted-out viewers, viewers without consent, the 10% holdout and first sessions never
+    reach the model.
+  - **The fallback.** Every model error, timeout, cap or invalid rail serves the rule-based rail, with the reason, for
+    an hour before the next try.
+  - **Metrics:** model cost, tokens and latency; validator drops and replaced reasons; rails by strategy and reason.
+    The dead-letter queue has an alarm.
+  - **Config:** `modules.recs` (`holdout_percent`, `cohorts`, `refresh_hours`) adds the default `recommender` registry
+    entry and makes the recommender the `recs` flag's default.
+  - **The viewer app** shows the rail, labelled with its strategy, and falls back to its own rule-based rail if
+    `GET /rail` fails.
+- **The rail recommender's deterministic core and its eval suite** (`recs`; [ADR-0027](docs/adr/0027-llm-rail-recommender.md)).
+  - `fast_channels.core.recs` holds the deterministic parts:
+    - the router that runs before any model call;
+    - the candidates, which are the next 24 hours of the guides filtered by rating ceiling and child-directed
+      channel;
+    - the catalog cards, with content understanding when it exists;
+    - the stable prompt and output schema;
+    - the validator and the faithfulness check;
+    - a Python port of the viewer's rule-based rail, kept identical to `rail.ts` by
+      `contracts/fixtures/rail/program-rail.json`.
+  - `make eval TASK=recommender MODEL=<id>` runs 12 golden cases, three times each, on a fixed 36-title fixture,
+    and writes the eval record. The committed `haiku-5-5-disabled-4k` record passed:
+    - every rail was valid and served;
+    - 91% of the reasons were faithful as written, and an Opus judge sample found 95%;
+    - no violation was served;
+    - every golden expectation was met;
+    - $0.0004 a rail, with a 2.5 s median.
+- **Content understanding** (`understanding`, M12, off by default; [docs/understanding.md](docs/understanding.md)).
+  - On a title's first encode, one Step Functions workflow makes a 640 by 360 MP4 proxy with MediaConvert, runs
+    Transcribe and Rekognition Video (shots, technical cues, labels, moderation) on it, and asks a video model through
+    the model registry (task `understanding.describe`) for the title's IAB Content Taxonomy 3.1 categories, keywords,
+    moods, brand-safety tier and synopsis.
+  - The answer is checked: only Content Taxonomy 3.1 categories and the 12 moods are kept, and the brand-safety tier is
+    the riskier of the model's and the moderation labels'. The result is the title's `UNDERSTANDING` item beside its
+    catalog item (`contracts/content-understanding.schema.json`), announced by `Content Understood`.
+  - It fails open: a failed analysis or model call leaves the item `partial`.
+  - The brand-safety tier is a GARM-style risk tier (`low`, `medium`, `high`, `floor`). It is taken from
+    Rekognition's most specific moderation labels, and `high` and `floor` count only when sustained: 10 frames,
+    about 5 s, at 90 % or more. Weapons and action violence are `medium`. Nothing gates demand on the tier yet.
+  - The item's categories are the title's genres: the model names IAB CTV genres, mapped to Content Taxonomy 3.1 as
+    the catalog's genre tags are. Asked for ids from the whole taxonomy, Nova 2 Lite copied the list's order.
+  - With the crawl module, the item's categories lead the catalog context object's `cat`, its keywords join
+    `kwarray` and its language fills an empty `language`, so bidders receive them in `app.content`. The bidder
+    simulator's `sim-bid-request` line shows `app.content`'s `cat` and `kwarray` (overlay O5).
+  - The describe task's eval suite (`make eval TASK=understanding.describe`) runs the four sample titles' live signals
+    and excerpts of their pictures through the real prompt. Its checks include the expected genre among the first
+    three categories and no clearly wrong one. Nova 2 Lite's record is committed.
+  - The `fastm`, `fastci` and `fastciads` stages turn the module on with `core.understanding.REGISTRY_DEFAULT`.
+  - About 18.90 US dollars per content hour with every analysis on, once per title (measured on the sample
+    titles, all under 16 minutes, 19.12); `modules.understanding.analyses` turns analyses off (about 9.90 without
+    labels and technical cues).
+  - It stands in for Elemental Inference, which has no VOD analysis (`OPTIMIZATION(aws): EI-VOD`).
+- **Guests get a playback ticket** (`identity`): `POST /playback/guest`, with no token.
+  - The body may carry the consent platform's GPP string and sections, and `gpc`; the browser's `Sec-GPC: 1` counts
+    as `gpc`. The ticket's row has no viewer id: the guest's breaks are CONTEXTUAL (reason `bound`, or `opted_out`
+    with Global Privacy Control) and carry the GPP string in `regs.gpp` for Prebid Server.
+  - An AWS WAF web ACL on the identity API blocks an address that mints more than
+    `modules.identity.guest_rate_limit` (default 100) guest tickets in 5 minutes. It adds about $6 a month.
+- **A consent store for signed-in viewers** (`identity`): `GET` and `PUT /consent` with the viewer's access token.
+  - The record, `C#<vid>` in the identity table, holds whether the viewer opted out of sale and sharing, whether they
+    gave the separate video-privacy consent, and their GPP string. An opt-out gives CONTEXTUAL breaks, the
+    video-privacy consent FULL, neither PSEUDONYMOUS.
+  - The Pod Decision Service reads it on every break of a bound session and keeps it 5 seconds, so a change reaches
+    the next break within that. A failed read keeps an answer up to a minute old.
+- **The reference viewer plays guests on guest tickets, asks signed-in viewers for their privacy choices, and sends
+  CMCD** (`viewer`).
+  - A new privacy-choices page (`#/privacy`) records the two choices; the home page says when a viewer has none.
+  - hls.js sends Common Media Client Data as a query parameter, which the CDN's access logs already parse into their
+    `cmcd-*` fields.
+- **Kids profiles and child-directed channels** (`release`, `identity`, `pds`).
+  - `modules.release.kids_pairs` gives each monetized channel the kids twins `-p-k` and `-p-l`. They name the kids
+    stored request, take no ticket, and follow the pair `a`/`b` through releases, promotions and rollbacks; their
+    alarms join `<prefix>-release-candidate`, and the playback plan names the stable sibling's twin (`kids`).
+  - `POST /playback {channel, profile: "kids"}` answers the kids twin's URL with no ticket and no `vid`; a channel
+    without twins answers 409 `no_kids_configuration`.
+  - `modules.release.child_directed` lists the monetized channels that are child-directed: every sibling names the
+    kids stored request, no ticket is minted for them, and every break is KIDS.
+  - The reference viewer signs Mia in on Marcus's account and plays her kids profile.
+  - `stages/fastm.json` and `stages/fastci.json` add the child-directed channel `{prefix}-kids` and the kids twins.
+
+### Changed
+
+- **W-2 1.33 is a quick-restart defect of Channel Assembly with MediaTailor, not a prefetch one**
+  ([limitations.md](docs/limitations.md#aws-elemental-mediatailor)).
+  - A channel started within seconds of its stop serves the new run's first break twice, with two `START-DATE`s for
+    one event id. Half or more of the sessions that meet it skip the next breaks: 2 to 4 breaks without prefetch, and
+    more than 21 minutes with it. Restarts from 319 s after the stop were clean (measured 2026-11-07).
+  - Operators wait 6 minutes after a manual stop when ad fill matters
+    ([operations.md](docs/operations.md#running-channels)).
+  - The e2e tests that judge ad fill start their channel only once it has been stopped 6 minutes
+    (`harness_pods.start_settled`).
+  - Their checks of unserved breaks and ADS log gaps print their count, and judge the share only from 10 sessions.
+- **The recommender runs with thinking disabled** ([ADR-0027](docs/adr/0027-llm-rail-recommender.md) amends
+  [ADR-0029](docs/adr/0029-per-task-model-registry.md)).
+  - The default is now Claude Haiku 5.5 with thinking disabled, effort low and `max_tokens` 4,000. It was thinking on
+    with 8,000.
+  - With thinking on, structured output spent the budget and returned no rail. The budget that avoids this costs three
+    times as much and is four times slower.
+- **The model spend counter and price list are in `fast_channels.core.model_spend`** (#158), so Lambda functions can
+  use them.
+  - Nova 2 Lite has list prices.
+  - The agent's `caps` module keeps its API.
+- **A signed-in viewer without a recorded consent now plays SAFE** (`identity`): own-book and house ads only, no
+  third-party bidder. So does one whose consent is older than 395 days, or whose consent cannot be read for over a
+  minute.
+  - Before, every signed-in viewer was PSEUDONYMOUS, whatever they had agreed to. The ticket's row no longer carries
+    a signed-in viewer's mode.
+  - `scripts/seed_personas.py` now records each demo persona's consent from `contracts/personas.json` (FULL gave the
+    video-privacy consent, PSEUDONYMOUS neither), and `--delete` removes it. Run it again on a deployed stage so the
+    personas keep their modes.
+
+### Fixed
+
+- **The probe no longer reports a channel off air in the minute after it starts.** A just-started channel's
+  playlist keeps media sequence 0 while it fills its window, and the probe failed every run in that minute
+  ("the media sequence stayed at 0"). Seen in the v4.2.0 release gate, with canary runs 34-36 s after a
+  start. The probe now checks that the newest segment advances: the media sequence plus the segments listed.
+- **A release's smoke test on the lab channel works on prefixes of 7 or more characters.** Its role could invoke
+  only `FastChannels-<prefix>-Operator-*`. CloudFormation shortens a generated function name's stack part to as
+  few as 25 characters, so a 7-character prefix's tool functions are named `FastChannels-<prefix>-Operato-…`
+  and the invocation was denied. With no monetized channel running, the release then failed and rolled back.
+  The role now invokes `FastChannels-<prefix>-*`, held to the Operator stack's functions by their
+  `aws:cloudformation:stack-name` tag. A test checks every Lambda grant on a name pattern with the longest
+  prefix.
+- **The agents' caps were taken only by the runner** until the Gateway's request interceptor (M9's third pull
+  request): a caller holding an agent's machine token could have called the Gateway directly past a cap. The
+  interceptor now takes the caps on the call itself, and the runner only reads them.
+- **The Operator stack deploys again with the agents module and no always-on channel.** Resolved with
+  `always_on: []`, the operations agent's restart grant has no channels but keeps its per-hour cap, and the envelope
+  refused that when its document was read back: the deploy's envelope record (`Custom::Trigger` `RosterOnEnvelope`)
+  failed and the Operator stack rolled back, and the runner would have failed at start. A channel-scoped grant with
+  no channels is valid now: it permits nothing. Every shipped stage file's envelope is tested to read back.
+- **The scheduler agent's Runtime starts again.** Its code zip is the agent package's locked closure, which lacked
+  `fast_channels.core` after the spend counter moved there: the Runtime failed at import (`No module named
+  'fast_channels.core'`), and every console, autopilot and agent run failed. The agent package now depends on the
+  core package, and a test installs each bundled package (agent, functions, PDS) alone and imports every one of its
+  modules, besides checking that each closure holds every workspace package its code imports.
+- **A child-directed channel's breaks were never KIDS at the Pod Decision Service** (`pds`). The bundle gave its
+  siblings the kids stored request, but nothing told the sidecar which channels are child-directed, so `/policy`
+  answered CONTEXTUAL: it added the third-party bidders and set `regs.coppa` back to 0. No shipped configuration had
+  a child-directed channel, because none could be configured until `modules.release.child_directed`. The sidecar now
+  gets them (`CHILD_DIRECTED_CHANNELS`) and answers KIDS for every sibling of such a channel, and validator R-P5
+  refuses a kids sibling that names another stored request.
+
 ## [4.1.1] - 2026-11-06
 
 A patch release: unplayed line ads give their budget back after 10 to 15 minutes, the as-run sweep counts a break
@@ -852,7 +1065,8 @@ AWS service behaviour that Apple's mediastreamvalidator reports at Must level
 ### Added
 - Initial Version
 
-[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.1...HEAD
+[Unreleased]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.1...v4.2.0
 [4.1.1]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/philhar88/AWS-Fast-Channels/compare/v3.0.0...v4.0.0

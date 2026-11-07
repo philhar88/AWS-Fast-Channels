@@ -15,9 +15,12 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_ssm as ssm
 from aws_cdk.assertions import Template
 
+from fast_channels.core.agents.envelope import Envelope, Role
 from fast_channels.core.naming import check_prefix
+from fast_channels.core.understanding import REGISTRY_DEFAULT as UNDERSTANDING_DEFAULT
+from fast_channels.core.understanding import TASK as UNDERSTANDING_TASK
 from fast_channels.infra.app import build
-from fast_channels.infra.config import ConfigError, FastChannelsConfig, ModulesConfig
+from fast_channels.infra.config import ConfigError, FastChannelsConfig, ModelTask, ModulesConfig, resolve_geo
 from fast_channels.infra.stage import FastChannelsStage, stage_id
 
 type GetDeployment = Callable[..., Any]
@@ -301,12 +304,27 @@ def shipped_with(overrides: dict[str, str]) -> FastChannelsConfig:
 
 
 def test_shipped_stages() -> None:
-    assert STAGES == stage_args.stage_names() == ["fastci", "fastciads", "fastcisell", "fastm"]
+    assert (
+        STAGES
+        == stage_args.stage_names()
+        == ["fastci", "fastciads", "fastciagent", "fastcipace", "fastcisell", "fastm"]
+    )
     assert f"^{stage_args.PREFIX.pattern}$" == FastChannelsConfig.model_json_schema()["properties"]["prefix"]["pattern"]
 
 
 SELLING_STAGE = "fastcisell"
-"""The agentic-selling stage (M7): the module and what it needs, with free direct demo creatives (no demo lines)."""
+"""The agentic-selling stage (M7, and M5's registered creatives): the modules and what they need, with free direct demo
+creatives (no demo lines)."""
+AGENTS_STAGE = "fastciagent"
+"""The agent roster's stage (M9): the module and ops, with its demo channel always-on and programmed, and the DevOps
+Agent opted in (the roster's e2e)."""
+
+
+PACE_STAGE = "fastcipace"
+"""The sales agent's stage (M9): the agents module with the PDS own book and one demo line with a flight, which the
+e2e makes overpace (the demand module needs a prefix of at most 10 characters, so not the roster's stage)."""
+KIDS_STAGES = frozenset({"fastm", "fastci"})
+"""Stages with the child-directed channel ``<prefix>-kids`` and the kids twins (M4)."""
 
 
 @pytest.mark.parametrize("name", STAGES)
@@ -316,13 +334,50 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
     assert config.prefix == name
     on = {module for module in ModulesConfig.model_fields if config.modules.enabled(module)}
     if name == SELLING_STAGE:
-        assert on == {"ops", "demand", "pds", "release", "selling"}
+        assert on == {"ops", "demand", "pds", "release", "selling", "creatives"}
         assert (config.modules.pds.demo_lines, config.modules.selling.creatives) == ((), ("direct1", "direct2"))
+    elif name == AGENTS_STAGE:
+        envelope = config.modules.agents.envelope.resolved(name)
+        assert on == {"ops", "agents"}
+        assert envelope.always_on == envelope.programmed == (f"{name}-demo",)
+        assert envelope.enabled() == [Role.OPERATIONS, Role.PROGRAMMING], "sales needs the PDS: a demand stage"
+        assert config.modules.agents.devops_agent
+    elif name == PACE_STAGE:
+        [line] = config.modules.pds.demo_lines
+        assert on == {"ops", "demand", "pds", "agents"}
+        assert config.modules.agents.envelope.enabled() == [Role.OPERATIONS, Role.SALES]
+        assert line.starts is not None and line.ends is not None, "a line with a flight has a pace"
     else:  # every module but selling, whose creatives their demo lines serve
         assert on == set(ModulesConfig.model_fields) - {"selling"}
-    assert config.modules.release.channels == (f"{name}-demo",)
-    assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
+        envelope = config.modules.agents.envelope
+        assert envelope.always_on == (), "their tests stop channels: none may be restarted"
+        assert envelope.programmed == () and envelope.enabled() == [Role.OPERATIONS], "their tests schedule"
+        assert not config.modules.agents.devops_agent
+        default = {**UNDERSTANDING_DEFAULT, "model": resolve_geo(UNDERSTANDING_DEFAULT["model"], "us-east-1")}
+        assert config.modules.models.tasks[UNDERSTANDING_TASK] == ModelTask.model_validate(default)
+    if name == PACE_STAGE:  # no release
+        assert config.modules.demand.simulator == "lambda"
+    elif name != AGENTS_STAGE:  # no demand
+        if name not in KIDS_STAGES:
+            assert config.modules.release.channels == (f"{name}-demo",)
+        else:  # the monetized channel with kids twins, and a child-directed channel (M4)
+            assert config.modules.release.channels == (f"{name}-demo", f"{name}-kids")
+            assert (config.modules.release.child_directed, config.modules.release.kids_pairs) == (
+                (f"{name}-kids",),
+                True,
+            )
+        assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
     assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_every_stage_files_envelope_reads_back_as_its_deploy_records_it(name: str) -> None:
+    """The envelope record (a deploy trigger) and the runners parse the resolved envelope's document: a stage whose
+    envelope does not read back fails its Operator deploy."""
+    config = shipped_with(stage_overrides(name))
+    envelope = config.modules.agents.envelope.resolved(config.prefix)
+
+    assert Envelope.model_validate_json(envelope.document) == envelope
 
 
 def test_shipped_prefixes_are_hyphen_free_so_none_falls_inside_anothers_grants() -> None:
@@ -370,13 +425,18 @@ def test_a_stage_under_another_prefix_expands_it() -> None:
     config = shipped_with(stage_overrides("fastci", "--prefix", "fastcipr7"))
 
     assert (config.prefix, config.channels.iac[0].name) == ("fastcipr7", "fastcipr7-demo")
-    assert config.modules.release.channels == ("fastcipr7-demo",)
+    assert config.modules.release.channels == ("fastcipr7-demo", "fastcipr7-kids")
+    assert config.modules.release.child_directed == ("fastcipr7-kids",)
 
 
 @pytest.mark.parametrize(
     ("files", "argv", "expected"),
     [
-        ({}, ["context", "fastz"], "unknown stage 'fastz': the stages are fastci, fastciads, fastcisell, fastm"),
+        (
+            {},
+            ["context", "fastz"],
+            "unknown stage 'fastz': the stages are fastci, fastciads, fastciagent, fastcipace, fastcisell, fastm",
+        ),
         ({}, ["context", "../cdk"], "unknown stage '../cdk'"),
         ({}, ["context", "fastm", "--prefix", "Fast_M"], "--prefix must match"),
         ({"bad": "[1, 2]"}, ["prefix", "bad"], "must hold a JSON object (a partial fast-channels block)"),
@@ -407,7 +467,7 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-MERGED_MODULES = ("models", "ops", "release", "demand")
+MERGED_MODULES = ("models", "ops", "release", "demand", "agents", "understanding")
 """Modules whose code is merged; a module's pull request adds it here, with tests of what it synthesizes."""
 NEEDED_MODULES = ("pds",)
 """Modules a merged one needs on (``release`` needs ``pds``) whose code is not merged yet: they add nothing, so the
@@ -416,12 +476,14 @@ MODULE_STACKS = {
     "Crawl": "FastChannels-fastm-Crawl",
     "Identity": "FastChannels-fastm-Identity",
     "Viewer": "FastChannels-fastm-Viewer",
+    "Recs": "FastChannels-fastm-Recs",
 }
-"""Stacks of merged modules kept off in the comparison (``crawl``, ``identity`` and ``viewer``, whose needs would turn
-every module on) ..."""
-MODULE_CHANGES = ("Media",)
-"""... and the shared stacks they change: crawl adds its catalog-context bucket and route to Media. Their own tests
-pin those changes down (``test_crawl.py::test_the_module_changes_nothing_else_in_the_media_stack``)."""
+"""Stacks of merged modules kept off in the comparison (``crawl``, ``identity``, ``viewer`` and ``recs``, whose needs
+would turn every module on) ..."""
+MODULE_CHANGES = ("Media", "Models", "Ops")
+"""... and the shared stacks they change: crawl adds its catalog-context bucket and route to Media; recs adds the
+``recommender`` task to Models and makes it the default of the ``recs`` flag in Ops. Their own tests pin those
+changes down (``test_crawl.py::test_the_module_changes_nothing_else_in_the_media_stack``, ``test_recs.py``)."""
 
 
 def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeployment, normalized: Any) -> None:
@@ -436,6 +498,8 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         {
             "prefix": "fastm",
             "observability": stage["observability"],  # the stage reads the shared as-run router (not a module)
+            "channels": stage["channels"],  # and has a second, child-directed channel (not a module)
+            "agent": stage["agent"],  # it allows its understanding task's video model (not a module)
             **{f"modules.{name}": stage["modules"][name] for name in on},
         }
     )
@@ -451,6 +515,7 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         "Operator": "FastChannels-fastm-Operator",
         "DemandEdge": "FastChannels-fastm-DemandEdge",
         "DemandBuild": "FastChannels-fastm-DemandBuild",
+        "Understanding": "FastChannels-fastm-Understanding",
     }
     assert names(fastm) == names(merged) | MODULE_STACKS
     modules_on = {stack.node.id: stack for stack in fastm.stacks}

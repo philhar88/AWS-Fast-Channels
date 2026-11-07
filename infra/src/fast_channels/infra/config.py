@@ -12,6 +12,7 @@ Every attribute docstring below is the field's documentation (also exported in t
 import json
 import os
 import re
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -21,10 +22,20 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
 
 from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from fast_channels.core.ad_server import AdServer
 from fast_channels.core.adload import CONTROL_TIERS, TIER_PATTERN, AdLoadPolicy
+from fast_channels.core.agents.envelope import Envelope, Role
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
@@ -32,8 +43,12 @@ from fast_channels.core.model_registry import SCHEDULER_TASK, TASK_NAME, TaskSet
 from fast_channels.core.monetization.names import sibling_pattern
 from fast_channels.core.naming import PREFIX_PATTERN, agent_namespace, check_prefix, is_agent_owned
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
+from fast_channels.core.recs import REGISTRY_DEFAULT as RECOMMENDER_DEFAULT
+from fast_channels.core.recs import TASK as RECOMMENDER_TASK
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
+from fast_channels.core.understanding.record import TASK as UNDERSTANDING_TASK
+from fast_channels.core.understanding.record import Analysis
 
 if TYPE_CHECKING:
     from constructs import Node
@@ -51,6 +66,10 @@ SCHEDULER_EVAL: Final = "haiku-5-5-adaptive-16k"
 SCHEDULER_DAILY_CAP_USD: Final = 5
 """The scheduler agent's daily spend cap, about ten times a busy demo day: four autopilot runs a day on each of five
 channels and 50 operator turns at about $0.005 each (``make eval``) is about $0.4."""
+DEFAULT_TASKS: Final[Mapping[str, Mapping[str, Any]]] = {
+    SCHEDULER_TASK: {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD, "eval": SCHEDULER_EVAL}
+}
+"""``modules.models.tasks`` when cdk.json sets none: the scheduler agent's entry."""
 DEFAULT_ALLOWED_MODELS: Final = (
     DEFAULT_MODEL,
     f"{GEO_PLACEHOLDER}.anthropic.claude-sonnet-5-5",
@@ -515,9 +534,7 @@ class ModelsModule(_Module):
     inference profile and spend cap. Entries choose only among ``agent.allowed_models``."""
     tasks: dict[str, ModelTask] = Field(
         # Validated like a value from cdk.json, so that {geo} resolves for the region.
-        default_factory=lambda: {
-            "scheduler.plan": {"model": DEFAULT_MODEL, "daily_cap_usd": SCHEDULER_DAILY_CAP_USD, "eval": SCHEDULER_EVAL}
-        },
+        default_factory=lambda: dict(DEFAULT_TASKS),
         validate_default=True,
     )
     """Registry entries by task name (dot-separated lowercase words); ``scheduler.plan`` is the scheduler agent."""
@@ -660,6 +677,16 @@ class DemoLine(_Section):
     caps: LineCaps = LineCaps()
     tier0: bool = False
     """A guaranteed line: placed first in a pod, ahead of any bid."""
+    starts: AwareDatetime | None = None
+    """Start of its flight (UTC); ``null``: started. With ``ends``, the line has a pace (the sales agent's)."""
+    ends: AwareDatetime | None = None
+    """End of its flight (UTC, exclusive); ``null``: serves until its budget is spent."""
+
+    @model_validator(mode="after")
+    def _flight(self) -> Self:
+        if self.starts is not None and self.ends is not None and self.ends <= self.starts:
+            raise ValueError(f"demo line {self.id}: its flight ends before it starts")
+        return self
 
 
 MAX_AD_LOAD_TIERS: Final = 8
@@ -782,6 +809,14 @@ class ReleaseModule(_Module):
     """IaC channels to monetize (names from ``channels.iac``; ``{prefix}`` is replaced as there). Their channel policy
     also admits the sibling configurations ``<channel>-p-?``. Adding a channel widens its policy once, and the
     deployment refuses that while the channel runs: stop it first."""
+    child_directed: tuple[str, ...] = ()
+    """Monetized channels (of ``channels``) that are child-directed: every break of theirs is KIDS (COPPA set, house
+    and kid-approved direct ads only, no third-party bidder), their siblings name the kids stored request, and no
+    playback ticket is minted for them. ``{prefix}`` is replaced as in ``channels``."""
+    kids_pairs: bool = False
+    """Give each other monetized channel (not the lab channel) the kids twins ``<channel>-p-k`` and ``-p-l``, which
+    follow the pair ``a``/``b`` through releases, promotions and rollbacks: a kids profile plays them
+    (``POST /playback`` with ``profile: "kids"``), and every break there is KIDS. About 14 more alarms per channel."""
     strategy: ReleaseStrategy = ReleaseStrategy.DEMO
     """``demo`` (a simulated audience: 10% steps over 30 minutes), ``standard`` (up to 20,000 concurrent viewers: 10%
     steps over 3 hours) or ``large`` (exponential steps over 4 hours)."""
@@ -795,10 +830,16 @@ class ReleaseModule(_Module):
     once they have passed)."""
     prefetch: ReleasePrefetch = ReleasePrefetch()
 
-    @field_validator("channels")
+    @field_validator("channels", "child_directed")
     @classmethod
     def _unique_channels(cls, channels: tuple[str, ...]) -> tuple[str, ...]:
         return _unique(channels)
+
+    @model_validator(mode="after")
+    def _child_directed_are_monetized(self) -> Self:
+        if extra := [c for c in self.child_directed if c not in self.channels]:
+            raise ValueError(f"child_directed: {extra} are not in channels {list(self.channels)}")
+        return self
 
 
 class CrawlModule(_Module):
@@ -820,15 +861,19 @@ class IdentityModule(_Module):
     """The viewer-identity module (``modules.identity``; ADR-0018)."""
 
     enabled: bool = False
-    """Deploy viewer identity: a Cognito viewer pool; ``POST /playback``, which mints a single-use playback ticket for
-    a signed-in viewer's play; and ``POST /redeem``, which binds the ticket to the one session that opens it
-    (docs/identity.md)."""
+    """Deploy viewer identity: a Cognito viewer pool; ``POST /playback`` and ``POST /playback/guest``, which mint a
+    single-use playback ticket for a signed-in viewer's or a guest's play; ``POST /redeem``, which binds the ticket to
+    the one session that opens it; and the consent store (``GET`` and ``PUT /consent``), which a signed-in viewer's
+    breaks follow: without a recorded consent they get own-book and house ads only (docs/identity.md)."""
     redeem_window_seconds: int = Field(default=120, ge=30, le=600)
     """From mint to the latest redeem: the player opens the ticket's URL at once, in one session."""
     api_rate_limit: int = Field(default=50, ge=1, le=10_000)
     """Requests per second the identity API accepts (API Gateway stage throttling, every method)."""
     api_burst_limit: int = Field(default=100, ge=1, le=5_000)
     """Burst of the identity API's throttling."""
+    guest_rate_limit: int = Field(default=100, ge=10, le=2_000_000_000)
+    """Guest tickets one address may mint in five minutes; AWS WAF blocks it beyond that (a household or an office
+    shares one address, and each play or channel change mints one)."""
 
 
 class SellingModule(_Module):
@@ -866,6 +911,20 @@ class SellingModule(_Module):
         return _unique(creatives)
 
 
+class CreativesModule(_Module):
+    """The creatives module (``modules.creatives``; docs/creatives.md)."""
+
+    enabled: bool = False
+    """Deploy the creative registry: advertisers' own creatives, each moderated, conditioned to the stage's default
+    ladder by the ingest pipeline, checked for ladder conformance and then bid by the PDS own book once READY. With
+    selling on, a buy booked over AdCP is served with its brand's READY creative; the demo creative is the fallback."""
+    moderation: bool = True
+    """Moderate each creative with Amazon Rekognition before it is conditioned. A creative with a moderation label at
+    or above ``min_confidence`` waits for a person's review (``scripts/creatives.py approve|reject``)."""
+    min_confidence: float = Field(default=80.0, ge=50, le=100)
+    """The moderation label confidence (percent) that sends a creative to review."""
+
+
 class ViewerModule(_Module):
     """The reference viewer app (``modules.viewer``)."""
 
@@ -879,6 +938,84 @@ class ViewerModule(_Module):
     shows viewers their value tier, which a production viewer app never does."""
 
 
+class AgentsModule(_Module):
+    """The agents module (``modules.agents``; M9, ADR-0023, docs/agents.md)."""
+
+    enabled: bool = False
+    """Deploy the agent roster: each agent of the envelope that is on gets a machine principal of the operator
+    plane (a Cognito client-credentials client), Cedar policies generated from its envelope, and a runner that holds
+    its unattended conversations with the scheduler agent's Runtime, answers its approval-gated tool calls from the
+    envelope and its caps, records every tool call and every refusal in the ledger (chain ``agents/<role>``) and
+    escalates a refusal to the alert topic."""
+    envelope: Envelope = Envelope()
+    """The autonomy envelope v1 (``core.agents.envelope``): the always-on and programmed channels, and per agent its
+    level, the tools it may call unattended (with their channels, per-hour caps and publish lead), its approval-gated
+    actions an hour and the tools that need a human. Not signed in v1; each deploy records its version in the
+    ledger."""
+    devops_agent: bool = False
+    """Opt in to AWS DevOps Agent: an Agent Space over this deployment's account with a read-only role, for
+    investigations and advice (it never acts). Idle it costs nothing; its investigations and other tasks are billed
+    per agent-second, 0.0083 US dollars (docs/agents.md#the-devops-agent)."""
+
+
+class UnderstandingModule(_Module):
+    """The content-understanding module (``modules.understanding``; docs/understanding.md)."""
+
+    enabled: bool = False
+    """Analyse each title once, on its first encode: Amazon Transcribe, Amazon Rekognition Video and a video model
+    through the model registry describe it (IAB Content Taxonomy 3.1 categories, keywords, moods, a brand-safety tier
+    and a synopsis) in an item beside its catalog item. The crawl module carries its categories and keywords into
+    ``app.content``; the recommender reads it. With every analysis on, about 18.90 US dollars per content hour, once
+    per title (list prices; docs/understanding.md#cost)."""
+    analyses: tuple[Analysis, ...] = tuple(Analysis)
+    """The analyses to run, each billed per content minute: ``labels`` and ``moderation`` 6 US dollars an hour each,
+    ``shots`` and ``technical_cues`` 3 each, ``transcript`` 0.36; the proxy (0.45) and the model call (about 0.10)
+    always run. ``moderation`` is the visual evidence of the brand-safety tier."""
+    task: str = Field(default=UNDERSTANDING_TASK, pattern=TASK_NAME.pattern)
+    """The model-registry task of the describe step; ``modules.models.tasks`` must hold it (a video model)."""
+
+    @field_validator("analyses")
+    @classmethod
+    def _analyses(cls, analyses: tuple[Analysis, ...]) -> tuple[Analysis, ...]:
+        if len(set(analyses)) != len(analyses):
+            raise ValueError(f"analyses repeat: {[a.value for a in analyses]}")
+        return analyses
+
+
+class RecsModule(_Module):
+    """The rail recommender (``modules.recs``; ADR-0027)."""
+
+    enabled: bool = False
+    """Deploy the rail recommender: ``GET /rail`` answers each signed-in viewer's "Recommended for you" rail, which
+    the ``recommender`` model task picks and explains from deterministic candidates and a validator; hourly cohort
+    rails for guests; the rule-based rail on every model error, timeout or cap. Adds a default ``recommender``
+    registry entry (Claude Haiku 5.5, thinking disabled) unless ``models.tasks`` names one."""
+    holdout_percent: int = Field(default=10, ge=0, le=50)
+    """Share of viewers in the rail holdout (bucket ``rail-v1``), who get the rule-based rail: the baseline the model
+    rail is measured against."""
+    cohorts: tuple[str, ...] = Field(default=("web-en",), min_length=1)
+    """``<device>-<language>`` of each hourly cohort rail, e.g. ``web-en`` or ``tv-es``."""
+    refresh_hours: int = Field(default=20, ge=1, le=35)
+    """A viewer's model rail older than this is rebuilt on their next request."""
+
+    @field_validator("cohorts")
+    @classmethod
+    def _cohorts(cls, cohorts: tuple[str, ...]) -> tuple[str, ...]:
+        if bad := [c for c in cohorts if not re.fullmatch(r"[a-z]{2,10}-[a-z]{2}", c)]:
+            raise ValueError(f"cohorts are <device>-<language> (e.g. web-en), got {bad}")
+        return cohorts
+
+
+DEVOPS_AGENT_REGIONS: Final = (
+    "us-east-1",
+    "us-west-2",
+    "ap-southeast-2",
+    "ap-northeast-1",
+    "eu-central-1",
+    "eu-west-1",
+)
+"""Where AWS DevOps Agent runs (its user guide's supported Regions, 2026-11)."""
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
@@ -887,6 +1024,10 @@ _MODULE_NEEDS: Final = {
     "identity": ("release",),
     "selling": ("pds", "release"),
     "viewer": ("identity",),
+    "agents": ("ops",),
+    "understanding": ("models",),
+    "recs": ("models", "identity"),
+    "creatives": ("pds",),
 }
 """Modules an enabled module builds on."""
 
@@ -909,6 +1050,28 @@ class ModulesConfig(_Section):
     identity: IdentityModule = IdentityModule()
     selling: SellingModule = SellingModule()
     viewer: ViewerModule = ViewerModule()
+    agents: AgentsModule = AgentsModule()
+    understanding: UnderstandingModule = UnderstandingModule()
+    recs: RecsModule = RecsModule()
+    creatives: CreativesModule = CreativesModule()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _recommender_entry(cls, data: Any) -> Any:
+        """With ``recs`` on, ``models.tasks`` gains the ``recommender`` entry ``modules.recs`` deploys
+        (:data:`fast_channels.core.recs.REGISTRY_DEFAULT`) unless it names one; with ``recs`` off, nothing changes."""
+        if not isinstance(data, dict):
+            return data
+        recs = data.get("recs")
+        if not (recs.enabled if isinstance(recs, RecsModule) else isinstance(recs, dict) and recs.get("enabled")):
+            return data
+        models = data.get("models") or {}
+        if isinstance(models, ModelsModule):
+            models = models.model_dump(mode="json")
+        tasks = dict(models.get("tasks") or DEFAULT_TASKS)
+        if RECOMMENDER_TASK in tasks:
+            return data
+        return {**data, "models": {**models, "tasks": {**tasks, RECOMMENDER_TASK: dict(RECOMMENDER_DEFAULT)}}}
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""
@@ -1047,6 +1210,42 @@ class FastChannelsConfig(_Section):
             )
         return None
 
+    def _agents_problems(self, where: str, iac: list[str], region: str | None = None) -> list[str]:
+        """The agents module's rules: the operator plane, IaC channels, one writer per channel, the sales agent's
+        own book."""
+        modules, problems = self.modules, list[str]()
+        if not self.agent.enabled:
+            problems.append(
+                f"{where}.agents: the roster runs on the operator plane's Runtime and Gateway; agent.enabled is false"
+            )
+        envelope = modules.agents.envelope.resolved(self.prefix)
+        named = (
+            set(envelope.always_on)
+            | set(envelope.programmed)
+            | {channel for agent in envelope.agents.values() for grant in agent.grants for channel in grant.channels}
+        )
+        problems += [
+            f"{where}.agents.envelope: {name!r} is not an IaC channel (channels.iac: {iac})"
+            for name in sorted(named - set(iac))
+        ]
+        problems += [
+            f"{where}.agents.envelope.programmed: {channel.name!r} has an autopilot_cron; the programming agent "
+            "and the autopilot would both schedule it (one writer per channel)"
+            for channel in self.channels.iac
+            if channel.name in envelope.programmed and channel.autopilot_cron
+        ]
+        if (sales := envelope.agents.get(Role.SALES)) is not None and sales.enabled and not modules.pds.enabled:
+            problems.append(
+                f"{where}.agents.envelope.agents.sales: the sales agent paces the PDS own book's lines; "
+                "modules.pds is off"
+            )
+        if modules.agents.devops_agent and region and region not in DEVOPS_AGENT_REGIONS:
+            problems.append(
+                f"{where}.agents.devops_agent: AWS DevOps Agent is not in {region} (it is in "
+                f"{', '.join(DEVOPS_AGENT_REGIONS)})"
+            )
+        return problems
+
     def _module_problems(self, region: str | None) -> list[str]:
         """Rules between a module and the rest of the configuration (rules among modules: :class:`ModulesConfig`).
         Model ids are compared with ``{geo}`` resolved for ``region``: a section left at its defaults keeps it."""
@@ -1072,6 +1271,8 @@ class FastChannelsConfig(_Section):
                 f"{where}.ops.ledger_lock: compliance-mode records cannot be deleted before their retention ends, "
                 "which removal=destroy needs; use governance or removal=retain"
             )
+        if modules.agents.enabled:
+            problems += self._agents_problems(where, iac, region)
         if modules.selling.enabled:
             allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
             if (model := modules.selling.buyer_model) not in allowed:
@@ -1099,6 +1300,11 @@ class FastChannelsConfig(_Section):
                 problems.append(
                     f"{where}.models.tasks: {SCHEDULER_TASK!r}, the scheduler agent's entry, is missing; add it or set "
                     "agent.enabled=false"
+                )
+            if modules.understanding.enabled and modules.understanding.task not in modules.models.tasks:
+                problems.append(
+                    f"{where}.understanding.task: {modules.understanding.task!r} is not in models.tasks; add its entry "
+                    "(a video model of agent.allowed_models, such as {geo}.amazon.nova-2-lite-v1:0)"
                 )
         return problems
 
@@ -1163,8 +1369,8 @@ def eval_records() -> tuple[Path, ...]:
 
 
 def _expand_prefix(data: dict[str, Any]) -> None:
-    """Replace ``{prefix}`` in IaC channel names and in the channels the release module monetizes, so one default
-    channel works for every deployment prefix."""
+    """Replace ``{prefix}`` in IaC channel names and in the channels the release module monetizes (and its
+    child-directed ones), so one default channel works for every deployment prefix."""
     prefix = data.get("prefix")
     if not isinstance(prefix, str):
         return
@@ -1174,10 +1380,11 @@ def _expand_prefix(data: dict[str, Any]) -> None:
             channel["name"] = channel["name"].replace("{prefix}", prefix)
     modules = data.get("modules")
     release = modules.get("release") if isinstance(modules, dict) else None
-    if isinstance(release, dict) and isinstance(release.get("channels"), list):
-        release["channels"] = [
-            name.replace("{prefix}", prefix) if isinstance(name, str) else name for name in release["channels"]
-        ]
+    for key in ("channels", "child_directed"):
+        if isinstance(release, dict) and isinstance(release.get(key), list):
+            release[key] = [
+                name.replace("{prefix}", prefix) if isinstance(name, str) else name for name in release[key]
+            ]
 
 
 def _decode(value: Any) -> Any:

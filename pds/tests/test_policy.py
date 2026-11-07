@@ -122,6 +122,25 @@ def test_modes(fields: dict[str, Any], mode: str, reason: str, bidders: dict[str
     )
 
 
+@pytest.mark.usefixtures("snapshot")
+def test_every_sibling_of_a_child_directed_channel_is_kids_with_no_bidder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CHILD_DIRECTED_CHANNELS", "fastm-kids")
+    settings.cache_clear()
+    try:
+        for pc in ("fastm-kids-p-a", "fastm-kids-p-b", "fastm-kids-p-z"):
+            answer = json.loads(ask(json.dumps(question(pc=pc, t="AbCdEfGhIjKlMnOpQrStUv"))).body)
+            assert (answer["mode"], answer["reason"], answer["bidders"], answer["regs"]["coppa"]) == (
+                "KIDS",
+                "kids",
+                {},
+                1,
+            ), pc
+        other = json.loads(ask(json.dumps(question(pc="fastm-demo-p-a"))).body)
+        assert other["mode"] == "CONTEXTUAL", "only the child-directed channel"
+    finally:
+        settings.cache_clear()
+
+
 def test_without_a_snapshot_the_answer_is_an_immediate_503(snapshot: _Store, caplog: pytest.LogCaptureFixture) -> None:
     """The module then serves the break SAFE (own book only) and, with the own book silent too, renders the kit's
     house ads (HOUSE_CONFIG); no decision is recorded."""

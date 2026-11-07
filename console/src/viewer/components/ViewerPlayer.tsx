@@ -5,13 +5,9 @@ import styles from "../../players/HlsPlayer.module.css";
 import { attachBreakTelemetry, type BreakPhase, type PlayedBreak } from "../../players/breaks";
 import { attachPlaybackTelemetry, type PlayerEvent, type PlayerEventLevel } from "../../players/telemetry";
 import { superviseTicketedSession } from "../../players/ticketed";
+import { VIEWER_HLS_CONFIG } from "../hlsConfig";
 import type { Source } from "../playback";
 import { sessionIdOf } from "../playback";
-
-/** One load attempt of the multivariant playlist, no retry (hls.js retries it by default). */
-const SINGLE_LOAD = {
-  default: { maxTimeToFirstByteMs: 10_000, maxLoadTimeMs: 20_000, timeoutRetry: null, errorRetry: null },
-};
 
 export interface ViewerPlayerProps {
   /** One new session's source; called for every open and reopen (a ticket is single-use). */
@@ -75,14 +71,7 @@ export function ViewerPlayer({ openSource, cdnBaseUrl, label, onSource, onSessio
     return superviseTicketedSession(
       source,
       (url) => {
-        const hls = new Hls({
-          enableInterstitialPlayback: false,
-          abrEwmaDefaultEstimate: 2_000_000,
-          // Never load a ticketed URL twice: MediaTailor creates the session, and its PRE_SESSION redeem binds the
-          // ticket, even when it answers the player an error (a starting channel's 404 or 504), so a retry of the
-          // same URL would be a replay, an anonymous session. The supervisor reopens on a fresh ticket instead.
-          manifestLoadPolicy: SINGLE_LOAD,
-        });
+        const hls = new Hls({ ...VIEWER_HLS_CONFIG });
         attachPlaybackTelemetry(hls, {
           event: (level, name, detail) => {
             emit(level, name, detail);

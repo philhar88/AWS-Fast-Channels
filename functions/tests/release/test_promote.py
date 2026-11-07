@@ -263,6 +263,49 @@ def test_rollback_remaps_the_candidate_to_its_last_good_tree(
     assert ledger.entries[0].detail["reason"] == {"Error": "SmokeFailed"}
 
 
+def test_rollback_takes_the_candidates_kids_twin_back_with_it(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    bundle = kit.make_bundle(kids_pairs=True)
+    key = state.add(bundle)
+    every = [*SIBLINGS, "fastm-demo-p-k", "fastm-demo-p-l"]
+    first = applied(None, channel="fastm-demo", siblings=every, release=1, digest=bundle.digest, change_id="c1", at=AT)
+    second = applied(
+        first,
+        channel="fastm-demo",
+        siblings=["fastm-demo-p-b", "fastm-demo-p-l"],
+        release=2,
+        digest=bundle.digest,
+        change_id="c2",
+        at=AT,
+    )
+    state.states["fastm-demo"] = (second, 2)
+    for release in (1, 2):
+        state.statuses[release] = ReleaseStatus(
+            release=release, digest=bundle.digest, bundle_key=key, change_id=f"c{release}", status="APPLIED", at=AT
+        )
+    state.holder = 2
+    mediatailor = stub("mediatailor")
+    for name in ("fastm-demo-p-b", "fastm-demo-p-l"):
+        sibling = next(s for s in bundle.siblings if s.name == name)
+        put, _ = render(
+            sibling.playback, prefix="fastm", release=1, change_id="c1", origin_secret=SecretStr("secret-value-a")
+        )
+        mediatailor.add_response("put_playback_configuration", {}, put)
+    for name in ("fastm-demo-p-a", "fastm-demo-p-k"):  # the plan: the stable sibling and its twin
+        mediatailor.add_response(
+            "get_playback_configuration", {"HlsConfiguration": {"ManifestEndpointPrefix": HLS}}, {"Name": name}
+        )
+    stub("s3").add_response("put_object", {}, None)
+    stub("appconfig").add_response("list_deployments", {"Items": []}, None)
+    expect_deployment(stub("appconfig"), {"fastm-demo": "fastm-demo-p-a"}, strategy="now1", number=8)
+    result = promote.rollback(key, 2, "c2", [CANDIDATE], {"Error": "SmokeFailed"})
+    assert result["remapped"] == {"fastm-demo-p-b": 1, "fastm-demo-p-l": 1}
+    channel, version = state.states["fastm-demo"]
+    assert channel.siblings["fastm-demo-p-l"].release == 1 and channel.history["fastm-demo-p-l"] == (1,)
+    assert version == 3, "one write for the sibling and its twin"
+
+
 def test_finish_publishes_a_changed_pointer_at_once_and_deletes_old_trees(
     kit: SimpleNamespace, state: Any, stub: Stub
 ) -> None:

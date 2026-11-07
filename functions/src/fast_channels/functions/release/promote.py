@@ -8,9 +8,9 @@
 - ``promote``: at 100 %, each candidate becomes stable (the old stable sibling idle), its plan is rewritten and the
   promotion ledgered; the lock is given back. Then the channel's probe sibling follows the stable sibling's release
   (:func:`follow_probe`).
-- ``rollback`` (R1): each candidate is remapped to its last good tree (a remap reaches live sessions at their next
-  break in about 3 s), the pointer goes back to the stable siblings at once, the plans name them, and the rollback is
-  ledgered; the lock is given back. The probe follows the stable sibling again.
+- ``rollback`` (R1): each candidate, and its kids twin, is remapped to its last good tree (a remap reaches live
+  sessions at their next break in about 3 s), the pointer goes back to the stable siblings at once, the plans name
+  them, and the rollback is ledgered; the lock is given back. The probe follows the stable sibling again.
 """
 
 import json
@@ -35,6 +35,7 @@ from fast_channels.core.monetization.release import (
     pointer,
     promoted,
     rolled_back,
+    with_twins,
 )
 from fast_channels.core.monetization.smoke import request_timeouts, timed_out
 from fast_channels.core.monetization.validators import check_rendered, require_valid
@@ -450,18 +451,20 @@ def rollback(
     for candidate in chosen:
         state, version = store.channel(candidate["channel"])
         assert state is not None
-        sibling = candidate["sibling"]
-        target = last_good(state, sibling)
-        number = recorded(state, sibling, release)
-        numbers.add(number)
-        if state.siblings[sibling].release == number and target is not None:
-            good = store.status(target)
-            assert good is not None
-            record = SiblingRecord(release=target, digest=good.digest, change_id=good.change_id, at=_now())
-            remap(sibling, record)
-            state = rolled_back(state, sibling, record=record)
+        changed = False
+        for sibling in with_twins([candidate["sibling"]], state.siblings):
+            target = last_good(state, sibling)
+            number = recorded(state, sibling, release)
+            numbers.add(number)
+            if state.siblings[sibling].release == number and target is not None:
+                good = store.status(target)
+                assert good is not None
+                record = SiblingRecord(release=target, digest=good.digest, change_id=good.change_id, at=_now())
+                remap(sibling, record)  # idempotent: a retried step remaps again what it did not record
+                state, changed = rolled_back(state, sibling, record=record), True
+            remapped[sibling] = state.siblings[sibling].release
+        if changed:
             store.put_channel(state, version=version)
-        remapped[sibling] = state.siblings[sibling].release
         apply.write_plan(_channel(bundle_key, candidate["channel"]), state, {}, _now())
     content = pointer(store.channels(list(config.release_channels)))
     stop_pointer()  # a rollout still in progress (the pointer step failed) goes no further
@@ -526,7 +529,9 @@ def runbook(alarm: str, correlation_id: str) -> dict[str, Any]:
     config = settings()
     config.require("release_channels")
     states = store.channels(list(config.release_channels))
-    pair = [n for state in states.values() for n in (state.stable, state.idle) if n]
+    pair = [
+        n for state in states.values() for n in with_twins([s for s in (state.stable, state.idle) if s], state.siblings)
+    ]
     if (holder := store.holder()) is not None:
         logger.info(
             "a release or rotation holds the lock; R1 leaves the siblings to it",
@@ -535,7 +540,7 @@ def runbook(alarm: str, correlation_id: str) -> dict[str, Any]:
         return {"remapped": {}, "deferred_to": holder}
     remapped: dict[str, int] = {}
     for sibling in sorted(alarming_siblings(pair)):
-        channel = next(name for name, state in states.items() if sibling in (state.stable, state.idle))
+        channel = next(name for name, state in states.items() if sibling.startswith(f"{name}-p-"))
         state, version = store.channel(channel)
         assert state is not None
         target = last_good(state, sibling)
@@ -556,7 +561,7 @@ def runbook(alarm: str, correlation_id: str) -> dict[str, Any]:
             detail={"runbook": "R1", "alarm": alarm, "sibling": sibling, "release": target},
         )
     logger.warning("runbook R1", extra={"alarm": alarm, "remapped": remapped})
-    channels = {name for name, state in states.items() if set(remapped) & {state.stable, state.idle}}
+    channels = {name for name in states if any(s.startswith(f"{name}-p-") for s in remapped)}
     probes = _follow_probes(channels, correlation_id, strict=False)
     return {"remapped": remapped, "probes": probes}
 

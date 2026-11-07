@@ -5,8 +5,9 @@ the task role's grants, as the CDK context ``scripts/guidance_app.py`` reads (:d
 grants are exactly the hot-path functions' were: the snapshot object, the budget shards' reads, the reservations'
 writes (``BUDGET#``, ``CAP#``, ``RES#`` items) and the ledger's ``pds/*`` chains, the viewer profiles' reads
 (``VIEWER#`` items, ADR-0037), with the crawl module the catalog-context objects, and with the identity module the
-ticket rows (``T#`` items of ``<prefix>-identity``: read, self-redeem and ``last_seen``). The task role is shared with
-Prebid Server's container, so Prebid Server could make these calls too (ADR-0036 weighs that).
+ticket rows (``T#`` items of ``<prefix>-identity``: read, self-redeem and ``last_seen``) and the viewers' consent
+(``C#`` items: read). The task role is shared with Prebid Server's container, so Prebid Server could make these calls
+too (ADR-0036 weighs that).
 
 The sidecar runs in the guidance's VPC, whose S3 gateway endpoint lets requests through only to the guidance's own
 buckets (its endpoint policy): S3 answers anything else ``AccessDenied``, whatever the role allows (seen live). So
@@ -16,11 +17,13 @@ wrapper adds a DynamoDB gateway endpoint whose policy admits only the sidecar's 
 (:func:`dynamodb_endpoint_statements`): the guidance itself calls no DynamoDB.
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from fast_channels.core.crawl.catalog_context import CONTEXT_PREFIX
+from fast_channels.core.identity.consent import KEY_PREFIX as CONSENT_KEY_PREFIX
 from fast_channels.core.identity.names import table_name as identity_table
 from fast_channels.core.identity.ticket import KEY_PREFIX as TICKET_KEY_PREFIX
 from fast_channels.core.ledger import ledger_table
@@ -170,6 +173,15 @@ def statements(
                 "Condition": _leading([f"{TICKET_KEY_PREFIX}*"]),
             }
         )
+        granted.append(
+            {
+                "Sid": "PdsViewerConsent",
+                "Effect": "Allow",
+                "Action": "dynamodb:GetItem",
+                "Resource": _table(partition, region, account, identity_table(prefix)),
+                "Condition": _leading([f"{CONSENT_KEY_PREFIX}*"]),
+            }
+        )
     return tuple(granted)
 
 
@@ -254,6 +266,7 @@ def sidecar(
     crawl: dict[str, str] | None = None,
     catalog_context_bucket: str | None = None,
     identity: bool = False,
+    child_directed: Sequence[str] = (),
 ) -> Sidecar:
     """The sidecar of stage ``prefix``.
 
@@ -271,6 +284,8 @@ def sidecar(
         catalog_context_bucket: with the crawl module on, its catalog-context bucket.
         identity: the identity module is on: the sidecar reads and binds tickets in ``<prefix>-identity``
             (``IDENTITY_TABLE``, ``fast_channels.pds.bindings``).
+        child_directed: the child-directed monetized channels (``modules.release.child_directed``): every break of
+            their siblings is KIDS (``CHILD_DIRECTED_CHANNELS``).
     """
     environment = {
         "FAST_PREFIX": prefix,
@@ -286,6 +301,7 @@ def sidecar(
         **(crawl or {}),
         **({"CATALOG_CONTEXT_BUCKET": catalog_context_bucket} if catalog_context_bucket else {}),
         **({"IDENTITY_TABLE": identity_table(prefix)} if identity else {}),
+        **({"CHILD_DIRECTED_CHANNELS": ",".join(child_directed)} if child_directed else {}),
     }
     return Sidecar(
         image=image,

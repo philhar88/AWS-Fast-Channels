@@ -642,6 +642,28 @@ def test_the_gap_share_is_of_sessions_not_breaks() -> None:
     assert pods.gap_share({("s1", "7")}, {f"s{n}" for n in range(1, 8)}) <= pods.GAP_SESSION_SHARE
 
 
+def test_a_run_is_judged_on_its_gaps_only_from_ten_sessions() -> None:
+    gaps = {("s1", "7"), ("s1", "8"), ("s2", "7"), ("s9", "7")}
+
+    assert pods.gapped_sessions(gaps, {"s1", "s2", "s3"}) == {"s1", "s2"}
+    small = pods.gap_count(gaps, {"s1", "s2", "s3"})
+    assert (small.gapped, small.allowed, small.rare) == (2, None, True), "two of three: reported, not judged"
+    assert "reported only, below 10 sessions" in str(small)
+    ten = {f"s{n}" for n in range(10)}
+    assert pods.gap_count(gaps, ten) == pods.GapCount(3, 10, 2) and not pods.gap_count(gaps, ten).rare
+    assert pods.gap_count({("s1", "7"), ("s2", "7")}, ten).rare, "a fifth of ten"
+    assert pods.gap_count(set(), set()).rare
+
+
+def test_a_stopped_channel_starts_six_minutes_after_its_stop() -> None:
+    """W-2 1.33: a test that judges ad fill waits until the channel has been stopped for 6 minutes."""
+    stopped = datetime(2026, 11, 7, 17, 29, 45, tzinfo=UTC)
+
+    assert pods.settled_at({"ChannelState": "STOPPED", "LastModifiedTime": stopped}) == stopped + timedelta(minutes=6)
+    assert pods.settled_at({"ChannelState": "RUNNING", "LastModifiedTime": stopped}) is None, "no restart to wait for"
+    assert pods.settled_at({"ChannelState": "STOPPED"}) is None
+
+
 def _ads_event(at: datetime, sid: str, kind: str, request: str, **fields: Any) -> dict[str, Any]:
     stamp = at.isoformat().replace("+00:00", "Z")
     return {"eventTimestamp": stamp, "sessionId": sid, "eventType": kind, "requestId": request, **fields}

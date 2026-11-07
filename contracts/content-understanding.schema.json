@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Analysis": {
+      "description": "An analysis the workflow can run; each one is switched on or off per deployment for its cost.",
+      "enum": [
+        "transcript",
+        "shots",
+        "technical_cues",
+        "labels",
+        "moderation"
+      ],
+      "title": "Analysis",
+      "type": "string"
+    },
+    "BrandSafety": {
+      "description": "The title's brand-safety risk tier, in the spirit of the brand safety floor and suitability tiers of the\nindustry framework: ``floor`` is content no advertiser should be next to, then high, medium and low risk.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "floor"
+      ],
+      "title": "BrandSafety",
+      "type": "string"
+    },
+    "Mood": {
+      "description": "The tone of a title: a fixed vocabulary, so rails and buyers can rely on its words.",
+      "enum": [
+        "uplifting",
+        "tense",
+        "dark",
+        "humorous",
+        "romantic",
+        "calm",
+        "energetic",
+        "sad",
+        "suspenseful",
+        "whimsical",
+        "epic",
+        "informative"
+      ],
+      "title": "Mood",
+      "type": "string"
+    },
+    "Status": {
+      "description": "``complete`` when every configured analysis and the describe step succeeded; ``partial`` when the item was\nwritten from what did (the workflow fails open).",
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "What the workflow found in one title (``CONTENT#<content_id>`` / ``UNDERSTANDING``).",
+  "properties": {
+    "v": {
+      "const": 1,
+      "default": 1,
+      "description": "Schema version; a new schema is a new version, never an in-place change.",
+      "title": "V",
+      "type": "integer"
+    },
+    "content_id": {
+      "description": "The title's catalog id.",
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "title": "Content Id",
+      "type": "string"
+    },
+    "asset_id": {
+      "description": "The encode that was analysed.",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Asset Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/Status"
+    },
+    "analyses": {
+      "description": "The analyses that succeeded and fed the item.",
+      "items": {
+        "$ref": "#/$defs/Analysis"
+      },
+      "title": "Analyses",
+      "type": "array"
+    },
+    "cat": {
+      "default": [],
+      "description": "IAB Tech Lab Content Taxonomy 3.1 category ids (AdCOM ``cattax`` 9), most apt first.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 5,
+      "title": "Cat",
+      "type": "array"
+    },
+    "keywords": {
+      "default": [],
+      "description": "Lower-case descriptive keywords, most apt first.",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Keywords",
+      "type": "array"
+    },
+    "moods": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Mood"
+      },
+      "maxItems": 3,
+      "title": "Moods",
+      "type": "array"
+    },
+    "brand_safety": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BrandSafety"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "A GARM-style risk tier, the riskier of the model's and the moderation labels'; null when neither ran."
+    },
+    "moderation": {
+      "default": [],
+      "description": "Top-level moderation categories seen (Rekognition's taxonomy): where the evidence of the tier lies.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Moderation",
+      "type": "array"
+    },
+    "synopsis": {
+      "default": "",
+      "description": "One or two sentences, without spoilers.",
+      "maxLength": 300,
+      "title": "Synopsis",
+      "type": "string"
+    },
+    "language": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z]{2}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The spoken language (ISO 639-1), from Transcribe.",
+      "title": "Language"
+    },
+    "shots": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Shots"
+    },
+    "speech_ratio": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Share of the runtime with speech.",
+      "title": "Speech Ratio"
+    },
+    "duration_ms": {
+      "minimum": 0,
+      "title": "Duration Ms",
+      "type": "integer"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The model the describe step ran on (the task's foundation model id); null when it did not run.",
+      "title": "Model"
+    },
+    "analyzed_at": {
+      "format": "date-time",
+      "title": "Analyzed At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "content_id",
+    "asset_id",
+    "status",
+    "analyses",
+    "duration_ms",
+    "analyzed_at"
+  ],
+  "title": "Understanding",
+  "type": "object"
+}

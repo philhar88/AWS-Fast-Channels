@@ -7,9 +7,9 @@ in this order (docs/pds.md#privacy-modes):
    (house only);
 2. a ticket that is missing, malformed, unknown, replayed, minted for another configuration or past its lease is
    CONTEXTUAL, with every viewer parameter zeroed;
-3. a bound viewer whose consent cannot be read (store failure, or an answer older than 60 s) is SAFE: own book and
-   house only, no third-party fan-out;
-4. otherwise the consent decides: FULL, PSEUDONYMOUS, or CONTEXTUAL for an opt-out.
+3. a bound viewer whose consent cannot be read (no record, a stale one, a store failure, or an answer older than
+   60 s) is SAFE: own book and house only, no third-party fan-out;
+4. otherwise the consent decides: FULL, PSEUDONYMOUS, or CONTEXTUAL for an opt-out and for a guest.
 
 Prebid Server's own Activity Controls do the per-field disclosure for each mode; the patch only names bidders, sets
 ``regs`` and ``device`` (the viewer-IP rule and the device-type map), carries user data in FULL, and adds what patch
@@ -17,7 +17,7 @@ contributors supply. :func:`decide` runs the whole chain.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from ipaddress import IPv4Address
@@ -46,8 +46,10 @@ class Consent(StrEnum):
     FULL = "FULL"
     PSEUDONYMOUS = "PSEUDONYMOUS"
     OPTED_OUT = "OPTED_OUT"
+    CONTEXTUAL = "CONTEXTUAL"
+    """A guest who did not opt out: no ids or user data, the GPP string passed (``core.identity.consent``)."""
     UNAVAILABLE = "UNAVAILABLE"
-    """The store failed, or its answer is older than 60 s."""
+    """No record, a stale one, a store failure, or an answer older than 60 s."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,17 @@ def is_kids_configuration(pc: str) -> bool:
     return bool(head and sep) and sibling in KIDS_SIBLINGS
 
 
+def channel_of(pc: str) -> str | None:
+    """The channel of sibling configuration ``pc`` (``<channel>-p-<letter>``), or None."""
+    head, sep, _ = pc.rpartition("-p-")
+    return head if head and sep else None
+
+
+def is_kids(pc: str, child_directed: Collection[str] = ()) -> bool:
+    """Whether a break on ``pc`` is KIDS: a kids sibling, or any sibling of a ``child_directed`` channel."""
+    return is_kids_configuration(pc) or channel_of(pc) in child_directed
+
+
 def resolve(
     identity: Reason,
     *,
@@ -126,9 +139,16 @@ def _by_consent(consent: Consent | None, viewer: Viewer) -> Resolution:
         case Consent.PSEUDONYMOUS:
             return Resolution(Mode.PSEUDONYMOUS, Reason.BOUND, viewer)
         case Consent.OPTED_OUT:  # no ids or user data; the GPP string still tells PBS what the viewer chose
-            return Resolution(Mode.CONTEXTUAL, Reason.OPTED_OUT, Viewer(gpp=viewer.gpp, gpp_sid=viewer.gpp_sid))
+            return Resolution(Mode.CONTEXTUAL, Reason.OPTED_OUT, _contextual(viewer))
+        case Consent.CONTEXTUAL:  # a guest's bound ticket
+            return Resolution(Mode.CONTEXTUAL, Reason.BOUND, _contextual(viewer))
         case _:
             return Resolution(Mode.SAFE, Reason.CONSENT_UNAVAILABLE)
+
+
+def _contextual(viewer: Viewer) -> Viewer:
+    """What a CONTEXTUAL break keeps of a bound viewer: the mint's correlation id and the GPP string, no ``vid``."""
+    return Viewer(cid=viewer.cid, gpp=viewer.gpp, gpp_sid=viewer.gpp_sid)
 
 
 @dataclass(frozen=True, slots=True)

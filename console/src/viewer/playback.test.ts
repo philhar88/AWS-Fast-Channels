@@ -56,13 +56,27 @@ describe("openChannel", () => {
     });
   });
 
-  it("plays a guest on the playback plan's anonymous URL", async () => {
-    const fetchImpl = backend(() => Promise.reject(new Error("unexpected mint")));
-    await expect(openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, fetchImpl })).resolves.toEqual({
-      url: PLANNED,
-      anonymous: "guest",
+  it("mints a guest ticket with no token, carrying Global Privacy Control", async () => {
+    const fetchImpl = backend(() => json(200, { url: TICKETED, cid: "01G" }));
+    await expect(openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, gpc: true, fetchImpl })).resolves.toEqual({
+      url: TICKETED,
+      cid: "01G",
     });
-    expect(urlOf(fetchImpl.mock.calls[0]?.[0] ?? "")).toBe(`${PLAN}/fastm-demo.json`);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${MINT}/guest`);
+    expect(init.headers).not.toHaveProperty("Authorization");
+    expect(JSON.parse(init.body as string)).toEqual({ channel: "fastm-demo", gpc: true });
+  });
+
+  it("plays a guest on the playback plan's anonymous URL when the guest mint fails", async () => {
+    const blocked = backend(() => Promise.resolve(new Response("Forbidden", { status: 403 })));
+    await expect(openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, gpc: false, fetchImpl: blocked })).resolves.toEqual({
+      url: PLANNED,
+      anonymous: "guest; no ticket: unauthorized",
+    });
+    const [, init] = blocked.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ channel: "fastm-demo" });
+    expect(urlOf(blocked.mock.calls[1]?.[0] ?? "")).toBe(`${PLAN}/fastm-demo.json`);
   });
 
   it("falls back to anonymous playback when the mint fails", async () => {
@@ -78,6 +92,16 @@ describe("openChannel", () => {
     await expect(
       openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, accessToken: token, fetchImpl: unreleased }),
     ).resolves.toEqual({ url: V3, anonymous: "no ticket: not_released; no playback plan" });
+  });
+
+  it("opens a kids profile on the kids twin with no ticket", async () => {
+    const twin = "https://cdn.example/v1/master/h/fastm-demo-p-k/hls.m3u8";
+    const fetchImpl = backend(() => json(200, { url: twin, cid: "01K", expires_in: null }));
+    await expect(
+      openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, accessToken: token, profile: "kids", fetchImpl }),
+    ).resolves.toEqual({ url: twin, kids: true });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ channel: "fastm-demo", profile: "kids" });
   });
 
   it("stops on an authorization failure instead of hiding it", async () => {

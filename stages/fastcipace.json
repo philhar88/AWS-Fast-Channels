@@ -1,0 +1,48 @@
+{
+  "prefix": "fastcipace",
+  "observability": {
+    "mediatailor_log_percent": 100,
+    "log_retention_days": 7,
+    "as_run": "shared"
+  },
+  "modules": {
+    "ops": {
+      "enabled": true,
+      "ledger_retention_days": 1
+    },
+    "demand": {
+      "enabled": true,
+      "mode": "demo",
+      "simulator": "lambda",
+      "tasks": {
+        "min": 1,
+        "max": 2
+      }
+    },
+    "pds": {
+      "enabled": true,
+      "demo_lines": [
+        {
+          "id": "paced-1",
+          "advertiser": "Paced Advertiser 1",
+          "adomain": "paced1.example",
+          "creatives": ["direct1"],
+          "cpm": 8.00,
+          "budget": 100,
+          "starts": "2026-01-01T00:00:00Z",
+          "ends": "2031-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "agents": {
+      "enabled": true,
+      "envelope": {
+        "agents": {
+          "sales": {
+            "enabled": true
+          }
+        }
+      }
+    }
+  }
+}

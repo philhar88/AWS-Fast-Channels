@@ -29,6 +29,7 @@ import pytest
 from _stack import Module, Stage
 from boto3.dynamodb.conditions import Key
 from harness import Channel, Tools, until, wait_for
+from harness_pods import wait_until_settled
 from harness_release import (
     SLOW_MS,
     Rig,
@@ -265,6 +266,7 @@ def on_air(releases: Stage, tools: Tools, channel: Channel) -> Iterator[dict[str
     picks: list[str] = []
     while sum(a.get("duration_ms") or 600_000 for a in assets for p in picks if p == a["asset_id"]) < ON_AIR_CONTENT_MS:
         picks.append(assets[len(picks) % len(assets)]["asset_id"])
+    wait_until_settled(releases, channel.name)  # before the plan: the start follows it
     start = clear_schedule(tools, channel.name)
     plan = tools(
         "schedule___plan", channel=channel.name, picks=picks, start=start.isoformat(), break_policy=BREAK_A_MINUTE

@@ -68,8 +68,15 @@ def test_one_effort_level_runs_both_modes() -> None:
 
 
 def test_an_unknown_task_is_refused() -> None:
-    with pytest.raises(SystemExit, match=r"cdk\.json has no model-registry task 'recommender'"):
-        eval_model.task_settings("recommender", HAIKU)
+    with pytest.raises(SystemExit, match=r"cdk\.json has no model-registry task 'portfolio\.propose'"):
+        eval_model.task_settings("portfolio.propose", HAIKU)
+
+
+def test_the_recommender_runs_with_the_entry_its_module_deploys() -> None:
+    settings = eval_model.task_settings("recommender", HAIKU)
+
+    assert (settings.model, settings.thinking, settings.max_tokens) == (HAIKU, Thinking.DISABLED, 4000)
+    assert qualification((REPO / "evals" / "records",), "recommender", settings) == []
 
 
 def test_the_record_has_a_check_per_scenario_and_fails_with_any_run(tmp_path: Path) -> None:

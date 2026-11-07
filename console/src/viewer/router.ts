@@ -1,15 +1,20 @@
-/** Hash routes of the viewer app: `#/personas` (who's watching), `#/` (rails) and `#/watch/<channel>`. */
+/**
+ * Hash routes of the viewer app: `#/personas` (who's watching), `#/` (rails), `#/watch/<channel>` and `#/privacy`
+ * (the signed-in viewer's consent).
+ */
 import { useSyncExternalStore } from "react";
 
 export type ViewerRoute =
   | { readonly view: "personas" }
   | { readonly view: "home" }
+  | { readonly view: "privacy" }
   | { readonly view: "watch"; readonly channel: string };
 
 export function parseViewerRoute(hash: string): ViewerRoute {
   const [view = "", detail] = hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   switch (view) {
     case "personas":
+    case "privacy":
       return { view };
     case "watch":
       return detail ? { view, channel: detail } : { view: "home" };
@@ -24,6 +29,8 @@ export function viewerHref(route: ViewerRoute): string {
       return "#/personas";
     case "home":
       return "#/";
+    case "privacy":
+      return "#/privacy";
     case "watch":
       return `#/watch/${encodeURIComponent(route.channel)}`;
   }

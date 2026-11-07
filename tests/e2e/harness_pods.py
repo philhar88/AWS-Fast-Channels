@@ -7,6 +7,7 @@ The readers and checks are pure functions over log events, unit-tested in ``test
 """
 
 import json
+import math
 import re
 import time
 from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -19,7 +20,7 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 from _demand import PREBID_CONTAINER, prebid_log_group
 from _stack import Module, Stage
-from harness import Player, TransientResponseError, wait_for
+from harness import Player, Tools, TransientResponseError, until, wait_for
 from playback import Segment, Splice, Window, media_segments, splices
 
 from fast_channels.core.demand import simulator_function, warmup_project
@@ -50,10 +51,15 @@ POLL_SECONDS: Final = 3.5
 _SESSION_ID: Final = re.compile(r"/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/")
 _MODULE_MESSAGE: Final = re.compile(r'"message":\s*"(\{.*\})"')
 ADS_EVENTS: Final = frozenset({"MAKING_ADS_REQUEST", "VAST_RESPONSE", "FILLED_AVAIL"})
-GAP_SESSION_SHARE: Final = 1 / 5
-"""At most this share of a run's sessions may have a known ADS log gap (:func:`log_gaps`): W-2 1.32 was seen in one
-session of seven. More is not that defect's rate, and fails the run."""
 """The ADS log events of a break answered and stitched."""
+GAP_SESSION_SHARE: Final = 1 / 5
+"""At most this share of a run's sessions may have a known gap: an ADS log gap (:func:`log_gaps`, W-2 1.32, seen in
+one session of seven) or an unserved prefetched break (:func:`unserved_prefetches`, W-2 1.33). More is not the
+defect's rate, and fails the run (:func:`gap_count`)."""
+GAP_MIN_SESSIONS: Final = 10
+"""The share is enforced only from this many sessions. Below it one gapped session is already a fifth or a third, and
+a defect's day-to-day rate cannot be told from a regression (W-2 1.33: 3 sessions of 33 on 2026-11-06, 5 of 17 the
+next day): a smaller run prints its count and passes."""
 FIRST_SIGHT: Final = frozenset({"NEW_CREATIVE", "IMPORT_IN_PROGRESS"})
 """MediaTailor's skip reasons for a creative it has not imported yet: ``NEW_CREATIVE`` the first time it sees it (it
 starts the import), ``IMPORT_IN_PROGRESS`` until the import is done."""
@@ -64,6 +70,13 @@ CLOCK_SLACK: Final = timedelta(seconds=1)
 """How much earlier than MediaTailor's ``MAKING_ADS_REQUEST`` an auction's records may be logged."""
 READY_TIMEOUT_S: Final = 1500
 """Census lag (up to about 4.5 minutes), then Prebid Server's scale-out (about 3) and warm-up (about 3), with room."""
+# OPTIMIZATION(aws): W-2 1.33 a quick restart duplicates the first break and wedges sessions: retire when AWS fixes it
+RESTART_SETTLE: Final = timedelta(minutes=6)
+"""A test that judges ad fill starts a channel only once it has been stopped this long (:func:`start_settled`).
+A channel started soon after its stop serves the run's first break twice, with two START-DATEs for one event id, and
+half or more of the sessions that meet it lose the next breaks (W-2 1.33). Measured on 2026-11-07: duplicated after
+restarts 1 to 34 s after the stop (7 of 7), clean from 319 s on (319, 386, 604 three times, 1394 s: 0 of 6). The
+threshold lies between 34 and 319 s, unmeasured; 6 minutes clears the lowest clean point."""
 
 
 # --- the viewer's address ------------------------------------------------------------------------------------------
@@ -85,6 +98,34 @@ def egress_address(client: httpx.Client) -> IpAddress:
     response = client.get(EGRESS_URL)
     response.raise_for_status()
     return ip_address(response.text.strip())
+
+
+# --- the channel's start -------------------------------------------------------------------------------------------
+
+
+def settled_at(described: Mapping[str, Any]) -> datetime | None:
+    """When the channel that ``DescribeChannel`` described may start without W-2 1.33: :data:`RESTART_SETTLE` after
+    its ``LastModifiedTime`` (its stop, or a later change) if it is stopped; None if it runs."""
+    changed = described.get("LastModifiedTime")
+    if described.get("ChannelState") != "STOPPED" or not isinstance(changed, datetime):
+        return None
+    return changed.astimezone(UTC) + RESTART_SETTLE
+
+
+def wait_until_settled(stage: Stage, channel: str) -> None:
+    """Wait until ``channel`` has been stopped for :data:`RESTART_SETTLE` (W-2 1.33): before a test that judges ad
+    fill starts it, and before it plans programs to air soon after the start. A running channel needs no wait."""
+    described = stage.session.client("mediatailor", region_name=stage.region).describe_channel(ChannelName=channel)
+    if (settled := settled_at(described)) is not None and settled > datetime.now(UTC):
+        print(f"{channel} stopped less than {RESTART_SETTLE} ago: waiting until {settled:%H:%M:%S} (W-2 1.33)")
+        until(settled)
+
+
+def start_settled(stage: Stage, tools: Tools, channel: str) -> dict[str, Any]:
+    """``channels___start_channel`` on ``channel`` once it has been stopped for :data:`RESTART_SETTLE`
+    (:func:`wait_until_settled`). A running channel starts at once: the call only moves its auto-stop."""
+    wait_until_settled(stage, channel)
+    return tools("channels___start_channel", channel=channel)
 
 
 # --- viewers -------------------------------------------------------------------------------------------------------
@@ -642,6 +683,42 @@ def retrieved_for(item: Break, window: Window) -> bool:
 def gap_share(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> float:
     """The share of ``sessions`` with at least one known ADS log gap."""
     return len({sid for sid, _ in gaps} & set(sessions)) / len(sessions) if sessions else 0.0
+
+
+def gapped_sessions(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> set[str]:
+    """The ``sessions`` with at least one known gap."""
+    return {sid for sid, _ in gaps} & set(sessions)
+
+
+@dataclass(frozen=True)
+class GapCount:
+    """How many of a run's sessions had a known gap, and how many may (``None``: too few sessions to tell)."""
+
+    gapped: int
+    sessions: int
+    allowed: int | None
+
+    @property
+    def rare(self) -> bool:
+        """Whether the run passes: within :data:`GAP_SESSION_SHARE`, or too small to judge."""
+        return self.allowed is None or self.gapped <= self.allowed
+
+    def __str__(self) -> str:
+        limit = (
+            f"{self.allowed} allowed"
+            if self.allowed is not None
+            else f"reported only, below {GAP_MIN_SESSIONS} sessions"
+        )
+        return f"{self.gapped} of {self.sessions} sessions had a known gap ({limit})"
+
+
+def gap_count(gaps: Collection[tuple[str, str]], sessions: Collection[str]) -> GapCount:
+    """The run's :class:`GapCount`: from :data:`GAP_MIN_SESSIONS` sessions on, :data:`GAP_SESSION_SHARE` of them (at
+    least one) may have a gap; a smaller run is reported, not judged."""
+    gapped = len(gapped_sessions(gaps, sessions))
+    if len(sessions) < GAP_MIN_SESSIONS:
+        return GapCount(gapped, len(sessions), None)
+    return GapCount(gapped, len(sessions), max(1, math.floor(GAP_SESSION_SHARE * len(sessions))))
 
 
 # --- the run's log groups and Prebid Server's readiness (the demand smokes') ---------------------------------------

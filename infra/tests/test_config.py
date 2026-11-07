@@ -11,10 +11,12 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel
 
 from fast_channels.core.adload import AdLoadPolicy
+from fast_channels.core.agents.envelope import Role
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, RenditionProfile
+from fast_channels.core.understanding.record import TASK
 from fast_channels.infra.config import (
     EVAL_RECORDS_ENV,
     AdsMode,
@@ -424,7 +426,29 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed
 
 
-MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity", "selling", "viewer")
+MODULES = (
+    "ops",
+    "models",
+    "demand",
+    "pds",
+    "release",
+    "crawl",
+    "identity",
+    "selling",
+    "viewer",
+    "agents",
+    "understanding",
+    "recs",
+    "creatives",
+)
+DESCRIBE: dict[str, Any] = {
+    "model": "{geo}.amazon.nova-2-lite-v1:0",
+    "effort": "low",
+    "thinking": "disabled",
+    "max_tokens": 4000,
+    "eval": "amazon.nova-2-lite-v1-0-disabled-4k",
+}
+"""The understanding module's describe task, with its fixture eval record (``infra/tests/data/evals``)."""
 RECS = "haiku-5-5-adaptive-8k"
 """The recommender's fixture eval record (``infra/tests/data/evals``)."""
 RECOMMENDER: dict[str, Any] = {
@@ -468,6 +492,18 @@ def test_selling_resolves_the_buyers_model(load_config: Load) -> None:
     selling = load_config(with_shipped(**SELLING), region="us-east-1").modules.selling
 
     assert (selling.buyer_model, selling.creatives, selling.cpm) == (US_HAIKU, ("direct2",), 14)
+
+
+def test_creatives_need_pds_and_moderate_by_default(load_config: Load) -> None:
+    message = config_error(load_config, with_shipped(**modules_on("creatives")))
+
+    assert "  - fast-channels.modules: creatives needs pds: enable it" in message
+    creatives = load_config(with_shipped(**modules_on("ops", "demand", "pds", "creatives"))).modules.creatives
+    assert (creatives.enabled, creatives.moderation, creatives.min_confidence) == (True, True, 80)
+    assert "min_confidence" in config_error(
+        load_config,
+        with_shipped(**modules_on("ops", "demand", "pds", "creatives"), **{"modules.creatives.min_confidence": 20}),
+    )
 
 
 def test_shipped_modules_are_off_and_at_their_defaults(load_config: Load) -> None:
@@ -645,7 +681,8 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
             **{
                 "removal": "retain",
                 "modules.ops.ledger_lock": "compliance",
-                "modules.models.tasks": {"recommender": {**recommender, "data_class": "viewer"}},
+                "modules.models.tasks": {"recommender": {**recommender, "data_class": "viewer"}, TASK: DESCRIBE},
+                "agent.allowed_models": [*SHIPPED["agent"]["allowed_models"], DESCRIBE["model"]],
                 "modules.demand.simulator": "lambda",
                 "modules.demand.tasks": {"min": 3, "max": 3},
                 "modules.demand.dayparts": [{"cron": "cron(50 17 ? * MON-FRI *)", "min": 3}],
@@ -662,7 +699,7 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
     modules = config.modules
     assert all(modules.enabled(name) for name in MODULES)
     assert modules.ops.ledger_lock is LedgerLock.COMPLIANCE
-    assert set(modules.models.tasks) == {"scheduler.plan", "recommender"}  # merged into cdk.json's entries
+    assert set(modules.models.tasks) == {"scheduler.plan", "recommender", TASK}  # merged into cdk.json's entries
     assert modules.models.tasks["recommender"].effort is Effort.LOW
     assert modules.demand.simulator is Simulator.LAMBDA
     assert modules.pds.demo_lines == (DemoLine.model_validate(LINE),)
@@ -825,3 +862,70 @@ def test_a_model_or_setting_without_its_own_record_fails_synth(
 def test_any_routing_of_the_tested_model_qualifies(load_config: Load) -> None:
     for region in ("eu-west-1", "sa-east-1"):  # eu. and global. profiles of the us.-tested Haiku 5.5
         assert load_config(MODELS_ON, region=region).modules.models.tasks["scheduler.plan"].eval
+
+
+def test_child_directed_channels_are_monetized_ones(load_config: Load) -> None:
+    with pytest.raises(ConfigError, match="child_directed"):
+        load_config(
+            {"fast-channels": {"modules": {"release": {"channels": ["{prefix}-demo"], "child_directed": ["x-kids"]}}}}
+        )
+    config = load_config(
+        {
+            "fast-channels": {
+                "prefix": "fastm",
+                "channels": {"iac": [{"name": "{prefix}-demo"}]},
+                "modules": {"release": {"channels": ["{prefix}-demo"], "child_directed": ["{prefix}-demo"]}},
+            }
+        }
+    )
+    assert config.modules.release.child_directed == ("fastm-demo",)
+
+
+AGENTS: dict[str, Any] = {**modules_on("ops", "agents")}
+"""The agents module with what it needs."""
+
+
+def test_the_agents_envelope_names_iac_channels_with_one_writer_each(load_config: Load) -> None:
+    autopilot = [{"name": "fast-demo", "autopilot_cron": "cron(0 */6 * * ? *)"}]
+    envelope = {"always_on": ["{prefix}-news"], "programmed": ["{prefix}-demo"]}
+
+    message = config_error(
+        load_config, with_shipped(**AGENTS, **{"channels.iac": autopilot, "modules.agents.envelope": envelope})
+    )
+
+    assert "fast-channels.modules.agents.envelope: 'fast-news' is not an IaC channel" in message
+    assert (
+        "'fast-demo' has an autopilot_cron; the programming agent and the autopilot would both schedule it" in message
+    )
+
+
+def test_the_sales_agent_needs_the_pds_own_book(load_config: Load) -> None:
+    sales = {"agents": {"sales": {"enabled": True}}}
+
+    message = config_error(load_config, with_shipped(**AGENTS, **{"modules.agents.envelope": sales}))
+    config = load_config(
+        with_shipped(**AGENTS, **modules_on("demand", "pds"), **{"modules.agents.envelope": sales}), region="us-east-1"
+    )
+
+    assert "the sales agent paces the PDS own book's lines; modules.pds is off" in message
+    assert config.modules.agents.envelope.enabled() == [Role.OPERATIONS, Role.SALES]
+
+
+def test_a_programmed_channel_without_an_autopilot_is_the_programming_agents(load_config: Load) -> None:
+    envelope = {"programmed": ["{prefix}-demo"], "agents": {"programming": {"enabled": True}}}
+
+    config = load_config(with_shipped(**AGENTS, **{"modules.agents.envelope": envelope}), region="us-east-1")
+
+    resolved = config.modules.agents.envelope.resolved(config.prefix)
+    publish = resolved.agents[Role.PROGRAMMING].grant("schedule___publish")
+    assert resolved.programmed == ("fast-demo",) and Role.PROGRAMMING in resolved.enabled()
+    assert publish is not None and publish.lead_minutes == 120
+
+
+def test_the_devops_agent_runs_only_where_aws_offers_it(load_config: Load) -> None:
+    devops = {**AGENTS, "modules.agents.devops_agent": True}
+
+    message = config_error(load_config, with_shipped(**devops), region="sa-east-1")
+
+    assert "fast-channels.modules.agents.devops_agent: AWS DevOps Agent is not in sa-east-1" in message
+    assert load_config(with_shipped(**devops), region="eu-west-1").modules.agents.devops_agent

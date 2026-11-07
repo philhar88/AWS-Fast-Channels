@@ -78,7 +78,7 @@ seed script and the PDS.
 | Luis Moreno | `luis@personas.example.com` | animation, surreal | `standard` |
 | Priya Shah | `priya@personas.example.com` | fantasy, adventure | `standard` |
 | Sam Lee | `sam@personas.example.com` | animation, sci-fi | `standard` |
-| Mia (kids profile) | not in this release | animation | none |
+| Mia (kids profile) | Marcus's sign-in | animation | none |
 | Guest | no sign-in | none | none |
 
 - **Sign-in** is Cognito `InitiateAuth` with `USER_PASSWORD_AUTH` on the identity module's public client, called
@@ -88,7 +88,16 @@ seed script and the PDS.
 - **Tokens** are kept in `sessionStorage`, one set per tab. Open each persona in its own window to compare them side
   by side. A tab opened from another one may copy its storage, so open a new window rather than a new tab from the
   app.
-- **A guest** never signs in: the guest's sessions are anonymous, CONTEXTUAL, on the control plan.
+- **A guest** never signs in: each play mints a guest ticket (`POST <playback API>playback/guest`), whose sessions
+  are CONTEXTUAL on the control plan, and opted out when the browser sends Global Privacy Control.
+- **A kids profile** (Mia) signs in with its account's sign-in (Marcus's) and plays every channel as the kids
+  profile: `POST /playback` with `profile: "kids"` answers the kids twin, KIDS with no ticket; the session panel
+  says "KIDS, no ticket" and there is no "why these ads" panel, because a KIDS session has no viewer id. A
+  child-directed channel plays the same way for everyone.
+- **Privacy choices** (`#/privacy`, in the persona menu): a signed-in viewer records whether they opt out of sale and
+  sharing and whether they give the video-privacy consent (`PUT <playback API>consent`). Until they choose, their
+  breaks are SAFE, own-book and house ads only, and the home page says so. `scripts/seed_personas.py` records the
+  demo personas' choices from their modes; Priya opts out live here.
 
 ## The rail
 
@@ -106,9 +115,14 @@ is called (`console/src/viewer/rail.ts`).
   first, each title once.
 - Without declared genres (the guest), channels rank by whether they air something now, then by name.
 
-The model registry's recommender tasks are not used: a recommender task needs an eval record with the recommender's
-checks ([agent.md](agent.md#model-registry)), and the demo catalog's four titles give a model nothing to choose among.
-The ranking is one pure function, so a recommender can replace it.
+With the `recs` module ([recs.md](recs.md)), "Recommended for you" replaces "Up next for you". The app asks
+`GET /rail` (`config.json`'s `railUrl`) with the viewer's access token and shows that rail.
+- **The header** says how the rail was made and why: "Recommended by Claude Haiku 5.5", "Picked for this audience
+  (no personal data)", or "Rule-based rail from your genres", each with its reason, such as the holdout or a model
+  rail being built.
+- **Each tile** shows the model's reason, or its evidence's template where the validator replaced it.
+- **When `GET /rail` fails,** the app falls back to its own rule-based rail. The recommender's fallback is a Python
+  port of the same function, kept identical by `contracts/fixtures/rail/program-rail.json`.
 
 ## Playback
 
@@ -120,10 +134,14 @@ The ranking is one pure function, so a recommender can replace it.
   even when it answers the player an error, such as a just-started channel's 404 or 504. A second load of the same URL
   would be a replay: an anonymous session. So hls.js does not retry the multivariant playlist (`manifestLoadPolicy`
   without retries), and a failed start is a reopen on a new ticket, 2 s later and backing off.
-- **Anonymous fallback.** A guest, or a failed mint (the API unreachable, `not_released`), plays the channel's
-  playback plan (`<cdn>/plan/playback/<channel>.json`): an anonymous, CONTEXTUAL session on the control plan. An
-  authorization failure (401 or 403) stops the player and asks the viewer to sign in again. An unmonetized channel
-  plays its v3.0.0 URL.
+- **Anonymous fallback.** A failed mint (the API unreachable, `not_released`, a guest's address over the rate
+  limit) plays the channel's playback plan (`<cdn>/plan/playback/<channel>.json`): an anonymous, CONTEXTUAL session
+  on the control plan. A signed-in viewer's authorization failure (401 or 403) stops the player and asks the viewer
+  to sign in again. An unmonetized channel plays its v3.0.0 URL.
+- **CMCD.** hls.js sends Common Media Client Data (CTA-5004) as a `CMCD` query parameter on every playlist and segment
+  request (`console/src/viewer/hlsConfig.ts`). The CDN's access logs parse it into their `cmcd-*` fields, such as the
+  buffer length when a viewer leaves, and keep it out of the cache keys; the edge rebuild drops it from the session's
+  init request. Its session id is hls.js's own: the MediaTailor session id in the path stays the join key.
 - **What plays.** The badge shows `Program`, `Ad 1`, `Ad 2` or `Slate`. An ad is a stitched ad segment; slate is a
   segment inside the break's `EXT-X-DATERANGE` that is not an ad, the channel's break slate for the seconds no ad
   filled. "Breaks played" lists each break as the player saw it, such as "1 ad + 0:30 of slate"
@@ -170,7 +188,8 @@ is warm ([modules.md](modules.md#how-each-module-fails-safe)). Open the app's UR
 | 3:30–6:00 | Wait for a break | Dana: `Ad 1`, then `Slate`; Marcus: `Ad 1`, `Ad 2`. "Breaks played": "1 ad + 0:30 of slate" against "2 ads" | Everyone on a channel gets the same break; what fills it differs per viewer |
 | 6:00–8:00 | Open "Why these ads" in both | Dana: FULL, tier `light`, "at most 1 ad, only bids above $20.00 CPM", one $35 ad, the bids below the bar. Marcus: tier `standard`, every slot at the market floor | Fewer, higher-priced ads for a high-value, ad-sensitive viewer; the tier and the bar never travel on the wire |
 | 8:00–9:00 | Switch the second window to Ben | Ben: tier `holdout`, the full pod | The holdout is how we would know we were wrong |
-| 9:00–10:00 | Switch to Guest | Anonymous, CONTEXTUAL, no panel | Without a sign-in a session gets the control plan |
+| 9:00–10:00 | Switch to Guest | A guest ticket, CONTEXTUAL, no panel | Without a sign-in a session gets the control plan and no identifier reaches a bidder |
+| With `recs` | Sign Dana in a second time | "Recommended by Claude Haiku 5.5": a model rail, each tile with its reason. Ben's says "Rule-based rail from your genres: you are in the rule-based holdout" if his `vid` falls in it | The model picks and explains; deterministic code chooses the candidates and checks every reason. A first session gets the audience rail, so a sign-up buys no model call |
 
 ## What it costs
 
@@ -182,8 +201,8 @@ is warm ([modules.md](modules.md#how-each-module-fails-safe)). Open the app's UR
 
 ## Limits
 
-- No kids profile and no guest ticket in this release: the identity module mints only for signed-in adults.
-- The rail is the genre baseline, not a recommender: it uses no viewing history and is not measured.
+- Without the `recs` module, the rail is the genre baseline, not a recommender. With it, the model rail is wired,
+  not proven ([recs.md](recs.md#what-it-does-not-do)).
 - The panel reads at most 400 records of a session from the last six hours.
 - The app shows a tier only while `ad_panel` is on, and only to the viewer it belongs to.
 

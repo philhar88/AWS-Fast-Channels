@@ -33,6 +33,8 @@ def test_the_shipped_map_uses_only_known_ids_and_covers_every_ctv_genre() -> Non
     assert len(genre_map.tags) == 44  # one tag per CTV genre of the IAB mapping
     assert all(genre.id in TAXONOMY and genre.name == TAXONOMY[genre.id] for genre in genre_map.tags.values())
     assert all(tag == tag.lower() for tag in genre_map.tags)
+    assert len(genre_map.ctv) == 44  # the CTV genres themselves, as the understanding module's model names them
+    assert genre_map.ctv["Sci-Fi"] == genre_map.tags["sci-fi"] == Genre("652", "Science Fiction")
 
 
 @pytest.mark.parametrize(

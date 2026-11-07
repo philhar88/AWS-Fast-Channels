@@ -12,6 +12,9 @@ The Pod Decision Service is the authority. On every break it reads ``T#<t>`` wit
 - Anything else is anonymous, with the reason: ``unknown`` (no row), ``pc_mismatch``, ``replay`` (bound to another
   session) or ``expired_or_raced`` (the window passed unredeemed, or the lease ended).
 
+A bound signed-in viewer's mode then comes from their consent (``core.identity.consent``), which the caller reads
+(:attr:`Binding.signed_in`); a bound guest's from the mode the guest mint put on the ticket.
+
 The row's times are epoch milliseconds (API Gateway's ``$context.requestTimeEpoch`` and the mint's clock).
 """
 
@@ -20,6 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
+from fast_channels.core.identity.consent import UNKNOWN, StoredConsent
 from fast_channels.core.identity.ticket import REDEEM_CONDITION, REDEEM_UPDATE, PrivacyMode, key
 from fast_channels.core.pds.models import Reason
 from fast_channels.core.pds.policy import ANONYMOUS, Consent, Viewer
@@ -54,11 +58,18 @@ class Binding:
     cid: str | None = None
     persona: str | None = None
     pm: PrivacyMode | None = None
+    gpp: str | None = None
+    gpp_sid: tuple[int, ...] = ()
     action: Action = Action.NONE
 
     @property
     def bound(self) -> bool:
         return self.reason is Reason.BOUND
+
+    @property
+    def signed_in(self) -> bool:
+        """Bound to a signed-in viewer, whose consent decides the mode."""
+        return self.bound and self.vid is not None
 
 
 def _ms(row: Mapping[str, Any], name: str) -> int | None:
@@ -74,6 +85,8 @@ def _bound(row: Mapping[str, Any], action: Action) -> Binding:
         cid=row.get("cid"),
         persona=row.get("persona"),
         pm=PrivacyMode(mode) if mode in set(PrivacyMode) else None,  # an unknown mode: consent unavailable, SAFE
+        gpp=row.get("gpp"),
+        gpp_sid=tuple(int(section) for section in row.get("gpp_sid") or ()),
         action=action,
     )
 
@@ -119,23 +132,30 @@ class PolicyInputs:
     consent: Consent | None = None
 
 
-CONSENT: Final[Mapping[PrivacyMode, Consent]] = {
-    PrivacyMode.FULL: Consent.FULL,
-    PrivacyMode.PSEUDONYMOUS: Consent.PSEUDONYMOUS,
+GUEST_CONSENT: Final[Mapping[PrivacyMode, Consent]] = {
+    PrivacyMode.CONTEXTUAL: Consent.CONTEXTUAL,
     PrivacyMode.OPTED_OUT: Consent.OPTED_OUT,
 }
-"""The row's privacy mode as the consent the policy reads: the mint records it, and there is no consent store yet."""
+"""A guest ticket's mode as the consent the policy reads; any other mode on a ticket without a ``vid`` is SAFE."""
 LOOKUP_FAILED: Final = PolicyInputs(Reason.BOUND, consent=Consent.UNAVAILABLE)
 """A well-formed ticket whose row could not be read: an identity failure for what may be a signed-in viewer, so the
 break is SAFE (own book and house only), never CONTEXTUAL with third parties (DESIGN-v2.2 §5.5)."""
 
 
-def policy_inputs(binding: Binding) -> PolicyInputs:
-    """The policy's identity, viewer and consent from ``binding``: the row's viewer values only when bound."""
+def policy_inputs(binding: Binding, consent: StoredConsent = UNKNOWN) -> PolicyInputs:
+    """The policy's identity, viewer and consent from ``binding``: the row's viewer values only when bound. A signed-in
+    viewer's consent is ``consent``, the store's answer (unread: SAFE); a guest's is the ticket's mode and GPP
+    string."""
     if not binding.bound:
         return PolicyInputs(binding.reason)
-    viewer = Viewer(vid=binding.vid, cid=binding.cid, persona=binding.persona)
-    return PolicyInputs(Reason.BOUND, viewer, CONSENT.get(binding.pm) if binding.pm else Consent.UNAVAILABLE)
+    if binding.signed_in:
+        viewer = Viewer(
+            vid=binding.vid, cid=binding.cid, persona=binding.persona, gpp=consent.gpp, gpp_sid=consent.gpp_sid
+        )
+        return PolicyInputs(Reason.BOUND, viewer, consent.consent)
+    guest = Viewer(cid=binding.cid, gpp=binding.gpp, gpp_sid=binding.gpp_sid)
+    mode = GUEST_CONSENT.get(binding.pm) if binding.pm else None
+    return PolicyInputs(Reason.BOUND, guest, mode or Consent.UNAVAILABLE)
 
 
 def self_redeem(table: str, ticket: str, *, sid: str, pc: str, now_ms: int) -> dict[str, Any]:

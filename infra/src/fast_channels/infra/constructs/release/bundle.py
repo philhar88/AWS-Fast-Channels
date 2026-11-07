@@ -100,6 +100,7 @@ def render(
             video_content_source_url=placeholders.hide(channel_urls[name]),
             outputs=iac[name].outputs,
             lab=name == lab,
+            child_directed=name in config.modules.release.child_directed,
         )
         for name in config.release_channels
     ]
@@ -116,6 +117,7 @@ def render(
         contributions=contributions,
         ad_server=route,
         ticketed=redeem_url is not None,
+        kids_pairs=config.modules.release.kids_pairs,
     )
     require_valid(validate_bundle(bundle))
     document = json.dumps(bundle_document(bundle)["bundle"], sort_keys=True, separators=(",", ":"))

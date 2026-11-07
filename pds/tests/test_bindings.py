@@ -1,5 +1,5 @@
 """The ticket lookup on ``/policy`` (``fast_channels.pds.bindings``), against DynamoDB Local: its conditions are
-DynamoDB's own, as the identity API's redeem runs them."""
+DynamoDB's own, as the identity API's redeem runs them; and the bound viewer's consent read beside it."""
 
 import json
 import time
@@ -12,12 +12,16 @@ import pytest
 from botocore.exceptions import ClientError, ConnectTimeoutError
 from dynamodb_local import local_client
 
+from fast_channels.core.identity import consent as consents
 from fast_channels.core.identity.binding import IDLE_MS, LOOKUP_FAILED, REFRESH_MS
+from fast_channels.core.identity.consent import MAX_AGE, UNKNOWN, ConsentChoice
 from fast_channels.core.identity.ticket import ticket_row
-from fast_channels.core.pds.models import PolicyRequest, Reason
+from fast_channels.core.pds.models import Mode, PolicyRequest, Reason
+from fast_channels.core.pds.policy import Consent, resolve
 from fast_channels.core.pds.snapshot import Snapshot, SnapshotBase, build, demo_demand
+from fast_channels.functions.settings import settings
 from fast_channels.pds import policy
-from fast_channels.pds.bindings import Bindings
+from fast_channels.pds.bindings import CONSENT_FRESH_S, CONSENT_STALE_S, Bindings
 
 SID = "6f1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d"
 OTHER_SID = "0d1c2a9e-4b7d-4e2a-9c1e-2d3f4a5b6c7d"
@@ -60,6 +64,24 @@ def mint(client: Any, table: str, **fields: Any) -> None:
     row |= fields
     item = {k: {"N": str(v)} if isinstance(v, int) else {"S": str(v)} for k, v in row.items()}
     client.put_item(TableName=table, Item=item)
+
+
+def consent(client: Any, table: str, *, at: int = NOW, **choice: Any) -> None:
+    """``VID``'s consent row, recorded at ``at``."""
+    row = consents.record(VID, ConsentChoice(**{"opt_out": False, **choice}), now_ms=at).item()
+    item = {
+        k: {"BOOL": v} if isinstance(v, bool) else {"N": str(v)} if isinstance(v, int) else {"S": str(v)}
+        for k, v in row.items()
+        if k != "gpp_sid"
+    }
+    if row.get("gpp_sid"):
+        item["gpp_sid"] = {"L": [{"N": str(n)} for n in row["gpp_sid"]]}
+    client.put_item(TableName=table, Item=item)
+
+
+def mode(inputs: Any) -> tuple[Mode, Reason]:
+    resolution = resolve(inputs.identity, viewer=inputs.viewer, consent=inputs.consent)
+    return resolution.mode, resolution.reason
 
 
 def stored(client: Any, table: str) -> dict[str, Any]:
@@ -171,6 +193,7 @@ def test_policy_records_the_bound_viewer(
 ) -> None:
     client, name = table
     mint(client, name, redeem_by=time.time_ns() // 10**6 + 60_000)
+    consent(client, name, at=time.time_ns() // 10**6)
     monkeypatch.setattr(policy, "store", _Store)
     monkeypatch.setattr(policy, "bindings", lambda: Bindings(name, client))
 
@@ -186,3 +209,103 @@ def test_policy_records_the_bound_viewer(
     assert (record["mode"], record["reason"], record["vid"], record["cid"]) == ("PSEUDONYMOUS", "bound", VID, "cid-1")
     answer, record = ask(sid=OTHER_SID)
     assert (answer["mode"], answer["reason"], record["vid"], record["cid"]) == ("CONTEXTUAL", "replay", None, None)
+
+
+def test_a_signed_in_viewers_consent_decides_and_a_change_reaches_the_next_break_in_five_seconds(
+    table: tuple[Any, str],
+) -> None:
+    client, name = table
+    mint(client, name, redeemedBy=SID, bound_at=NOW - 60_000, last_seen=NOW - 60_000)
+    clock = Clock()
+    found = Bindings(name, client, clock=clock)
+    assert mode(found.inputs(request())) == (Mode.SAFE, Reason.CONSENT_UNAVAILABLE), "no consent recorded"
+    clock.now += int(CONSENT_FRESH_S * 1000)
+    consent(client, name, vppa=True, gpp="DBABMA~CPXx", gpp_sid=[2])
+    full = found.inputs(request())
+    assert mode(full) == (Mode.FULL, Reason.BOUND)
+    assert (full.viewer.vid, full.viewer.gpp, full.viewer.gpp_sid) == (VID, "DBABMA~CPXx", (2,))
+    consent(client, name, opt_out=True)
+    clock.now += 1000
+    assert mode(found.inputs(request())) == (Mode.FULL, Reason.BOUND), "kept for five seconds"
+    clock.now += int(CONSENT_FRESH_S * 1000)
+    opted_out = found.inputs(request())
+    assert mode(opted_out) == (Mode.CONTEXTUAL, Reason.OPTED_OUT)
+    assert resolve(opted_out.identity, viewer=opted_out.viewer, consent=opted_out.consent).viewer.vid is None
+
+
+def test_a_stale_or_malformed_consent_is_safe(table: tuple[Any, str]) -> None:
+    client, name = table
+    mint(client, name, redeemedBy=SID, bound_at=NOW - 60_000, last_seen=NOW - 60_000)
+    consent(client, name, at=NOW - int(MAX_AGE.total_seconds() * 1000) - 1)
+    assert mode(Bindings(name, client, clock=Clock()).inputs(request())) == (Mode.SAFE, Reason.CONSENT_UNAVAILABLE)
+    client.put_item(TableName=name, Item={"pk": {"S": consents.key(VID)}, "opt_out": {"S": "maybe"}})
+    assert Bindings(name, client, clock=Clock()).consent(VID) == UNKNOWN
+
+
+class _ConsentFails:
+    """DynamoDB Local, except that consent reads fail once ``failing`` is set."""
+
+    def __init__(self, client: Any) -> None:
+        self.client, self.failing = client, False
+
+    def get_item(self, **request: Any) -> Any:
+        if self.failing and request["Key"]["pk"]["S"].startswith(consents.KEY_PREFIX):
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "GetItem")
+        return self.client.get_item(**request)
+
+    def update_item(self, **request: Any) -> Any:
+        return self.client.update_item(**request)
+
+
+def test_a_failed_consent_read_keeps_the_last_answer_for_a_minute_then_is_safe(table: tuple[Any, str]) -> None:
+    client, name = table
+    mint(client, name, redeemedBy=SID, bound_at=NOW - 60_000, last_seen=NOW - 60_000)
+    consent(client, name)
+    failing = _ConsentFails(client)
+    clock = Clock()
+    found = Bindings(name, failing, clock=clock)
+    assert found.consent(VID).consent is Consent.PSEUDONYMOUS
+    failing.failing = True
+    clock.now += int(CONSENT_STALE_S * 1000) - 1
+    assert found.consent(VID).consent is Consent.PSEUDONYMOUS, "the store failed: the answer of a minute ago holds"
+    clock.now += 1
+    assert found.consent(VID) == UNKNOWN, "older than a minute: SAFE"
+
+
+class _Counting:
+    def __init__(self, client: Any) -> None:
+        self.client, self.keys = client, list[str]()
+
+    def get_item(self, **request: Any) -> Any:
+        self.keys.append(request["Key"]["pk"]["S"])
+        return self.client.get_item(**request)
+
+
+def test_a_guest_ticket_is_contextual_with_its_gpp_string_and_reads_no_consent(table: tuple[Any, str]) -> None:
+    client, name = table
+    row = ticket_row(
+        ticket=TICKET, pc=PC, cid="cid-2", now_ms=NOW - 30_000, pm=consents.guest_mode(gpc=False), gpp="DBAA"
+    ).item()
+    row |= {"redeemedBy": SID, "bound_at": NOW - 60_000, "last_seen": NOW - 60_000}
+    client.put_item(
+        TableName=name, Item={k: {"N": str(v)} if isinstance(v, int) else {"S": str(v)} for k, v in row.items()}
+    )
+    counting = _Counting(client)
+    inputs = Bindings(name, counting, clock=Clock()).inputs(request())
+    assert mode(inputs) == (Mode.CONTEXTUAL, Reason.BOUND)
+    assert (inputs.viewer.vid, inputs.viewer.cid, inputs.viewer.gpp) == (None, "cid-2", "DBAA")
+    assert counting.keys == [f"T#{TICKET}"], "a guest has no consent row to read"
+
+
+def test_a_child_directed_channels_sibling_reads_no_binding(
+    table: tuple[Any, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, name = table
+    monkeypatch.setenv("CHILD_DIRECTED_CHANNELS", "fastm-kids")
+    settings.cache_clear()
+    try:
+        counting = _Counting(client)
+        assert Bindings(name, counting, clock=Clock()).inputs(request(pc="fastm-kids-p-a")).identity is Reason.UNKNOWN
+        assert counting.keys == [], "the mode is KIDS whatever the binding says"
+    finally:
+        settings.cache_clear()

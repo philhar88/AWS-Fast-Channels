@@ -132,9 +132,13 @@ def test_config_publishes_public_persona_fields_and_marks_monetized_channels(
     assert document["playbackUrl"] == API
     assert document["planBaseUrl"] == "https://d1.cloudfront.net/plan/playback"
     assert document["epgBaseUrl"] == "https://d1.cloudfront.net/epg"
-    assert [(c["name"], c["monetized"]) for c in document["channels"]] == [("fastm-demo", True)]
+    assert [(c["name"], c["monetized"]) for c in document["channels"]] == [
+        ("fastm-demo", True),
+        ("fastm-kids", False),
+    ]
     assert {p["id"] for p in document["personas"]} == {p.id for p in PERSONAS}
-    assert all(set(p) == {"id", "name", "bio", "email", "signIn", "genres"} for p in document["personas"])
+    assert all(set(p) == {"id", "name", "bio", "email", "signIn", "account", "genres"} for p in document["personas"])
+    assert {p["id"]: p["account"] for p in document["personas"] if p["account"]} == {"mia": "marcus"}
     assert "light" not in json.dumps(document["personas"])  # no tier reaches the page
 
 

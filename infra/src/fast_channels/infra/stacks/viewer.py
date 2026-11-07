@@ -12,6 +12,7 @@ from fast_channels.core.identity.names import Parameter
 from fast_channels.core.personas import PERSONAS, Persona
 from fast_channels.infra.constructs.viewer import VIEWER_DIST, AdPanelApi, ViewerConfig, ViewerSite
 from fast_channels.infra.constructs.viewer.site import origin
+from fast_channels.infra.stacks.recs import rail_url_parameter
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -72,8 +73,15 @@ class ViewerStack(Stack):
                 vid_key_arn=identity(Parameter.VID_KEY),
                 log_retention=config.observability.log_retention,
             )
-        # The CSP names each API's origin; the APIs answer CORS for any origin, so neither refers to the site.
-        apis = [playback_url, *([self.ad_panel.url] if self.ad_panel else [])]
+        self.rail_url: str | None = None
+        if config.modules.recs.enabled:
+            self.rail_url = ssm.StringParameter.value_for_string_parameter(self, rail_url_parameter(prefix))
+        # The CSP names each API's origin; the APIs answer CORS for any origin, so none refers to the site.
+        apis = [
+            playback_url,
+            *([self.ad_panel.url] if self.ad_panel else []),
+            *([self.rail_url] if self.rail_url else []),
+        ]
         media_urls = [media.cdn_base_url, media.content_base_url]
         self.site = ViewerSite(self, "Site", connect_sources=[*media_urls, *map(origin, apis)], dist=dist)
         self.site.publish(
@@ -86,6 +94,7 @@ class ViewerStack(Stack):
                 channels=self.channels,
                 monetized=frozenset(config.release_channels),
                 personas=tuple(personas),
+                rail_url=self.rail_url,
             )
         )
         CfnOutput(self, "ViewerUrl", value=self.site.url, description="The reference viewer")

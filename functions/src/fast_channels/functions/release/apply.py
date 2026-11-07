@@ -47,6 +47,7 @@ from fast_channels.core.monetization.release import (
     mapped_functions,
     playback_plan,
     targets,
+    twin,
 )
 from fast_channels.core.monetization.validators import (
     Rule,
@@ -335,27 +336,33 @@ def _hls_prefix(configuration: str, configured: Mapping[str, str]) -> str:
 
 
 def write_plan(channel: MonetizedChannel, state: ChannelState, configured: Mapping[str, str], at: datetime) -> None:
-    """Rewrite ``/plan/playback/<channel>.json`` for the state's stable sibling (``configured``: HLS prefixes this
-    step already knows, by sibling)."""
+    """Rewrite ``/plan/playback/<channel>.json`` for the state's stable sibling, and its kids twin when the channel
+    has one (``configured``: HLS prefixes this step already knows, by sibling)."""
     config = settings()
     config.require("media_bucket", "cdn_base_url")
     if state.stable is None:
         raise ValueError(f"{channel.name} has no stable sibling")
+
+    def urls(configuration: str) -> dict[str, str]:
+        return specs.playback_urls(
+            cdn_base=config.cdn_base_url,
+            playback_prefix_hls=_hls_prefix(configuration, configured),
+            outputs=channel.outputs,
+        )
+
+    kids = twin(state.stable)
     plan = playback_plan(
         channel=channel.name,
         configuration=state.stable,
         release=state.siblings[state.stable].release,
-        playback=specs.playback_urls(
-            cdn_base=config.cdn_base_url,
-            playback_prefix_hls=_hls_prefix(state.stable, configured),
-            outputs=channel.outputs,
-        ),
+        playback=urls(state.stable),
         at=at,
+        kids=(kids, state.siblings[kids].release, urls(kids)) if kids in state.siblings else None,
     )
     aws.client("s3").put_object(
         Bucket=config.media_bucket,
         Key=names.plan_key(channel.name),
-        Body=plan.model_dump_json(indent=2).encode(),
+        Body=plan.model_dump_json(indent=2, exclude_none=True).encode(),
         ContentType="application/json",
         CacheControl=names.PLAN_CACHE_CONTROL,
     )

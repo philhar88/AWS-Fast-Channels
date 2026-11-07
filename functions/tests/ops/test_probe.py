@@ -17,9 +17,11 @@ MULTIVARIANT = """#EXTM3U
 """
 
 
-def media(sequence: int, *, daterange: str = "") -> str:
+def media(sequence: int, *, daterange: str = "", extra: int = 0) -> str:
+    """A media playlist of two segments (``extra`` more before them), the newest an ad."""
+    more = "".join(f"#EXTINF:6.0,\nseg-0{n}.ts\n" for n in range(extra))
     return (
-        f"#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n{daterange}"
+        f"#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n{daterange}{more}"
         "#EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nhttps://ads.example.com/ad-1.ts\n"
     )
 
@@ -68,11 +70,29 @@ def test_a_channel_on_air_passes(probe: ModuleType, monkeypatch: pytest.MonkeyPa
     assert fetched[-1] == "https://ads.example.com/ad-1.ts"  # the newest segment resolves
 
 
+def test_a_channel_whose_playlist_is_still_filling_passes(probe: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A just-started channel keeps media sequence 0 while its playlist grows to its window: on air all the same."""
+    serve(
+        probe,
+        monkeypatch,
+        {
+            f"{BASE}/index.m3u8": [MULTIVARIANT],
+            f"{BASE}/0.m3u8": [media(0, extra=7), media(0, extra=8)],
+            "https://ads.example.com/ad-1.ts": ["ts bytes"],
+        },
+    )
+
+    result = probe.probe("fastm-demo", f"{BASE}/index.m3u8")
+
+    assert result["media_sequence"] == [0, 0]
+
+
 @pytest.mark.parametrize(
     ("pages", "message"),
     [
         ({"index": ["#EXTM3U\n"]}, "lists no variant"),
-        ({"0": [media(10), media(10)]}, "media sequence stayed at 10"),
+        ({"0": [media(10), media(10)]}, r"no new segment for 9 s \(the newest stayed at 11; off air\?\)"),
+        ({"0": [media(0, extra=1), media(0, extra=1)]}, "the newest stayed at 2"),
         ({"0": ["#EXTM3U\n"]}, "no EXT-X-MEDIA-SEQUENCE"),
         ({"0": [media(10), "#EXT-X-MEDIA-SEQUENCE:11\n"]}, "lists no segment"),
         ({"0": [media(10), media(11, daterange='#EXT-X-DATERANGE:START-DATE="x"\n')]}, "has no ID"),

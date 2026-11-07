@@ -1,0 +1,31 @@
+{
+  "prefix": "fastciagent",
+  "observability": {
+    "mediatailor_log_percent": 100,
+    "log_retention_days": 7,
+    "as_run": "shared"
+  },
+  "modules": {
+    "ops": {
+      "enabled": true,
+      "ledger_retention_days": 1
+    },
+    "agents": {
+      "enabled": true,
+      "envelope": {
+        "always_on": [
+          "{prefix}-demo"
+        ],
+        "programmed": [
+          "{prefix}-demo"
+        ],
+        "agents": {
+          "programming": {
+            "enabled": true
+          }
+        }
+      },
+      "devops_agent": true
+    }
+  }
+}

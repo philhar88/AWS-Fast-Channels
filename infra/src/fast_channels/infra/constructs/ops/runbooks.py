@@ -65,6 +65,7 @@ class Runbooks(Construct):
         source_location: the deployment's source location (R15).
         alarms: names of the alarms that start R7, R9, R12 and R17.
         log_retention: retention of the logs.
+        always_on: the always-on channels (the agents' envelope), which R12 would start.
         removal_policy: what happens to them when the stack is deleted.
 
     Attributes:
@@ -87,6 +88,7 @@ class Runbooks(Construct):
         source_location: str,
         alarms: Mapping[Runbook, Sequence[str]],
         log_retention: logs.RetentionDays,
+        always_on: Sequence[str] = (),
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
@@ -104,6 +106,7 @@ class Runbooks(Construct):
                 "APPCONFIG_ENVIRONMENT": prefix,
                 "IAC_CHANNELS": ",".join(channels),
                 "SOURCE_LOCATION": source_location,
+                **({"ALWAYS_ON_CHANNELS": ",".join(always_on)} if always_on else {}),
             },
             timeout=Duration.minutes(2),
             memory_size=256,

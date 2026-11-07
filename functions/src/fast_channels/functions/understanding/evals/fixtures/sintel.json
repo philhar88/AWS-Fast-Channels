@@ -1,0 +1,174 @@
+{
+ "content_id": "sintel",
+ "title": "Sintel",
+ "source": "https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv",
+ "license": "CC BY 3.0 — © Blender Foundation | durian.blender.org",
+ "duration_ms": 888000,
+ "windows_s": [
+  30,
+  160,
+  660
+ ],
+ "signals": {
+  "duration_ms": 888021,
+  "analyses": [
+   "transcript",
+   "shots",
+   "technical_cues",
+   "labels",
+   "moderation"
+  ],
+  "language": "en",
+  "speech_ratio": 0.055,
+  "transcript": "G. I. Oh. This blade has a dark past. It has shed much innocent blood. You're a fool for traveling alone, so completely unprepared. You're lucky your blood's still flowing. Thank you. So, What brings you to the land of the gatekeepers? Um. I'm searching for someone. Someone very dear. A kindred spirit. A dragon. A dangerous quest for a lone hunter. I've been alone for as long as I can remember. Mm Shh. Hey, shh shh, we're almost done. Hey, sit still. Good night, scales. Goddamn scales. Come on. No! Scales. Hm. Oh. Oh. Let's go. Ah Yeah I have failed. Hm You've only failed to see. These are dragon lands, Sintel. You are closer than you know. Skis. Ah. Scales. Scales. Uh Come be Can you tell me This time For one to wake. When you home. Do you feel Breaks through W My tender hue. I",
+  "shots": 201,
+  "mean_shot_s": 4.4,
+  "cues": {
+   "BlackFrames": 1,
+   "Content": 1,
+   "EndCredits": 1,
+   "OpeningCredits": 2
+  },
+  "credits_at_s": 747.4,
+  "labels": [
+   {
+    "name": "Person",
+    "seconds": 621.8
+   },
+   {
+    "name": "Adult",
+    "seconds": 462.3
+   },
+   {
+    "name": "Head",
+    "seconds": 400.2
+   },
+   {
+    "name": "Female",
+    "seconds": 305.1
+   },
+   {
+    "name": "Woman",
+    "seconds": 290.9
+   },
+   {
+    "name": "Face",
+    "seconds": 229.9
+   },
+   {
+    "name": "Male",
+    "seconds": 166.3
+   },
+   {
+    "name": "Outdoors",
+    "seconds": 149.7
+   },
+   {
+    "name": "Man",
+    "seconds": 146.4
+   },
+   {
+    "name": "Nature",
+    "seconds": 130.2
+   },
+   {
+    "name": "Indoors",
+    "seconds": 109.0
+   },
+   {
+    "name": "Interior Design",
+    "seconds": 103.0
+   },
+   {
+    "name": "Text",
+    "seconds": 84.0
+   },
+   {
+    "name": "Snow",
+    "seconds": 54.0
+   },
+   {
+    "name": "Sad",
+    "seconds": 37.8
+   },
+   {
+    "name": "Crying",
+    "seconds": 28.9
+   },
+   {
+    "name": "Animal",
+    "seconds": 27.2
+   },
+   {
+    "name": "Baby",
+    "seconds": 23.4
+   },
+   {
+    "name": "Wood",
+    "seconds": 22.5
+   },
+   {
+    "name": "Avalanche",
+    "seconds": 18.5
+   },
+   {
+    "name": "War",
+    "seconds": 17.6
+   },
+   {
+    "name": "Bride",
+    "seconds": 17.6
+   },
+   {
+    "name": "Wedding",
+    "seconds": 17.6
+   },
+   {
+    "name": "Plant",
+    "seconds": 17.0
+   },
+   {
+    "name": "Scenery",
+    "seconds": 16.8
+   }
+  ],
+  "moderation": {
+   "Violence": 88.3
+  },
+  "moderation_labels": {
+   "Blood & Gore": {
+    "category": "Violence",
+    "frames": 2,
+    "sustained": 0,
+    "confidence": 88.3
+   },
+   "Graphic Violence": {
+    "category": "Violence",
+    "frames": 4,
+    "sustained": 0,
+    "confidence": 88.3
+   },
+   "Violence": {
+    "category": "Violence",
+    "frames": 4,
+    "sustained": 0,
+    "confidence": 88.3
+   }
+  }
+ },
+ "expect": {
+  "categories_any": [
+   "641",
+   "335",
+   "325"
+  ],
+  "categories_none": [
+   "332",
+   "648",
+   "651",
+   "645",
+   "646"
+  ],
+  "brand_safety": "medium"
+ }
+}

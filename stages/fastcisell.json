@@ -34,6 +34,9 @@
       "enabled": true,
       "cpm": 40.00,
       "creatives": ["direct1", "direct2"]
+    },
+    "creatives": {
+      "enabled": true
     }
   }
 }

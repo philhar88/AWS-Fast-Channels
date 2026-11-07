@@ -140,6 +140,8 @@
         "release": {
           "enabled": false,
           "channels": [],
+          "child_directed": [],
+          "kids_pairs": false,
           "strategy": "demo",
           "lab_channel": true,
           "probe_sibling": true,
@@ -163,7 +165,8 @@
           "enabled": false,
           "redeem_window_seconds": 120,
           "api_rate_limit": 50,
-          "api_burst_limit": 100
+          "api_burst_limit": 100,
+          "guest_rate_limit": 100
         },
         "selling": {
           "enabled": false,
@@ -176,6 +179,98 @@
         "viewer": {
           "enabled": false,
           "ad_panel": false
+        },
+        "agents": {
+          "enabled": false,
+          "envelope": {
+            "always_on": [],
+            "programmed": [],
+            "agents": {
+              "operations": {
+                "enabled": true,
+                "level": "L2",
+                "grants": [
+                  {
+                    "tool": "channels___start_channel",
+                    "channels": [
+                      "{always_on}"
+                    ],
+                    "per_hour": 1,
+                    "lead_minutes": null
+                  }
+                ],
+                "actions_per_hour": 6,
+                "spend_usd_per_day": "0",
+                "needs_human": [
+                  "channels___stop_channel",
+                  "channels___create_channel",
+                  "channels___delete_channel"
+                ]
+              },
+              "programming": {
+                "enabled": false,
+                "level": "L2",
+                "grants": [
+                  {
+                    "tool": "schedule___plan",
+                    "channels": [
+                      "{programmed}"
+                    ],
+                    "per_hour": null,
+                    "lead_minutes": null
+                  },
+                  {
+                    "tool": "schedule___publish",
+                    "channels": [
+                      "{programmed}"
+                    ],
+                    "per_hour": 6,
+                    "lead_minutes": 120
+                  }
+                ],
+                "actions_per_hour": 12,
+                "spend_usd_per_day": "0",
+                "needs_human": [
+                  "schedule___remove_programs",
+                  "schedule___update_brief",
+                  "channels___create_channel",
+                  "channels___delete_channel"
+                ]
+              },
+              "sales": {
+                "enabled": false,
+                "level": "L1",
+                "grants": [
+                  {
+                    "tool": "sales___propose",
+                    "channels": [],
+                    "per_hour": 12,
+                    "lead_minutes": null
+                  }
+                ],
+                "actions_per_hour": 10,
+                "spend_usd_per_day": "0",
+                "needs_human": []
+              }
+            }
+          },
+          "devops_agent": false
+        },
+        "understanding": {
+          "enabled": false,
+          "analyses": ["transcript", "shots", "technical_cues", "labels", "moderation"],
+          "task": "understanding.describe"
+        },
+        "recs": {
+          "enabled": false,
+          "holdout_percent": 10,
+          "cohorts": ["web-en"],
+          "refresh_hours": 20
+        },
+        "creatives": {
+          "enabled": false,
+          "moderation": true,
+          "min_confidence": 80
         }
       }
     },

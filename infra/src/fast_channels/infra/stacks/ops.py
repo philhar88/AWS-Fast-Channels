@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 from aws_cdk import CfnOutput, Stack
 from aws_cdk import aws_ssm as ssm
 
-from fast_channels.core.flags import DemandMode, Flags
+from fast_channels.core.flags import DemandMode, Flags, RecsStrategy
 from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import mediatailor_log_group
 from fast_channels.core.runbooks import Runbook
@@ -36,12 +36,14 @@ __all__ = ["OpsExports", "OpsStack", "stage_flags"]
 
 def stage_flags(config: FastChannelsConfig) -> Flags:
     """The ``flags`` profile's default for this deployment: every kill switch on (nothing killed; a module that is
-    not deployed reads none), ``commercial`` off and ``demand.mode`` as configured."""
+    not deployed reads none), ``commercial`` off, ``demand.mode`` as configured and ``recs.strategy`` the
+    recommender when the recs module is deployed."""
     demand = config.modules.demand
     return Flags(
         agents=True,
         demand=DemandMode(demand.mode.value) if demand.enabled else DemandMode.OFF,
         crawl=True,
+        recs=RecsStrategy.RECOMMENDER if config.modules.recs.enabled else RecsStrategy.POPULARITY,
         release_promote=True,
     )
 
@@ -170,6 +172,10 @@ class OpsStack(Stack):
             },
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,
+            # R12 starts the always-on channels the agents' envelope lists (the operations agent acts on them)
+            always_on=config.modules.agents.envelope.resolved(prefix).always_on
+            if config.modules.agents.enabled
+            else (),
         )
         self.exports = OpsExports(
             appconfig_application=self.appconfig.application,

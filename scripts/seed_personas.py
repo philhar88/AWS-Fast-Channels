@@ -13,20 +13,29 @@ is sent. The passwords are written to the Secrets Manager secret ``<prefix>/iden
 (``core.identity.vid.viewer_id``), the id the Pod Decision Service knows the viewer by; the raw ``sub`` is never
 printed or stored.
 
+Each persona of the contract also gets the consent its mode stands for in the identity table (``C#<vid>``,
+``fast_channels.core.identity.consent``): FULL gave the video-privacy consent, PSEUDONYMOUS neither, CONTEXTUAL
+opted out. Without a consent a signed-in viewer's breaks are SAFE. A ``--persona`` outside the contract gets none.
+
 With the ``pds`` module, each persona of the contract that has an ad-load tier also gets its profile in the PDS table
-(``VIEWER#<vid>``, ``fast_channels.functions.pds.profiles.put_profile``, ADR-0037), and ``--delete`` removes it.
+(``VIEWER#<vid>``, ``fast_channels.functions.pds.profiles.put_profile``, ADR-0037). ``--delete`` removes the consent
+and the profile.
 """
 
 import argparse
 import json
 import secrets
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from _stack import REPO, Stage, add_prefix_argument, run
 from botocore.exceptions import ClientError
 
+from fast_channels.core.identity import consent as consents
+from fast_channels.core.identity.consent import ConsentChoice
 from fast_channels.core.identity.names import (
     PERSONA_ATTRIBUTE,
     Parameter,
@@ -34,6 +43,7 @@ from fast_channels.core.identity.names import (
     parameter_name,
 )
 from fast_channels.core.identity.vid import viewer_id
+from fast_channels.core.pds.models import Mode
 from fast_channels.core.pds.names import table_name
 from fast_channels.core.pds.viewers import profile_key
 from fast_channels.core.personas import persona as contract_persona
@@ -48,6 +58,12 @@ CONTRACT: Final = REPO / "contracts" / "personas.json"
 EMAIL_DOMAIN: Final = "personas.example.com"
 SIGNED_IN: Final = "user"
 """The ``sign_in`` of a persona with a pool user (``fast_channels.core.personas.SignIn.USER``)."""
+CHOICES: Final = {
+    Mode.FULL: ConsentChoice(opt_out=False, vppa=True),
+    Mode.PSEUDONYMOUS: ConsentChoice(opt_out=False),
+    Mode.CONTEXTUAL: ConsentChoice(opt_out=True),
+}
+"""The consent a signed-in persona's mode stands for."""
 
 
 def contract_personas(path: Path = CONTRACT) -> list[dict[str, str]]:
@@ -110,6 +126,25 @@ def tier_of(persona: str) -> str | None:
         return None
 
 
+def choice_of(persona: str) -> ConsentChoice | None:
+    """The consent the contract's mode of a signed-in ``persona`` stands for; ``None`` for a guest, a kids profile or
+    a persona outside the contract."""
+    try:
+        entry = contract_persona(persona)
+    except ValueError:
+        return None
+    return CHOICES.get(entry.mode) if entry.sign_in == SIGNED_IN else None
+
+
+def _consent(stage: Stage, persona: str, vid: str) -> str | None:
+    """Record ``persona``'s consent (``C#<vid>``); the consent it gives, or ``None`` without one."""
+    if (choice := choice_of(persona)) is None:
+        return None
+    row = consents.record(vid, choice, now_ms=time.time_ns() // 1_000_000)
+    stage.session.resource("dynamodb").Table(_parameter(stage, Parameter.TABLE)).put_item(Item=row.item())
+    return consents.consent_of(row, now=datetime.now(UTC)).value
+
+
 def _missing_table(error: ClientError) -> bool:
     return error.response.get("Error", {}).get("Code") == "ResourceNotFoundException"
 
@@ -152,8 +187,8 @@ def _user(cognito: CognitoIdentityProviderClient, pool: str, persona: str, email
 
 
 def seed(stage: Stage, personas: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Create ``personas`` in the stage's pool, with their PDS profiles; each one's ``{persona, email, vid}``, and
-    ``tier`` where a profile was written."""
+    """Create ``personas`` in the stage's pool, with their consent and PDS profiles; each one's
+    ``{persona, email, vid}``, with ``consent`` and ``tier`` where they were written."""
     cognito: CognitoIdentityProviderClient = stage.session.client("cognito-idp")
     pool, issuer = _parameter(stage, Parameter.USER_POOL_ID), _parameter(stage, Parameter.ISSUER)
     key = _parameter(stage, Parameter.VID_KEY)
@@ -165,25 +200,34 @@ def seed(stage: Stage, personas: list[dict[str, str]]) -> list[dict[str, str]]:
         secret = users.get(persona, {}).get("password") or password()
         sub = _user(cognito, pool, persona, email, secret)
         vid = viewer_id(kms, key_id=key, issuer=issuer, sub=sub)
+        consent = _consent(stage, persona, vid)
         tier = _profile(stage, persona, vid)
         users[persona] = {"email": email, "password": secret}
-        seeded.append({"persona": persona, "email": email, "vid": vid} | ({"tier": tier} if tier else {}))
+        seeded.append(
+            {"persona": persona, "email": email, "vid": vid}
+            | ({"consent": consent} if consent else {})
+            | ({"tier": tier} if tier else {})
+        )
     _write_secret(stage, users)
     return seeded
 
 
 def delete(stage: Stage, personas: list[dict[str, str]]) -> list[str]:
-    """Delete ``personas``' users and their PDS profiles (and the secret once none is left); the deleted personas."""
+    """Delete ``personas``' users, their consent and PDS profiles (and the secret once none is left); the deleted
+    personas."""
     cognito: CognitoIdentityProviderClient = stage.session.client("cognito-idp")
     pool, issuer = _parameter(stage, Parameter.USER_POOL_ID), _parameter(stage, Parameter.ISSUER)
     key, kms = _parameter(stage, Parameter.VID_KEY), stage.session.client("kms")
+    identity = stage.session.resource("dynamodb").Table(_parameter(stage, Parameter.TABLE))
     users = _secret(stage)
     deleted = []
     for entry in personas:
         try:
             user = cognito.admin_get_user(UserPoolId=pool, Username=entry["email"])
             sub = next(a["Value"] for a in user["UserAttributes"] if a["Name"] == "sub")
-            _delete_profile(stage, viewer_id(kms, key_id=key, issuer=issuer, sub=sub))
+            vid = viewer_id(kms, key_id=key, issuer=issuer, sub=sub)
+            identity.delete_item(Key={"pk": consents.key(vid)})
+            _delete_profile(stage, vid)
             cognito.admin_delete_user(UserPoolId=pool, Username=entry["email"])
             deleted.append(entry["id"])
         except cognito.exceptions.UserNotFoundException:

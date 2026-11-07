@@ -165,10 +165,21 @@ RECOMMENDER_CHECKS: Final = ("schema_valid", "faithfulness", "policy_violations"
 """What a recommender task's record must hold (Phase 2, D§14.3): schema-valid rails; the deterministic faithfulness
 check (each tile's reason cites only facts of the input, $0 to run); zero policy violations (kids, rating ceiling,
 PII, candidate ids, consent); cost per rail. A judge sample (``judge_faithfulness``) is added before a default flip."""
+UNDERSTANDING_CHECKS: Final = (
+    "schema_valid",
+    "categories_valid",
+    "expected_categories",
+    "no_wrong_categories",
+    "moderation_agreement",
+    "brand_safety_expected",
+    "cost_per_hour",
+)
+"""What a record of the understanding module's describe task must hold (``functions.understanding.evals``)."""
 REQUIRED_CHECKS: Final[Mapping[str, tuple[str, ...]]] = {
     SCHEDULER_TASK: ("scenario_standard", "scenario_hard"),
     "recommender": RECOMMENDER_CHECKS,
     "recommender.cohort": RECOMMENDER_CHECKS,
+    "understanding.describe": UNDERSTANDING_CHECKS,
 }
 """Checks a passing record of each task must include; tasks not listed need at least one check."""
 

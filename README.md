@@ -168,7 +168,13 @@ Version 4.0.0 adds optional modules for ad monetization and its operations. Each
 | `pds` | The Pod Decision Service, a sidecar in each Prebid Server task: what each ad request may share with third parties, which ads fill the pod, and an own book of direct lines and house ads with reservations and delivery | `ops`, `demand` |
 | `release` | The Release Controller for monetized playback configurations: sibling configurations with MediaTailor Functions, a smoke gate, gradual promotion with unattended rollback, origin-secret rotation and ad prefetch | `ops`, `demand`, `pds` |
 | `crawl` | Show-level content metadata (IAB Tech Lab Content Taxonomy 3.1) in ad requests, with an uplift holdout | `pds`, `release` |
-| `identity` (unreleased) | Signed-in viewers: a Cognito viewer pool and single-use opaque playback tickets, bound to one session each | `release` |
+| `understanding` | Content understanding once per title: categories, keywords, moods, brand safety and a synopsis from Transcribe, Rekognition Video and a video model | `models` |
+| `identity` | Signed-in viewers and guests: a Cognito viewer pool, single-use opaque playback tickets bound to one session each, a consent store, and kids profiles and child-directed channels | `release` |
+| `viewer` | A reference viewer app: persona sign-in, a rail of recommended channels, ticketed playback and a demo-only "why these ads" panel | `identity` |
+| `selling` | Agentic selling over AdCP, a sandbox: the Prebid Sales Agent as seller, with the AWS reference buyer and governance agents; a booked buy becomes a direct line of the own book | `pds`, `release` |
+| `creatives` | Advertisers' own creatives: a registry, Amazon Rekognition moderation with a person reviewing what it flags, conditioning to the ladder and a conformance check | `pds` |
+| `agents` | Operations, programming and sales agents as machine principals inside an autonomy envelope, enforced by the Gateway's Cedar policies, its request interceptor and a runner; every action and refusal in the ledger | `ops` |
+| `recs` | A "Recommended for you" rail per signed-in viewer, picked and explained by Claude Haiku 5.5 in the background, with a rule-based fallback | `models`, `identity` |
 
 [docs/modules.md](docs/modules.md) gives each module's complexity and cost (stacks, IAM roles, cost per hour idle
 and on air, teardown time), what v4.0.0 leaves out, how to turn a module on, its capacity and how it fails safe, and
@@ -281,10 +287,12 @@ lists what a teardown leaves behind.
 | [Observability](docs/observability.md) | Logging and tracing matrix, correlation contract, trace script, alarms, Transaction Search |
 | [Operations](docs/operations.md) | Configuration reference, deploy and destroy, users, quotas, costs, security, troubleshooting |
 | [Optional modules](docs/modules.md) | The ad-monetization and operations modules: complexity and cost per module, turning them on, capacity, fail-safe behaviour, account-level limits |
-| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md), [Viewer identity](docs/identity.md) | The `demand`, `pds`, `release`, `crawl` and `identity` modules |
+| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md), [Viewer identity](docs/identity.md), [Content understanding](docs/understanding.md), [Agentic selling](docs/selling.md), [Creatives](docs/creatives.md) | The `demand`, `pds`, `release`, `crawl`, `identity`, `understanding`, `selling` and `creatives` modules |
 | [Known limitations and product suggestions](docs/limitations.md) | What we found in the AWS services and open-source projects the reference uses: what each item means for a deployment, what the repository does about it, and what we suggest to the product |
 | [Workarounds to remove](docs/workarounds.md) | The AWS product behaviour we work around, where each workaround lives and what to delete when AWS fixes it |
 | [Reference viewer](docs/viewer.md) | The `viewer` module: demo personas, a rail of recommended channels, ticketed playback and the "why these ads" panel; its 10-minute demo script |
+| [The agent roster](docs/agents.md) | The `agents` module: agents that operate the stage as machine principals inside an autonomy envelope, Cedar, the Gateway's request interceptor and the runner as its enforcement points, the ledger and escalation |
+| [Rail recommender](docs/recs.md) | The `recs` module: `GET /rail`, a model-ranked rail per signed-in viewer behind a deterministic router, candidates and validator, cohort rails, the rule-based fallback and the recommender's eval |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |
 | [Decision records](docs/adr/README.md) | Why the architecture is the way it is |
 | [Console](console/README.md), [Agent](agent/README.md) | Component READMEs |

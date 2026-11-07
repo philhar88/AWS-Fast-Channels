@@ -390,6 +390,8 @@ def test_o5_simulator_bids_with_the_configured_creatives(
             "xff_entries": 0,
             "device_ip": None,
             "device_ipv6": None,
+            "content_cat": None,
+            "content_kwarray": None,
         }
     ]
 
@@ -403,7 +405,13 @@ def test_o5_logs_the_device_address_as_received_and_never_a_header_value(
     when a header carries it (test_14_demand_pods asserts both on a deployed stage)."""
     handler = o5_handler(tmp_path, monkeypatch)
     masked = {"ip": "198.51.100.0", "ipv6": "2001:db8:1234:5600::", "ua": "Mozilla/5.0 (SMART-TV; Linux)"}
-    request = {"id": "r", "imp": [{"id": "s1", "video": {"rqddurs": [30]}}], "device": masked}
+    content = {"cat": ["641", "332"], "kwarray": ["abstract", "colorful"]}
+    request = {
+        "id": "r",
+        "imp": [{"id": "s1", "video": {"rqddurs": [30]}}],
+        "device": masked,
+        "app": {"content": content},
+    }
     headers = {"x-forwarded-for": "198.51.100.7, 10.0.1.9", "X-Prebid": "pbs", "user-agent": "client 2001:db8::7"}
 
     with caplog.at_level(logging.INFO):
@@ -417,6 +425,8 @@ def test_o5_logs_the_device_address_as_received_and_never_a_header_value(
         "xff_entries": 2,
         "device_ip": "198.51.100.0",
         "device_ipv6": "2001:db8:1234:5600::",
+        "content_cat": ["641", "332"],  # the PDS's app.content patch (test_27_understanding reads it)
+        "content_kwarray": ["abstract", "colorful"],
     }
     logged = "".join(r.getMessage() for r in caplog.records)
     for value in ("198.51.100.7", "10.0.1.9", "2001:db8::7", "client", "SMART-TV"):

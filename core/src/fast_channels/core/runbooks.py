@@ -17,7 +17,9 @@ actions it would take (``mode`` ``dry_run``). A runbook whose kill switch is off
 | R16 | A program within 6 h ends after its rights | The programming agent replaces it | — |
 | R17 | The CDN 5xx alarm | Page; shed optional work | ``ops.shed`` |
 
-There is no evergreen block and no always-on list yet (the envelope, OD10), so R12, R13 and R15 page instead.
+There is no evergreen block yet, so R13 and R15 page instead. The always-on list comes from the agents' envelope
+(``modules.agents``); without it R12 pages too. With it, R12 records that it would start a stopped always-on channel,
+and the operations agent (``functions.agents``) is the one that does.
 """
 
 from collections.abc import Mapping, Sequence

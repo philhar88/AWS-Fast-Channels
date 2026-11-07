@@ -18,6 +18,7 @@ from aws_cdk.assertions import Template
 from cdk_nag import AwsSolutionsChecks, ServerlessChecks
 from pydantic import BaseModel
 
+from fast_channels.core.agents.envelope import Envelope, Role
 from fast_channels.functions.tools.registry import Access, Approval, ToolSpec, all_tools, confirm_tools
 from fast_channels.infra.config import FastChannelsConfig
 from fast_channels.infra.constructs.alerts import alert_topic
@@ -1039,7 +1040,7 @@ def test_agent_zip_has_the_shim_at_its_root_and_the_package(tmp_path: Path) -> N
     assert (tmp_path / "bin" / "opentelemetry-instrument").stat().st_mode & 0o777 == 0o755
     assert (tmp_path / "main.py").stat().st_mode & 0o777 == 0o644
     assert not (tmp_path / "requirements.txt").exists()
-    assert not list(tmp_path.glob("fast_channels/core"))  # the agent does not depend on core
+    assert (tmp_path / "fast_channels" / "core" / "model_spend.py").is_file()  # the spend counter it imports
 
 
 def test_start_channel_may_skip_missed_programs_on_every_deployment_channel(everything: Template) -> None:
@@ -1056,3 +1057,363 @@ def test_start_channel_may_skip_missed_programs_on_every_deployment_channel(ever
 
     assert "program/fast-*/*" in allowed("mediatailor:DeleteProgram")
     assert "epg/*" in allowed("s3:PutObject")
+
+
+# --- the agent roster (M9) ------------------------------------------------------------------------------------------
+
+AGENTS = {
+    "modules.ops.enabled": True,
+    "modules.agents.enabled": True,
+    "modules.agents.envelope": {"always_on": ["fast-demo"]},
+}
+
+
+def _agent_policies(envelope: Envelope, role: Role = Role.OPERATIONS) -> dict[str, cedar.CedarPolicy]:
+    principal = cedar.AgentPrincipal(role, "agent123", envelope.resolved("fast").agents[role])
+    policies = cedar.agent_policies(all_tools(), "arn:aws:bedrock-agentcore:us-east-1:1:gateway/g", principal)
+    return {p.name: p for p in policies}
+
+
+def test_cedar_for_an_agent_follows_its_envelope() -> None:
+    """Parity: the agent may call READ tools and its grants (scoped to their channels), and every other tool that is
+    not READ, or that needs a human, is forbidden."""
+    envelope = Envelope(always_on=("fast-demo",))
+    policies = _agent_policies(envelope)
+    agent = envelope.resolved("fast").agents[Role.OPERATIONS]
+    reads = {s.qualified_name for s in all_tools() if s.access is Access.READ}
+    writes = {s.qualified_name for s in all_tools() if s.access is not Access.READ}
+
+    assert set(policies) == {"permit_operations_read", "permit_operations_start_channel", "forbid_operations"}
+    assert _actions(policies["permit_operations_read"].statement) == reads
+    start = policies["permit_operations_start_channel"].statement
+    assert _actions(start) == {grant.tool for grant in agent.grants}
+    assert start.endswith(
+        'principal.getTag("client_id") == "agent123" && context.input has channel && '
+        '(context.input.channel like "fast-demo") };'
+    )
+    forbidden = _actions(policies["forbid_operations"].statement)
+    assert forbidden == (writes - {grant.tool for grant in agent.grants}) | set(agent.needs_human)
+    assert policies["forbid_operations"].forbid
+    assert all('principal.getTag("client_id") == "agent123"' in p.statement for p in policies.values())
+
+
+def test_cedar_forbids_a_propose_only_agent_every_gated_tool() -> None:
+    envelope = Envelope.model_validate(
+        {
+            "agents": {
+                "sales": {
+                    "enabled": True,
+                    "level": "L1",
+                    "grants": [{"tool": "schedule___publish", "channels": ["fast-demo"]}],
+                }
+            }
+        }
+    )
+    policies = _agent_policies(envelope, Role.SALES)
+
+    assert "schedule___publish" in _actions(policies["forbid_sales"].statement)
+
+
+def test_cedar_refuses_an_envelope_with_an_unknown_tool() -> None:
+    envelope = Envelope.model_validate({"agents": {"operations": {"enabled": True, "grants": [{"tool": "x___y"}]}}})
+
+    with pytest.raises(ValueError, match=r"grants unknown tools \['x___y'\]"):
+        _agent_policies(envelope)
+
+
+@pytest.fixture(scope="module")
+def roster(dist: Path) -> Plane:
+    return build({**EVERYTHING, **AGENTS}, dist=dist)
+
+
+def test_each_agent_is_a_machine_client_the_gateway_and_runtime_accept(roster: Plane) -> None:
+    template = roster.template
+    clients = {
+        name: c["Properties"]
+        for name, c in resources(template, "AWS::Cognito::UserPoolClient").items()
+        if name.startswith("IdentityUsersAgentOperations")
+    }
+
+    [(name, client)] = clients.items()
+    assert client["AllowedOAuthFlows"] == ["client_credentials"] and client["GenerateSecret"] is True
+    for resource in (*resources(template, "AWS::BedrockAgentCore::Gateway").values(), only_runtime(template)):
+        allowed = resource["Properties"]["AuthorizerConfiguration"]["CustomJWTAuthorizer"]["AllowedClients"]
+        assert {"Ref": name} in allowed
+    named = {p["Properties"]["Name"] for p in resources(template, "AWS::BedrockAgentCore::Policy").values()}
+    assert {"fast_tools_permit_operations_read", "fast_tools_forbid_operations"} <= named
+
+
+def test_the_runner_holds_the_envelope_and_may_touch_only_its_caps_chain_and_topic(roster: Plane) -> None:
+    template = roster.template
+    [(name, runner)] = [
+        (k, f["Properties"])
+        for k, f in resources(template, "AWS::Lambda::Function").items()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.runner.handler"
+    ]
+    env = runner["Environment"]["Variables"]
+    envelope = Envelope.model_validate_json(env["ENVELOPE"])
+
+    assert env["ROLE"] == "operations"
+    assert envelope.version == Envelope(always_on=("fast-demo",)).resolved("fast").version
+    assert (env["AGENTS_TABLE"], env["LEDGER_TABLE"]) == ("fast-agents", "fast-ledger")
+    assert runner["Timeout"] == 900
+    role = runner["Role"]["Fn::GetAtt"][0]
+    [allowed] = [
+        p["Properties"]["PolicyDocument"]["Statement"]
+        for p in resources(template, "AWS::IAM::Policy").values()
+        if p["Properties"]["Roles"] == [{"Ref": role}]
+    ]
+    by_action = {a: s for s in allowed for a in as_list(s["Action"])}
+    assert "dynamodb:UpdateItem" not in by_action, "the runner reads the caps; the Gateway's interceptor takes them"
+    assert by_action["dynamodb:GetItem"]["Condition"] == {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["CAP#operations*"]}
+    }
+    assert "LIBRARY_TABLE" in env, "the stored plans a publish lead reads"
+    assert by_action["dynamodb:PutItem"]["Condition"] == {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["agents/operations"]}
+    }
+    assert "sns:Publish" in by_action and "cognito-idp:DescribeUserPoolClient" in by_action
+    assert name.startswith("RosterOperationsRunner")
+
+
+def test_the_caps_table_expires_its_counters_and_the_envelope_is_recorded_on_deploy(roster: Plane) -> None:
+    template = roster.template
+    tables = [t["Properties"] for t in resources(template, "AWS::DynamoDB::GlobalTable").values()]
+    [caps] = [t for t in tables if t.get("TableName") == "fast-agents"]
+
+    assert caps["TimeToLiveSpecification"] == {"AttributeName": "ttl", "Enabled": True}
+    assert len(resources(template, "Custom::Trigger")) == 1
+    [record] = [
+        f["Properties"]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.envelope_record.handler"
+    ]
+    assert "ENVELOPE" in record["Environment"]["Variables"]
+
+
+def test_without_the_agents_module_there_is_no_roster(template: Template, named_outputs: Any) -> None:
+    handlers = {f["Properties"].get("Handler") for f in resources(template, "AWS::Lambda::Function").values()}
+
+    assert not {h for h in handlers if h and ".agents." in h}
+    assert not [k for k in named_outputs(template) if "Agent" in k and k != "AutopilotClientId"]
+
+
+def test_cedar_without_an_always_on_channel_forbids_every_restart() -> None:
+    policies = _agent_policies(Envelope())
+
+    assert "permit_operations_start_channel" not in policies
+    assert "channels___start_channel" in _actions(policies["forbid_operations"].statement)
+
+
+def test_the_operations_agent_wakes_on_the_census_and_the_off_air_alarm_and_reads_its_channels(roster: Plane) -> None:
+    template = roster.template
+    rules = [r["Properties"] for r in resources(template, "AWS::Events::Rule").values()]
+    patterns = [r["EventPattern"] for r in rules if r.get("Description", "").startswith("Agents: the operations agent")]
+    [(_, runner)] = [
+        (k, f["Properties"])
+        for k, f in resources(template, "AWS::Lambda::Function").items()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.runner.handler"
+    ]
+    role = runner["Role"]["Fn::GetAtt"][0]
+    [allowed] = [
+        p["Properties"]["PolicyDocument"]["Statement"]
+        for p in resources(template, "AWS::IAM::Policy").values()
+        if p["Properties"]["Roles"] == [{"Ref": role}]
+    ]
+
+    census = {"source": ["fast-channels.fast"], "detail-type": ["Census Changed"], "detail": {"running": [0]}}
+    alarm = {
+        "source": ["aws.cloudwatch"],
+        "detail-type": ["CloudWatch Alarm State Change"],
+        "detail": {"alarmName": ["fast-probe-off-air"], "state": {"value": ["ALARM"]}},
+    }
+    canonical = [json.dumps(p, sort_keys=True) for p in (census, alarm)]
+    assert sorted(json.dumps(p, sort_keys=True) for p in patterns) == sorted(canonical)
+    [describe] = [s for s in allowed if s["Action"] == "mediatailor:DescribeChannel"]
+    assert describe["Resource"] == "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-demo"
+
+
+ROSTER = {
+    **EVERYTHING,
+    "channels.iac": [{"name": "fast-demo", "autopilot_cron": "cron(0 */6 * * ? *)"}, {"name": "fast-news"}],
+    "modules.ops.enabled": True,
+    "modules.demand.enabled": True,
+    "modules.pds.enabled": True,
+    "modules.agents.enabled": True,
+    "modules.agents.envelope": {
+        "always_on": ["fast-demo"],
+        "programmed": ["fast-news"],
+        "agents": {"programming": {"enabled": True}, "sales": {"enabled": True}},
+    },
+}
+
+
+@pytest.fixture(scope="module")
+def full_roster(dist: Path) -> Plane:
+    return build(ROSTER, dist=dist)
+
+
+def _statements(template: dict[str, Any], function: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    role = function["Role"]["Fn::GetAtt"][0]
+    by_action: dict[str, list[dict[str, Any]]] = {}
+    for policy in resources(template, "AWS::IAM::Policy").values():
+        if policy["Properties"]["Roles"] == [{"Ref": role}]:
+            for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+                for action in as_list(statement["Action"]):
+                    by_action.setdefault(action, []).append(statement)
+    return by_action
+
+
+def _runner(template: dict[str, Any], role: str) -> dict[str, Any]:
+    [runner] = [
+        f["Properties"]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.runner.handler"
+        and f["Properties"]["Environment"]["Variables"]["ROLE"] == role
+    ]
+    return runner
+
+
+def test_the_gateway_checks_every_agent_call_with_its_request_interceptor(full_roster: Plane) -> None:
+    template = full_roster.template
+    [interceptor] = [
+        f["Properties"]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.interceptor.handler"
+    ]
+    [gateway] = resources(template, "AWS::BedrockAgentCore::Gateway").values()
+    [configuration] = gateway["Properties"]["InterceptorConfigurations"]
+    env = interceptor["Environment"]["Variables"]
+    tools = json.loads(env["TOOLS"])
+
+    assert configuration["InterceptionPoints"] == ["REQUEST"]
+    assert configuration["InputConfiguration"] == {"PassRequestHeaders": True}
+    assert "Fn::GetAtt" in json.dumps(configuration["Interceptor"]["Lambda"]["Arn"])
+    assert {"CLIENT_OPERATIONS", "CLIENT_PROGRAMMING", "CLIENT_SALES"} <= set(env)
+    assert tools["channels___start_channel"] is True and tools["schedule___publish"] is True
+    assert tools["schedule___plan"] is False and tools["sales___propose"] is False
+    assert "sales___line_pacing" not in tools and "channels___get_channel" not in tools, "READ tools pass unchecked"
+    allowed = _statements(template, interceptor)
+    [caps] = allowed["dynamodb:UpdateItem"]
+    assert caps["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"] == [
+        "CAP#operations*",
+        "CAP#programming*",
+        "CAP#sales*",
+    ]
+    chains = sorted(
+        key
+        for s in allowed["dynamodb:PutItem"]
+        for key in s["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"]
+    )
+    assert chains == ["agents/operations", "agents/programming", "agents/sales"]
+    [plans] = allowed["dynamodb:GetItem"]
+    assert plans["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"] == ["CHANNEL#fast-news"]
+    assert "sns:Publish" in allowed
+    alarms = {a["Properties"]["AlarmName"] for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    assert "fast-agent-interceptor-errors" in alarms
+
+
+def test_without_the_agents_module_the_gateway_has_no_interceptor(template: Template) -> None:
+    [gateway] = resources(template, "AWS::BedrockAgentCore::Gateway").values()
+
+    assert "InterceptorConfigurations" not in gateway["Properties"]
+
+
+def test_the_programming_agent_ticks_hourly_and_reads_only_its_channels_schedules(full_roster: Plane) -> None:
+    template = full_roster.template
+    runner = _runner(template, "programming")
+    rules = {
+        r["Properties"]["Description"]: r["Properties"]
+        for r in resources(template, "AWS::Events::Rule").values()
+        if r["Properties"].get("Description", "").startswith("Agents: every hour")
+    }
+    allowed = _statements(template, runner)
+
+    [programming] = [r for d, r in rules.items() if "programming agent" in d]
+    assert programming["ScheduleExpression"] == "cron(0 * * * ? *)"
+    [schedule] = allowed["mediatailor:GetChannelSchedule"]
+    assert schedule["Resource"] == "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-news"
+    leading = sorted(
+        key
+        for s in allowed["dynamodb:GetItem"]
+        for key in s["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"]
+    )
+    assert leading == ["CAP#programming*", "CHANNEL#fast-news"]
+
+
+def test_cedar_lets_the_programming_agent_plan_and_publish_on_its_channels_only(full_roster: Plane) -> None:
+    def text(statement: str | dict[str, Any]) -> str:
+        """A statement with its tokens (the agent's client id) as ``<token>``."""
+        if isinstance(statement, str):
+            return statement
+        return "".join(part if isinstance(part, str) else "<token>" for part in statement["Fn::Join"][1])
+
+    named = {
+        p["Properties"]["Name"]: text(p["Properties"]["Definition"]["Cedar"]["Statement"])
+        for p in resources(full_roster.template, "AWS::BedrockAgentCore::Policy").values()
+    }
+
+    assert 'context.input.plan_id like "fast-news.*"' in named["fast_tools_permit_programming_publish"]
+    assert 'context.input.channel like "fast-news"' in named["fast_tools_permit_programming_plan"]
+    forbidden = _actions(named["fast_tools_forbid_programming"])
+    assert {"schedule___remove_programs", "schedule___update_brief", "channels___start_channel"} <= forbidden
+    assert "schedule___publish" not in forbidden
+
+
+def test_the_sales_agent_reads_the_own_book_and_records_proposals(full_roster: Plane) -> None:
+    template = full_roster.template
+    targets = {
+        t["Properties"]["Name"]: t["Properties"]
+        for t in resources(template, "AWS::BedrockAgentCore::GatewayTarget").values()
+    }
+    [tools] = [
+        f["Properties"]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f["Properties"].get("Handler") == "fast_channels.functions.tools.sales.handler"
+    ]
+    runner = _runner(template, "sales")
+    named = {p["Properties"]["Name"] for p in resources(template, "AWS::BedrockAgentCore::Policy").values()}
+
+    schema = targets["sales"]["TargetConfiguration"]["Mcp"]["Lambda"]["ToolSchema"]["InlinePayload"]
+    assert sorted(tool["Name"] for tool in schema) == ["line_pacing", "propose"]
+    env = tools["Environment"]["Variables"]
+    assert (env["PDS_TABLE"], env["LEDGER_TABLE"]) == ("fast-pds", "fast-ledger") and "PDS_CONFIG_BUCKET" in env
+    for function in (tools, runner):
+        allowed = _statements(template, function)
+        [snapshot] = allowed["s3:GetObject"]
+        assert '"/snapshot/current.json"' in json.dumps(snapshot["Resource"])
+        budgets = [s for s in allowed["dynamodb:GetItem"] if "BUDGET#*" in json.dumps(s)]
+        assert len(budgets) == 1
+    [proposals] = _statements(template, tools)["dynamodb:PutItem"]
+    assert proposals["Condition"]["ForAllValues:StringLike"]["dynamodb:LeadingKeys"] == ["sales/proposals"]
+    assert "fast_tools_permit_sales_propose" in named
+    rules = [r["Properties"] for r in resources(template, "AWS::Events::Rule").values()]
+    assert any(r.get("ScheduleExpression") == "cron(30 * * * ? *)" for r in rules)
+
+
+def test_the_devops_agent_is_opt_in_and_only_investigates(dist: Path, template: Template) -> None:
+    opted = build({**EVERYTHING, **AGENTS, "modules.agents.devops_agent": True}, dist=dist).template
+    [space] = resources(opted, "AWS::DevOpsAgent::AgentSpace").values()
+    [association] = resources(opted, "AWS::DevOpsAgent::Association").values()
+    [(role_name, role)] = [
+        (k, r["Properties"]) for k, r in resources(opted, "AWS::IAM::Role").items() if k.startswith("DevOpsAgentRole")
+    ]
+    [statements] = [
+        p["Properties"]["PolicyDocument"]["Statement"]
+        for p in resources(opted, "AWS::IAM::Policy").values()
+        if p["Properties"]["Roles"] == [{"Ref": role_name}]
+    ]
+
+    assert space["Properties"]["Name"] == "fast-devops"
+    assert "Preferences" not in space["Properties"], "elevated actions stay at their default: off"
+    assert "OperatorApp" not in space["Properties"]
+    aws = association["Properties"]["Configuration"]["Aws"]
+    assert association["Properties"]["ServiceId"] == "aws" and aws["AccountType"] == "monitor"
+    assert aws["AssumableRoleArn"] == {"Fn::GetAtt": [role_name, "Arn"]} and "AgentElevatedRoleArn" not in aws
+    [trust] = role["AssumeRolePolicyDocument"]["Statement"]
+    assert trust["Principal"] == {"Service": "aidevops.amazonaws.com"}
+    assert trust["Condition"]["StringEquals"] == {"aws:SourceAccount": "123456789012"}
+    assert "AIDevOpsAgentAccessPolicy" in json.dumps(role["ManagedPolicyArns"])
+    assert {"Effect": "Deny", "Action": "support:CreateCase", "Resource": "*"} in statements
+    assert not resources(template, "AWS::DevOpsAgent::AgentSpace")
+    assert not resources(build({**EVERYTHING, **AGENTS}, dist=dist).template, "AWS::DevOpsAgent::AgentSpace")

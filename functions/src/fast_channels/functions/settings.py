@@ -115,6 +115,19 @@ class Settings:
     """The snapshot publisher's function, which the selling module's sync runs when the booked lines change."""
     selling_products: str = field(default_factory=lambda: _env("SELLING_PRODUCTS"))
     """JSON of the selling module's product terms (``functions.selling.sync.Terms``)."""
+    pds_creatives_key: str = field(default_factory=lambda: _env("PDS_CREATIVES_KEY"))
+    """The config bucket's object of the registry's READY creatives (creatives module), which the publisher adds to
+    the own book and the selling module's sync books; unset without the module."""
+    creatives_table: str = field(default_factory=lambda: _env("CREATIVES_TABLE"))
+    """The creatives module's registry (``<prefix>-creatives``)."""
+    creatives_quarantine_bucket: str = field(default_factory=lambda: _env("CREATIVES_QUARANTINE_BUCKET"))
+    """The creatives module's quarantine bucket of source files."""
+    creatives_ladder: str = field(default_factory=lambda: _env("CREATIVES_LADDER"))
+    """JSON of the ladder creatives are conditioned to (the stage's default ladder, ``core.ladder.Ladder``)."""
+    creatives_moderation: bool = field(default_factory=lambda: _env("CREATIVES_MODERATION") == "true")
+    """Whether Amazon Rekognition moderates each creative before it is conditioned."""
+    creatives_min_confidence: float = field(default_factory=lambda: float(_env("CREATIVES_MIN_CONFIDENCE") or 80))
+    """The moderation label confidence (percent) at which a creative goes to a person's review."""
     lake_workgroup: str = field(default_factory=lambda: _env("LAKE_WORKGROUP"))
     """The lake's Athena workgroup (``<prefix>-lake``), which the delivery function's CDN-log runs query in."""
     cdn_log_table: str = field(default_factory=lambda: _env("CDN_LOG_TABLE"))
@@ -125,6 +138,9 @@ class Settings:
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
     release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
     """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
+    child_directed_channels: tuple[str, ...] = field(default_factory=lambda: _csv("CHILD_DIRECTED_CHANNELS"))
+    """The monetized channels that are child-directed (``modules.release.child_directed``): every break of theirs is
+    KIDS, and no ticket is minted for them (comma-separated ``CHILD_DIRECTED_CHANNELS``)."""
     release_siblings: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_SIBLINGS"))
     """The monetized channels' sibling configurations (comma-separated ``RELEASE_SIBLINGS``)."""
     release_lock_seconds: int = field(default_factory=lambda: int(_env("RELEASE_LOCK_SECONDS") or 0))
@@ -165,6 +181,18 @@ class Settings:
     """ARN of the identity module's KMS HMAC key, which the ``vid`` is computed with."""
     redeem_window_ms: int = field(default_factory=lambda: int(_env("REDEEM_WINDOW_MS") or 0))
     """``modules.identity.redeem_window_seconds`` in milliseconds: from mint to the latest redeem of a ticket."""
+    understanding_bucket: str = field(default_factory=lambda: _env("UNDERSTANDING_BUCKET"))
+    """The understanding module's bucket: analysis proxies (``proxies/``) and raw results (``results/``)."""
+    understanding_task: str = field(default_factory=lambda: _env("UNDERSTANDING_TASK"))
+    """The model-registry task of the understanding module's describe step (``understanding.describe``)."""
+    understanding_analyses: tuple[str, ...] = field(default_factory=lambda: _csv("UNDERSTANDING_ANALYSES"))
+    """The analyses the understanding workflow is configured to run (``modules.understanding.analyses``)."""
+    models_counter_table: str = field(default_factory=lambda: _env("MODELS_COUNTER_TABLE"))
+    """The model registry's daily spend counters (``<prefix>-models``)."""
+    understanding_items: bool = field(default_factory=lambda: _env("UNDERSTANDING_ITEMS") == "true")
+    """The crawl publisher reads each title's ``UNDERSTANDING`` item too (the understanding module is on)."""
+    alert_topic_arn: str = field(default_factory=lambda: _env("ALERT_TOPIC_ARN"))
+    """The deployment's alert topic, told when a model task's daily cap is reached."""
 
     @property
     def app(self) -> str:

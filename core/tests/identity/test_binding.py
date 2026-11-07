@@ -17,6 +17,7 @@ from fast_channels.core.identity.binding import (
     refresh,
     self_redeem,
 )
+from fast_channels.core.identity.consent import UNKNOWN, StoredConsent
 from fast_channels.core.identity.ticket import REDEEM_CONDITION, REDEEM_UPDATE, PrivacyMode
 from fast_channels.core.pds.models import Mode, Reason
 from fast_channels.core.pds.policy import ANONYMOUS, Consent, Viewer, resolve
@@ -90,18 +91,57 @@ def test_the_writes_are_the_identity_apis_own() -> None:
     assert (renew["ConditionExpression"], renew["UpdateExpression"]) == ("redeemedBy = :sid", "SET last_seen = :now")
 
 
+GPP = "DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA"
+
+
 @pytest.mark.parametrize(
-    ("pm", "mode"),
-    [("PSEUDONYMOUS", Mode.PSEUDONYMOUS), ("FULL", Mode.FULL), ("OPTED_OUT", Mode.CONTEXTUAL), ("WHAT", Mode.SAFE)],
+    ("stored", "mode", "reason"),
+    [
+        (StoredConsent(Consent.FULL, GPP, (2,)), Mode.FULL, Reason.BOUND),
+        (StoredConsent(Consent.PSEUDONYMOUS), Mode.PSEUDONYMOUS, Reason.BOUND),
+        (StoredConsent(Consent.OPTED_OUT, GPP, (7,)), Mode.CONTEXTUAL, Reason.OPTED_OUT),
+        (UNKNOWN, Mode.SAFE, Reason.CONSENT_UNAVAILABLE),
+    ],
 )
-def test_the_rows_privacy_mode_decides_a_bound_break(pm: str, mode: Mode) -> None:
-    inputs = policy_inputs(check(bound(pm=pm), sid=SID, pc=PC, now_ms=NOW))
+def test_a_signed_in_viewers_consent_decides_their_bound_break_never_the_rows_mode(
+    stored: StoredConsent, mode: Mode, reason: Reason
+) -> None:
+    binding = check(bound(pm="FULL"), sid=SID, pc=PC, now_ms=NOW)
+    assert binding.signed_in
+    inputs = policy_inputs(binding, stored)
     resolution = resolve(inputs.identity, viewer=inputs.viewer, consent=inputs.consent)
-    assert resolution.mode is mode
+    assert (resolution.mode, resolution.reason) == (mode, reason)
     if mode in {Mode.FULL, Mode.PSEUDONYMOUS}:
-        assert resolution.viewer == Viewer(vid=VID, cid=row()["cid"], persona="dana")
+        assert resolution.viewer == Viewer(
+            vid=VID, cid=row()["cid"], persona="dana", gpp=stored.gpp, gpp_sid=stored.gpp_sid
+        )
+    elif mode is Mode.CONTEXTUAL:
+        assert resolution.viewer == Viewer(cid=row()["cid"], gpp=GPP, gpp_sid=(7,)), "no vid, the GPP string kept"
     else:
-        assert resolution.viewer.vid is None
+        assert resolution.viewer == ANONYMOUS
+    assert policy_inputs(binding).consent is Consent.UNAVAILABLE, "a consent nobody read is SAFE"
+
+
+@pytest.mark.parametrize(
+    ("pm", "mode", "reason"),
+    [
+        ("CONTEXTUAL", Mode.CONTEXTUAL, Reason.BOUND),
+        ("OPTED_OUT", Mode.CONTEXTUAL, Reason.OPTED_OUT),
+        ("FULL", Mode.SAFE, Reason.CONSENT_UNAVAILABLE),
+        (None, Mode.SAFE, Reason.CONSENT_UNAVAILABLE),
+    ],
+)
+def test_a_guests_ticket_carries_its_mode_and_gpp_string(pm: str | None, mode: Mode, reason: Reason) -> None:
+    guest = {
+        name: value for name, value in bound(pm=pm, gpp=GPP, gpp_sid=[2]).items() if name not in {"vid", "persona"}
+    }
+    binding = check({name: value for name, value in guest.items() if value is not None}, sid=SID, pc=PC, now_ms=NOW)
+    assert binding.bound and not binding.signed_in
+    inputs = policy_inputs(binding, StoredConsent(Consent.FULL))  # a guest has no consent row: it is never used
+    resolution = resolve(inputs.identity, viewer=inputs.viewer, consent=inputs.consent)
+    assert (resolution.mode, resolution.reason) == (mode, reason)
+    if mode is Mode.CONTEXTUAL:
+        assert resolution.viewer == Viewer(cid=row()["cid"], gpp=GPP, gpp_sid=(2,))
 
 
 def test_a_failed_lookup_is_safe_never_contextual() -> None:

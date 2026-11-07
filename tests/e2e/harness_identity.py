@@ -5,6 +5,8 @@ Any e2e that plays as a signed-in viewer uses these:
     token = sign_in(stage, "dana")             # a persona seeded by scripts/seed_personas.py
     answer = mint(stage, token, "fastm-demo")  # POST /playback: {"url", "cid", "expires_in"}
     ticket_of(answer["url"])                   # the 22-character ads.t
+    guest(stage, "fastm-demo", gpc=True)       # POST /playback/guest, no token
+    record_consent(stage, token, opt_out=False)  # PUT /consent: without one the viewer's breaks are SAFE
 
 ``sign_in`` reads the persona's password from the Secrets Manager secret ``<prefix>/identity/demo-users`` and the app
 client from ``/<prefix>/identity/client-id``, and signs in with ``USER_PASSWORD_AUTH`` as the viewer app does. A test
@@ -19,18 +21,26 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from harness import Player, wait_for
-from harness_pods import Viewer
+from harness_pods import Logs, Viewer, ipv4_client, json_object, prebid_tasks, record_pattern, warmups
 
+from fast_channels.core.demand import warmup_project
+from fast_channels.core.identity.consent import key as consent_key
 from fast_channels.core.identity.names import PERSONA_ATTRIBUTE, Parameter, demo_users_secret, parameter_name
 from fast_channels.core.identity.ticket import TICKET
+from fast_channels.core.identity.vid import viewer_id
+from fast_channels.core.monetization import names
+from fast_channels.core.monetization.release import PlaybackPlan
+from fast_channels.core.pds.names import sidecar_log_group
 
 if TYPE_CHECKING:
     from _stack import Stage
+    from harness_demand import DemandEdge
 
 TICKET_PARAMETER: Final = "ads.t"
 TIMEOUT: Final = httpx.Timeout(15.0)
@@ -76,7 +86,7 @@ class SignedIn:
 @contextmanager
 def viewer(stage: Stage, email: str, *, persona: str) -> Iterator[SignedIn]:
     """A pool user of the test's own (``email``, ``custom:persona``), signed in with a password as the viewer app
-    does, and deleted afterwards. No email is sent."""
+    does, and deleted afterwards with any consent they recorded. No email is sent."""
     cognito = stage.session.client("cognito-idp")
     pool, password = parameter(stage, Parameter.USER_POOL_ID), f"{secrets.token_urlsafe(18)}aA1!"
     cognito.admin_create_user(
@@ -94,7 +104,17 @@ def viewer(stage: Stage, email: str, *, persona: str) -> Iterator[SignedIn]:
         user = cognito.admin_get_user(UserPoolId=pool, Username=email)
         sub = next(a["Value"] for a in user["UserAttributes"] if a["Name"] == "sub")
         signed_in = tokens(stage, email, password)
-        yield SignedIn(email, sub, signed_in["AccessToken"], signed_in["IdToken"])
+        try:
+            yield SignedIn(email, sub, signed_in["AccessToken"], signed_in["IdToken"])
+        finally:
+            vid = viewer_id(
+                stage.session.client("kms"),
+                key_id=parameter(stage, Parameter.VID_KEY),
+                issuer=parameter(stage, Parameter.ISSUER),
+                sub=sub,
+            )
+            table = stage.session.resource("dynamodb").Table(parameter(stage, Parameter.TABLE))
+            table.delete_item(Key={"pk": consent_key(vid)})
     finally:
         cognito.admin_delete_user(UserPoolId=pool, Username=email)
 
@@ -104,12 +124,44 @@ def sign_in(stage: Stage, persona: str) -> str:
     return tokens(stage, *credentials(stage, persona))["AccessToken"]
 
 
-def mint(stage: Stage, token: str, channel: str) -> dict[str, Any]:
-    """``POST /playback`` for ``channel``: ``{"url", "cid", "expires_in"}``. Raises on any answer but 200."""
+def mint(stage: Stage, token: str, channel: str, *, profile: str | None = None) -> dict[str, Any]:
+    """``POST /playback`` for ``channel`` (``profile="kids"``: the account's kids profile): ``{"url", "cid",
+    "expires_in"}``. Raises on any answer but 200."""
     response = httpx.post(
         parameter(stage, Parameter.PLAYBACK_URL),
         headers={"Authorization": f"Bearer {token}"},
-        json={"channel": channel},
+        json={"channel": channel, **({"profile": profile} if profile else {})},
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    answer: dict[str, Any] = response.json()
+    return answer
+
+
+def guest(
+    stage: Stage, channel: str, *, gpp: str | None = None, gpp_sid: tuple[int, ...] = (), gpc: bool = False
+) -> dict[str, Any]:
+    """``POST /playback/guest`` for ``channel``: ``{"url", "cid", "expires_in"}``. Raises on any answer but 200."""
+    body: dict[str, Any] = {"channel": channel, **({"gpp": gpp, "gpp_sid": list(gpp_sid)} if gpp else {})}
+    response = httpx.post(
+        f"{parameter(stage, Parameter.PLAYBACK_URL)}/guest", json=body | ({"gpc": True} if gpc else {}), timeout=TIMEOUT
+    )
+    response.raise_for_status()
+    answer: dict[str, Any] = response.json()
+    return answer
+
+
+def consent_url(stage: Stage) -> str:
+    """``GET`` and ``PUT`` here read and write the signed-in viewer's consent (beside ``/playback``)."""
+    return parameter(stage, Parameter.PLAYBACK_URL).removesuffix("playback") + "consent"
+
+
+def record_consent(stage: Stage, token: str, *, opt_out: bool, vppa: bool = False) -> dict[str, Any]:
+    """``PUT /consent``: the viewer's choice, as stored. Raises on any answer but 200."""
+    response = httpx.put(
+        consent_url(stage),
+        headers={"Authorization": f"Bearer {token}"},
+        json={"opt_out": opt_out, "vppa": vppa},
         timeout=TIMEOUT,
     )
     response.raise_for_status()
@@ -160,3 +212,51 @@ def join(stage: Stage, http: httpx.Client, token: str, channel: str) -> tuple[Vi
         failures.append(response.status_code)
         time.sleep(5)
     raise AssertionError(f"no session after {JOIN_ATTEMPTS} tickets: {failures}")
+
+
+READY_TIMEOUT_S: Final = 1500
+"""Census lag, Prebid Server's scale-out and warm-up, with room (as ``test_14``)."""
+RECORDS_TIMEOUT_S: Final = 300
+
+
+def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
+    """The channel's playback plan, read through the CDN as a player reads it."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
+    with ipv4_client(timeout=10.0) as http:
+        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
+    response.raise_for_status()
+    return PlaybackPlan.model_validate_json(response.text)
+
+
+def wait_until_ready(stage: Stage, edge: DemandEdge) -> None:
+    """Until Prebid Server runs and every running task's warm-up succeeded (the PDS is its sidecar)."""
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+
+    def ready() -> bool | None:
+        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        return (bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}) or None
+
+    wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server")
+
+
+def decision_records(
+    stage: Stage, sessions: dict[str, Viewer], since: datetime, record: str
+) -> dict[str, list[dict[str, Any]]]:
+    """Every role's ``record`` lines (``pds.policy``, ``pds.select``), read again until each session has one or the
+    timeout passed."""
+    logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms=int(since.timestamp() * 1000))
+    roles = {session.sid: role for role, session in sessions.items()}
+    found: dict[str, list[dict[str, Any]]] = {}
+
+    def complete() -> bool | None:
+        events = logs.events(sidecar_log_group(stage.prefix), record_pattern(record, roles))
+        found.clear()
+        for event in events:
+            if (line := json_object(event["message"])) is not None:
+                found.setdefault(roles[line["sid"]], []).append(line)
+        return set(found) == set(sessions) or None
+
+    wait_for(complete, timeout=RECORDS_TIMEOUT_S, interval=15, what=f"every session's {record} records")
+    return found

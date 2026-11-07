@@ -91,7 +91,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the model registry on, synth refuses a task whose eval names no passing record for its model family and settings (effort, thinking, max_tokens). Required checks by task: scheduler.plan: scenario_standard, scenario_hard; recommender: schema_valid, faithfulness, policy_violations, cost_per_rail; recommender.cohort: schema_valid, faithfulness, policy_violations, cost_per_rail. The recommender's (schema_valid, faithfulness, policy_violations, cost_per_rail) include the deterministic faithfulness check: each tile's reason cites only facts of the input.",
+  "description": "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the model registry on, synth refuses a task whose eval names no passing record for its model family and settings (effort, thinking, max_tokens). Required checks by task: scheduler.plan: scenario_standard, scenario_hard; recommender: schema_valid, faithfulness, policy_violations, cost_per_rail; recommender.cohort: schema_valid, faithfulness, policy_violations, cost_per_rail; understanding.describe: schema_valid, categories_valid, expected_categories, no_wrong_categories, moderation_agreement, brand_safety_expected, cost_per_hour. The recommender's (schema_valid, faithfulness, policy_violations, cost_per_rail) include the deterministic faithfulness check: each tile's reason cites only facts of the input.",
   "properties": {
     "task": {
       "description": "The task the suite tests.",
@@ -199,13 +199,13 @@
   "examples": [
     {
       "task": "recommender",
-      "key": "haiku-5-5-adaptive-8k",
+      "key": "haiku-5-5-disabled-4k",
       "model": "us.anthropic.claude-haiku-5-5",
       "effort": "low",
-      "thinking": "adaptive",
-      "max_tokens": 8000,
-      "suite": "recommender conformance v1: 300 synthetic viewers, 8 personas",
-      "runs": 1,
+      "thinking": "disabled",
+      "max_tokens": 4000,
+      "suite": "recommender conformance v1 (recs-v1): 12 golden cases on a 36-title fixture",
+      "runs": 3,
       "passed": true,
       "checks": [
         {
@@ -215,10 +215,16 @@
           "threshold": ">= 0.99"
         },
         {
+          "name": "rails_served",
+          "passed": true,
+          "value": 1.0,
+          "threshold": ">= 0.95"
+        },
+        {
           "name": "faithfulness",
           "passed": true,
-          "value": 0.933,
-          "threshold": ">= 0.90"
+          "value": 0.9101,
+          "threshold": ">= 0.85"
         },
         {
           "name": "policy_violations",
@@ -227,14 +233,44 @@
           "threshold": "== 0"
         },
         {
+          "name": "raw_violations",
+          "passed": true,
+          "value": 0.0,
+          "threshold": "<= 0.05"
+        },
+        {
+          "name": "golden_ranks",
+          "passed": true,
+          "value": 1.0,
+          "threshold": ">= 0.80"
+        },
+        {
           "name": "cost_per_rail",
           "passed": true,
-          "value": 0.0024,
-          "threshold": "<= 0.01"
+          "value": 0.0004,
+          "threshold": "<= 0.002"
+        },
+        {
+          "name": "latency_p50_s",
+          "passed": true,
+          "value": 2.459,
+          "threshold": "<= 10"
+        },
+        {
+          "name": "prompt_audit",
+          "passed": true,
+          "value": 0.0,
+          "threshold": "== 0"
+        },
+        {
+          "name": "judge_faithfulness",
+          "passed": true,
+          "value": 0.9474,
+          "threshold": ">= 0.80"
         }
       ],
-      "cost_usd": "0.49",
-      "recorded_at": "2026-10-27T22:00:00Z"
+      "cost_usd": "0.103286",
+      "recorded_at": "2026-11-07T05:16:11.689883Z"
     }
   ]
 }

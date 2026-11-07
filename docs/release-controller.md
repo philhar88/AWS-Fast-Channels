@@ -28,7 +28,13 @@ send their ad requests as a templated OpenRTB POST to Prebid Server:
 | Sibling | Role |
 |---|---|
 | `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it). With the `identity` module they are *ticketed*: their PRE_SESSION root redeems the playback ticket before the session controls, and their ad requests carry it (`X-Fast-T`), except on the lab channel ([identity.md](identity.md#the-pre_session-redeem)) |
+| `<channel>-p-k`, `<channel>-p-l` | The kids twins (`modules.release.kids_pairs`): `k` is `a`'s twin and `l` is `b`'s. They name the kids stored request `fast-pod-kids` (`regs.coppa` 1), are never ticketed, and every break on them is KIDS. A release that configures the idle sibling configures its twin with it, a rollback takes the twin back with it, and the kids stable sibling is always the stable sibling's twin. Kids profiles play them (`POST /playback` with `profile: "kids"`). Not on the lab channel or a child-directed channel |
 | `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs. It runs the stable sibling's release, re-applied after every promotion and rollback ([below](#the-probe-follows-the-stable-release)) |
+
+A **child-directed** channel (`modules.release.child_directed`) has the pair and the probe, all KIDS: they name
+`fast-pod-kids`, take no ticket, and the Pod Decision Service treats every break on them as KIDS (no third-party
+bidder, house and kid-approved direct ads only). Validator R-P5 refuses a kids sibling that names another stored
+request, and R-P6 kids twins that are not `k` and `l` together.
 
 These names, and the controller's IAM grants on `<channel>-p-*`, belong to the channel: the configuration refuses
 an IaC channel named `<channel>-p-...` (with the module on or off, so turning it on cannot collide) and one named
@@ -141,7 +147,9 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
    extension's `Configuration-Version` header, which can name another version ([W-2 4.6](workarounds.md)).
 4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, the
    channel's probe is re-applied with the new stable release ([below](#the-probe-follows-the-stable-release)), and
-   the Function trees no sibling keeps are deleted.
+   the Function trees no sibling keeps are deleted. The kids twins are not smoke-tested on their own: each runs its
+   general sibling's trees without the redeem, it is configured and rolled back with it, and its hook and marker
+   alarms are part of `<prefix>-release-candidate`.
 
 A failed smoke or soak, or a rolled-back pointer, runs **R1**: the candidate is remapped to its last good tree
 (a remap reaches live sessions at their next break in about 3 s), the pointer goes back to the stable siblings at
@@ -254,6 +262,12 @@ stable sibling and its playback URL per output:
   "playback": {"hls": "https://<cdn>/v1/master/<hash>/fastm-demo-p-a/hls.m3u8"},
   "updated": "2026-10-29T12:00:00Z"
 }
+```
+
+On a channel with kids twins the plan also names the stable sibling's twin, where a kids profile plays:
+
+```json
+  "kids": {"configuration": "fastm-demo-p-k", "release": "r0001", "playback": {"hls": "https://<cdn>/v1/master/<hash>/fastm-demo-p-k/hls.m3u8"}}
 ```
 
 Players that want the monetized stream read it; the v3.0.0 URLs keep working.
@@ -416,6 +430,6 @@ stay until the stack goes.
 | `<prefix>-release-drift` in alarm | The drift function's log (`release drift`): the paths that differ |
 | `release.hold` in the ledger | No monetized channel ran and there is no lab channel (or no agent to start it): start a channel and run the release again by hand |
 | `release.rollback` in the ledger | Its `reason` (a failed smoke verdict lists what failed; `ROLLED_BACK` names the alarm, or `timed_out` the PRE_ADS requests that reached their timeout) |
-| `<prefix>-release-unserved-breaks` in alarm | **MediaTailor skipped a prefetched break; open an AWS case** ([W-2 1.33](workarounds.md)). The detector's log names each session, sibling and marker time. Check the sibling's ADS log for that session: a retrieval (`MAKING_ADS_REQUEST` with `prefetchScheduleName`), then the break's `AD_MARKER_FOUND` without it, then nothing. Attach those events and the schedule's windows (`GetPrefetchSchedule`). Nothing of ours to roll back: the viewer saw the slate for that break |
+| `<prefix>-release-unserved-breaks` in alarm | **First check for a quick restart** ([W-2 1.33](workarounds.md)): if the channel started less than 6 minutes after a stop, the run's first break shows two `DATERANGE` IDs (two `START-DATE`s, one event id) in the sessions' `AD_MARKER_FOUND`, and the sessions that met it skipped the next breaks. Nothing of ours to roll back; add the sessions to the AWS case. Otherwise the detector's log names each session, sibling and marker time: check the sibling's ADS log for that session (a retrieval, `MAKING_ADS_REQUEST` with `prefetchScheduleName`, then the break's `AD_MARKER_FOUND` without it, then nothing), and open an AWS case with those events and the schedule's windows (`GetPrefetchSchedule`). The viewer saw the slate for that break |
 | `RefilledBreaks` above 0 (no alarm) | **MediaTailor filled a prefetched break again in real time; add the sessions to the AWS case** ([W-2 1.34](workarounds.md)). The zero-ads detector's log (`a prefetched break was filled again in real time`) names each session, sibling, marker time and its fills. The viewer saw the first ad start twice; delivery credited it once (`repeat`), so nothing is over-counted and nothing needs a rollback |
 | `<prefix>-release-log-loss` in alarm | **Log loss means delivery is under-counted.** The Pod Decision Service counts deliveries from the same log's `BEACON_FIRED`, so the breaks MediaTailor left out may have delivered impressions that were not counted, and the sweeper may release their reservations. The reconciliation function's log names the siblings and the hour. Reconcile delivery from the trackers' own logs (the impression URLs the creatives call); the alarm detects and never back-fills |

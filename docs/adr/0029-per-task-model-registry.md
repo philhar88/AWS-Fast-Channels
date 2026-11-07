@@ -1,6 +1,6 @@
 # 0029 — A per-task model registry over Bedrock Converse
 
-**Status:** Accepted (amends [0012](0012-default-model.md))
+**Status:** Accepted (amends [0012](0012-default-model.md)); the recommender's default amended by [0027](0027-llm-rail-recommender.md)
 
 ## Context
 [0012](0012-default-model.md) gave the scheduling agent one model spec in SSM: a model from an IAM allow-list, an
@@ -52,8 +52,10 @@ Building the registry (M13-01 to M13-03) measured two more facts:
 - **Viewer data stays in its geography.** A task with `data_class: viewer` must use a geographic profile (`us.`,
   `eu.`, ...), never `global.`.
 - **Thinking and the output schema never change per call.** `thinking` is a field of the task: `adaptive` omits it,
-  `disabled` turns it off. The recommender's default is Claude Haiku 5.5 with thinking on (`adaptive`) and
-  `max_tokens` 8,000.
+  `disabled` turns it off. The recommender's default was Claude Haiku 5.5 with thinking on (`adaptive`) and
+  `max_tokens` 8,000; [0027](0027-llm-rail-recommender.md) reverses it to thinking disabled and 4,000, because
+  structured output with thinking on spent the budget and returned no rail, and the larger budget that avoids it
+  costs three times as much and is four times slower.
 - **Caps are circuit breakers.** They are set at about ten times expected use, and the owner treats cost as no
   issue.
   - A deterministic token counter per task and UTC day (`<prefix>-models`) admits a run and each model call only
@@ -80,7 +82,7 @@ Building the registry (M13-01 to M13-03) measured two more facts:
 - The counter adds one conditional DynamoDB write per run and per model call, a few milliseconds each.
 - Strands keys some defaults on the model id string (prompt caching, tool-result status, context window), so with
   an AIP the agent sets them from the underlying model.
-- Candidate AWS defects found on the gateway route, and the undocumented daily-budget limit of Budgets actions, go
-  to the owner's AWS letters, not into code. The gateway defects are: Messages answering 200 with an error body;
+- Candidate AWS defects found on the gateway route, and the undocumented daily-budget limit of Budgets actions, are
+  recorded in [limitations.md](../limitations.md). The gateway defects are: Messages answering 200 with an error body;
   rate-limit model keys resolved after the rule pin; token limits letting too much through; an undocumented 10×
   output burndown for Haiku and Sonnet 5.5.

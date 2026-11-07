@@ -13,7 +13,7 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0002](0002-l2-constructs-over-solutions-constructs.md) | Stable L2 constructs over AWS Solutions Constructs | Accepted, amended by 0020; L1 list amended for the modules |
 | [0003](0003-native-rendition-profiles-no-object-lambda.md) | Rendition profiles are static encode manifests, no S3 Object Lambda | Accepted, amended by 0016 |
 | [0004](0004-tracing-without-the-xray-sdk.md) | Tracing without the AWS X-Ray SDK | Accepted |
-| [0005](0005-preconditioned-ads.md) | Preconditioned ads (no MediaTailor transcoding) by default | Accepted, amended by 0016 and 0017 |
+| [0005](0005-preconditioned-ads.md) | Preconditioned ads (no MediaTailor transcoding) by default | Accepted, amended by 0016, 0017 and the creatives module |
 | [0006](0006-one-cmaf-encode-per-asset.md) | One CMAF encode per asset, ladder version as the unit of compatibility | Superseded by 0016 |
 | [0007](0007-sigv4-channel-origin-no-cdn-shield.md) | SigV4-only Channel Assembly origin; no CDN-shielded mode in v3.0 | Accepted |
 | [0008](0008-ad-break-alignment.md) | Ad breaks on segment boundaries; frame-accurate cue points, ESAM when off the segment grid | Accepted, amended by 0016 and 0017 |
@@ -33,8 +33,9 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0022](0022-delivery-states-billing-and-the-hash-chained-ledger.md) | Delivery states, counterparty billing, and the hash-chained ledger | Accepted |
 | [0023](0023-machine-principals.md) | Machine principals: the Release Controller promotes and rolls back unattended | Accepted |
 | [0024](0024-agentic-selling-over-adcp.md) | Agentic selling over AdCP: the Prebid Sales Agent as seller of record, A2A on the seller | Accepted |
+| [0027](0027-llm-rail-recommender.md) | An LLM rail recommender behind a deterministic router, candidates and validator | Accepted |
 | [0028](0028-reference-viewer-on-its-own-origin.md) | A reference viewer on its own origin, with a rule-based rail and a demo-only ad panel | Accepted |
-| [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted |
+| [0029](0029-per-task-model-registry.md) | A per-task model registry over Bedrock Converse | Accepted, amended by 0027 |
 | [0031](0031-show-level-content-metadata.md) | Show-level content metadata in ad requests, looked up by the break's UPID | Accepted; native 2.6 fields only since 2026-10-30 |
 | [0032](0032-shared-as-run-router.md) | One as-run subscription per account, routed through EventBridge | Accepted |
 | [0033](0033-prefetch-single-schedules.md) | Ad prefetch with rolling SINGLE schedules from the schedule of record | Accepted |

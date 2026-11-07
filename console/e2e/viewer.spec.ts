@@ -44,9 +44,25 @@ test("each persona gets their own rail", async ({ page }) => {
   await page.goto("/?mock#/personas");
   await signIn(page, "Luis Moreno");
   await expect.poll(() => railChannels(page)).toEqual(["fast-anim", "fast-demo"]);
-  await expect(page.getByRole("region", { name: "Up next for you" }).getByText("Elephants Dream").first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Recommended for you" }).getByText("Elephants Dream").first()).toBeVisible();
   expect(problems).toEqual([]);
 });
+
+test("the recommender's rail shows its reasons and how it was made", async ({ page }) => {
+  const problems = await open(page);
+  await signIn(page, "Dana Reyes");
+  const rail = page.getByRole("region", { name: "Recommended for you" });
+  await expect(rail.getByText("Recommended by Claude Haiku 5.5")).toBeVisible();
+  await expect(rail.getByText("Tears of Steel").first()).toBeVisible();
+  await expect(rail.getByText(/A sci-fi and action pick, as you like it/).first()).toBeVisible();
+  await screenshot(page, "viewer-recommended");
+
+  await page.goto("/?mock#/personas");
+  await signIn(page, "Ben Okafor");
+  await expect(page.getByText(/Rule-based rail from your genres: you are in the rule-based holdout/)).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
 
 test("a light-tier viewer gets one ad and slate, and the panel says why", async ({ page }) => {
   const problems = await open(page);
@@ -73,12 +89,12 @@ test("a standard-tier viewer gets the full pod on the same channel", async ({ pa
   expect(problems).toEqual([]);
 });
 
-test("a guest plays anonymously and sees no decisions", async ({ page }) => {
+test("a guest plays on a guest ticket and sees no decisions", async ({ page }) => {
   const problems = await open(page);
   await page.getByRole("button", { name: "Watch as Guest" }).click();
   await expect(page.getByRole("heading", { name: "Channels on now" })).toBeVisible();
   await page.getByRole("link", { name: "Watch fast-demo" }).click();
-  await expect(page.getByText("Anonymous: guest")).toBeVisible();
+  await expect(page.getByText(/Ticket 01MOCKGUEST/)).toBeVisible();
   await expect(page.getByText(/A guest's session is CONTEXTUAL/)).toBeVisible();
   expect(problems).toEqual([]);
 });
@@ -92,5 +108,34 @@ test("a wrong password is refused", async ({ page }) => {
   await signInButton.click();
   await expect(page.getByText("Incorrect username or password.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Who's watching?" })).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
+test("a viewer without a consent is asked for one, and opting out changes their mode", async ({ page }) => {
+  const problems = await open(page);
+  await signIn(page, "Priya Shah");
+  await expect(page.getByText("Choose your privacy settings")).toBeVisible();
+  await page.getByRole("link", { name: "Privacy choices" }).first().click();
+  await expect(page.getByText(/Your breaks now: SAFE/)).toBeVisible();
+  await page.getByText("Do not sell or share my personal information").click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText(/Your breaks now: CONTEXTUAL/)).toBeVisible();
+  await screenshot(page, "viewer-privacy");
+  await page.getByRole("link", { name: "Back" }).click();
+  await expect(page.getByText("Choose your privacy settings")).toBeHidden();
+  expect(problems).toEqual([]);
+});
+
+test("a kids profile signs in on its account and plays KIDS with no ticket", async ({ page }) => {
+  const problems = await open(page);
+  await page.getByRole("button", { name: "Watch as Mia" }).click();
+  await expect(page.getByRole("dialog").getByRole("textbox", { name: "Email" })).toHaveValue("marcus@personas.example.com");
+  await page.getByRole("textbox", { name: "Password" }).fill("demo-password");
+  await page.getByRole("dialog").getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Mia", exact: true })).toBeVisible();
+  await expect(page.getByText("The kids lineup: no recommender, no personal data.")).toBeVisible();
+  await page.getByRole("link", { name: "Watch fast-demo" }).click();
+  await expect(page.getByText("Mia (kids profile)")).toBeVisible();
+  await expect(page.getByText("KIDS, no ticket")).toBeVisible();
   expect(problems).toEqual([]);
 });

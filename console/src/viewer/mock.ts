@@ -9,7 +9,10 @@ import type { Tokens } from "./auth";
 import { SignInError } from "./auth";
 import type { ViewerBackend } from "./backend";
 import type { Persona, ViewerChannel, ViewerConfig } from "./config";
+import type { ConsentRecord } from "./consent";
 import type { Source } from "./playback";
+import { programRail } from "./rail";
+import type { RailAnswer } from "./railClient";
 
 const CDN = new URL("/mock/cdn", window.location.href).href;
 const STANDARD_POD = `${CDN}/channel/hls.m3u8`;
@@ -22,7 +25,7 @@ export const MOCK_PERSONAS: readonly Persona[] = [
   { id: "luis", name: "Luis Moreno", bio: "Freelancer; animation in the background all day.", email: "luis@personas.example.com", signIn: "user", genres: ["animation", "surreal"] },
   { id: "priya", name: "Priya Shah", bio: "Nurse in San Jose; an hour of fantasy after a shift.", email: "priya@personas.example.com", signIn: "user", genres: ["fantasy", "adventure"] },
   { id: "sam", name: "Sam Lee", bio: "Student, new this week; declared animation and sci-fi.", email: "sam@personas.example.com", signIn: "user", genres: ["animation", "sci-fi"] },
-  { id: "mia", name: "Mia", bio: "8; a kids profile on Marcus's account.", email: null, signIn: "kids_profile", genres: ["animation"] },
+  { id: "mia", name: "Mia", bio: "8; a kids profile on Marcus's account.", email: null, signIn: "kids_profile", account: "marcus", genres: ["animation"] },
   { id: "guest", name: "Guest", bio: "A drive-by viewer who never signs in.", email: null, signIn: "guest", genres: [] },
 ];
 
@@ -41,6 +44,7 @@ export const MOCK_VIEWER_CONFIG: ViewerConfig = {
   epgBaseUrl: `${CDN}/epg`,
   planBaseUrl: `${CDN}/plan/playback`,
   adPanelUrl: "https://panel.example/",
+  railUrl: "https://rail.example/rail",
   channels: CHANNELS,
   personas: MOCK_PERSONAS,
 };
@@ -130,8 +134,41 @@ function mockDecisions(persona: Persona | undefined, sid: string): SessionDecisi
   return { sid, breaks: [decision] };
 }
 
+/** The recommender's answer in mock mode: the rule-based rail's picks with model-like reasons; Ben, pinned to the
+ * holdout, gets the rule-based rail. */
+function mockRail(persona: Persona | undefined, now = Date.now()): RailAnswer {
+  const guides = CHANNELS.map((channel) => ({ channel, epg: mockViewerEpg(channel.name, now) }));
+  const holdout = persona?.id === "ben";
+  const tiles = programRail(persona?.genres ?? [], guides, now).map((tile) => ({
+    content_id: tile.program.content_id ?? tile.program.name,
+    title: tile.program.title,
+    channel: tile.channel.name,
+    program: tile.program.name,
+    start: tile.program.start,
+    end: tile.program.end,
+    on_now: tile.onNow,
+    reason: holdout
+      ? `You like ${tile.matched.join(" and ")}`
+      : `A ${tile.matched.join(" and ")} pick, as you like it`,
+    evidence: ["declared_genre"],
+  }));
+  return {
+    strategy: holdout ? "baseline" : "llm",
+    reason: holdout ? "holdout" : "model",
+    title: holdout ? "Up next for you" : "Recommended for you",
+    tiles,
+    lineage: holdout ? null : { model: "us.anthropic.claude-haiku-5-5", prompt_version: "recs-v1", built_at: new Date(now).toISOString() },
+  };
+}
+
+/** The kids lineup in mock mode: nothing in the sample catalog is rated for children. */
+function mockKidsRail(): RailAnswer {
+  return { strategy: "kids", reason: "kids", title: "For kids", tiles: [], lineage: null };
+}
+
 export function mockViewerBackend(): ViewerBackend {
   let mints = 0;
+  const consents = new Map<string, ConsentRecord>();
   return {
     config: MOCK_VIEWER_CONFIG,
     signIn: (username, password) => {
@@ -145,16 +182,30 @@ export function mockViewerBackend(): ViewerBackend {
       const persona = MOCK_PERSONAS.find((p) => refreshToken === `mock-refresh-${p.id}`);
       return persona ? Promise.resolve(mockTokens(persona)) : Promise.reject(new Error("unknown refresh token"));
     },
-    open: async (channel, accessToken): Promise<Source> => {
+    open: async (channel, accessToken, _signal, profile): Promise<Source> => {
       const persona = accessToken ? personaOfToken(await accessToken()) : undefined;
-      if (!channel.monetized || !persona) {
-        return { url: STANDARD_POD, anonymous: channel.monetized ? "guest" : "not monetized", sid: sessionId("guest") };
+      if (profile === "kids") {
+        return { url: STANDARD_POD, kids: true, sid: sessionId("kids") };
+      }
+      if (!channel.monetized) {
+        return { url: STANDARD_POD, anonymous: "not monetized", sid: sessionId("guest") };
       }
       mints += 1;
+      if (!persona) {
+        return { url: STANDARD_POD, cid: `01MOCKGUEST${String(mints).padStart(4, "0")}`, sid: sessionId("guest") };
+      }
       const url = TIERS[persona.id] === "light" ? LIGHT_POD : STANDARD_POD;
       return { url, cid: `01MOCKCID${String(mints).padStart(4, "0")}`, sid: sessionId(persona.id) };
     },
+    consent: (accessToken) => Promise.resolve(consents.get(personaOfToken(accessToken)?.id ?? "") ?? null),
+    setConsent: (accessToken, choice) => {
+      const record = { opt_out: choice.opt_out, vppa: choice.vppa, updated_at: Date.now() };
+      consents.set(personaOfToken(accessToken)?.id ?? "", record);
+      return Promise.resolve(record);
+    },
     epg: (channel) => Promise.resolve(mockViewerEpg(channel)),
     decisions: (sid, accessToken) => Promise.resolve(mockDecisions(personaOfToken(accessToken), sid)),
+    rail: (accessToken, query) =>
+      Promise.resolve(query.profile === "kids" ? mockKidsRail() : mockRail(personaOfToken(accessToken))),
   };
 }

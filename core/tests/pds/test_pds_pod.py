@@ -590,3 +590,41 @@ def test_randomized_pods_keep_every_invariant() -> None:
             assert all(b.house for b in placed)
         shuffled = select.model_copy(update={"bids": rng.sample(select.bids, len(select.bids))})
         assert select_pod(shuffled, context) == decision, "the result depends on bid order"
+
+
+# --- ad buffet: registered creatives not yet WARM (M5) ---------------------------------------------------------------
+
+COLD = "cr-0123456789ab"
+
+
+def own_line(ref: str, impid: str = "s1", price: str = "20", **fields: Any) -> Bid:
+    return bid(ref, impid, bidder="ownbook", price=Decimal(price), adomain=["acme-outdoor.example"], **fields)
+
+
+def test_a_cold_creative_wins_its_slot_with_a_standalone_behind_it() -> None:
+    decision = select_pod(request([own_line(COLD), bid("sim1", price=Decimal(10))]), PodContext(cold=frozenset({COLD})))
+    assert crids(decision) == ([COLD], ["sim1"])
+    assert decision.outcomes == {COLD: Outcome.WON, "sim1": Outcome.STANDALONE}
+
+
+def test_a_cold_creative_no_standalone_can_back_is_left_out_and_the_pod_is_selected_again() -> None:
+    bids = [own_line(COLD), bid("sim2", "s2", price=Decimal(10))]
+    decision = select_pod(request(bids, slots=2), PodContext(cold=frozenset({COLD})))
+    assert crids(decision) == (["sim2"], [])
+    assert decision.outcomes[COLD] is Outcome.UNBACKED
+    # A creative not marked cold wins its slot without a standalone, as before.
+    assert crids(select_pod(request(bids, slots=2))) == ([COLD, "sim2"], [])
+
+
+def test_a_cold_creative_is_never_a_standalone() -> None:
+    bids = [bid("sim1", price=Decimal(30)), own_line(COLD), bid("sim2", price=Decimal(10))]
+    decision = select_pod(request(bids), PodContext(cold=frozenset({COLD})))
+    assert crids(decision) == (["sim1"], ["sim2"])
+    assert decision.outcomes[COLD] is Outcome.OUTBID
+
+
+def test_a_cold_creatives_slot_goes_to_the_next_bid_when_its_only_backup_shares_its_brand() -> None:
+    bids = [own_line(COLD), bid("sim1", price=Decimal(10), adomain=["acme-outdoor.example"])]
+    decision = select_pod(request(bids), PodContext(cold=frozenset({COLD})))
+    assert crids(decision) == (["sim1"], [])
+    assert decision.outcomes == {COLD: Outcome.UNBACKED, "sim1": Outcome.WON}

@@ -12,9 +12,11 @@ export interface Persona {
   readonly id: string;
   readonly name: string;
   readonly bio: string;
-  /** Sign-in username; `null` for a guest. */
+  /** Sign-in username; `null` for a guest and a kids profile. */
   readonly email: string | null;
   readonly signIn: SignIn;
+  /** A kids profile's account: the persona whose sign-in it uses; `null` otherwise. */
+  readonly account?: string | null;
   /** Declared genres, most liked first, in the catalog's genre vocabulary: the rail's seed. */
   readonly genres: readonly string[];
 }
@@ -39,6 +41,8 @@ export interface ViewerConfig {
   readonly planBaseUrl: string;
   /** The demo's "why these ads" API, or `null` when `modules.viewer.ad_panel` is off. */
   readonly adPanelUrl: string | null;
+  /** The recommender's `GET /rail` (the recs module); absent without it, when the app ranks its own rule-based rail. */
+  readonly railUrl?: string;
   readonly channels: readonly ViewerChannel[];
   readonly personas: readonly Persona[];
 }
