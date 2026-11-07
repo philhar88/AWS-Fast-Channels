@@ -48,16 +48,18 @@ def _cached[T](key: str, seconds: float, load: Callable[[], T]) -> T:
 
 
 def guides(channels: Sequence[str] | None = None) -> list[list[Airing]]:
-    """The channels' guides (``epg/<channel>.json``), in channel order; a channel without one has no airings."""
+    """The channels' guides (``epg/<channel>.json``), in channel order; a channel without one (a channel created
+    since the last publish, say) or whose guide cannot be read has no airings."""
     config = recs_settings()
 
     def load(channel: str) -> list[Airing]:
         try:
             body = client("s3").get_object(Bucket=config.media_bucket, Key=epg_keys(channel)[0])["Body"].read()
         except ClientError as error:
-            if error.response.get("Error", {}).get("Code") in {"NoSuchKey", "404"}:
-                return []
-            raise
+            code = error.response.get("Error", {}).get("Code")
+            if code not in {"NoSuchKey", "404"}:  # anything else is logged: one channel never fails the rail
+                logger.warning("guide unreadable, left out", extra={"channel": channel, "code": code})
+            return []
         try:
             return airings(channel, json.loads(body))
         except json.JSONDecodeError, ValidationError:

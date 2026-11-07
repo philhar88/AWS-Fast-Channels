@@ -152,3 +152,19 @@ def test_the_kill_switch_is_the_recs_flag(
 
 def test_without_ops_there_is_no_kill_switch() -> None:
     assert inputs.kill_switch() is False
+
+
+def test_a_guide_that_cannot_be_read_leaves_its_channel_out(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A channel created since the last publish has no guide; without s3:ListBucket that is a 403, not a 404. Either
+    way one channel never fails the rail (fastm, 2026-11-07)."""
+
+    class Denied(FakeS3):
+        def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 - boto3's names
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+
+    monkeypatch.setattr(inputs, "client", lambda service: Denied({}))
+
+    assert inputs.guides() == [[], []]
+    assert "guide unreadable, left out" in caplog.text
