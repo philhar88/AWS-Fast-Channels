@@ -1,5 +1,6 @@
 """The agent runner: approvals answered from the envelope and its caps, every call ledgered, refusals escalated."""
 
+import dataclasses
 import json
 import threading
 from dataclasses import dataclass, field
@@ -331,3 +332,80 @@ def test_the_envelope_record_appends_its_version(agent_tables: AgentTables, monk
     )
     assert json.loads(entry["detail"])["agents"] == ["operations"]
     function_settings.cache_clear()
+
+
+@dataclass
+class MediaTailor:
+    states: dict[str, str]
+
+    def describe_channel(self, *, ChannelName: str) -> dict[str, str]:  # noqa: N803
+        return {"ChannelState": self.states[ChannelName]}
+
+
+def census(running: int, previous: int = 1) -> dict[str, Any]:
+    return {
+        "id": "event-1",
+        "detail-type": "Census Changed",
+        "source": "fast-channels.fast",
+        "time": "2026-11-07T10:00:00Z",
+        "detail": {"running": running, "previous": previous, "correlation_id": "census-execution"},
+    }
+
+
+def off_air(state: str) -> dict[str, Any]:
+    return {
+        "id": "event-2",
+        "detail-type": "CloudWatch Alarm State Change",
+        "source": "aws.cloudwatch",
+        "detail": {"alarmName": "fast-probe-off-air", "state": {"value": state}},
+    }
+
+
+@pytest.mark.parametrize("event", [census(0), off_air("ALARM")])
+def test_an_always_on_channel_found_stopped_starts_a_run_about_it(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch, event: dict[str, Any]
+) -> None:
+    tables, _ = stage
+    monkeypatch.setattr(aws, "client", lambda service: MediaTailor({"fast-demo": "STOPPED"}))
+
+    found = runner.request_of(settings(tables), event)
+
+    assert isinstance(found, runner.RunRequest)
+    assert found.channel == "fast-demo" and found.correlation_id == event["id"]
+    assert "STOPPED: fast-demo" in found.prompt and "channels___start_channel" in found.prompt
+    assert found.facts["states"] == {"fast-demo": "STOPPED"}
+
+
+@pytest.mark.parametrize(
+    ("role", "event", "states", "reason"),
+    [
+        (Role.OPERATIONS, census(0), {"fast-demo": "RUNNING"}, "no always-on channel is stopped"),
+        (Role.OPERATIONS, census(2, previous=0), {"fast-demo": "STOPPED"}, "not an off-air signal"),
+        (Role.OPERATIONS, off_air("OK"), {"fast-demo": "STOPPED"}, "not an off-air signal"),
+        (Role.PROGRAMMING, census(0), {"fast-demo": "STOPPED"}, "has no census trigger"),
+    ],
+)
+def test_a_trigger_with_nothing_to_do_starts_no_run(
+    stage: tuple[AgentTables, Topic],
+    monkeypatch: pytest.MonkeyPatch,
+    role: Role,
+    event: dict[str, Any],
+    states: dict[str, str],
+    reason: str,
+) -> None:
+    tables, _ = stage
+    monkeypatch.setattr(aws, "client", lambda service: MediaTailor(states))
+    monkeypatch.setattr(runner, "runner_settings", lambda: settings(tables, role))
+    scripted(monkeypatch, [])
+
+    found = runner.handler(event, Context())
+
+    assert reason in found["skipped"]
+    assert tables.ledger_entries() == []
+
+
+def test_without_an_always_on_channel_a_census_trigger_starts_no_run(stage: tuple[AgentTables, Topic]) -> None:
+    tables, _ = stage
+    cfg = dataclasses.replace(settings(tables), envelope=Envelope().resolved("fast"))
+
+    assert runner.request_of(cfg, census(0)) == "no channel is always-on"

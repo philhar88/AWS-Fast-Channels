@@ -1201,3 +1201,31 @@ def test_cedar_without_an_always_on_channel_forbids_every_restart() -> None:
 
     assert "permit_operations_start_channel" not in policies
     assert "channels___start_channel" in _actions(policies["forbid_operations"].statement)
+
+
+def test_the_operations_agent_wakes_on_the_census_and_the_off_air_alarm_and_reads_its_channels(roster: Plane) -> None:
+    template = roster.template
+    rules = [r["Properties"] for r in resources(template, "AWS::Events::Rule").values()]
+    patterns = [r["EventPattern"] for r in rules if r.get("Description", "").startswith("Agents: the operations agent")]
+    [(_, runner)] = [
+        (k, f["Properties"])
+        for k, f in resources(template, "AWS::Lambda::Function").items()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.runner.handler"
+    ]
+    role = runner["Role"]["Fn::GetAtt"][0]
+    [allowed] = [
+        p["Properties"]["PolicyDocument"]["Statement"]
+        for p in resources(template, "AWS::IAM::Policy").values()
+        if p["Properties"]["Roles"] == [{"Ref": role}]
+    ]
+
+    census = {"source": ["fast-channels.fast"], "detail-type": ["Census Changed"], "detail": {"running": [0]}}
+    alarm = {
+        "source": ["aws.cloudwatch"],
+        "detail-type": ["CloudWatch Alarm State Change"],
+        "detail": {"alarmName": ["fast-probe-off-air"], "state": {"value": ["ALARM"]}},
+    }
+    canonical = [json.dumps(p, sort_keys=True) for p in (census, alarm)]
+    assert sorted(json.dumps(p, sort_keys=True) for p in patterns) == sorted(canonical)
+    [describe] = [s for s in allowed if s["Action"] == "mediatailor:DescribeChannel"]
+    assert describe["Resource"] == "arn:aws:mediatailor:us-east-1:123456789012:channel/fast-demo"

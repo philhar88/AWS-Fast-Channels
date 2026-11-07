@@ -22,6 +22,7 @@ from fast_channels.infra.constructs.operator.identity import OperatorIdentity, m
 from fast_channels.infra.constructs.operator.roster import AgentRoster
 from fast_channels.infra.constructs.operator.runtime import RegistryTask, SchedulerAgent
 from fast_channels.infra.constructs.operator.tools import AgentTools
+from fast_channels.infra.constructs.ops.canary import off_air_alarm_name
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -203,6 +204,8 @@ class OperatorStack(Stack):
                 identity=self.identity,
                 runtime_invoke_url=self.agent.invoke_url,
                 alert_topic=media.alert_topic,
+                event_bus=media.event_bus,
+                off_air_alarm=off_air_alarm_name(prefix),
                 log_retention=retention,
                 removal_policy=removal,
             )
