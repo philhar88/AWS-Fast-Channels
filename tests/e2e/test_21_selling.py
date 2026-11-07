@@ -16,6 +16,7 @@ Runs only on a stage with the Selling stack (``make deploy-demand`` with ``modul
 
 import json
 import re
+from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Final
@@ -36,6 +37,7 @@ from harness_selling import (
     book,
     buyer_of,
     delivery_question,
+    end_flight,
     reply,
     run_brand,
     seller_buy,
@@ -77,9 +79,15 @@ def buyer(selling: Stage) -> Buyer:
 
 
 @pytest.fixture(scope="module")
-def booking(selling: Stage, seller: Seller, buyer: Buyer, channel: Channel) -> Booking:
-    """The scripted journey, run by the buyer agent; the buy it made, read back from the seller."""
-    return book(seller, buyer, brand=RUN_BRAND, product=product_id(channel.name))
+def booking(selling: Stage, seller: Seller, buyer: Buyer, channel: Channel) -> Iterator[Booking]:
+    """The scripted journey, run by the buyer agent; the buy it made, read back from the seller. Its flight ends with
+    the module: the line holds one of the stage's few pool creatives for a day otherwise, and a later run's buy would
+    find none free (no line)."""
+    booked = book(seller, buyer, brand=RUN_BRAND, product=product_id(channel.name))
+    try:
+        yield booked
+    finally:
+        end_flight(seller, booked.media_buy_id, booked.brand)
 
 
 def test_the_buyer_agent_books_through_governance(booking: Booking, seller: Seller) -> None:

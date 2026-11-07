@@ -224,6 +224,22 @@ def seller_buy(seller: Seller, media_buy_id: str, brand: str) -> dict[str, Any] 
     return next((buy for buy in found if buy["media_buy_id"] == media_buy_id), None)
 
 
+def end_flight(seller: Seller, media_buy_id: str, brand: str) -> dict[str, Any]:
+    """End the buy's flight a minute from now (``update_dates``), so its line leaves the own book at the next sync
+    and frees its creative. A ``pending_creatives`` buy may not be paused (``INVALID_STATE``), and the seller's cancel
+    cancels nothing (docs/limitations.md, W-8 A10 cancel)."""
+    ends = (datetime.now(UTC) + timedelta(minutes=1)).replace(microsecond=0)
+    answer = seller.call(
+        "update_media_buy",
+        account=account(brand),
+        media_buy_id=media_buy_id,
+        idempotency_key=str(uuid.uuid4()),
+        end_time=ends.isoformat().replace("+00:00", "Z"),
+    )
+    assert answer.get("status") == "completed", answer
+    return answer
+
+
 def book(seller: Seller, buyer: Buyer, *, brand: str, product: str) -> Booking:
     """The scripted journey, run by the buyer agent for ``brand``; the buy it made, read back from the seller."""
     starts = (datetime.now(UTC) + FLIGHT_LEAD).replace(microsecond=0)
