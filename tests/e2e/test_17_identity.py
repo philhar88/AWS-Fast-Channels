@@ -1,5 +1,5 @@
-"""Viewer identity (``modules.identity``, ADR-0018): the viewer pool, ``POST /playback`` and ``POST /redeem`` on a
-deployed stage.
+"""Viewer identity (``modules.identity``, ADR-0018): the viewer pool, ``POST /playback``, ``POST /playback/guest``,
+``GET`` and ``PUT /consent`` and ``POST /redeem`` on a deployed stage.
 
 Runs only when the stage has the Identity stack (``STAGE=fastm`` or ``fastci``). The test creates one viewer of its
 own in the pool (``e2e-<run id>@personas.example.com``), signs it in with a password as the viewer app does, mints
@@ -65,6 +65,18 @@ class Identity:
         if response.status_code == 200:
             self.minted.append(ticket_of(response.json()["url"]))
         return response
+
+    def guest(self, body: Any, headers: dict[str, str] | None = None) -> httpx.Response:
+        response = httpx.post(
+            f"{self.outputs['PlaybackApiUrl']}playback/guest", headers=headers or {}, json=body, timeout=TIMEOUT
+        )
+        if response.status_code == 200:
+            self.minted.append(ticket_of(response.json()["url"]))
+        return response
+
+    def consent(self, token: str, method: str = "GET", body: Any = None) -> httpx.Response:
+        url, headers = f"{self.outputs['PlaybackApiUrl']}consent", {"Authorization": f"Bearer {token}"}
+        return httpx.request(method, url, headers=headers, json=body, timeout=TIMEOUT)
 
     def redeem(self, ticket: str, sid: str, pc: str) -> httpx.Response:
         return httpx.post(self.outputs["RedeemUrl"], json={"t": ticket, "sid": sid, "pc": pc}, timeout=TIMEOUT)
@@ -147,12 +159,8 @@ def test_a_signed_in_viewer_gets_a_single_use_ticket(
     )
     assert row["vid"] == vid, "the viewer's vid, computed from their sub with the stage's key"
     assert viewer.sub not in json.dumps(row, default=str), "the raw sub never reaches the row"
-    assert (row["pc"], row["pm"], row["persona"], row["cid"]) == (
-        plan["configuration"],
-        "PSEUDONYMOUS",
-        PERSONA,
-        answer["cid"],
-    )
+    assert (row["pc"], row["persona"], row["cid"]) == (plan["configuration"], PERSONA, answer["cid"])
+    assert "pm" not in row, "a signed-in viewer's mode is their consent, read by the PDS on every break"
     assert (
         int(row["redeem_by"]) - int(row["iat"]) == 120_000 and started - 5_000 <= int(row["iat"]) <= time.time() * 1000
     )
@@ -226,6 +234,7 @@ def test_the_access_log_holds_no_address_or_ticket(identity: Identity, viewer: S
             break
         time.sleep(5)
     assert messages, f"no access log in {group} after 2 minutes"
+    assert all(isinstance(json.loads(m), dict) for m in messages), "every line is JSON (its error unquoted twice)"
     assert not [m for m in messages if ticket in m or viewer.sub in m or re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", m)]
 
 
@@ -311,3 +320,42 @@ def test_the_cdn_refuses_explicit_session_initialization(plan: dict[str, Any]) -
         assert http.post(f"{origin}{paths['session']}", json={}).status_code == 403
         assert http.get(f"{origin}{paths['session']}").status_code == 403
         assert http.get(f"{origin}{paths['extra']}?ads.t={TICKET_1}").status_code == 400
+
+
+GPP: Final = "DBABTA~1YNN"
+"""A US-national GPP section, as a consent platform gives it (the PDS passes it on, Prebid Server reads it)."""
+
+
+def test_a_guest_gets_a_ticket_without_a_vid_and_with_their_gpp_string(
+    identity: Identity, plan: dict[str, Any]
+) -> None:
+    response = identity.guest({"channel": plan["channel"], "gpp": GPP, "gpp_sid": [7]}, headers={"Sec-GPC": "1"})
+    assert response.status_code == 200, response.text
+    url = response.json()["url"]
+    assert url == f"{plan['playback']['hls']}?ads.t={ticket_of(url)}"
+    row = identity.row(ticket_of(url))
+    assert (row["pc"], row["pm"], row["gpp"], [int(n) for n in row["gpp_sid"]]) == (
+        plan["configuration"],
+        "OPTED_OUT",
+        GPP,
+        [7],
+    ), "Global Privacy Control: opted out"
+    assert "vid" not in row and "persona" not in row
+    plain = identity.guest({"channel": plan["channel"]})
+    assert identity.row(ticket_of(plain.json()["url"]))["pm"] == "CONTEXTUAL"
+    assert identity.guest({"channel": plan["channel"], "vid": "x"}).status_code == 400
+
+
+def test_a_viewer_records_their_consent_and_reads_it_back(identity: Identity, viewer: SignedIn) -> None:
+    assert identity.consent(viewer.access_token).status_code == 404, "no consent yet: the viewer's breaks are SAFE"
+    put = identity.consent(viewer.access_token, "PUT", {"opt_out": False, "vppa": True, "gpp": GPP, "gpp_sid": [7]})
+    assert put.status_code == 200, put.text
+    read = identity.consent(viewer.access_token).json()
+    assert {k: read[k] for k in ("opt_out", "vppa", "gpp", "gpp_sid")} == {
+        "opt_out": False,
+        "vppa": True,
+        "gpp": GPP,
+        "gpp_sid": [7],
+    }
+    assert identity.consent(viewer.id_token).status_code in {401, 403}, "an ID token never reaches the consent"
+    assert identity.consent(viewer.access_token, "PUT", {"opt_out": "no"}).status_code == 400

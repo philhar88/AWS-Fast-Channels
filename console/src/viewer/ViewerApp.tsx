@@ -5,6 +5,7 @@ import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import TopNavigation from "@cloudscape-design/components/top-navigation";
 import { useEffect } from "react";
+import { ConsentNotice, PrivacyView } from "./components/PrivacyView";
 import { PersonaPicker } from "./components/PersonaPicker";
 import { Rails } from "./components/Rails";
 import { WatchView } from "./components/WatchView";
@@ -36,6 +37,7 @@ export function ViewerApp() {
                   iconName: "user-profile" as const,
                   items: [
                     { id: "switch", text: "Switch persona", href: viewerHref({ view: "personas" }) },
+                    { id: "privacy", text: "Privacy choices", href: viewerHref({ view: "privacy" }) },
                     { id: "signout", text: viewer.accessToken ? "Sign out" : "Leave guest mode" },
                   ],
                   onItemClick: ({ detail }: { detail: { id: string } }) => {
@@ -53,6 +55,8 @@ export function ViewerApp() {
           <PersonaPicker />
         ) : route.view === "watch" ? (
           <WatchView channel={route.channel} persona={persona} />
+        ) : route.view === "privacy" ? (
+          <PrivacyView />
         ) : (
           <ContentLayout
             header={
@@ -66,6 +70,7 @@ export function ViewerApp() {
             }
           >
             <SpaceBetween size="l">
+              <ConsentNotice />
               <Rails persona={persona} />
             </SpaceBetween>
           </ContentLayout>

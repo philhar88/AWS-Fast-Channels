@@ -1,8 +1,10 @@
 /**
  * The URL a player opens, one per session. A signed-in viewer of a monetized channel gets a playback ticket:
  * `POST /playback {channel}` with the viewer's access token answers a single-use SSAI URL
- * (`…/v1/master/<hash>/<pc>/hls.m3u8?ads.t=<ticket>`) and the session's correlation id `cid`. A guest, an
- * unmonetized channel, or any failure of the mint plays the anonymous URL instead: the channel's playback plan
+ * (`…/v1/master/<hash>/<pc>/hls.m3u8?ads.t=<ticket>`) and the session's correlation id `cid`. A guest gets one from
+ * `POST /playback/guest {channel, gpc?}`, with no token: their breaks are CONTEXTUAL, and opted out with Global
+ * Privacy Control (the browser's `Sec-GPC` header, or `navigator.globalPrivacyControl`). An unmonetized channel, or
+ * any failure of a mint, plays the anonymous URL instead: the channel's playback plan
  * (`<cdn>/plan/playback/<channel>.json`, the stable sibling) for a monetized channel, the v3.0.0 URL otherwise.
  * Anonymous sessions are CONTEXTUAL: contextual ads on the control plan, never an error.
  */
@@ -35,19 +37,46 @@ export class MintError extends Error {
 const OUTPUT = "hls";
 
 /** `POST <playbackUrl> {channel}` (the identity module's `POST /playback`) with the viewer's access token. */
-export async function mintTicket(
+export function mintTicket(
   playbackUrl: string,
   accessToken: string,
   channel: string,
   signal?: AbortSignal,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ url: string; cid: string }> {
-  const response = await fetchImpl(playbackUrl, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ channel }),
+  return postTicket(
+    playbackUrl,
+    { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    { channel },
     signal,
-  });
+    fetchImpl,
+  );
+}
+
+/** `POST <playbackUrl>/guest {channel, gpc?}` (the identity module's `POST /playback/guest`), with no token. */
+export function guestTicket(
+  playbackUrl: string,
+  channel: string,
+  gpc: boolean,
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ url: string; cid: string }> {
+  return postTicket(`${playbackUrl}/guest`, { "Content-Type": "application/json" }, { channel, ...(gpc ? { gpc } : {}) }, signal, fetchImpl);
+}
+
+/** Whether the browser sends Global Privacy Control (`navigator.globalPrivacyControl`, where it is known). */
+export function globalPrivacyControl(): boolean {
+  return typeof navigator !== "undefined" && (navigator as { globalPrivacyControl?: unknown }).globalPrivacyControl === true;
+}
+
+async function postTicket(
+  url: string,
+  headers: Record<string, string>,
+  payload: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  fetchImpl: typeof fetch,
+): Promise<{ url: string; cid: string }> {
+  const response = await fetchImpl(url, { method: "POST", headers, body: JSON.stringify(payload), signal });
   const body = (await response.json().catch(() => ({}))) as { url?: string; cid?: string; error?: string; message?: string };
   if (!response.ok || typeof body.url !== "string" || typeof body.cid !== "string") {
     const code = body.error ?? (response.status === 401 || response.status === 403 ? "unauthorized" : `http_${response.status}`);
@@ -75,6 +104,8 @@ export interface SourceOptions {
   readonly planBaseUrl: string;
   /** The signed-in viewer's access token; absent for a guest. */
   readonly accessToken?: () => Promise<string>;
+  /** A guest's Global Privacy Control signal; the browser's own by default. */
+  readonly gpc?: boolean;
   readonly fetchImpl?: typeof fetch;
 }
 
@@ -91,24 +122,25 @@ export async function openChannel(channel: ViewerChannel, options: SourceOptions
     }
     return { url: fallback, anonymous: "not monetized" };
   }
-  let anonymous = "guest";
-  if (options.accessToken) {
-    try {
-      const token = await options.accessToken();
-      const ticket = await mintTicket(options.playbackUrl, token, channel.name, signal, fetchImpl);
-      return { url: ticket.url, cid: ticket.cid };
-    } catch (error) {
-      if (signal?.aborted) {
-        throw error;
-      }
-      if (error instanceof MintError && (error.status === 401 || error.status === 403)) {
-        throw new FatalSourceError(`The playback API refused the session (${error.code}): sign in again`);
-      }
-      if (error instanceof MintError && error.code === "no_kids_configuration") {
-        throw new FatalSourceError(error.message);
-      }
-      anonymous = error instanceof MintError ? `no ticket: ${error.code}` : "no ticket: the playback API is unreachable";
+  let anonymous: string;
+  const signedIn = options.accessToken;
+  try {
+    const ticket = signedIn
+      ? await mintTicket(options.playbackUrl, await signedIn(), channel.name, signal, fetchImpl)
+      : await guestTicket(options.playbackUrl, channel.name, options.gpc ?? globalPrivacyControl(), signal, fetchImpl);
+    return { url: ticket.url, cid: ticket.cid };
+  } catch (error) {
+    if (signal?.aborted) {
+      throw error;
     }
+    if (signedIn && error instanceof MintError && (error.status === 401 || error.status === 403)) {
+      throw new FatalSourceError(`The playback API refused the session (${error.code}): sign in again`);
+    }
+    if (error instanceof MintError && error.code === "no_kids_configuration") {
+      throw new FatalSourceError(error.message);
+    }
+    const why = error instanceof MintError ? `no ticket: ${error.code}` : "no ticket: the playback API is unreachable";
+    anonymous = signedIn ? why : `guest; ${why}`;
   }
   try {
     return { url: await plannedUrl(options.planBaseUrl, channel.name, signal, fetchImpl), anonymous };

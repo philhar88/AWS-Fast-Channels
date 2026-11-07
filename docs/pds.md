@@ -64,7 +64,7 @@ house ads, no third party, no viewer data. If `/select` fails, the module render
 | FULL | A consented adult with separate video-privacy consent | Per-partner pseudonymous ids, user data scoped per bidder |
 | PSEUDONYMOUS | Authenticated, no sale/share opt-out | No ids; genre and category, never the title |
 | CONTEXTUAL | Guests, ticketless sessions, invalid or replayed tickets, opted-out viewers | No ids, no user data, coarse geo; show-level content metadata; GPP where known |
-| SAFE | The consent store failed or is older than 60 s; probe sessions | Nothing: own book and house ads only (house ads only for probes) |
+| SAFE | A signed-in viewer with no consent recorded, a stale one, or a store that failed for over 60 s; probe sessions | Nothing: own book and house ads only (house ads only for probes) |
 | KIDS | A kids playback configuration (`…-p-k`, `…-p-l`) or a child-directed channel | Nothing: COPPA set, house ads and creatives approved for children only |
 
 The PDS resolves a break's mode in this order (`fast_channels.core.pds.policy.resolve`):
@@ -75,13 +75,15 @@ The PDS resolves a break's mode in this order (`fast_channels.core.pds.policy.re
    its lease gives CONTEXTUAL, with a reason code (`missing`, `invalid`, `unknown`, `replay`, `pc_mismatch`,
    `expired_or_raced`) and **every viewer parameter zeroed**;
 3. a bound viewer whose consent cannot be read gives SAFE (`consent_unavailable`);
-4. otherwise the consent decides: FULL, PSEUDONYMOUS, or CONTEXTUAL (`opted_out`, keeping only the GPP string).
+4. otherwise the consent decides: FULL, PSEUDONYMOUS, or CONTEXTUAL (`opted_out`, keeping only the GPP string);
+   a bound guest is CONTEXTUAL (`bound`, or `opted_out` with Global Privacy Control), with the GPP string.
 
 Without the `identity` module no session carries a ticket, so every session is CONTEXTUAL with reason `missing`.
 With it, the sidecar reads the ticket's row on every break and decides step 2 from it, binding a fresh ticket
 itself when the PRE_SESSION redeem never landed; a lookup that fails makes the break SAFE
-([identity.md](identity.md#the-pod-decision-service)). There is no consent store yet: a bound viewer's consent is
-the privacy mode the mint wrote on the row (`PSEUDONYMOUS`).
+([identity.md](identity.md#the-pod-decision-service)). A bound signed-in viewer's consent is their row `C#<vid>`
+in the same table, which the sidecar reads on every break and keeps 5 seconds; no row, a stale one, or a store that
+failed for over a minute is SAFE ([identity.md](identity.md#consent)). A guest's ticket carries its mode.
 Prebid Server's account Activity Controls do the per-field disclosure for each mode.
 
 ## The viewer-IP rule

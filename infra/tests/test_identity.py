@@ -1,5 +1,5 @@
-"""The identity module's infrastructure (ADR-0018): the viewer pool, the ticket table, the vid key, the mint and the
-identity API with its two methods."""
+"""The identity module's infrastructure (ADR-0018): the viewer pool, the ticket and consent table, the vid key, the
+mint and the identity API with its routes and the guests' rate rule."""
 
 import json
 from collections.abc import Callable
@@ -11,6 +11,7 @@ from aws_cdk.assertions import Template
 
 from fast_channels.core.identity.ticket import REDEEM_CONDITION, REDEEM_UPDATE
 from fast_channels.infra.config import ConfigError, FastChannelsConfig
+from fast_channels.infra.constructs.identity.api import ACCESS_LOG, access_log_format
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -109,7 +110,7 @@ def test_the_ticket_table_and_the_vid_key(identity: Template) -> None:
     assert _one(identity, "AWS::KMS::Alias")["AliasName"] == "alias/fastm-identity-vid"
 
 
-def test_the_mint_reads_plans_puts_rows_and_macs_only(identity: Template) -> None:
+def test_the_mint_reads_plans_puts_and_reads_rows_and_macs_only(identity: Template) -> None:
     [mint] = [
         f["Properties"]
         for f in identity.find_resources("AWS::Lambda::Function").values()
@@ -120,8 +121,8 @@ def test_the_mint_reads_plans_puts_rows_and_macs_only(identity: Template) -> Non
     granted = {
         a for s in _statements(identity) for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])
     }
-    assert {"s3:GetObject", "dynamodb:PutItem", "kms:GenerateMac", "dynamodb:UpdateItem"} <= granted
-    assert not {"dynamodb:GetItem", "dynamodb:Scan", "kms:Decrypt"} & granted
+    assert {"s3:GetObject", "dynamodb:PutItem", "dynamodb:GetItem", "kms:GenerateMac", "dynamodb:UpdateItem"} <= granted
+    assert not {"dynamodb:Scan", "dynamodb:Query", "dynamodb:DeleteItem", "kms:Decrypt"} & granted
     [plans] = [s for s in _statements(identity) if s["Action"] == "s3:GetObject"]
     assert "plan/playback/*" in json.dumps(plans["Resource"])
 
@@ -140,6 +141,40 @@ def test_playback_takes_access_tokens_with_the_scope_and_answers_cors(identity: 
         assert responses[kind]["ResponseParameters"] == {"gatewayresponse.header.Access-Control-Allow-Origin": "'*'"}
     authorizer = _one(identity, "AWS::ApiGateway::Authorizer")
     assert authorizer["Type"] == "COGNITO_USER_POOLS"
+
+
+def test_the_guest_mint_has_no_authorizer_and_consent_takes_the_access_token(identity: Template) -> None:
+    methods = _methods(identity)
+    guest = methods[("guest", "POST")]
+    assert (guest["AuthorizationType"], guest["Integration"]["Type"]) == ("NONE", "AWS_PROXY")
+    for verb in ("GET", "PUT"):
+        consent = methods[("consent", verb)]
+        assert (consent["AuthorizationType"], consent["AuthorizationScopes"]) == (
+            "COGNITO_USER_POOLS",
+            ["fast/playback"],
+        )
+    assert methods[("consent", "OPTIONS")]["AuthorizationType"] == "NONE", "the CORS preflight"
+    assert ("guest", "OPTIONS") in methods
+
+
+def test_a_web_acl_limits_guest_mints_per_address_and_keeps_no_requests(identity: Template) -> None:
+    acl = _one(identity, "AWS::WAFv2::WebACL")
+    assert acl["Scope"] == "REGIONAL" and acl["DefaultAction"] == {"Allow": {}}
+    [rule] = acl["Rules"]
+    rate = rule["Statement"]["RateBasedStatement"]
+    assert (rule["Action"], rate["AggregateKeyType"], rate["Limit"], rate["EvaluationWindowSec"]) == (
+        {"Block": {}},
+        "IP",
+        100,
+        300,
+    )
+    match = rate["ScopeDownStatement"]["ByteMatchStatement"]
+    assert (match["SearchString"], match["PositionalConstraint"]) == ("/v1/playback/guest", "EXACTLY")
+    assert (
+        not acl["VisibilityConfig"]["SampledRequestsEnabled"] and not rule["VisibilityConfig"]["SampledRequestsEnabled"]
+    )
+    association = _one(identity, "AWS::WAFv2::WebACLAssociation")
+    assert "/stages/" in json.dumps(association["ResourceArn"])
 
 
 def test_redeem_is_a_conditional_update_with_no_lambda(identity: Template) -> None:
@@ -193,3 +228,15 @@ def test_the_parameters_and_outputs(identity: Template) -> None:
 
 def test_template_snapshot(identity: Template, normalized: Any, snapshot_json: SnapshotAssertion) -> None:
     assert normalized(identity) == snapshot_json
+
+
+def test_an_access_log_line_is_json_and_names_no_quoted_variable() -> None:
+    """``$context.error.messageString`` arrives quoted (``"Unauthorized"``): a format that quoted it again wrote
+    ``"error": ""Unauthorized""``, which no JSON reader takes (seen on fastm, 2026-11-07). The format holds tokens
+    only, so a line is the format with its variables substituted."""
+    assert "messageString" not in access_log_format()
+    line = access_log_format()
+    for variable in ACCESS_LOG.values():
+        line = line.replace(variable, "UNAUTHORIZED" if variable == "$context.error.responseType" else "x")
+    assert json.loads(line)["error"] == "UNAUTHORIZED"
+    assert set(json.loads(line)) == set(ACCESS_LOG)

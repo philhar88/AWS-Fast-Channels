@@ -36,14 +36,15 @@ class IdentityStack(Stack):
     - **Viewer pool** (:class:`~fast_channels.infra.constructs.identity.viewers.ViewerPool`): Cognito Essentials, the
       scope ``fast/playback`` in every access token.
     - **Ticket table** ``<prefix>-identity``: one row ``T#<t>`` per minted ticket (``core.identity.ticket``), deleted by
-      DynamoDB TTL a day after the longest binding lease.
+      DynamoDB TTL a day after the longest binding lease, and one row ``C#<vid>`` per signed-in viewer who recorded
+      their consent (``core.identity.consent``), kept until they change it.
     - **``vid`` key** ``alias/<prefix>-identity-vid``: a KMS HMAC-SHA-256 key. ``vid = HMAC(iss|sub)`` truncated to 128
       bits (``core.identity.vid``); the key never leaves KMS, so nobody can compute the ``vid`` of a ``sub`` without
       ``kms:GenerateMac`` on it. It is kept with the stack's removal policy: a new key changes every ``vid``.
     - **Mint** (``functions.identity.mint``): reads the channel's playback plan from the media bucket, puts the row and
-      answers the CDN URL with ``?ads.t=<t>``.
-    - **Identity API** (:class:`~fast_channels.infra.constructs.identity.api.IdentityApi`): ``POST /playback`` and
-      ``POST /redeem``.
+      answers the CDN URL with ``?ads.t=<t>``, for signed-in viewers and guests; reads and writes a viewer's consent.
+    - **Identity API** (:class:`~fast_channels.infra.constructs.identity.api.IdentityApi`): ``POST /playback``,
+      ``POST /playback/guest``, ``GET`` and ``PUT /consent`` and ``POST /redeem``, with the guests' rate rule.
 
     Other stacks and the scripts read the stack's values from the SSM parameters ``/<prefix>/identity/<name>``
     (``core.identity.names.Parameter``).
@@ -110,7 +111,7 @@ class IdentityStack(Stack):
             self,
             "Mint",
             handler="fast_channels.functions.identity.mint.handler",
-            description="POST /playback: a signed-in viewer's single-use playback ticket",
+            description="POST /playback, /playback/guest and GET, PUT /consent: tickets and consent",
             environment={
                 "FAST_PREFIX": config.prefix,
                 "MEDIA_BUCKET": media_bucket.bucket_name,
@@ -131,7 +132,7 @@ class IdentityStack(Stack):
             [media_bucket.arn_for_objects(plan_key("*"))],
             why="the channels' playback plans (plan/playback/<channel>.json)",
         )
-        self.mint.allow(["dynamodb:PutItem"], [self.table.table_arn])
+        self.mint.allow(["dynamodb:PutItem", "dynamodb:GetItem"], [self.table.table_arn])  # tickets; consent
         self.mint.allow(["kms:GenerateMac"], [self.vid_key.key_arn])
         self.api = IdentityApi(
             self,
@@ -142,6 +143,7 @@ class IdentityStack(Stack):
             table=self.table,
             rate_limit=settings.api_rate_limit,
             burst_limit=settings.api_burst_limit,
+            guest_rate_limit=settings.guest_rate_limit,
             log_retention=retention,
             removal_policy=removal,
         )

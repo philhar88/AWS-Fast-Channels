@@ -26,7 +26,7 @@ import pytest
 from _stack import Module, Stage
 from harness import BREAK_POLICY, LEAD, Channel, Player, Tools, wait_for
 from harness_demand import DemandEdge
-from harness_identity import SignedIn, join, mint, parameter, ticket_of, viewer, wait_until_serving
+from harness_identity import SignedIn, join, mint, parameter, record_consent, ticket_of, viewer, wait_until_serving
 from harness_pods import Logs, Viewer, ipv4_client, json_object, prebid_tasks, record_pattern, warmups, watch
 from playback import Window, break_windows
 
@@ -150,6 +150,7 @@ def played(
         pytest.skip(f"stage {stage.prefix} has no demand module deployed (make deploy-demand)")
     kms = stage.session.client("kms")
     with viewer(stage, f"e2e-session-{run_id.lower()}@personas.example.com", persona=PERSONA) as signed_in:
+        record_consent(stage, signed_in.access_token, opt_out=False)  # PSEUDONYMOUS: no consent is SAFE
         vid = viewer_id(
             kms,
             key_id=parameter(stage, Parameter.VID_KEY),

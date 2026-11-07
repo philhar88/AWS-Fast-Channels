@@ -8,7 +8,7 @@ import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import _stack
@@ -21,6 +21,7 @@ from botocore.stub import ANY, Stubber
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.cost import encode_cost
+from fast_channels.core.identity.consent import ConsentChoice
 from fast_channels.core.ingest import IngestRequest
 from fast_channels.core.ladder import Ladder
 from fast_channels.functions.tools.catalog import catalog_item
@@ -843,3 +844,41 @@ def test_seed_personas_writes_and_deletes_a_tiered_personas_pds_profile(stubbed:
     assert personas._profile(stage, "ben", vid) is None  # no PDS table on the stage
     personas._delete_profile(stage, vid)
     assert (personas.tier_of("ben"), personas.tier_of("guest"), personas.tier_of("nobody")) == ("holdout", None, None)
+
+
+class _Table:
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
+
+    def put_item(self, Item: dict[str, Any]) -> None:  # noqa: N803 (boto3's keyword)
+        self.items.append(Item)
+
+
+class _ConsentSession:
+    """SSM names the identity table; the resource API writes to it."""
+
+    def __init__(self) -> None:
+        self.table = _Table()
+
+    def client(self, name: str, **_: Any) -> Any:
+        assert name == "ssm"
+        return SimpleNamespace(get_parameter=lambda **_: {"Parameter": {"Value": "fastci-identity"}})
+
+    def resource(self, name: str, **_: Any) -> Any:
+        assert name == "dynamodb"
+        return SimpleNamespace(Table=lambda table: self.table if table == "fastci-identity" else None)
+
+
+def test_seed_personas_records_the_consent_each_contract_mode_stands_for() -> None:
+    """FULL gave the video-privacy consent, PSEUDONYMOUS neither; a kids profile, a guest and a persona outside the
+    contract get no consent (a signed-in viewer without one plays SAFE)."""
+    assert personas.choice_of("dana") == ConsentChoice(opt_out=False, vppa=True)
+    assert personas.choice_of("luis") == ConsentChoice(opt_out=False)
+    assert [personas.choice_of(p) for p in ("mia", "guest", "e2e-seeded")] == [None, None, None]
+    session = _ConsentSession()
+    stage = Stage("fastci", session)  # type: ignore[arg-type]
+    vid = "0123456789abcdef0123456789abcdef"
+    assert personas._consent(stage, "dana", vid) == "FULL"
+    assert personas._consent(stage, "e2e-seeded", vid) is None
+    [item] = session.table.items
+    assert (item["pk"], item["opt_out"], item["vppa"]) == (f"C#{vid}", False, True)

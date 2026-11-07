@@ -77,7 +77,14 @@ def test_identity_failures_are_contextual_with_every_viewer_parameter_zeroed(fai
     [
         (Consent.FULL, Resolution(Mode.FULL, Reason.BOUND, VIEWER)),
         (Consent.PSEUDONYMOUS, Resolution(Mode.PSEUDONYMOUS, Reason.BOUND, VIEWER)),
-        (Consent.OPTED_OUT, Resolution(Mode.CONTEXTUAL, Reason.OPTED_OUT, Viewer(gpp=VIEWER.gpp, gpp_sid=(7,)))),
+        (
+            Consent.OPTED_OUT,
+            Resolution(Mode.CONTEXTUAL, Reason.OPTED_OUT, Viewer(cid=VIEWER.cid, gpp=VIEWER.gpp, gpp_sid=(7,))),
+        ),
+        (
+            Consent.CONTEXTUAL,
+            Resolution(Mode.CONTEXTUAL, Reason.BOUND, Viewer(cid=VIEWER.cid, gpp=VIEWER.gpp, gpp_sid=(7,))),
+        ),
         (Consent.UNAVAILABLE, Resolution(Mode.SAFE, Reason.CONSENT_UNAVAILABLE)),
         (None, Resolution(Mode.SAFE, Reason.CONSENT_UNAVAILABLE)),
     ],

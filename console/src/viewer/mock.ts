@@ -9,6 +9,7 @@ import type { Tokens } from "./auth";
 import { SignInError } from "./auth";
 import type { ViewerBackend } from "./backend";
 import type { Persona, ViewerChannel, ViewerConfig } from "./config";
+import type { ConsentRecord } from "./consent";
 import type { Source } from "./playback";
 
 const CDN = new URL("/mock/cdn", window.location.href).href;
@@ -132,6 +133,7 @@ function mockDecisions(persona: Persona | undefined, sid: string): SessionDecisi
 
 export function mockViewerBackend(): ViewerBackend {
   let mints = 0;
+  const consents = new Map<string, ConsentRecord>();
   return {
     config: MOCK_VIEWER_CONFIG,
     signIn: (username, password) => {
@@ -147,12 +149,21 @@ export function mockViewerBackend(): ViewerBackend {
     },
     open: async (channel, accessToken): Promise<Source> => {
       const persona = accessToken ? personaOfToken(await accessToken()) : undefined;
-      if (!channel.monetized || !persona) {
-        return { url: STANDARD_POD, anonymous: channel.monetized ? "guest" : "not monetized", sid: sessionId("guest") };
+      if (!channel.monetized) {
+        return { url: STANDARD_POD, anonymous: "not monetized", sid: sessionId("guest") };
       }
       mints += 1;
+      if (!persona) {
+        return { url: STANDARD_POD, cid: `01MOCKGUEST${String(mints).padStart(4, "0")}`, sid: sessionId("guest") };
+      }
       const url = TIERS[persona.id] === "light" ? LIGHT_POD : STANDARD_POD;
       return { url, cid: `01MOCKCID${String(mints).padStart(4, "0")}`, sid: sessionId(persona.id) };
+    },
+    consent: (accessToken) => Promise.resolve(consents.get(personaOfToken(accessToken)?.id ?? "") ?? null),
+    setConsent: (accessToken, choice) => {
+      const record = { opt_out: choice.opt_out, vppa: choice.vppa, updated_at: Date.now() };
+      consents.set(personaOfToken(accessToken)?.id ?? "", record);
+      return Promise.resolve(record);
     },
     epg: (channel) => Promise.resolve(mockViewerEpg(channel)),
     decisions: (sid, accessToken) => Promise.resolve(mockDecisions(personaOfToken(accessToken), sid)),

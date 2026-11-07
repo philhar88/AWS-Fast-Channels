@@ -1,11 +1,16 @@
-"""The identity API: ``POST /playback`` (the ticket mint) and ``POST /redeem`` (the PRE_SESSION Function's binding).
+"""The identity API: ``POST /playback`` and ``POST /playback/guest`` (the ticket mints), ``GET`` and ``PUT /consent``
+(the signed-in viewer's consent) and ``POST /redeem`` (the PRE_SESSION Function's binding).
 
 API Gateway REST, regional, one stage ``v1`` throttled per ``modules.identity``.
 
-- ``POST /playback``: the viewer pool's Cognito authorizer with the authorization scope ``fast/playback``, so only an
-  access token carrying it reaches the mint Lambda (an ID token never carries a scope). CORS allows any origin: it is
-  a bearer-token API without cookies. The 4xx and 5xx gateway responses carry the CORS header too, so a browser sees
-  the error.
+- ``POST /playback``, ``GET /consent`` and ``PUT /consent``: the viewer pool's Cognito authorizer with the
+  authorization scope ``fast/playback``, so only an access token carrying it reaches the mint Lambda (an ID token
+  never carries a scope). CORS allows any origin: it is a bearer-token API without cookies. The 4xx and 5xx gateway
+  responses carry the CORS header too, so a browser sees the error.
+- ``POST /playback/guest``: the same Lambda without an authorizer. An AWS WAF web ACL on the stage blocks an address
+  that mints more than ``modules.identity.guest_rate_limit`` guest tickets in five minutes (a rate-based rule scoped
+  to that path); the stage's throttling still caps the whole API. The web ACL keeps no sampled requests (they would
+  hold addresses and headers).
 - ``POST /redeem``: no Lambda. An AWS integration runs DynamoDB ``UpdateItem`` on ``T#<t>`` with the redeem condition
   (``core.identity.ticket.REDEEM_CONDITION``), ``:now`` being API Gateway's request time. A request validator holds
   the body to ``{t, sid, pc}`` of the expected shapes first, so nothing else reaches the template. 200
@@ -22,6 +27,7 @@ from typing import TYPE_CHECKING, Final
 from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_wafv2 as wafv2
 from constructs import Construct
 
 from fast_channels.core.identity.names import PLAYBACK_SCOPE, api_name
@@ -36,6 +42,10 @@ if TYPE_CHECKING:
 
 STAGE: Final = "v1"
 CORS_ORIGIN: Final = "'*'"
+GUEST_PATH: Final = f"/{STAGE}/playback/guest"
+"""The guest mint's path as WAF sees it (the stage name first)."""
+GUEST_WINDOW_S: Final = 300
+"""The guest rate rule's evaluation window."""
 REDEEM_SCHEMA: Final = apigw.JsonSchema(
     type=apigw.JsonSchemaType.OBJECT,
     required=["t", "sid", "pc"],
@@ -55,10 +65,17 @@ ACCESS_LOG: Final = {
     "status": "$context.status",
     "latencyMs": "$context.responseLatency",
     "integrationLatencyMs": "$context.integration.latency",
-    "error": "$context.error.messageString",
+    "error": "$context.error.responseType",
     "authorizerError": "$context.authorizer.error",
 }
-"""What an access-log line holds: no address, header, body or token claim."""
+"""What an access-log line holds: no address, header, body or token claim. The error is its gateway response type
+(``UNAUTHORIZED``, ``WAF_FILTERED``, ...), a token: ``$context.error.messageString`` arrives quoted, so quoting it in
+the format wrote ``"error": ""Unauthorized""``, which is not JSON (fastm, 2026-11-07)."""
+
+
+def access_log_format() -> str:
+    """:data:`ACCESS_LOG` as the stage's JSON access-log format."""
+    return json.dumps(ACCESS_LOG)
 
 
 def redeem_template(table: str) -> str:
@@ -85,14 +102,15 @@ class IdentityApi(Construct):
     Args:
         prefix: deployment prefix (``<prefix>-identity``).
         user_pool: the viewer pool (the authorizer).
-        mint: the ``POST /playback`` function.
+        mint: the function behind every route but the redeem.
         table: the ticket table (the redeem's ``UpdateItem``).
         rate_limit, burst_limit: the stage's throttling.
+        guest_rate_limit: guest tickets an address may mint in five minutes.
         log_retention, removal_policy: of the access-log group.
 
     Attributes:
         api: the REST API; ``url`` its stage URL (``https://…/v1/``).
-        playback_url, redeem_url: the two methods' URLs.
+        playback_url, guest_url, consent_url, redeem_url: the routes' URLs.
     """
 
     def __init__(
@@ -106,6 +124,7 @@ class IdentityApi(Construct):
         table: dynamodb.ITableV2,
         rate_limit: int,
         burst_limit: int,
+        guest_rate_limit: int,
         log_retention: logs.RetentionDays,
         removal_policy: RemovalPolicy,
     ) -> None:
@@ -115,7 +134,7 @@ class IdentityApi(Construct):
             self,
             "Api",
             rest_api_name=api_name(prefix),
-            description=f"FAST Channels ({prefix}): playback tickets for signed-in viewers",
+            description=f"FAST Channels ({prefix}): playback tickets and viewer consent",
             endpoint_types=[apigw.EndpointType.REGIONAL],
             # A REST API logs through the account's API Gateway CloudWatch role (one per account and Region). A stack
             # must not take that setting over, so access logs need it set already (docs/identity.md#logs).
@@ -126,7 +145,7 @@ class IdentityApi(Construct):
                 throttling_burst_limit=burst_limit,
                 tracing_enabled=True,
                 access_log_destination=apigw.LogGroupLogDestination(access_logs),
-                access_log_format=apigw.AccessLogFormat.custom(json.dumps(ACCESS_LOG)),
+                access_log_format=apigw.AccessLogFormat.custom(access_log_format()),
             ),
         )
         for name, kind in (
@@ -148,28 +167,93 @@ class IdentityApi(Construct):
                 max_age=None,
             ),
         )
-        playback.add_method(
-            "POST",
-            apigw.LambdaIntegration(mint),
-            authorizer=authorizer,
-            authorization_type=apigw.AuthorizationType.COGNITO,
-            authorization_scopes=[PLAYBACK_SCOPE],
+        integration = apigw.LambdaIntegration(mint)
+
+        def signed_in(resource: apigw.Resource, method: str) -> None:
+            resource.add_method(
+                method,
+                integration,
+                authorizer=authorizer,
+                authorization_type=apigw.AuthorizationType.COGNITO,
+                authorization_scopes=[PLAYBACK_SCOPE],
+            )
+
+        signed_in(playback, "POST")
+        playback.add_resource("guest").add_method("POST", integration)
+        consent = self.api.root.add_resource(
+            "consent",
+            default_cors_preflight_options=apigw.CorsOptions(
+                allow_origins=apigw.Cors.ALL_ORIGINS,
+                allow_methods=["GET", "PUT", "OPTIONS"],
+                allow_headers=["Authorization", "Content-Type"],
+                max_age=None,
+            ),
         )
+        for method in ("GET", "PUT"):
+            signed_in(consent, method)
         self._redeem(table)
+        self._guest_rate(prefix, guest_rate_limit)
         self.playback_url = f"{self.api.url}playback"
+        self.guest_url = f"{self.api.url}playback/guest"
+        self.consent_url = f"{self.api.url}consent"
         self.redeem_url = f"{self.api.url}redeem"
         nag.acknowledge(
             self.api,
             {
                 "AwsSolutions-APIG2": "POST /playback validates its body in the mint; POST /redeem has a request "
                 "validator",
-                "AwsSolutions-APIG3": "Stage throttling bounds the API; a web ACL would bill every play",
                 "AwsSolutions-APIG4": "POST /redeem is MediaTailor's PRE_SESSION call, which has no credential to "
-                "send: binding needs the ticket itself; the CORS preflights carry no authorization by design",
+                "send: binding needs the ticket itself; POST /playback/guest is the guests' mint, behind the web "
+                "ACL's rate rule; the CORS preflights carry no authorization by design",
                 "AwsSolutions-APIG6": "Execution logging needs the account-wide API Gateway CloudWatch role; the stage "
                 "writes access logs",
-                "AwsSolutions-COG4": "POST /redeem is called by MediaTailor, not a viewer (see APIG4)",
+                "AwsSolutions-COG4": "POST /redeem is called by MediaTailor, POST /playback/guest by guests: "
+                "neither has a viewer-pool token (see APIG4)",
             },
+        )
+
+    def _guest_rate(self, prefix: str, limit: int) -> None:
+        """The web ACL (module docstring), on the stage."""
+        visibility = wafv2.CfnWebACL.VisibilityConfigProperty(
+            cloud_watch_metrics_enabled=True, metric_name=f"{prefix}-identity", sampled_requests_enabled=False
+        )
+        rule = wafv2.CfnWebACL.RuleProperty(
+            name="guest-mints-per-address",
+            priority=0,
+            action=wafv2.CfnWebACL.RuleActionProperty(block={}),
+            statement=wafv2.CfnWebACL.StatementProperty(
+                rate_based_statement=wafv2.CfnWebACL.RateBasedStatementProperty(
+                    aggregate_key_type="IP",
+                    limit=limit,
+                    evaluation_window_sec=GUEST_WINDOW_S,
+                    scope_down_statement=wafv2.CfnWebACL.StatementProperty(
+                        byte_match_statement=wafv2.CfnWebACL.ByteMatchStatementProperty(
+                            field_to_match=wafv2.CfnWebACL.FieldToMatchProperty(uri_path={}),
+                            positional_constraint="EXACTLY",
+                            search_string=GUEST_PATH,
+                            text_transformations=[wafv2.CfnWebACL.TextTransformationProperty(priority=0, type="NONE")],
+                        )
+                    ),
+                )
+            ),
+            visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                cloud_watch_metrics_enabled=True,
+                metric_name=f"{prefix}-identity-guest-mints",
+                sampled_requests_enabled=False,
+            ),
+        )
+        acl = wafv2.CfnWebACL(
+            self,
+            "GuestRate",
+            name=f"{prefix}-identity",
+            description="Guest playback tickets per address",
+            scope="REGIONAL",
+            default_action=wafv2.CfnWebACL.DefaultActionProperty(allow={}),
+            rules=[rule],
+            visibility_config=visibility,
+        )
+        wafv2.CfnWebACLAssociation(
+            self, "GuestRateOnStage", resource_arn=self.api.deployment_stage.stage_arn, web_acl_arn=acl.attr_arn
         )
 
     def _redeem(self, table: dynamodb.ITableV2) -> None:

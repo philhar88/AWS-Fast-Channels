@@ -823,15 +823,19 @@ class IdentityModule(_Module):
     """The viewer-identity module (``modules.identity``; ADR-0018)."""
 
     enabled: bool = False
-    """Deploy viewer identity: a Cognito viewer pool; ``POST /playback``, which mints a single-use playback ticket for
-    a signed-in viewer's play; and ``POST /redeem``, which binds the ticket to the one session that opens it
-    (docs/identity.md)."""
+    """Deploy viewer identity: a Cognito viewer pool; ``POST /playback`` and ``POST /playback/guest``, which mint a
+    single-use playback ticket for a signed-in viewer's or a guest's play; ``POST /redeem``, which binds the ticket to
+    the one session that opens it; and the consent store (``GET`` and ``PUT /consent``), which a signed-in viewer's
+    breaks follow: without a recorded consent they get own-book and house ads only (docs/identity.md)."""
     redeem_window_seconds: int = Field(default=120, ge=30, le=600)
     """From mint to the latest redeem: the player opens the ticket's URL at once, in one session."""
     api_rate_limit: int = Field(default=50, ge=1, le=10_000)
     """Requests per second the identity API accepts (API Gateway stage throttling, every method)."""
     api_burst_limit: int = Field(default=100, ge=1, le=5_000)
     """Burst of the identity API's throttling."""
+    guest_rate_limit: int = Field(default=100, ge=10, le=2_000_000_000)
+    """Guest tickets one address may mint in five minutes; AWS WAF blocks it beyond that (a household or an office
+    shares one address, and each play or channel change mints one)."""
 
 
 class SellingModule(_Module):
