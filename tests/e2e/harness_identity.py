@@ -5,6 +5,8 @@ Any e2e that plays as a signed-in viewer uses these:
     token = sign_in(stage, "dana")             # a persona seeded by scripts/seed_personas.py
     answer = mint(stage, token, "fastm-demo")  # POST /playback: {"url", "cid", "expires_in"}
     ticket_of(answer["url"])                   # the 22-character ads.t
+    guest(stage, "fastm-demo", gpc=True)       # POST /playback/guest, no token
+    record_consent(stage, token, opt_out=False)  # PUT /consent: without one the viewer's breaks are SAFE
 
 ``sign_in`` reads the persona's password from the Secrets Manager secret ``<prefix>/identity/demo-users`` and the app
 client from ``/<prefix>/identity/client-id``, and signs in with ``USER_PASSWORD_AUTH`` as the viewer app does. A test
@@ -26,8 +28,10 @@ import httpx
 from harness import Player, wait_for
 from harness_pods import Viewer
 
+from fast_channels.core.identity.consent import key as consent_key
 from fast_channels.core.identity.names import PERSONA_ATTRIBUTE, Parameter, demo_users_secret, parameter_name
 from fast_channels.core.identity.ticket import TICKET
+from fast_channels.core.identity.vid import viewer_id
 
 if TYPE_CHECKING:
     from _stack import Stage
@@ -76,7 +80,7 @@ class SignedIn:
 @contextmanager
 def viewer(stage: Stage, email: str, *, persona: str) -> Iterator[SignedIn]:
     """A pool user of the test's own (``email``, ``custom:persona``), signed in with a password as the viewer app
-    does, and deleted afterwards. No email is sent."""
+    does, and deleted afterwards with any consent they recorded. No email is sent."""
     cognito = stage.session.client("cognito-idp")
     pool, password = parameter(stage, Parameter.USER_POOL_ID), f"{secrets.token_urlsafe(18)}aA1!"
     cognito.admin_create_user(
@@ -94,7 +98,17 @@ def viewer(stage: Stage, email: str, *, persona: str) -> Iterator[SignedIn]:
         user = cognito.admin_get_user(UserPoolId=pool, Username=email)
         sub = next(a["Value"] for a in user["UserAttributes"] if a["Name"] == "sub")
         signed_in = tokens(stage, email, password)
-        yield SignedIn(email, sub, signed_in["AccessToken"], signed_in["IdToken"])
+        try:
+            yield SignedIn(email, sub, signed_in["AccessToken"], signed_in["IdToken"])
+        finally:
+            vid = viewer_id(
+                stage.session.client("kms"),
+                key_id=parameter(stage, Parameter.VID_KEY),
+                issuer=parameter(stage, Parameter.ISSUER),
+                sub=sub,
+            )
+            table = stage.session.resource("dynamodb").Table(parameter(stage, Parameter.TABLE))
+            table.delete_item(Key={"pk": consent_key(vid)})
     finally:
         cognito.admin_delete_user(UserPoolId=pool, Username=email)
 
@@ -110,6 +124,37 @@ def mint(stage: Stage, token: str, channel: str) -> dict[str, Any]:
         parameter(stage, Parameter.PLAYBACK_URL),
         headers={"Authorization": f"Bearer {token}"},
         json={"channel": channel},
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    answer: dict[str, Any] = response.json()
+    return answer
+
+
+def guest(
+    stage: Stage, channel: str, *, gpp: str | None = None, gpp_sid: tuple[int, ...] = (), gpc: bool = False
+) -> dict[str, Any]:
+    """``POST /playback/guest`` for ``channel``: ``{"url", "cid", "expires_in"}``. Raises on any answer but 200."""
+    body: dict[str, Any] = {"channel": channel, **({"gpp": gpp, "gpp_sid": list(gpp_sid)} if gpp else {})}
+    response = httpx.post(
+        f"{parameter(stage, Parameter.PLAYBACK_URL)}/guest", json=body | ({"gpc": True} if gpc else {}), timeout=TIMEOUT
+    )
+    response.raise_for_status()
+    answer: dict[str, Any] = response.json()
+    return answer
+
+
+def consent_url(stage: Stage) -> str:
+    """``GET`` and ``PUT`` here read and write the signed-in viewer's consent (beside ``/playback``)."""
+    return parameter(stage, Parameter.PLAYBACK_URL).removesuffix("playback") + "consent"
+
+
+def record_consent(stage: Stage, token: str, *, opt_out: bool, vppa: bool = False) -> dict[str, Any]:
+    """``PUT /consent``: the viewer's choice, as stored. Raises on any answer but 200."""
+    response = httpx.put(
+        consent_url(stage),
+        headers={"Authorization": f"Bearer {token}"},
+        json={"opt_out": opt_out, "vppa": vppa},
         timeout=TIMEOUT,
     )
     response.raise_for_status()

@@ -54,6 +54,23 @@ All notable changes to this project are documented here. The format follows
   - About 18.90 US dollars per content hour with every analysis on, once per title; `modules.understanding.analyses`
     turns analyses off (about 9.90 without labels and technical cues).
   - It stands in for Elemental Inference, which has no VOD analysis (`OPTIMIZATION(aws): EI-VOD`).
+- **Guests get a playback ticket** (`identity`): `POST /playback/guest`, with no token.
+  - The body may carry the consent platform's GPP string and sections, and `gpc`; the browser's `Sec-GPC: 1` counts
+    as `gpc`. The ticket's row has no viewer id: the guest's breaks are CONTEXTUAL (reason `bound`, or `opted_out`
+    with Global Privacy Control) and carry the GPP string in `regs.gpp` for Prebid Server.
+  - An AWS WAF web ACL on the identity API blocks an address that mints more than
+    `modules.identity.guest_rate_limit` (default 100) guest tickets in 5 minutes. It adds about $6 a month.
+- **A consent store for signed-in viewers** (`identity`): `GET` and `PUT /consent` with the viewer's access token.
+  - The record, `C#<vid>` in the identity table, holds whether the viewer opted out of sale and sharing, whether they
+    gave the separate video-privacy consent, and their GPP string. An opt-out gives CONTEXTUAL breaks, the
+    video-privacy consent FULL, neither PSEUDONYMOUS.
+  - The Pod Decision Service reads it on every break of a bound session and keeps it 5 seconds, so a change reaches
+    the next break within that. A failed read keeps an answer up to a minute old.
+- **The reference viewer plays guests on guest tickets, asks signed-in viewers for their privacy choices, and sends
+  CMCD** (`viewer`).
+  - A new privacy-choices page (`#/privacy`) records the two choices; the home page says when a viewer has none.
+  - hls.js sends Common Media Client Data as a query parameter, which the CDN's access logs already parse into their
+    `cmcd-*` fields.
 
 ### Changed
 
@@ -67,6 +84,14 @@ All notable changes to this project are documented here. The format follows
   use them.
   - Nova 2 Lite has list prices.
   - The agent's `caps` module keeps its API.
+- **A signed-in viewer without a recorded consent now plays SAFE** (`identity`): own-book and house ads only, no
+  third-party bidder. So does one whose consent is older than 395 days, or whose consent cannot be read for over a
+  minute.
+  - Before, every signed-in viewer was PSEUDONYMOUS, whatever they had agreed to. The ticket's row no longer carries
+    a signed-in viewer's mode.
+  - `scripts/seed_personas.py` now records each demo persona's consent from `contracts/personas.json` (FULL gave the
+    video-privacy consent, PSEUDONYMOUS neither), and `--delete` removes it. Run it again on a deployed stage so the
+    personas keep their modes.
 
 ### Fixed
 
@@ -75,6 +100,7 @@ All notable changes to this project are documented here. The format follows
   'fast_channels.core'`), and every console, autopilot and agent run failed. The agent package now depends on the
   core package, and a test installs each bundled package (agent, functions, PDS) alone and imports every one of its
   modules, besides checking that each closure holds every workspace package its code imports.
+
 
 ## [4.1.1] - 2026-11-06
 

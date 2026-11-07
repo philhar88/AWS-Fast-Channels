@@ -38,7 +38,6 @@ def test_the_row_of_a_ticket() -> None:
     assert row.item() == {
         "pk": "T#" + "A" * 22,
         "pc": "fastm-demo-p-a",
-        "pm": "PSEUDONYMOUS",
         "cid": "c-1",
         "iat": 1_000_000,
         "redeem_by": 1_120_000,
@@ -46,8 +45,13 @@ def test_the_row_of_a_ticket() -> None:
         "vid": "ab" * 16,
         "persona": "dana",
     }
-    guest = ticket_row(ticket="B" * 22, pc="fastm-demo-p-a", cid="c-2", now_ms=0, pm=PrivacyMode.OPTED_OUT)
-    assert "vid" not in guest.item() and "persona" not in guest.item() and guest.item()["pm"] == "OPTED_OUT"
+    assert "pm" not in row.item(), "a signed-in viewer's mode is their consent, read on every break"
+    guest = ticket_row(
+        ticket="B" * 22, pc="fastm-demo-p-a", cid="c-2", now_ms=0, pm=PrivacyMode.OPTED_OUT, gpp="DBAA", gpp_sid=(7,)
+    )
+    assert "vid" not in guest.item() and "persona" not in guest.item()
+    assert (guest.item()["pm"], guest.item()["gpp"], guest.item()["gpp_sid"]) == ("OPTED_OUT", "DBAA", [7])
+    assert "gpp_sid" not in ticket_row(ticket="C" * 22, pc="fastm-demo-p-a", cid="c-3", now_ms=0).item()
     with pytest.raises(ValueError, match="not a playback ticket"):
         key("short")
 

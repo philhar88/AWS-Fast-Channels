@@ -73,12 +73,12 @@ test("a standard-tier viewer gets the full pod on the same channel", async ({ pa
   expect(problems).toEqual([]);
 });
 
-test("a guest plays anonymously and sees no decisions", async ({ page }) => {
+test("a guest plays on a guest ticket and sees no decisions", async ({ page }) => {
   const problems = await open(page);
   await page.getByRole("button", { name: "Watch as Guest" }).click();
   await expect(page.getByRole("heading", { name: "Channels on now" })).toBeVisible();
   await page.getByRole("link", { name: "Watch fast-demo" }).click();
-  await expect(page.getByText("Anonymous: guest")).toBeVisible();
+  await expect(page.getByText(/Ticket 01MOCKGUEST/)).toBeVisible();
   await expect(page.getByText(/A guest's session is CONTEXTUAL/)).toBeVisible();
   expect(problems).toEqual([]);
 });
@@ -92,5 +92,20 @@ test("a wrong password is refused", async ({ page }) => {
   await signInButton.click();
   await expect(page.getByText("Incorrect username or password.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Who's watching?" })).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
+test("a viewer without a consent is asked for one, and opting out changes their mode", async ({ page }) => {
+  const problems = await open(page);
+  await signIn(page, "Priya Shah");
+  await expect(page.getByText("Choose your privacy settings")).toBeVisible();
+  await page.getByRole("link", { name: "Privacy choices" }).first().click();
+  await expect(page.getByText(/Your breaks now: SAFE/)).toBeVisible();
+  await page.getByText("Do not sell or share my personal information").click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText(/Your breaks now: CONTEXTUAL/)).toBeVisible();
+  await screenshot(page, "viewer-privacy");
+  await page.getByRole("link", { name: "Back" }).click();
+  await expect(page.getByText("Choose your privacy settings")).toBeHidden();
   expect(problems).toEqual([]);
 });

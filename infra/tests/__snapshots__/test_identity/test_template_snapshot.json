@@ -124,7 +124,7 @@
     },
     "ApiCD79AAA0": {
       "Properties": {
-        "Description": "FAST Channels (fastm): playback tickets for signed-in viewers",
+        "Description": "FAST Channels (fastm): playback tickets and viewer consent",
         "EndpointConfiguration": {
           "Types": [
             "REGIONAL"
@@ -168,8 +168,15 @@
       },
       "Type": "AWS::ApiGateway::GatewayResponse"
     },
-    "ApiDeploymentFE1E7282c8d9bba8a1397aa2ad69d68b0fb47a2e": {
+    "ApiDeploymentFE1E7282fb7d070326194c99eca93f5246081f89": {
       "DependsOn": [
+        "ApiconsentGET0DDA89BC",
+        "ApiconsentOPTIONS2223DC11",
+        "ApiconsentPUT4B37EB55",
+        "ApiconsentE62C3D17",
+        "ApiplaybackguestOPTIONS8EF963C7",
+        "ApiplaybackguestPOSTC0B7BD3F",
+        "ApiplaybackguestC41D38B0",
         "ApiplaybackOPTIONSE56F125F",
         "ApiplaybackPOSTE4BD60DA",
         "Apiplayback138C8201",
@@ -185,7 +192,7 @@
         "aws:cdk:do-not-refactor": true
       },
       "Properties": {
-        "Description": "FAST Channels (fastm): playback tickets for signed-in viewers",
+        "Description": "FAST Channels (fastm): playback tickets and viewer consent",
         "RestApiId": {
           "Ref": "ApiCD79AAA0"
         }
@@ -204,7 +211,7 @@
           "Format": "{\"requestId\": \"$context.requestId\", \"time\": \"$context.requestTimeEpoch\", \"method\": \"$context.httpMethod\", \"resource\": \"$context.resourcePath\", \"status\": \"$context.status\", \"latencyMs\": \"$context.responseLatency\", \"integrationLatencyMs\": \"$context.integration.latency\", \"error\": \"$context.error.messageString\", \"authorizerError\": \"$context.authorizer.error\"}"
         },
         "DeploymentId": {
-          "Ref": "ApiDeploymentFE1E7282c8d9bba8a1397aa2ad69d68b0fb47a2e"
+          "Ref": "ApiDeploymentFE1E7282fb7d070326194c99eca93f5246081f89"
         },
         "MethodSettings": [
           {
@@ -232,6 +239,94 @@
         "TracingEnabled": true
       },
       "Type": "AWS::ApiGateway::Stage"
+    },
+    "ApiGuestRate08D74204": {
+      "Properties": {
+        "DefaultAction": {
+          "Allow": {}
+        },
+        "Description": "Guest playback tickets per address",
+        "Name": "fastm-identity",
+        "Rules": [
+          {
+            "Action": {
+              "Block": {}
+            },
+            "Name": "guest-mints-per-address",
+            "Priority": 0,
+            "Statement": {
+              "RateBasedStatement": {
+                "AggregateKeyType": "IP",
+                "EvaluationWindowSec": 300,
+                "Limit": 100,
+                "ScopeDownStatement": {
+                  "ByteMatchStatement": {
+                    "FieldToMatch": {
+                      "UriPath": {}
+                    },
+                    "PositionalConstraint": "EXACTLY",
+                    "SearchString": "/v1/playback/guest",
+                    "TextTransformations": [
+                      {
+                        "Priority": 0,
+                        "Type": "NONE"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "VisibilityConfig": {
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "fastm-identity-guest-mints",
+              "SampledRequestsEnabled": false
+            }
+          }
+        ],
+        "Scope": "REGIONAL",
+        "Tags": [
+          {
+            "Key": "fast:app",
+            "Value": "fastm"
+          },
+          {
+            "Key": "fast:owner",
+            "Value": "iac"
+          }
+        ],
+        "VisibilityConfig": {
+          "CloudWatchMetricsEnabled": true,
+          "MetricName": "fastm-identity",
+          "SampledRequestsEnabled": false
+        }
+      },
+      "Type": "AWS::WAFv2::WebACL"
+    },
+    "ApiGuestRateOnStageE8AC4FBF": {
+      "Properties": {
+        "ResourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:apigateway:us-east-1::/restapis/",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/stages/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              }
+            ]
+          ]
+        },
+        "WebACLArn": {
+          "Fn::GetAtt": [
+            "ApiGuestRate08D74204",
+            "Arn"
+          ]
+        }
+      },
+      "Type": "AWS::WAFv2::WebACLAssociation"
     },
     "ApiRedeemBody1E2019B1": {
       "Properties": {
@@ -352,6 +447,245 @@
         "Type": "COGNITO_USER_POOLS"
       },
       "Type": "AWS::ApiGateway::Authorizer"
+    },
+    "ApiconsentE62C3D17": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiCD79AAA0",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "consent",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Resource"
+    },
+    "ApiconsentGET0DDA89BC": {
+      "Properties": {
+        "AuthorizationScopes": [
+          "fast/playback"
+        ],
+        "AuthorizationType": "COGNITO_USER_POOLS",
+        "AuthorizerId": {
+          "Ref": "ApiViewersFD090360"
+        },
+        "HttpMethod": "GET",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "MintD94A12BF",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "ResourceId": {
+          "Ref": "ApiconsentE62C3D17"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiconsentGETApiPermissionFastChannelsfastmIdentityApi5A0A1A60GETconsentA023CE2F": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              },
+              "/GET/consent"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiconsentGETApiPermissionTestFastChannelsfastmIdentityApi5A0A1A60GETconsent94DADBE9": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/test-invoke-stage/GET/consent"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiconsentOPTIONS2223DC11": {
+      "Properties": {
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "HttpMethod": "OPTIONS",
+        "Integration": {
+          "IntegrationResponses": [
+            {
+              "ResponseParameters": {
+                "method.response.header.Access-Control-Allow-Headers": "'Authorization,Content-Type'",
+                "method.response.header.Access-Control-Allow-Methods": "'GET,PUT,OPTIONS'",
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              },
+              "StatusCode": "204"
+            }
+          ],
+          "RequestTemplates": {
+            "application/json": "{ statusCode: 200 }"
+          },
+          "Type": "MOCK"
+        },
+        "MethodResponses": [
+          {
+            "ResponseParameters": {
+              "method.response.header.Access-Control-Allow-Headers": true,
+              "method.response.header.Access-Control-Allow-Methods": true,
+              "method.response.header.Access-Control-Allow-Origin": true
+            },
+            "StatusCode": "204"
+          }
+        ],
+        "ResourceId": {
+          "Ref": "ApiconsentE62C3D17"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiconsentPUT4B37EB55": {
+      "Properties": {
+        "AuthorizationScopes": [
+          "fast/playback"
+        ],
+        "AuthorizationType": "COGNITO_USER_POOLS",
+        "AuthorizerId": {
+          "Ref": "ApiViewersFD090360"
+        },
+        "HttpMethod": "PUT",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "MintD94A12BF",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "ResourceId": {
+          "Ref": "ApiconsentE62C3D17"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiconsentPUTApiPermissionFastChannelsfastmIdentityApi5A0A1A60PUTconsent6319178E": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              },
+              "/PUT/consent"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiconsentPUTApiPermissionTestFastChannelsfastmIdentityApi5A0A1A60PUTconsent9CCDE722": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/test-invoke-stage/PUT/consent"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
     },
     "Apiplayback138C8201": {
       "Properties": {
@@ -500,6 +834,144 @@
       },
       "Type": "AWS::ApiGateway::Method"
     },
+    "ApiplaybackguestC41D38B0": {
+      "Properties": {
+        "ParentId": {
+          "Ref": "Apiplayback138C8201"
+        },
+        "PathPart": "guest",
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Resource"
+    },
+    "ApiplaybackguestOPTIONS8EF963C7": {
+      "Properties": {
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "HttpMethod": "OPTIONS",
+        "Integration": {
+          "IntegrationResponses": [
+            {
+              "ResponseParameters": {
+                "method.response.header.Access-Control-Allow-Headers": "'Authorization,Content-Type'",
+                "method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              },
+              "StatusCode": "204"
+            }
+          ],
+          "RequestTemplates": {
+            "application/json": "{ statusCode: 200 }"
+          },
+          "Type": "MOCK"
+        },
+        "MethodResponses": [
+          {
+            "ResponseParameters": {
+              "method.response.header.Access-Control-Allow-Headers": true,
+              "method.response.header.Access-Control-Allow-Methods": true,
+              "method.response.header.Access-Control-Allow-Origin": true
+            },
+            "StatusCode": "204"
+          }
+        ],
+        "ResourceId": {
+          "Ref": "ApiplaybackguestC41D38B0"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiplaybackguestPOSTApiPermissionFastChannelsfastmIdentityApi5A0A1A60POSTplaybackguestAB13E0B8": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/",
+              {
+                "Ref": "ApiDeploymentStagev1149A6FAE"
+              },
+              "/POST/playback/guest"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiplaybackguestPOSTApiPermissionTestFastChannelsfastmIdentityApi5A0A1A60POSTplaybackguest643D25BA": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "MintD94A12BF",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:aws:execute-api:us-east-1:123456789012:",
+              {
+                "Ref": "ApiCD79AAA0"
+              },
+              "/test-invoke-stage/POST/playback/guest"
+            ]
+          ]
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "ApiplaybackguestPOSTC0B7BD3F": {
+      "Properties": {
+        "AuthorizationType": "NONE",
+        "HttpMethod": "POST",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "MintD94A12BF",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "ResourceId": {
+          "Ref": "ApiplaybackguestC41D38B0"
+        },
+        "RestApiId": {
+          "Ref": "ApiCD79AAA0"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
     "ApiredeemDC52A65C": {
       "Properties": {
         "ParentId": {
@@ -608,7 +1080,7 @@
           "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
           "S3Key": "<asset-hash>.zip"
         },
-        "Description": "POST /playback: a signed-in viewer's single-use playback ticket",
+        "Description": "POST /playback, /playback/guest and GET, PUT /consent: tickets and consent",
         "Environment": {
           "Variables": {
             "FAST_PREFIX": "fastm",
@@ -757,7 +1229,10 @@
               }
             },
             {
-              "Action": "dynamodb:PutItem",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem"
+              ],
               "Effect": "Allow",
               "Resource": {
                 "Fn::GetAtt": [

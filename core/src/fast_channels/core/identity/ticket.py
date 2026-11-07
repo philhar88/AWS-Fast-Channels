@@ -5,9 +5,11 @@ or ``__``. MediaTailor does not need that rule, but its User Guide still states 
 redraw is free (P0-05: 0.96 % of draws, at most 3). The edge keeps the init query's ``ads.t`` only when it is one
 :data:`TICKET` value.
 
-The row ``T#<t>`` holds what the session may use, computed by the mint and never by the player: the viewer's ``vid``,
-the privacy mode, the demo persona, the playback configuration the ticket is for, and the redeem window. Times are
-epoch milliseconds, the API Gateway redeem's ``$context.requestTimeEpoch``; ``ttl`` is epoch seconds for DynamoDB.
+The row ``T#<t>`` holds what the session may use, computed by the mint and never by the player: a signed-in
+viewer's ``vid`` and demo persona, or a guest's privacy mode and GPP string; the playback configuration the ticket is
+for, and the redeem window. A signed-in viewer's mode is not on the ticket: the Pod Decision Service reads their
+consent (``core.identity.consent``) on every break. Times are epoch milliseconds, the API Gateway redeem's
+``$context.requestTimeEpoch``; ``ttl`` is epoch seconds for DynamoDB.
 """
 
 import re
@@ -32,15 +34,20 @@ REDEEM_CONDITION: Final = (
 """Binds an unredeemed ticket inside its window to the session ``:sid`` of configuration ``:pc``; again for the same
 session (a retried hook), never for another (DESIGN-v2.2 §5.3)."""
 REDEEM_UPDATE: Final = "SET redeemedBy = :sid, bound_at = if_not_exists(bound_at, :now), last_seen = :now"
+GPP_PATTERN: Final = r"^[A-Za-z0-9_.~-]{1,4096}$"
+"""A GPP string: base64url sections joined by ``~`` (``.`` inside a section)."""
+GPP_SECTIONS_MAX: Final = 32
 
 
 class PrivacyMode(StrEnum):
-    """What the ticket's viewer agreed to (DESIGN-v2.2 §5.5), as the mint records it. The Pod Decision Service decides
-    each break's mode from it and the binding."""
+    """A guest's mode as the guest mint records it (DESIGN-v2.2 §5.5): ``CONTEXTUAL``, or ``OPTED_OUT`` with Global
+    Privacy Control. ``FULL`` and ``PSEUDONYMOUS`` are on tickets minted before the consent store, which the Pod
+    Decision Service no longer reads for a signed-in viewer."""
 
     FULL = "FULL"
     PSEUDONYMOUS = "PSEUDONYMOUS"
     OPTED_OUT = "OPTED_OUT"
+    CONTEXTUAL = "CONTEXTUAL"
 
 
 def mint() -> str:
@@ -69,17 +76,22 @@ class TicketRow(BaseModel):
 
     pk: str = Field(pattern=r"^T#[A-Za-z0-9_-]{22}$")
     pc: str = Field(min_length=1, max_length=64, description="The playback configuration the ticket is for.")
-    pm: PrivacyMode
+    pm: PrivacyMode | None = Field(default=None, description="A guest's mode; none for a signed-in viewer.")
     cid: str = Field(min_length=1, max_length=64, description="Correlation id of the mint.")
     iat: int = Field(ge=0, description="Minted at, epoch ms.")
     redeem_by: int = Field(ge=0, description="The latest redeem, epoch ms.")
     ttl: int = Field(ge=0, description="DynamoDB expiry, epoch s.")
     vid: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     persona: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    gpp: str | None = Field(default=None, pattern=GPP_PATTERN, description="A guest's GPP string.")
+    gpp_sid: tuple[int, ...] = Field(default=(), max_length=GPP_SECTIONS_MAX, description="Its applicable sections.")
 
     def item(self) -> dict[str, Any]:
-        """The row as a DynamoDB resource item: fields that are ``None`` are left out."""
-        return self.model_dump(mode="json", exclude_none=True)
+        """The row as a DynamoDB resource item: fields that are ``None`` or empty are left out."""
+        item = self.model_dump(mode="json", exclude_none=True)
+        if not self.gpp_sid:
+            item.pop("gpp_sid")
+        return item
 
 
 def ticket_row(
@@ -88,9 +100,11 @@ def ticket_row(
     pc: str,
     cid: str,
     now_ms: int,
-    pm: PrivacyMode = PrivacyMode.PSEUDONYMOUS,
+    pm: PrivacyMode | None = None,
     vid: str | None = None,
     persona: str | None = None,
+    gpp: str | None = None,
+    gpp_sid: tuple[int, ...] = (),
     redeem_window_ms: int = REDEEM_WINDOW_MS,
 ) -> TicketRow:
     """The row of a ticket minted at ``now_ms``."""
@@ -104,4 +118,6 @@ def ticket_row(
         ttl=now_ms // 1000 + ROW_TTL_S,
         vid=vid,
         persona=persona,
+        gpp=gpp,
+        gpp_sid=gpp_sid,
     )
