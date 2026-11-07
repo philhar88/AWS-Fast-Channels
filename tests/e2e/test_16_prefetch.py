@@ -37,6 +37,7 @@ import pytest
 from _stack import Module, Plane, StackError, Stage, stage_id
 from botocore.exceptions import ClientError
 from harness import BREAK_POLICY, Channel, Tools, until, wait_for
+from harness_pods import start_settled
 from harness_prefetch import Avail, Request, avails, requests, spread
 
 from fast_channels.core.monetization.prefetch import event_id_of
@@ -197,7 +198,7 @@ def on_air(tools: Tools, channel: Channel, stage: Stage) -> Iterator[datetime]:
     guide = tools("schedule___get_schedule", channel=channel.name)["programs"]
     if upcoming := [p["name"] for p in guide if datetime.fromisoformat(p["start"]) > now]:
         tools("schedule___remove_programs", channel=channel.name, programs=upcoming)
-    tools("channels___start_channel", channel=channel.name)
+    start_settled(stage, tools, channel.name)
     try:
         wait_for(lambda: running_tasks(stage) >= 2 or None, timeout=900, interval=15, what="two Prebid Server tasks")
         time.sleep(WARM_UP.total_seconds())

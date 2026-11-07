@@ -11,10 +11,10 @@ or one that leaves before its third break, is not found).
 retrieval names the ``prefetchScheduleName``, and a later sighting may ask again in real time and replace the pod,
 or do nothing (fastcid 2026-11-06). A break is counted once per session, by its ``DATERANGE`` ID: it is served when
 any of its sightings is followed by a real-time ``MAKING_ADS_REQUEST`` or a ``FILLED_AVAIL`` of the session within
-:data:`SERVED_WITHIN`, or names its prefetch schedule. On prefetching siblings MediaTailor sometimes serves none of
-them, with no event at all (W-2 1.33, fastcid 2026-11-06: 3 of 33 sessions, their partners on the same breaks
-filled, every marker inside its schedule's consumption window). The silent-loss detector cannot see one: it alarms on
-a minute's ratio over at least five markers.
+:data:`SERVED_WITHIN`, or names its prefetch schedule. MediaTailor sometimes serves none of them, with no event at
+all: after a channel restart within seconds of its stop, half or more of the sessions that meet the run's
+duplicated first break skip the next breaks, prefetched or not (W-2 1.33, fastcie 2026-11-07). The silent-loss
+detector cannot see one: it alarms on a minute's ratio over at least five markers.
 
 **Refilled breaks** (with ``UNSERVED_BREAKS``). MediaTailor can also meet a prefetched break's start marker again
 seconds after filling the break from its retrieval, ask in real time and replace the pod mid-break: the viewer sees
@@ -70,7 +70,7 @@ UNSERVED_QUERY: Final = (
     f"| limit {ROWS_LIMIT}"
 )
 """Every sighting of a break's start marker (with its ``DATERANGE`` ID), ad request and fill: one row each."""
-# OPTIMIZATION(aws): W-2 1.33 a prefetched break is neither consumed nor requested: retire when MediaTailor fixes it
+# OPTIMIZATION(aws): W-2 1.33 sessions skip breaks after a quick channel restart: retire when AWS fixes it
 SERVED_WITHIN: Final = timedelta(seconds=10)
 """How long after a sighting the session's real-time request or fill must come (seen: 2.8 s)."""
 MARKER_EARLY: Final = timedelta(seconds=1)

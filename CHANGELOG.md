@@ -149,6 +149,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **W-2 1.33 is a quick-restart defect of Channel Assembly with MediaTailor, not a prefetch one**
+  ([limitations.md](docs/limitations.md#aws-elemental-mediatailor)).
+  - A channel started within seconds of its stop serves the new run's first break twice, with two `START-DATE`s for
+    one event id. Half or more of the sessions that meet it skip the next breaks: 2 to 4 breaks without prefetch, and
+    more than 21 minutes with it. Restarts from 319 s after the stop were clean (measured 2026-11-07).
+  - Operators wait 6 minutes after a manual stop when ad fill matters
+    ([operations.md](docs/operations.md#running-channels)).
+  - The e2e tests that judge ad fill start their channel only once it has been stopped 6 minutes
+    (`harness_pods.start_settled`).
+  - Their checks of unserved breaks and ADS log gaps print their count, and judge the share only from 10 sessions.
 - **The recommender runs with thinking disabled** ([ADR-0027](docs/adr/0027-llm-rail-recommender.md) amends
   [ADR-0029](docs/adr/0029-per-task-model-registry.md)).
   - The default is now Claude Haiku 5.5 with thinking disabled, effort low and `max_tokens` 4,000. It was thinking on
