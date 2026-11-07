@@ -48,7 +48,6 @@ from harness_demand import DemandEdge
 from harness_pods import (
     ADS_EVENTS,
     FIRST_SIGHT,
-    GAP_SESSION_SHARE,
     LOGGED,
     SMART_TV_USER_AGENT,
     Break,
@@ -62,7 +61,7 @@ from harness_pods import (
     breaks,
     egress_address,
     event_line,
-    gap_share,
+    gap_count,
     ipv4_client,
     line_creatives,
     log_gaps,
@@ -72,6 +71,7 @@ from harness_pods import (
     playback_plan,
     pod_of,
     record_pattern,
+    start_settled,
     timestamp,
     wait_until_ready,
     watch,
@@ -273,7 +273,7 @@ def smoke(pds: Stage, channel: Channel, tools: Tools, run_id: str, request: pyte
         cleanups: list[Callable[[], None]] = []
         cut = DeliveryCut(stage) if request.config.getoption("cut_ads_delivery") else None
         try:
-            tools("channels___start_channel", channel=channel.name)
+            start_settled(stage, tools, channel.name)
             asset = request.getfixturevalue("ingested")  # while Prebid Server scales out
             if stage.status(Module.CRAWL) is not None:
                 cleanups.append(publish_context(stage, run_id))
@@ -873,11 +873,12 @@ def test_delivery_is_counted_from_mediatailors_beacon_firings(smoke: Smoke) -> N
 def test_the_ads_log_gaps_are_known_and_rare(smoke: Smoke) -> None:
     """W-2 1.32: the vended ADS log can leave out events of a break MediaTailor filled. The checks above skip such a
     known gap (decided by the PDS, played by our tracker); this one reports them and fails when more than
-    :data:`harness_pods.GAP_SESSION_SHARE` of the sessions have one: that is not the known defect's rate."""
+    :data:`harness_pods.GAP_SESSION_SHARE` of the sessions have one, from :data:`harness_pods.GAP_MIN_SESSIONS`
+    sessions on: that is not the known defect's rate (:func:`harness_pods.gap_count`)."""
     gaps = smoke.gaps()
-    share = gap_share(gaps, smoke.sids)
-    print(f"ADS log gaps (W-2 1.32): {len(gaps)} breaks in {share:.0%} of {len(smoke.sids)} sessions: {sorted(gaps)}")
-    assert share <= GAP_SESSION_SHARE, f"{share:.0%} of the sessions have an ADS log gap: {sorted(gaps)}"
+    count = gap_count(gaps, smoke.sids)
+    print(f"ADS log gaps (W-2 1.32): {len(gaps)} breaks; {count}: {sorted(gaps)}")
+    assert count.rare, f"{count}: {sorted(gaps)}"
 
 
 def test_prebid_server_ran_the_deployed_image(pds: Stage, smoke: Smoke) -> None:

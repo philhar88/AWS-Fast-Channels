@@ -37,7 +37,7 @@ from harness_identity import (
     wait_until_ready,
     wait_until_serving,
 )
-from harness_pods import Viewer, ipv4_client, watch
+from harness_pods import Viewer, ipv4_client, start_settled, watch
 from playback import Window, break_windows
 
 from fast_channels.core.identity.names import Parameter
@@ -126,7 +126,7 @@ def played(
             with ipv4_client(follow_redirects=True, timeout=20.0) as http:
                 try:
                     for name in (channel.name, kids.name):
-                        tools("channels___start_channel", channel=name)
+                        start_settled(stage, tools, name)
                     asset = request.getfixturevalue("ingested")  # while Prebid Server scales out
                     wait_until_ready(stage, edge)
                     windows = schedule(tools, channel.name, asset.asset_id)

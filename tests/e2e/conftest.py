@@ -42,6 +42,7 @@ from harness import (  # noqa: E402
     wait_for,
     watch,
 )
+from harness_pods import wait_until_settled  # noqa: E402
 from playback import break_windows  # noqa: E402
 
 from fast_channels.core.ingest import AssetKind  # noqa: E402
@@ -227,8 +228,11 @@ def variant_playlists(stage: Stage, ingested: Asset, ladder: Ladder) -> dict[str
 
 
 @pytest.fixture(scope="session")
-def plan(tools: Tools, channel: Channel, ingested: Asset) -> dict[str, Any]:
-    """``schedule___plan``: the test pattern three times, starting in a few minutes, one break per program."""
+def plan(stage: Stage, tools: Tools, channel: Channel, ingested: Asset) -> dict[str, Any]:
+    """``schedule___plan``: the test pattern three times, starting in a few minutes, one break per program. A channel
+    stopped a moment ago is planned once its restart would not lose the ads (:func:`harness_pods.wait_until_settled`):
+    test_04 judges them."""
+    wait_until_settled(stage, channel.name)
     start = (datetime.now(UTC) + LEAD).replace(microsecond=0)
     return tools(
         "schedule___plan",

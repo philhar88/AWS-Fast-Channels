@@ -24,6 +24,7 @@ from harness_pods import (
     json_object,
     prebid_tasks,
     record_pattern,
+    start_settled,
     warmups,
     watch,
 )
@@ -297,7 +298,7 @@ def air(
     edge = DemandEdge(stage.prefix, stage.session)
     with ipv4_client(follow_redirects=True, timeout=20.0, headers={"User-Agent": SMART_TV_USER_AGENT}) as http:
         try:
-            tools("channels___start_channel", channel=channel.name)
+            start_settled(stage, tools, channel.name)
             asset = ingest()  # while Prebid Server scales out
             wait_until_ready(stage, edge)
             wait_for(

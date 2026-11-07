@@ -531,6 +531,9 @@ remain, because the agent forwards it to the Gateway for every tool call of a ru
   `skipped` output (the agent reports them), and filler plays until the next program
   ([channel-assembly.md](channel-assembly.md#starting-a-channel-late)).
 - Stop it the same way, or directly: `aws mediatailor stop-channel --channel-name fast-demo`.
+- **Wait 6 minutes after a stop before starting a monetized channel again** when ad fill matters. A channel
+  started within seconds of its stop serves its first break twice, and half or more of the viewers watching then
+  lose the next breaks ([W-2 1.33](limitations.md#aws-elemental-mediatailor)). Restarts from 319 s on were clean.
 - A running channel without a schedule plays its filler slate. Publish at least 10 minutes ahead of air time; later
   inserts work on a best-effort basis.
 - Keep the schedule ahead with the autopilot (`autopilot_cron`) or by asking the agent to "extend fast-demo to a

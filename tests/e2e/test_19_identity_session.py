@@ -39,7 +39,7 @@ from harness_identity import (
     wait_until_ready,
     wait_until_serving,
 )
-from harness_pods import Viewer, ipv4_client, watch
+from harness_pods import Viewer, ipv4_client, start_settled, watch
 from playback import Window, break_windows
 
 from fast_channels.core.identity.names import Parameter
@@ -123,7 +123,7 @@ def played(
         try:
             with ipv4_client(follow_redirects=True, timeout=20.0) as http:
                 try:
-                    tools("channels___start_channel", channel=channel.name)
+                    start_settled(stage, tools, channel.name)
                     asset = request.getfixturevalue("ingested")  # while Prebid Server scales out
                     wait_until_ready(stage, edge)
                     start = (datetime.now(UTC) + LEAD).replace(microsecond=0)
