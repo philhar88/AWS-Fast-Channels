@@ -220,6 +220,11 @@
               }
             }
           }
+        },
+        "understanding": {
+          "enabled": false,
+          "analyses": ["transcript", "shots", "technical_cues", "labels", "moderation"],
+          "task": "understanding.describe"
         }
       }
     },

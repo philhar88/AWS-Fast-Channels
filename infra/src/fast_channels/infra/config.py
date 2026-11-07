@@ -35,6 +35,8 @@ from fast_channels.core.naming import PREFIX_PATTERN, agent_namespace, check_pre
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES
 from fast_channels.core.specs import validate_ads_url
 from fast_channels.core.timeline import ProgrammingBrief  # noqa: TC001 - pydantic resolves it at runtime
+from fast_channels.core.understanding.record import TASK as UNDERSTANDING_TASK
+from fast_channels.core.understanding.record import Analysis
 
 if TYPE_CHECKING:
     from constructs import Node
@@ -895,6 +897,30 @@ class AgentsModule(_Module):
     human. Not signed in v1; each deploy records its version in the ledger."""
 
 
+class UnderstandingModule(_Module):
+    """The content-understanding module (``modules.understanding``; docs/understanding.md)."""
+
+    enabled: bool = False
+    """Analyse each title once, on its first encode: Amazon Transcribe, Amazon Rekognition Video and a video model
+    through the model registry describe it (IAB Content Taxonomy 3.1 categories, keywords, moods, a brand-safety tier
+    and a synopsis) in an item beside its catalog item. The crawl module carries its categories and keywords into
+    ``app.content``; the recommender reads it. With every analysis on, about 18.90 US dollars per content hour, once
+    per title (list prices; docs/understanding.md#cost)."""
+    analyses: tuple[Analysis, ...] = tuple(Analysis)
+    """The analyses to run, each billed per content minute: ``labels`` and ``moderation`` 6 US dollars an hour each,
+    ``shots`` and ``technical_cues`` 3 each, ``transcript`` 0.36; the proxy (0.45) and the model call (about 0.10)
+    always run. ``moderation`` is the visual evidence of the brand-safety tier."""
+    task: str = Field(default=UNDERSTANDING_TASK, pattern=TASK_NAME.pattern)
+    """The model-registry task of the describe step; ``modules.models.tasks`` must hold it (a video model)."""
+
+    @field_validator("analyses")
+    @classmethod
+    def _analyses(cls, analyses: tuple[Analysis, ...]) -> tuple[Analysis, ...]:
+        if len(set(analyses)) != len(analyses):
+            raise ValueError(f"analyses repeat: {[a.value for a in analyses]}")
+        return analyses
+
+
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
     "pds": ("ops", "demand"),
@@ -904,6 +930,7 @@ _MODULE_NEEDS: Final = {
     "selling": ("pds", "release"),
     "viewer": ("identity",),
     "agents": ("ops",),
+    "understanding": ("models",),
 }
 """Modules an enabled module builds on."""
 
@@ -927,6 +954,7 @@ class ModulesConfig(_Section):
     selling: SellingModule = SellingModule()
     viewer: ViewerModule = ViewerModule()
     agents: AgentsModule = AgentsModule()
+    understanding: UnderstandingModule = UnderstandingModule()
 
     def enabled(self, name: str) -> bool:
         """Whether module ``name`` (a field of this section) is on."""
@@ -1131,6 +1159,11 @@ class FastChannelsConfig(_Section):
                 problems.append(
                     f"{where}.models.tasks: {SCHEDULER_TASK!r}, the scheduler agent's entry, is missing; add it or set "
                     "agent.enabled=false"
+                )
+            if modules.understanding.enabled and modules.understanding.task not in modules.models.tasks:
+                problems.append(
+                    f"{where}.understanding.task: {modules.understanding.task!r} is not in models.tasks; add its entry "
+                    "(a video model of agent.allowed_models, such as {geo}.amazon.nova-2-lite-v1:0)"
                 )
         return problems
 

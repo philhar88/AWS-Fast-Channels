@@ -319,7 +319,8 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
         assert on == {"ops", "demand", "pds", "release", "selling"}
         assert (config.modules.pds.demo_lines, config.modules.selling.creatives) == ((), ("direct1", "direct2"))
     else:  # every module but selling, whose creatives their demo lines serve
-        assert on == set(ModulesConfig.model_fields) - {"selling"}
+        # understanding joins the stages with its model task's eval record (M12, second PR)
+        assert on == set(ModulesConfig.model_fields) - {"selling", "understanding"}
     assert config.modules.release.channels == (f"{name}-demo",)
     assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
     assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day

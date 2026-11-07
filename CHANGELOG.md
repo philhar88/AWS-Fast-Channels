@@ -39,6 +39,18 @@ All notable changes to this project are documented here. The format follows
     - no violation was served;
     - every golden expectation was met;
     - $0.0004 a rail, with a 2.5 s median.
+- **Content understanding** (`understanding`, M12, off by default; [docs/understanding.md](docs/understanding.md)).
+  - On a title's first encode, one Step Functions workflow makes a 640 by 360 MP4 proxy with MediaConvert, runs
+    Transcribe and Rekognition Video (shots, technical cues, labels, moderation) on it, and asks a video model through
+    the model registry (task `understanding.describe`) for the title's IAB Content Taxonomy 3.1 categories, keywords,
+    moods, brand-safety tier and synopsis.
+  - The answer is checked: only Content Taxonomy 3.1 categories and the 12 moods are kept, and the brand-safety tier is
+    the riskier of the model's and the moderation labels'. The result is the title's `UNDERSTANDING` item beside its
+    catalog item (`contracts/content-understanding.schema.json`), announced by `Content Understood`.
+  - It fails open: a failed analysis or model call leaves the item `partial`.
+  - About 18.90 US dollars per content hour with every analysis on, once per title; `modules.understanding.analyses`
+    turns analyses off (about 9.90 without labels and technical cues).
+  - It stands in for Elemental Inference, which has no VOD analysis (`OPTIMIZATION(aws): EI-VOD`).
 
 ### Changed
 

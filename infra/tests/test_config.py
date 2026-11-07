@@ -15,6 +15,7 @@ from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
 from fast_channels.core.profiles import CATALOGUE, DEFAULT_PACKAGE_PROFILES, RenditionProfile
+from fast_channels.core.understanding.record import TASK
 from fast_channels.infra.config import (
     EVAL_RECORDS_ENV,
     AdsMode,
@@ -424,7 +425,27 @@ def test_deployments_encode_the_builtin_ladders(load_config: Load) -> None:
     assert config.ladder("standard").version == "standard@843ed1d05a"  # HLS MPEG-TS, AVC + AAC-LC muxed
 
 
-MODULES = ("ops", "models", "demand", "pds", "release", "crawl", "identity", "selling", "viewer", "agents")
+MODULES = (
+    "ops",
+    "models",
+    "demand",
+    "pds",
+    "release",
+    "crawl",
+    "identity",
+    "selling",
+    "viewer",
+    "agents",
+    "understanding",
+)
+DESCRIBE: dict[str, Any] = {
+    "model": "{geo}.amazon.nova-2-lite-v1:0",
+    "effort": "low",
+    "thinking": "disabled",
+    "max_tokens": 4000,
+    "eval": "amazon.nova-2-lite-v1-0-disabled-4k",
+}
+"""The understanding module's describe task, with its fixture eval record (``infra/tests/data/evals``)."""
 RECS = "haiku-5-5-adaptive-8k"
 """The recommender's fixture eval record (``infra/tests/data/evals``)."""
 RECOMMENDER: dict[str, Any] = {
@@ -645,7 +666,8 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
             **{
                 "removal": "retain",
                 "modules.ops.ledger_lock": "compliance",
-                "modules.models.tasks": {"recommender": {**recommender, "data_class": "viewer"}},
+                "modules.models.tasks": {"recommender": {**recommender, "data_class": "viewer"}, TASK: DESCRIBE},
+                "agent.allowed_models": [*SHIPPED["agent"]["allowed_models"], DESCRIBE["model"]],
                 "modules.demand.simulator": "lambda",
                 "modules.demand.tasks": {"min": 3, "max": 3},
                 "modules.demand.dayparts": [{"cron": "cron(50 17 ? * MON-FRI *)", "min": 3}],
@@ -662,7 +684,7 @@ def test_module_rules_accept_a_consistent_configuration(load_config: Load) -> No
     modules = config.modules
     assert all(modules.enabled(name) for name in MODULES)
     assert modules.ops.ledger_lock is LedgerLock.COMPLIANCE
-    assert set(modules.models.tasks) == {"scheduler.plan", "recommender"}  # merged into cdk.json's entries
+    assert set(modules.models.tasks) == {"scheduler.plan", "recommender", TASK}  # merged into cdk.json's entries
     assert modules.models.tasks["recommender"].effort is Effort.LOW
     assert modules.demand.simulator is Simulator.LAMBDA
     assert modules.pds.demo_lines == (DemoLine.model_validate(LINE),)
