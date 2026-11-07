@@ -15,6 +15,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_ssm as ssm
 from aws_cdk.assertions import Template
 
+from fast_channels.core.agents.envelope import Envelope
 from fast_channels.core.naming import check_prefix
 from fast_channels.core.understanding import REGISTRY_DEFAULT as UNDERSTANDING_DEFAULT
 from fast_channels.core.understanding import TASK as UNDERSTANDING_TASK
@@ -346,6 +347,16 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
             )
         assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
     assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day
+
+
+@pytest.mark.parametrize("name", STAGES)
+def test_every_stage_files_envelope_reads_back_as_its_deploy_records_it(name: str) -> None:
+    """The envelope record (a deploy trigger) and the runners parse the resolved envelope's document: a stage whose
+    envelope does not read back fails its Operator deploy."""
+    config = shipped_with(stage_overrides(name))
+    envelope = config.modules.agents.envelope.resolved(config.prefix)
+
+    assert Envelope.model_validate_json(envelope.document) == envelope
 
 
 def test_shipped_prefixes_are_hyphen_free_so_none_falls_inside_anothers_grants() -> None:

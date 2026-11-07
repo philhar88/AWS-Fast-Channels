@@ -150,6 +150,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The Operator stack deploys again with the agents module and no always-on channel.** Resolved with
+  `always_on: []`, the operations agent's restart grant has no channels but keeps its per-hour cap, and the envelope
+  refused that when its document was read back: the deploy's envelope record (`Custom::Trigger` `RosterOnEnvelope`)
+  failed and the Operator stack rolled back, and the runner would have failed at start. A channel-scoped grant with
+  no channels is valid now: it permits nothing. Every shipped stage file's envelope is tested to read back.
 - **The scheduler agent's Runtime starts again.** Its code zip is the agent package's locked closure, which lacked
   `fast_channels.core` after the spend counter moved there: the Runtime failed at import (`No module named
   'fast_channels.core'`), and every console, autopilot and agent run failed. The agent package now depends on the
