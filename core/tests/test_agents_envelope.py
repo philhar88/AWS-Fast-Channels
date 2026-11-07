@@ -65,7 +65,6 @@ def test_placeholders_expand_and_repeats_collapse() -> None:
     ("grant", "message"),
     [
         ({"tool": "catalog___search_content", "channels": ["x"]}, "names no channel"),
-        ({"tool": START, "per_hour": 1}, "needs the channels"),
         ({"tool": "channels start"}, "should match pattern"),
     ],
 )
@@ -140,3 +139,14 @@ def test_without_an_always_on_channel_the_operations_agent_restarts_none() -> No
     found = verdict(envelope, Role.OPERATIONS, START, {"channel": "fast-demo"}, now=NOW)
 
     assert not found.allowed and found.refusal is Refusal.OUT_OF_SCOPE and "no channel" in found.reason
+
+
+def test_an_envelope_with_no_channel_reads_back_what_was_hashed() -> None:
+    """Resolved with no always-on channel, the operations grant has no channels but keeps its cap: the runner and the
+    deploy's envelope record read the document back (a stage with ``always_on: []``, such as fastm)."""
+    envelope = Envelope().resolved("fast")
+
+    assert envelope.agents[Role.OPERATIONS].grants[0].channels == ()
+    assert Envelope.model_validate_json(envelope.document) == envelope
+    found = verdict(envelope, Role.OPERATIONS, START, {"channel": "fast-demo"}, now=NOW)
+    assert not found.allowed and found.refusal is Refusal.OUT_OF_SCOPE, "it permits nothing"

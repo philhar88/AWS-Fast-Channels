@@ -96,10 +96,11 @@ class Grant(BaseModel):
 
     @model_validator(mode="after")
     def _scoped(self) -> Self:
+        # A channel-scoped grant whose channels are empty (an empty {always_on} once resolved) permits nothing: the
+        # verdict refuses it and Cedar has no permit for it, so its per-channel cap is never reached. It must stay
+        # valid, because the runner and the deploy's envelope record read the resolved document back.
         if self.channels and self.tool not in SCOPES:
             raise ValueError(f"{self.tool} names no channel: a grant of it cannot list channels")
-        if self.per_hour is not None and self.tool in SCOPES and not self.channels:
-            raise ValueError(f"{self.tool}: a per-channel cap needs the channels it applies to")
         return self
 
 
