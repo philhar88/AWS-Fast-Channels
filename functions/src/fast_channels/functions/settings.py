@@ -125,6 +125,9 @@ class Settings:
     """The release module's private bucket of bundle documents (``release/<digest>/bundle.json``)."""
     release_channels: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_CHANNELS"))
     """The channels the release module monetizes (comma-separated ``RELEASE_CHANNELS``)."""
+    child_directed_channels: tuple[str, ...] = field(default_factory=lambda: _csv("CHILD_DIRECTED_CHANNELS"))
+    """The monetized channels that are child-directed (``modules.release.child_directed``): every break of theirs is
+    KIDS, and no ticket is minted for them (comma-separated ``CHILD_DIRECTED_CHANNELS``)."""
     release_siblings: tuple[str, ...] = field(default_factory=lambda: _csv("RELEASE_SIBLINGS"))
     """The monetized channels' sibling configurations (comma-separated ``RELEASE_SIBLINGS``)."""
     release_lock_seconds: int = field(default_factory=lambda: int(_env("RELEASE_LOCK_SECONDS") or 0))

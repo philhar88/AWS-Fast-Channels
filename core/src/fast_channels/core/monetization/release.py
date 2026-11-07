@@ -8,6 +8,11 @@ channel configures every sibling (``a`` becomes stable, ``b`` idle). A sibling a
 release. Promotion (M3-04) swaps the pair. The probe ``z`` (house only, canary sessions only) then follows the stable
 sibling's release (:func:`followed`), and so does a rollback of the stable sibling (M3-x4).
 
+With ``modules.release.kids_pairs`` a channel also has the **kids twins** ``k`` and ``l`` (kids profiles, KIDS): ``k``
+is ``a``'s twin and ``l`` is ``b``'s (:func:`twin`). A release that configures the idle sibling configures its twin
+with it, and the twin is rolled back with it, so the kids stable sibling is always the stable sibling's twin and the
+state keeps one pair.
+
 :func:`targets` picks the siblings a release configures, :func:`mapped_functions` the Functions it creates for
 them, :func:`applied` records it, :func:`differences` compares what a configuration should be with what the service
 returns (drift), and :class:`PlaybackPlan` is the document players without a ticket read.
@@ -31,7 +36,30 @@ if TYPE_CHECKING:
 
 STABLE_LETTER, IDLE_LETTER = ROLE_LETTERS[SiblingRole.GENERAL]
 (PROBE_LETTER,) = ROLE_LETTERS[SiblingRole.PROBE]
+TWIN_LETTERS: Final = dict(zip(ROLE_LETTERS[SiblingRole.GENERAL], ROLE_LETTERS[SiblingRole.KIDS], strict=True))
+"""``a`` → ``k``, ``b`` → ``l``: each general sibling's kids twin."""
 PLAN_VERSION: Final = 1
+
+
+def twin(sibling: str) -> str:
+    """The kids twin of a general sibling ``<channel>-p-a``/``-p-b`` (``-p-k``/``-p-l``).
+
+    Raises:
+        ValueError: ``sibling`` is not a general sibling.
+    """
+    channel, sep, letter = sibling.rpartition("-p-")
+    if not sep or letter not in TWIN_LETTERS:
+        raise ValueError(f"{sibling!r} is not a general sibling (<channel>-p-a or -p-b)")
+    return f"{channel}-p-{TWIN_LETTERS[letter]}"
+
+
+def with_twins(siblings: Sequence[str], configured: Mapping[str, object]) -> list[str]:
+    """``siblings`` and, for each general one, its kids twin where ``configured`` has it."""
+    found = list(siblings)
+    for name in siblings:
+        if name.rpartition("-p-")[2] in TWIN_LETTERS and (kids := twin(name)) in configured and kids not in found:
+            found.append(kids)
+    return found
 
 
 class _Model(BaseModel):
@@ -83,13 +111,13 @@ class ReleaseStatus(_Model):
 
 def targets(bundle: Bundle, state: Mapping[str, ChannelState]) -> list[Sibling]:
     """The siblings a release of ``bundle`` configures: of a channel never released, all of them; afterwards its
-    idle sibling, and any sibling not configured yet (a channel's new probe)."""
+    idle sibling with its kids twin, and any sibling not configured yet (a channel's new probe or kids twins)."""
     chosen: list[Sibling] = []
     for sibling in bundle.siblings:
         channel = state.get(sibling.channel)
         idle = channel.idle if channel else None  # None: the channel was never released
         configured = channel.siblings if channel else {}
-        if idle is None or sibling.name == idle or sibling.name not in configured:
+        if idle is None or sibling.name in {idle, twin(idle)} or sibling.name not in configured:
             chosen.append(sibling)
     return chosen
 
@@ -209,8 +237,17 @@ def content_version(document: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:CONTENT_VERSION_LENGTH]
 
 
+class KidsPlan(_Model):
+    """Where a kids profile plays the channel: the stable sibling's kids twin."""
+
+    configuration: str
+    release: str = Field(pattern=r"^r[0-9]{4}$")
+    playback: dict[str, str] = Field(description="Playback URL by channel output, through the CDN.")
+
+
 class PlaybackPlan(_Model):
-    """``/plan/playback/<channel>.json``: where a player without a ticket plays the channel (its stable sibling).
+    """``/plan/playback/<channel>.json``: where a player without a ticket plays the channel (its stable sibling),
+    and, on a channel with kids twins, where a kids profile does (``kids``, left out otherwise).
 
     Rewritten on every release that changes the stable sibling, every promotion and every rollback; served by the
     CDN with ``max-age=30``.
@@ -222,14 +259,27 @@ class PlaybackPlan(_Model):
     release: str = Field(pattern=r"^r[0-9]{4}$")
     playback: dict[str, str] = Field(description="Playback URL by channel output, through the CDN.")
     updated: datetime
+    kids: KidsPlan | None = None
 
 
 def playback_plan(
-    *, channel: str, configuration: str, release: int, playback: Mapping[str, str], at: datetime
+    *,
+    channel: str,
+    configuration: str,
+    release: int,
+    playback: Mapping[str, str],
+    at: datetime,
+    kids: tuple[str, int, Mapping[str, str]] | None = None,
 ) -> PlaybackPlan:
-    """The plan of ``channel`` playing ``configuration`` at ``release``."""
+    """The plan of ``channel`` playing ``configuration`` at ``release``; ``kids`` is the kids twin's
+    ``(configuration, release, playback)``."""
     return PlaybackPlan(
-        channel=channel, configuration=configuration, release=release_tag(release), playback=dict(playback), updated=at
+        channel=channel,
+        configuration=configuration,
+        release=release_tag(release),
+        playback=dict(playback),
+        updated=at,
+        kids=KidsPlan(configuration=kids[0], release=release_tag(kids[1]), playback=dict(kids[2])) if kids else None,
     )
 
 

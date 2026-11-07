@@ -23,7 +23,7 @@ export const MOCK_PERSONAS: readonly Persona[] = [
   { id: "luis", name: "Luis Moreno", bio: "Freelancer; animation in the background all day.", email: "luis@personas.example.com", signIn: "user", genres: ["animation", "surreal"] },
   { id: "priya", name: "Priya Shah", bio: "Nurse in San Jose; an hour of fantasy after a shift.", email: "priya@personas.example.com", signIn: "user", genres: ["fantasy", "adventure"] },
   { id: "sam", name: "Sam Lee", bio: "Student, new this week; declared animation and sci-fi.", email: "sam@personas.example.com", signIn: "user", genres: ["animation", "sci-fi"] },
-  { id: "mia", name: "Mia", bio: "8; a kids profile on Marcus's account.", email: null, signIn: "kids_profile", genres: ["animation"] },
+  { id: "mia", name: "Mia", bio: "8; a kids profile on Marcus's account.", email: null, signIn: "kids_profile", account: "marcus", genres: ["animation"] },
   { id: "guest", name: "Guest", bio: "A drive-by viewer who never signs in.", email: null, signIn: "guest", genres: [] },
 ];
 
@@ -147,8 +147,11 @@ export function mockViewerBackend(): ViewerBackend {
       const persona = MOCK_PERSONAS.find((p) => refreshToken === `mock-refresh-${p.id}`);
       return persona ? Promise.resolve(mockTokens(persona)) : Promise.reject(new Error("unknown refresh token"));
     },
-    open: async (channel, accessToken): Promise<Source> => {
+    open: async (channel, accessToken, _signal, profile): Promise<Source> => {
       const persona = accessToken ? personaOfToken(await accessToken()) : undefined;
+      if (profile === "kids") {
+        return { url: STANDARD_POD, kids: true, sid: sessionId("kids") };
+      }
       if (!channel.monetized) {
         return { url: STANDARD_POD, anonymous: "not monetized", sid: sessionId("guest") };
       }

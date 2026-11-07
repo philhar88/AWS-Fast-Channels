@@ -951,3 +951,21 @@ def test_require_valid() -> None:
     with pytest.raises(v.InvalidBundleError, match="R-F2 function x: no") as raised:
         v.require_valid([problem])
     assert raised.value.violations == (problem,)
+
+
+def test_kids_twins_come_in_pairs_and_name_the_kids_stored_request(kit: SimpleNamespace) -> None:
+    bundle = kit.make_bundle(kids_pairs=True)
+
+    def drop_l(document: dict[str, Any]) -> None:
+        document["siblings"] = [s for s in document["siblings"] if s["letter"] != "l"]
+
+    def adult_pod(document: dict[str, Any]) -> None:
+        for sibling in document["siblings"]:
+            if sibling["letter"] == "k":
+                body = sibling["playback"]["AdDecisionServerConfiguration"]["HttpRequest"]["Body"]
+                sibling["playback"]["AdDecisionServerConfiguration"]["HttpRequest"]["Body"] = body.replace(
+                    "fast-pod-kids", "fast-pod"
+                )
+
+    assert kit.rules(v.validate_bundle(kit.edit(bundle, drop_l))) == {Rule.P6}
+    assert Rule.P5 in kit.rules(v.validate_bundle(kit.edit(bundle, adult_pod)))

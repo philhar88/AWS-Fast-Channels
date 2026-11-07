@@ -321,8 +321,12 @@ def _root(prefix: str, sibling: SiblingContext, hook: Hook, trees: Sequence[Hook
     return functions.add(root)
 
 
-def _letters(probe_sibling: bool) -> list[tuple[SiblingRole, str]]:
-    roles = [SiblingRole.GENERAL, *([SiblingRole.PROBE] if probe_sibling else [])]
+def _letters(*, probe_sibling: bool, kids_twins: bool) -> list[tuple[SiblingRole, str]]:
+    roles = [
+        SiblingRole.GENERAL,
+        *([SiblingRole.KIDS] if kids_twins else []),
+        *([SiblingRole.PROBE] if probe_sibling else []),
+    ]
     return [(role, letter) for role in roles for letter in ROLE_LETTERS[role]]
 
 
@@ -340,6 +344,7 @@ def build_bundle(
     contributions: Sequence[BundleContribution] = (),
     ad_server: AdServerRoute | None = None,
     ticketed: bool = False,
+    kids_pairs: bool = False,
 ) -> Bundle:
     """The bundle of ``channels``: siblings ``a``/``b`` (and the probe ``z``) per channel, each hook's root executor
     over ``contributions`` and then the session controls. The probe, which never forwards a ticket, publishes the
@@ -348,15 +353,18 @@ def build_bundle(
     With ``ticketed`` (the identity module) the general siblings on the Prebid Server route forward the playback
     ticket, except the lab channel's (which publish their hook events, and so the ticket) and a child-directed
     channel's (KIDS has no viewer id); the identity contribution redeems it on exactly those (:attr:`SiblingContext.
-    ticketed`). Without it every session is CONTEXTUAL and PRE_SESSION runs the controls alone. There are no kids pairs
-    yet. With ``ad_server`` the pair siblings take the ad-server route (M8-09) and the probe stays on Prebid Server.
+    ticketed`). Without it every session is CONTEXTUAL and PRE_SESSION runs the controls alone. With ``kids_pairs``
+    every channel but the lab channel and a child-directed one also gets the kids twins ``k``/``l`` (KIDS: the kids
+    stored request, never ticketed, always on Prebid Server). A child-directed channel's siblings are all KIDS. With
+    ``ad_server`` the pair siblings take the ad-server route (M8-09) and the probe stays on Prebid Server.
     Validate the result with :func:`fast_channels.core.monetization.validators.validate_bundle`.
     """
     functions = _Functions()
     siblings: list[Sibling] = []
     every = [*contributions, SessionControls()]
     for channel in channels:
-        for role, letter in _letters(probe_sibling):
+        twins = kids_pairs and not channel.lab and not channel.child_directed
+        for role, letter in _letters(probe_sibling=probe_sibling, kids_twins=twins):
             name = sibling_name(channel.name, letter)
             route = AdsRoute.AD_SERVER if ad_server and role is SiblingRole.GENERAL else AdsRoute.PBS
             context = SiblingContext(

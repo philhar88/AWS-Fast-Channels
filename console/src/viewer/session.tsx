@@ -7,15 +7,19 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { idClaims, loadTokens, renewingAccessToken, storeTokens, type Tokens } from "./auth";
 import { useViewerBackend } from "./backend";
 import type { Persona } from "./config";
+import { kidsProfileOf, signInEmail } from "./profiles";
 import { ViewerContext, type Viewer } from "./viewer";
 
 const GUEST_KEY = "fast-viewer.guest";
+const PROFILE_KEY = "fast-viewer.profile";
 
+/** The account persona Cognito names, or the kids profile of that account picked in this tab. */
 function personaOf(tokens: Tokens, personas: readonly Persona[]): Persona | null {
   try {
     const claims = idClaims(tokens.idToken);
     const id = claims["custom:persona"];
-    return personas.find((p) => p.id === id) ?? personas.find((p) => p.email !== null && p.email === claims.email) ?? null;
+    const account = personas.find((p) => p.id === id) ?? personas.find((p) => p.email !== null && p.email === claims.email) ?? null;
+    return kidsProfileOf(sessionStorage.getItem(PROFILE_KEY), account, personas) ?? account;
   } catch {
     return null;
   }
@@ -35,6 +39,7 @@ export function ViewerSession({ children }: { children: ReactNode }) {
   const signOut = useCallback(() => {
     remember(null);
     sessionStorage.removeItem(GUEST_KEY);
+    sessionStorage.removeItem(PROFILE_KEY);
     setGuest(null);
     window.location.hash = "#/personas";
   }, [remember]);
@@ -60,11 +65,17 @@ export function ViewerSession({ children }: { children: ReactNode }) {
       persona: tokens ? personaOf(tokens, personas) : guest,
       ...(accessToken ? { accessToken } : {}),
       signIn: async (persona, password) => {
-        if (!persona.email) {
+        const email = signInEmail(persona, personas);
+        if (!email) {
           throw new Error(`${persona.name} has no sign-in`);
         }
-        const signedIn = await backend.signIn(persona.email, password);
+        const signedIn = await backend.signIn(email, password);
         sessionStorage.removeItem(GUEST_KEY);
+        if (persona.signIn === "kids_profile") {
+          sessionStorage.setItem(PROFILE_KEY, persona.id);
+        } else {
+          sessionStorage.removeItem(PROFILE_KEY);
+        }
         setGuest(null);
         remember(signedIn);
       },

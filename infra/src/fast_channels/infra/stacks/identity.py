@@ -118,6 +118,11 @@ class IdentityStack(Stack):
                 "IDENTITY_TABLE": self.table.table_name,
                 "VID_KEY": self.vid_key.key_arn,
                 "RELEASE_CHANNELS": ",".join(config.modules.release.channels),  # the monetized ones: not the lab
+                **(
+                    {"CHILD_DIRECTED_CHANNELS": ",".join(config.modules.release.child_directed)}
+                    if config.modules.release.child_directed
+                    else {}
+                ),
                 "REDEEM_WINDOW_MS": str(settings.redeem_window_seconds * 1000),
             },
             timeout=Duration.seconds(10),

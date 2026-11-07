@@ -847,3 +847,20 @@ def test_a_model_or_setting_without_its_own_record_fails_synth(
 def test_any_routing_of_the_tested_model_qualifies(load_config: Load) -> None:
     for region in ("eu-west-1", "sa-east-1"):  # eu. and global. profiles of the us.-tested Haiku 5.5
         assert load_config(MODELS_ON, region=region).modules.models.tasks["scheduler.plan"].eval
+
+
+def test_child_directed_channels_are_monetized_ones(load_config: Load) -> None:
+    with pytest.raises(ConfigError, match="child_directed"):
+        load_config(
+            {"fast-channels": {"modules": {"release": {"channels": ["{prefix}-demo"], "child_directed": ["x-kids"]}}}}
+        )
+    config = load_config(
+        {
+            "fast-channels": {
+                "prefix": "fastm",
+                "channels": {"iac": [{"name": "{prefix}-demo"}]},
+                "modules": {"release": {"channels": ["{prefix}-demo"], "child_directed": ["{prefix}-demo"]}},
+            }
+        }
+    )
+    assert config.modules.release.child_directed == ("fastm-demo",)

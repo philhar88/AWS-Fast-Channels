@@ -14,6 +14,12 @@ signed-in viewer's consent.
 - ``GET /consent`` and ``PUT /consent``: the signed-in viewer's consent row ``C#<vid>`` (``core.identity.consent``),
   the store the Pod Decision Service follows. Without a row a signed-in viewer's breaks are SAFE.
 
+**Kids.** ``POST /playback {channel, profile: "kids"}`` (a kids profile on the signed-in account) answers the kids
+twin's URL from the plan (``-p-k``/``-p-l``, ``modules.release.kids_pairs``), and a child-directed channel
+(``CHILD_DIRECTED_CHANNELS``) answers its plan's URL to every viewer and guest: **no ticket and no ``vid``**, because a
+KIDS break has no viewer id; its configuration makes it KIDS, never a client flag. Such a URL is not single-use, and
+``expires_in`` is null. A channel without kids twins answers 409 ``no_kids_configuration``.
+
 A ticket names the channel's stable sibling, from its playback plan (``plan/playback/<channel>.json``, which the
 Release Controller rewrites at every promotion and rollback), and the answer is the plan's CDN playback URL with
 ``?ads.t=<t>``. The ticket is the only viewer value in the URL. A player opens it within the redeem window, in one
@@ -29,7 +35,7 @@ import time
 import uuid
 from collections.abc import Callable
 from functools import cache
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, CORSConfig, Response
@@ -72,6 +78,8 @@ class PlaybackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     channel: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    profile: Literal["kids"] | None = None
+    """``kids``: the account's kids profile plays the channel's kids twin."""
 
 
 class GuestRequest(BaseModel):
@@ -172,15 +180,41 @@ def _ticket(
     return Response(status_code=200, content_type=JSON, body=json.dumps(body))
 
 
+def _kids(channel: str, *, profile: bool) -> Response[str] | None:
+    """A child-directed channel's URL, or for a kids ``profile`` the kids twin's, with no ticket; None for a play that
+    takes a ticket."""
+    child_directed = channel in settings().child_directed_channels
+    if not (child_directed or profile):
+        return None
+    if channel not in _channels():
+        return _error(400, "unknown_channel", f"{channel} is not a monetized channel")
+    plan = _plan(channel)
+    if plan is None:
+        return _error(503, "not_released", f"{channel} has no released playback configuration yet")
+    if child_directed:
+        configuration, playback = plan.configuration, plan.playback
+    elif plan.kids is not None:
+        configuration, playback = plan.kids.configuration, plan.kids.playback
+    else:
+        return _error(409, "no_kids_configuration", f"{channel} has no kids playback configuration")
+    cid = str(uuid.uuid7())
+    logger.append_keys(cid=cid)
+    logger.info("kids playback", extra={"channel": channel, "pc": configuration})
+    url = playback.get(PREFERRED_OUTPUT) or next(iter(playback.values()))
+    return Response(status_code=200, content_type=JSON, body=json.dumps({"url": url, "cid": cid, "expires_in": None}))
+
+
 @app.post("/playback")
 def playback() -> Response[str]:
     settings().require("media_bucket", "identity_table", "vid_key", "release_channels")
     if (claims := _claims()) is None:
         return _forbidden()
     try:
-        request = PlaybackRequest.model_validate_json(app.current_event.body or "")
+        request = PlaybackRequest.model_validate_json(app.current_event.body or "", strict=True)
     except ValidationError:
-        return _error(400, "invalid_request", 'the body is {"channel": "<channel name>"}')
+        return _error(400, "invalid_request", 'the body is {"channel": "<channel name>", "profile"?: "kids"}')
+    if (kids := _kids(request.channel, profile=request.profile == "kids")) is not None:
+        return kids
     return _ticket(request.channel, vid=lambda: _vid(claims), persona=_persona(claims))
 
 
@@ -191,6 +225,8 @@ def guest() -> Response[str]:
         request = GuestRequest.model_validate_json(app.current_event.body or "", strict=True)
     except ValidationError:
         return _error(400, "invalid_request", 'the body is {"channel": "<channel name>", "gpp"?, "gpp_sid"?, "gpc"?}')
+    if (kids := _kids(request.channel, profile=False)) is not None:
+        return kids
     headers = {name.lower(): value for name, value in (app.current_event.headers or {}).items()}
     gpc = request.gpc or headers.get(GPC_HEADER, "").strip() == "1"
     return _ticket(request.channel, pm=guest_mode(gpc=gpc), gpp=request.gpp, gpp_sid=request.gpp_sid)

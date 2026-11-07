@@ -109,3 +109,16 @@ test("a viewer without a consent is asked for one, and opting out changes their 
   await expect(page.getByText("Choose your privacy settings")).toBeHidden();
   expect(problems).toEqual([]);
 });
+
+test("a kids profile signs in on its account and plays KIDS with no ticket", async ({ page }) => {
+  const problems = await open(page);
+  await page.getByRole("button", { name: "Watch as Mia" }).click();
+  await expect(page.getByRole("dialog").getByRole("textbox", { name: "Email" })).toHaveValue("marcus@personas.example.com");
+  await page.getByRole("textbox", { name: "Password" }).fill("demo-password");
+  await page.getByRole("dialog").getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Mia", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Watch fast-demo" }).click();
+  await expect(page.getByText("Mia (kids profile)")).toBeVisible();
+  await expect(page.getByText("KIDS, no ticket")).toBeVisible();
+  expect(problems).toEqual([]);
+});

@@ -246,7 +246,8 @@ def test_the_site_serves_the_app_under_its_csp_and_a_config_without_tiers(run: R
     personas = {p["id"]: p for p in run.config["personas"]}
     assert set(personas) == {p.id for p in PERSONAS}
     assert all("tier" not in p and "value" not in p for p in personas.values())
-    assert [c["monetized"] for c in run.config["channels"]] == [True]
+    channels = [c for c in run.config["channels"] if c["monetized"]]
+    assert channels and channels == run.config["channels"], "every IaC channel of the stage is monetized"
 
 
 def test_each_persona_mints_a_ticket_with_an_access_token_of_the_playback_scope(run: Run) -> None:

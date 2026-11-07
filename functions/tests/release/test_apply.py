@@ -294,13 +294,18 @@ def test_configure_keeps_the_deliveries_a_retry_already_made(kit: SimpleNamespac
 # --- publish --------------------------------------------------------------------------------------------------------
 
 
-def expect_plan(s3: Stubber, *, configuration: str, release: int, hls: str = HLS) -> None:
+def expect_plan(
+    s3: Stubber, *, configuration: str, release: int, hls: str = HLS, kids: tuple[str, int, str] | None = None
+) -> None:
     plan = playback_plan(
         channel="fastm-demo",
         configuration=configuration,
         release=release,
         playback=specs.playback_urls(cdn_base=CDN, playback_prefix_hls=hls, outputs=("hls",)),
         at=AT,
+        kids=(kids[0], kids[1], specs.playback_urls(cdn_base=CDN, playback_prefix_hls=kids[2], outputs=("hls",)))
+        if kids
+        else None,
     )
     s3.add_response(
         "put_object",
@@ -308,7 +313,7 @@ def expect_plan(s3: Stubber, *, configuration: str, release: int, hls: str = HLS
         {
             "Bucket": "fastm-media",
             "Key": "plan/playback/fastm-demo.json",
-            "Body": plan.model_dump_json(indent=2).encode(),
+            "Body": plan.model_dump_json(indent=2, exclude_none=True).encode(),
             "ContentType": "application/json",
             "CacheControl": "max-age=30",
         },
@@ -370,6 +375,22 @@ def test_publish_of_a_later_release_keeps_the_plan_on_the_stable_sibling(
     assert version == 2 and channel.siblings["fastm-demo-p-b"].release == 2
     assert channel.siblings["fastm-demo-p-a"].release == 1
     assert state.statuses[2].status == "APPLIED"
+
+
+def test_the_plan_names_the_stable_siblings_kids_twin(
+    kit: SimpleNamespace, state: Any, ledger: Any, stub: Stub
+) -> None:
+    bundle = kit.make_bundle(kids_pairs=True)
+    key = state.add(bundle)
+    state.statuses[1] = ReleaseStatus(
+        release=1, digest=bundle.digest, bundle_key=key, change_id="c1", status="APPLYING", at=AT
+    )
+    kids = HLS.replace("0123abcd", "kids")
+    found = [*results("a", "b", "z"), *results("k", "l", hls=kids)]
+    expect_plan(stub("s3"), configuration="fastm-demo-p-a", release=1, kids=("fastm-demo-p-k", 1, kids))
+    apply.publish(key, bundle.digest, 1, "c1", found)
+    channel, _ = state.states["fastm-demo"]
+    assert set(channel.siblings) == {f"fastm-demo-p-{x}" for x in "abklz"}
 
 
 # --- fail and the handler -------------------------------------------------------------------------------------------

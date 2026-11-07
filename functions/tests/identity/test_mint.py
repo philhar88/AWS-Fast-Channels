@@ -55,7 +55,8 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "MEDIA_BUCKET": BUCKET,
         "IDENTITY_TABLE": TABLE,
         "VID_KEY": KEY,
-        "RELEASE_CHANNELS": "fastm-demo",
+        "RELEASE_CHANNELS": "fastm-demo,fastm-kids",
+        "CHILD_DIRECTED_CHANNELS": "fastm-kids",
         "REDEEM_WINDOW_MS": "120000",
     }.items():
         monkeypatch.setenv(name, value)
@@ -119,8 +120,8 @@ def event(
     }
 
 
-def plan_response(stub: Stub, plan: dict[str, Any] | None = PLAN) -> None:
-    where = {"Bucket": BUCKET, "Key": "plan/playback/fastm-demo.json"}
+def plan_response(stub: Stub, plan: dict[str, Any] | None = PLAN, channel: str = "fastm-demo") -> None:
+    where = {"Bucket": BUCKET, "Key": f"plan/playback/{channel}.json"}
     if plan is None:
         stub("s3").add_client_error("get_object", "NoSuchKey", "no plan", expected_params=where)
         return
@@ -179,7 +180,7 @@ def test_an_id_token_or_a_token_without_a_subject_is_refused(stub: Stub) -> None
 
 
 def test_a_bad_body_or_an_unknown_channel_is_a_400(stub: Stub) -> None:
-    for body in ("", "not json", {"channel": "fastm-demo", "profile": "kids"}, {"channel": "../x"}, {}):
+    for body in ("", "not json", {"channel": "fastm-demo", "profile": "adult"}, {"channel": "../x"}, {}):
         status, answered = answer(mint.handler(event(body), Context()))
         assert (status, answered["error"]) == (400, "invalid_request"), body
     status, answered = answer(mint.handler(event({"channel": "fastm-other"}), Context()))
@@ -285,3 +286,32 @@ def test_no_consent_is_a_404_and_only_an_access_token_reaches_it(stub: Stub) -> 
         assert (status, answered["error"]) == (403, "forbidden")
     status, answered = answer(mint.handler(event({"opt_out": "no"}, method="PUT", path="/consent"), Context()))
     assert (status, answered["error"]) == (400, "invalid_request")
+
+
+KIDS_URL = URL.replace("fastm-demo-p-b", "fastm-demo-p-l")
+
+
+def test_a_kids_profile_plays_the_kids_twin_without_a_ticket_or_a_vid(stub: Stub) -> None:
+    plan_response(
+        stub, PLAN | {"kids": {"configuration": "fastm-demo-p-l", "release": "r0014", "playback": {"hls": KIDS_URL}}}
+    )
+    status, answered = answer(mint.handler(event({"channel": "fastm-demo", "profile": "kids"}), Context()))
+    assert (status, answered) == (200, {"url": KIDS_URL, "cid": CID, "expires_in": None})
+    assert "ads.t" not in answered["url"], "KIDS has no viewer id: no KMS call, no row (the stubs saw none)"
+
+
+def test_a_kids_profile_on_a_channel_without_kids_twins_is_a_409(stub: Stub) -> None:
+    plan_response(stub)
+    status, answered = answer(mint.handler(event({"channel": "fastm-demo", "profile": "kids"}), Context()))
+    assert (status, answered["error"]) == (409, "no_kids_configuration")
+
+
+def test_a_child_directed_channel_plays_without_a_ticket_for_everyone(stub: Stub) -> None:
+    kids_plan = PLAN | {"channel": "fastm-kids", "configuration": "fastm-kids-p-a", "playback": {"hls": URL}}
+    for request in (
+        event({"channel": "fastm-kids"}),
+        event({"channel": "fastm-kids"}, claims={}, path="/playback/guest"),
+    ):
+        plan_response(stub, kids_plan, channel="fastm-kids")
+        status, answered = answer(mint.handler(request, Context()))
+        assert (status, answered["url"], answered["expires_in"]) == (200, URL, None)

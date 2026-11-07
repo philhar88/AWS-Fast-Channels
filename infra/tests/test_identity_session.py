@@ -194,3 +194,12 @@ def test_the_sidecar_reads_and_binds_ticket_rows_only() -> None:
     assert "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-identity" in endpoint["Resource"]
     [plain_endpoint] = plain.dynamodb_endpoint_statements
     assert not any("identity" in r for r in plain_endpoint["Resource"])
+    [consent] = [s for s in ticketed.statements if s["Sid"] == "PdsViewerConsent"]
+    assert (consent["Action"], consent["Resource"]) == (
+        "dynamodb:GetItem",
+        "arn:aws:dynamodb:us-east-1:123456789012:table/fastm-identity",
+    )
+    assert consent["Condition"] == {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["C#*"]}}, "consent: read only"
+    kids = sidecar(**arguments, child_directed=["fastm-kids"])
+    assert kids.environment["CHILD_DIRECTED_CHANNELS"] == "fastm-kids"
+    assert "CHILD_DIRECTED_CHANNELS" not in plain.environment

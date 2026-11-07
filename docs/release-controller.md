@@ -28,7 +28,13 @@ send their ad requests as a templated OpenRTB POST to Prebid Server:
 | Sibling | Role |
 |---|---|
 | `<channel>-p-a`, `<channel>-p-b` | The pair. One is *stable* (viewers play it), the other *idle* (the next release goes to it). With the `identity` module they are *ticketed*: their PRE_SESSION root redeems the playback ticket before the session controls, and their ad requests carry it (`X-Fast-T`), except on the lab channel ([identity.md](identity.md#the-pre_session-redeem)) |
+| `<channel>-p-k`, `<channel>-p-l` | The kids twins (`modules.release.kids_pairs`): `k` is `a`'s twin and `l` is `b`'s. They name the kids stored request `fast-pod-kids` (`regs.coppa` 1), are never ticketed, and every break on them is KIDS. A release that configures the idle sibling configures its twin with it, a rollback takes the twin back with it, and the kids stable sibling is always the stable sibling's twin. Kids profiles play them (`POST /playback` with `profile: "kids"`). Not on the lab channel or a child-directed channel |
 | `<channel>-p-z` | The probe (`modules.release.probe_sibling`): house ads only, for canaries and smoke tests. It publishes the PRE_SESSION hook's opt-in events, so the session controls it commits can be read in its logs. It runs the stable sibling's release, re-applied after every promotion and rollback ([below](#the-probe-follows-the-stable-release)) |
+
+A **child-directed** channel (`modules.release.child_directed`) has the pair and the probe, all KIDS: they name
+`fast-pod-kids`, take no ticket, and the Pod Decision Service treats every break on them as KIDS (no third-party
+bidder, house and kid-approved direct ads only). Validator R-P5 refuses a kids sibling that names another stored
+request, and R-P6 kids twins that are not `k` and `l` together.
 
 These names, and the controller's IAM grants on `<channel>-p-*`, belong to the channel: the configuration refuses
 an IaC channel named `<channel>-p-...` (with the module on or off, so turning it on cannot collide) and one named
@@ -141,7 +147,9 @@ The release keeps the controller's lock until it is promoted or rolled back, so 
    extension's `Configuration-Version` header, which can name another version ([W-2 4.6](workarounds.md)).
 4. **Promotion** at 100 %: the candidate becomes stable, the plan names it, `release.promote` is ledgered, the
    channel's probe is re-applied with the new stable release ([below](#the-probe-follows-the-stable-release)), and
-   the Function trees no sibling keeps are deleted.
+   the Function trees no sibling keeps are deleted. The kids twins are not smoke-tested on their own: each runs its
+   general sibling's trees without the redeem, it is configured and rolled back with it, and its hook and marker
+   alarms are part of `<prefix>-release-candidate`.
 
 A failed smoke or soak, or a rolled-back pointer, runs **R1**: the candidate is remapped to its last good tree
 (a remap reaches live sessions at their next break in about 3 s), the pointer goes back to the stable siblings at
@@ -254,6 +262,12 @@ stable sibling and its playback URL per output:
   "playback": {"hls": "https://<cdn>/v1/master/<hash>/fastm-demo-p-a/hls.m3u8"},
   "updated": "2026-10-29T12:00:00Z"
 }
+```
+
+On a channel with kids twins the plan also names the stable sibling's twin, where a kids profile plays:
+
+```json
+  "kids": {"configuration": "fastm-demo-p-k", "release": "r0001", "playback": {"hls": "https://<cdn>/v1/master/<hash>/fastm-demo-p-k/hls.m3u8"}}
 ```
 
 Players that want the monetized stream read it; the v3.0.0 URLs keep working.
