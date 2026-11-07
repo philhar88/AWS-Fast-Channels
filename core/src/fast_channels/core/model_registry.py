@@ -171,6 +171,7 @@ UNDERSTANDING_CHECKS: Final = (
     "expected_categories",
     "no_wrong_categories",
     "moderation_agreement",
+    "brand_safety_expected",
     "cost_per_hour",
 )
 """What a record of the understanding module's describe task must hold (``functions.understanding.evals``)."""

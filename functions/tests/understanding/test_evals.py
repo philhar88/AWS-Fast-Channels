@@ -6,9 +6,9 @@ from typing import Any
 import pytest
 
 from fast_channels.core.model_registry import TaskSettings
-from fast_channels.core.understanding import REGISTRY_DEFAULT, Analysis
+from fast_channels.core.understanding import REGISTRY_DEFAULT, Analysis, BrandSafety
 from fast_channels.core.understanding.prompt import TOOL
-from fast_channels.core.understanding.signals import Signals
+from fast_channels.core.understanding.signals import Sighting, Signals
 from fast_channels.functions.understanding.evals import suite
 
 SETTINGS = TaskSettings.model_validate({**REGISTRY_DEFAULT, "model": "us.amazon.nova-2-lite-v1:0"})
@@ -22,7 +22,11 @@ def case(**changes: Any) -> suite.Case:
         analyses=(Analysis.TRANSCRIPT, Analysis.MODERATION),
         language="en",
         transcript="A robot walks through a ruined city.",
-        moderation={"Violence": 92.0},
+        moderation={"Violence": 96.0},
+        moderation_labels={
+            "Blood & Gore": Sighting(category="Violence", frames=12, sustained=12, confidence=96.0),
+            "Violence": Sighting(category="Violence", frames=12, sustained=12, confidence=96.0),
+        },
     )
     base: dict[str, Any] = {
         "content_id": "film",
@@ -32,7 +36,7 @@ def case(**changes: Any) -> suite.Case:
         "duration_ms": 600_000,
         "windows_s": (60, 300, 540),
         "signals": signals,
-        "expect": suite.Expect(categories_any=("652",), categories_none=("332", "641")),
+        "expect": suite.Expect(categories_any=("652",), categories_none=("332", "641"), brand_safety=BrandSafety.HIGH),
     }
     return suite.Case.model_validate({**base, **changes})
 
@@ -124,13 +128,34 @@ def test_the_expected_genre_must_be_among_the_three_categories_bidders_see() -> 
 
 
 def test_a_tier_far_below_the_moderation_labels_disagrees() -> None:
-    """Violence at 92 is the high tier: medium agrees (one step below), low does not."""
+    """Sustained blood and gore is the high tier: medium agrees (one step below), low does not; the item is high
+    either way, the case's expected tier."""
     agree, disagree = (
         suite.run_case(case(), 0, settings=SETTINGS, model_id="p", client=Model({**GOOD, "brand_safety": t}), video=b"")
         for t in ("medium", "low")
     )
 
     assert (agree.agrees, disagree.agrees) == (True, False)
+    assert (agree.tier, agree.tier_expected, disagree.tier_expected) == (BrandSafety.HIGH, True, True)
+
+
+def test_a_tier_above_the_expected_one_fails_the_expectation() -> None:
+    """A brief moment of blood (two frames): the labels give medium; a model that answers high makes the item high,
+    which the case does not expect."""
+    labels = {"Blood & Gore": Sighting(category="Violence", frames=2, sustained=0, confidence=88.0)}
+    brief = case(
+        signals=case().signals.model_copy(update={"moderation_labels": labels}),
+        expect=suite.Expect(categories_any=("652",), brand_safety=BrandSafety.MEDIUM),
+    )
+    calm, alarmed = (
+        suite.run_case(brief, 0, settings=SETTINGS, model_id="p", client=Model({**GOOD, "brand_safety": t}), video=b"")
+        for t in ("medium", "high")
+    )
+
+    assert (calm.tier, calm.tier_expected) == (BrandSafety.MEDIUM, True)
+    assert (alarmed.tier, alarmed.tier_expected) == (BrandSafety.HIGH, False)
+    checks = {c.name: c for c in suite.checks([calm, alarmed])}
+    assert checks["brand_safety_expected"].value == 0.5 and not checks["brand_safety_expected"].passed
 
 
 def test_a_call_without_the_tool_fails_every_check() -> None:
@@ -157,4 +182,4 @@ def test_the_fixtures_are_the_sample_titles() -> None:
         assert found.license == title["license"]
         assert abs(found.signals.duration_ms - title["duration_ms"]) <= 2_000  # the encode's, to a frame or two
         assert found.windows() and found.frames <= 180
-        assert found.expect.categories_any
+        assert found.expect.categories_any and found.expect.brand_safety is not None

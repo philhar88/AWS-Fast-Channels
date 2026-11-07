@@ -134,6 +134,26 @@
   ],
   "moderation": {
    "Violence": 88.3
+  },
+  "moderation_labels": {
+   "Blood & Gore": {
+    "category": "Violence",
+    "frames": 2,
+    "sustained": 0,
+    "confidence": 88.3
+   },
+   "Graphic Violence": {
+    "category": "Violence",
+    "frames": 4,
+    "sustained": 0,
+    "confidence": 88.3
+   },
+   "Violence": {
+    "category": "Violence",
+    "frames": 4,
+    "sustained": 0,
+    "confidence": 88.3
+   }
   }
  },
  "expect": {
@@ -148,6 +168,7 @@
    "651",
    "645",
    "646"
-  ]
+  ],
+  "brand_safety": "medium"
  }
 }

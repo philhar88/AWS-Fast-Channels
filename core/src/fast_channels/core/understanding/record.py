@@ -137,9 +137,9 @@ class Understanding(BaseModel):
     """Lower-case descriptive keywords, most apt first."""
     moods: tuple[Mood, ...] = Field(default=(), max_length=MAX_MOODS)
     brand_safety: BrandSafety | None = None
-    """The riskier of the model's tier and the tier of the moderation labels; null when neither ran."""
+    """A GARM-style risk tier, the riskier of the model's and the moderation labels'; null when neither ran."""
     moderation: tuple[str, ...] = ()
-    """Top-level moderation categories found (Rekognition's taxonomy), the evidence of the tier."""
+    """Top-level moderation categories seen (Rekognition's taxonomy): where the evidence of the tier lies."""
     synopsis: str = Field(default="", max_length=SYNOPSIS_MAX_CHARS)
     """One or two sentences, without spoilers."""
     language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")

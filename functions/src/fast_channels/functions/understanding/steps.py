@@ -51,6 +51,7 @@ from fast_channels.core.understanding.record import (
 from fast_channels.core.understanding.signals import (
     Signals,
     label_signals,
+    moderation_labels,
     moderation_signals,
     segment_signals,
     transcript_signals,
@@ -224,7 +225,7 @@ def _results(analysis: Analysis, prepared: Prepared, run: Mapping[str, Any]) -> 
             moderation = _keep(
                 prepared, "moderation", _pages(rekognition.get_content_moderation, run["job_id"], "ModerationLabels")
             )
-            return {"moderation": moderation_signals(moderation)}
+            return {"moderation": moderation_signals(moderation), "moderation_labels": moderation_labels(moderation)}
 
 
 def _pages(call: Callable[..., Mapping[str, Any]], job_id: str, key: str, **extra: Any) -> Iterator[dict[str, Any]]:

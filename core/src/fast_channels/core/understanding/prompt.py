@@ -30,7 +30,7 @@ from fast_channels.core.understanding.record import (
     Mood,
     categories,
 )
-from fast_channels.core.understanding.signals import MODERATION_TIERS
+from fast_channels.core.understanding.signals import MODERATION_TIERS, SUSTAINED_FRAMES
 
 if TYPE_CHECKING:
     from fast_channels.core.understanding.signals import Signals
@@ -38,11 +38,14 @@ if TYPE_CHECKING:
 TOOL: Final = "record_understanding"
 TEMPERATURE: Final = 0.0
 TIERS: Final[Mapping[BrandSafety, str]] = {
-    BrandSafety.FLOOR: "content no advertiser should appear next to: explicit sexual content, hate, graphic harm",
-    BrandSafety.HIGH: "graphic violence, disturbing imagery, crime or weapons shown in detail",
-    BrandSafety.MEDIUM: "mild violence or peril, drugs or tobacco, suggestive scenes, crude language or gestures",
-    BrandSafety.LOW: "nothing a mainstream advertiser would avoid (family, documentary, light drama)",
+    BrandSafety.FLOOR: "content no advertiser should appear next to: explicit sexual content or nudity, hate "
+    "symbols or extremism",
+    BrandSafety.HIGH: "graphic and sustained: lingering blood and gore, self-harm, corpses or torture shown in detail",
+    BrandSafety.MEDIUM: "action, fantasy or brief violence, weapons, peril, a moment of blood, unsettling imagery, "
+    "drugs or tobacco, partial nudity or suggestive scenes, crude language or gestures, gambling",
+    BrandSafety.LOW: "nothing a mainstream advertiser would avoid (family, documentary, light drama, mild romance)",
 }
+"""The tiers' wording, GARM-style risk levels, calibrated with the moderation rule (``signals.MODERATION_TIERS``)."""
 
 
 def system_prompt() -> str:
@@ -59,9 +62,9 @@ def system_prompt() -> str:
         f"- keywords: up to {MAX_KEYWORDS} short lower-case descriptive keywords (subjects, settings, themes), "
         f"each at most {KEYWORD_MAX_CHARS} characters, no names of people.\n"
         f"- moods: up to {MAX_MOODS} words from this vocabulary only: {', '.join(m.value for m in Mood)}.\n"
-        "- brand_safety: the title's brand-safety risk tier, one of the tiers below. Rate the riskiest scenes, not "
-        "the title's average, and weigh the moderation categories of the signals: they are what an automated review "
-        "saw in at least two frames.\n"
+        "- brand_safety: the title's brand-safety risk tier, one of the tiers below. Rate its riskiest scenes by "
+        "how graphic they are and how long they last: a brief moment does not make a title high. Weigh the moderation "
+        "labels of the signals, what an automated review saw and in how many frames (about two a second).\n"
         f"{tiers}\n"
         f"- synopsis: one or two sentences, at most {SYNOPSIS_MAX_CHARS} characters, as a programme guide would "
         "write it (the story, not 'this video shows'), without spoilers and without naming real people.\n\n"
@@ -70,10 +73,11 @@ def system_prompt() -> str:
 
 
 def _flagged(tier: BrandSafety) -> str:
-    """The moderation categories of ``tier`` (``MODERATION_TIERS``), so that the model reads the signals as the
-    workflow does."""
+    """The moderation labels of ``tier`` (``MODERATION_TIERS``), so that the model reads the signals as the workflow
+    does; high and floor labels count only when sustained."""
     names = [name for name, found in MODERATION_TIERS.items() if found is tier]
-    return f" (moderation categories: {', '.join(names)})" if names else ""
+    sustained = f", when seen in {SUSTAINED_FRAMES} frames or more" if tier.rank >= BrandSafety.HIGH.rank else ""
+    return f" (moderation labels: {', '.join(names)}{sustained})" if names else ""
 
 
 def tool_spec() -> dict[str, Any]:

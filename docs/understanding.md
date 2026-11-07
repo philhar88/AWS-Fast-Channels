@@ -14,6 +14,7 @@ over.
 
 - [How it works](#how-it-works)
 - [The item](#the-item)
+- [Brand safety](#brand-safety)
 - [Turning it on](#turning-it-on)
 - [Cost](#cost)
 - [The eval suite](#the-eval-suite)
@@ -42,8 +43,8 @@ EventBridge rule starts it on each `Asset Ready` event of a content asset.
 4. **Collect.** The step pages each finished analysis's results, keeps them raw for 30 days under `results/`, and
    reduces them to signals: the spoken language, the share of the runtime with speech, a transcript excerpt (at
    most 8,000 characters: its start, middle and end), the shot count and mean shot length, the technical cues, the
-   25 labels with the most screen time, and the top-level moderation categories seen in at least two frames at
-   80 % confidence or more.
+   25 labels with the most screen time, and every moderation label seen in at least two frames at 80 %
+   confidence or more, with its frames ([Brand safety](#brand-safety)).
 5. **Describe.** One Bedrock Converse call through the registry task `understanding.describe`, under the task's
    daily spend cap. The model sees the proxy (by its S3 URI), the signals and the excerpt. Video models read pictures
    only (Amazon Nova has no audio), which is why the transcript travels as text. The model answers through one forced
@@ -53,7 +54,7 @@ EventBridge rule starts it on each `Asset Ready` event of a content asset.
      ([content-enrichment.md](content-enrichment.md#genres-and-categories)); other values are dropped;
    - keywords are trimmed and lowered (at most 10), moods outside the vocabulary are dropped (at most 3);
    - the synopsis is cut at a word (at most 300 characters);
-   - the brand-safety tier is the riskier of the model's and the moderation categories' tier.
+   - the brand-safety tier is the riskier of the model's and the moderation labels' tier.
 
    The step writes the item and puts `Catalog Item Changed` and `Content Understood` on the deployment's bus.
 
@@ -76,15 +77,12 @@ is [`contracts/content-understanding.schema.json`](../contracts/content-understa
 | `cat` | The Content Taxonomy 3.1 ids (AdCOM `cattax` 9) of the title's genres, most apt first: at most 3 (the schema allows 5) |
 | `keywords` | Lower-case descriptive keywords, at most 10 |
 | `moods` | At most 3 of: uplifting, tense, dark, humorous, romantic, calm, energetic, sad, suspenseful, whimsical, epic, informative (`fast_channels.core.understanding.MOODS`) |
-| `brand_safety`, `moderation` | `low`, `medium`, `high` or `floor`, and the top-level moderation categories behind it |
+| `brand_safety`, `moderation` | A GARM-style risk tier, `low`, `medium`, `high` or `floor` ([Brand safety](#brand-safety)), and the top-level moderation categories seen |
 | `synopsis` | One or two sentences, without spoilers or real people's names, at most 300 characters |
 | `language`, `speech_ratio`, `shots`, `duration_ms` | From the analyses |
 | `model`, `analyzed_at` | The foundation model the describe step ran on (null when it did not run), and when |
 
 Categories, keywords, moods and the synopsis come from the model step only: an item with a null `model` has none.
-The brand-safety tiers of the moderation categories are in `fast_channels.core.understanding.signals`
-(`MODERATION_TIERS`): explicit content and hate symbols are `floor`, violence and disturbing imagery `high`, drugs,
-tobacco, suggestive content, gambling and rude gestures `medium`, alcohol and swimwear `low`.
 
 Who reads the item:
 
@@ -95,6 +93,44 @@ Who reads the item:
   the CMS sends thin metadata.
 - **The recommender** reads it with the title's `META` item.
 - Other consumers can follow the event `Content Understood` (`content_id`, `asset_id`, `status`, `correlation_id`).
+
+## Brand safety
+
+`brand_safety` is a risk tier in the style of the GARM brand safety floor and suitability framework, from the least
+to the most risk: `low`, `medium`, `high` and `floor`, which is content no advertiser should appear next to.
+`high` means high risk, not highly safe.
+
+**Nothing gates demand on it yet.** The catalog context, and so `app.content`, carries the item's categories,
+keywords and language, not its tier. The Pod Decision Service, Prebid Server and the recommender don't read it, and
+`Content Understood` doesn't carry it. A consumer that restricts bidders or brands by the tier is still to be
+built.
+
+The tier is the riskier of two:
+
+- **The model's,** from the tier descriptions in its prompt, which name each tier's moderation labels.
+- **The moderation labels',** by the most specific label Rekognition reports, in
+  `fast_channels.core.understanding.signals.MODERATION_TIERS`:
+
+  | Tier | Labels |
+  |---|---|
+  | `floor` | Explicit nudity and sexual activity, sex toys, hate symbols (Nazi Party, White Supremacy, Extremist) |
+  | `high` | Blood & Gore, Self-Harm, Death and Emaciation (Emaciated Bodies, Corpses) |
+  | `medium` | Weapons, weapon and physical violence, explosions, crashes, drugs and tobacco, non-explicit nudity, suggestive content, rude gestures, gambling |
+  | `low` | Alcohol, swimwear or underwear, kissing |
+
+  A label that is not listed takes its top-level category's tier, and an unknown category counts as `medium`.
+- **The exposure rule:** a `high` or `floor` label counts at its tier only when it was seen in at least 10 frames at
+  90 % confidence or more. Rekognition samples about two frames a second, so that is about five seconds on screen.
+  Below that, the label gives one tier less. Any label needs two frames at 80 % to count at all.
+
+On the sample titles, Sintel, Tears of Steel and Elephants Dream are `medium` and the Sintel trailer is `low`:
+- Sintel has two frames of blood;
+- Tears of Steel has sustained weapon violence;
+- Elephants Dream has three frames that read as emaciated bodies.
+
+Before this calibration, which rolled the labels up to their top-level category and had no exposure rule, all
+three were `high`. Unit tests cover the `high` and `floor` cases with synthetic labels, because no open-licensed
+title has them.
 
 ## Turning it on
 
@@ -170,12 +206,13 @@ checks, with the excerpt sent inline; only Bedrock is called. The suite writes
 | `expected_categories` | at least 80 % of the calls have one of the title's expected genres among the first three categories, which the catalog context carries to bidders (such as Animation & Anime, Fantasy or Science Fiction) |
 | `no_wrong_categories` | at least 90 % of the calls name none of the title's clearly wrong genres (Documentary, Factual or Reality TV for any of the films, Animation & Anime for Tears of Steel) |
 | `moderation_agreement` | at least 90 % of the calls give a tier at most one step below the moderation labels' |
+| `brand_safety_expected` | at least 80 % of the calls give the item the title's expected tier, the riskier of the model's and the labels' (`medium` for the three films, `low` for the trailer) |
 | `moods_valid` | at least 90 % of the moods are in the vocabulary |
 | `cost_per_hour` | the model's cost of an hour-long title, at most $0.50 |
 
 The committed record is Amazon Nova 2 Lite's with the default entry: every check passed, at $0.09 for an hour-long
-title and $0.16 for the run. The prompt names each tier's moderation categories: without them, the model rated
-Sintel `low` in two calls of three, against moderation labels of graphic violence.
+title and $0.16 for the run, and every call gave the expected tier. The prompt names each tier's moderation labels:
+without them, the model rated Sintel `low` in two calls of three, against moderation labels of graphic violence.
 
 The request carries no cache point. With one on the system prompt, Nova 2 Lite reported most of each title's video
 tokens as cache reads (the first title's as cache writes), though no video was ever sent twice; its Price List
