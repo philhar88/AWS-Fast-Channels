@@ -59,13 +59,19 @@ class _GenreMapFile(BaseModel):
 class GenreMap:
     """Catalog genre tags → Content Taxonomy 3.1 genres."""
 
-    def __init__(self, tags: Mapping[str, Genre]) -> None:
+    def __init__(self, tags: Mapping[str, Genre], ctv: Mapping[str, Genre] | None = None) -> None:
         self._tags = dict(tags)
+        self._ctv = dict(ctv or {})
 
     @property
     def tags(self) -> Mapping[str, Genre]:
         """Every mapped tag and its genre."""
         return self._tags
+
+    @property
+    def ctv(self) -> Mapping[str, Genre]:
+        """Every CTV genre of the map (``Sci-Fi``) and its Content Taxonomy 3.1 entry."""
+        return self._ctv
 
     def resolve(self, tags: Iterable[str]) -> Resolved:
         """Split ``tags`` into genres and other tags; tags are compared lower case, without surrounding spaces."""
@@ -125,6 +131,7 @@ def load_genre_map(path: Path = GENRE_MAP, *, taxonomy: Mapping[str, str] | None
         raise ValueError(f"{path.name}: " + "; ".join(problems))
     return GenreMap(
         {tag: Genre(document.ctv[ctv], names[document.ctv[ctv]]) for tag, ctv in document.tags.items()},
+        {ctv: Genre(id_, names[id_]) for ctv, id_ in document.ctv.items()},
     )
 
 

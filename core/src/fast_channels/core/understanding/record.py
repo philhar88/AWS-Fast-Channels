@@ -8,7 +8,7 @@ alone, so a catalog sync never erases an analysis and an analysis never edits th
 from datetime import datetime
 from enum import StrEnum
 from functools import cache
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
@@ -17,6 +17,18 @@ from fast_channels.core.crawl.taxonomy import CT31_IDS, load_taxonomy
 
 TASK: Final = "understanding.describe"
 """The model-registry task of the describe step (``modules.models.tasks``)."""
+MODEL: Final = "{geo}.amazon.nova-2-lite-v1:0"
+"""The describe step's model: Amazon Nova 2 Lite, which reads video (pictures only) from S3."""
+REGISTRY_DEFAULT: Final[dict[str, Any]] = {
+    "model": MODEL,
+    "effort": "low",
+    "thinking": "disabled",
+    "max_tokens": 4000,
+    "daily_cap_usd": 5,
+    "eval": "amazon.nova-2-lite-v1-0-disabled-4k",
+}
+"""The ``understanding.describe`` registry entry of the shipped stages. The cap is about ten times a busy day of
+ingest: one call per title, about a tenth of a cent to a cent each. Effort applies to Claude models only."""
 ITEM_SK: Final = "UNDERSTANDING"
 """Sort key of the item, beside the CMS's ``META`` in the title's partition."""
 VERSION: Final = 1

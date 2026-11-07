@@ -179,3 +179,20 @@ def test_understanding_needs_the_model_registry_and_its_task(load_config: Callab
         load_config({"fast-channels": {**CDK["fast-channels"], **without_task}}, region="us-east-1")
     with pytest.raises(ValueError, match="analyses repeat"):
         FastChannelsConfig.model_validate({"modules": {"understanding": {"analyses": ["shots", "shots"]}}})
+
+
+def publisher_environment(stage: Any) -> dict[str, Any]:
+    template = Template.from_stack(stage.crawl)
+    [function] = [
+        f
+        for f in template.find_resources("AWS::Lambda::Function").values()
+        if f["Properties"]["Handler"] == "fast_channels.functions.crawl.publisher.handler"
+    ]
+    environment: dict[str, Any] = function["Properties"]["Environment"]["Variables"]
+    return environment
+
+
+def test_with_understanding_the_crawl_publisher_reads_the_items(deployment: Callable[..., Any]) -> None:
+    assert publisher_environment(deployment(understanding_stage()).stage)["UNDERSTANDING_ITEMS"] == "true"
+    without = {**FASTM, "modules": {**FASTM["modules"], "understanding": {"enabled": False}}}
+    assert "UNDERSTANDING_ITEMS" not in publisher_environment(deployment(without).stage)

@@ -15,6 +15,7 @@ from fast_channels.core.understanding.prompt import (
     answer,
     cut,
     description,
+    genres,
     request,
     system_prompt,
     tool_spec,
@@ -170,17 +171,20 @@ def test_labels_are_ranked_by_screen_time_above_the_confidence_floor() -> None:
     assert len(label_signals(labels, top=1)) == 1
 
 
-def test_moderation_counts_top_level_categories_seen_twice() -> None:
-    def seen(name: str, parent: str, confidence: float = 90.0) -> dict[str, Any]:
-        return {"Timestamp": 0, "ModerationLabel": {"Name": name, "ParentName": parent, "Confidence": confidence}}
+def test_moderation_counts_top_level_categories_seen_in_two_frames() -> None:
+    def seen(at: int, name: str, parent: str, confidence: float = 90.0) -> dict[str, Any]:
+        return {"Timestamp": at, "ModerationLabel": {"Name": name, "ParentName": parent, "Confidence": confidence}}
 
     labels = [
-        seen("Violence", ""),
-        seen("Weapons", "Violence"),
-        seen("Weapon Violence", "Weapons"),  # level 3: rolled up to Violence
-        seen("Alcohol", ""),  # seen once only
-        seen("Smoking", "Drugs & Tobacco", 70.0),  # below the confidence floor
-        seen("Smoking", "Drugs & Tobacco", 72.0),
+        seen(0, "Violence", ""),
+        seen(0, "Weapons", "Violence"),
+        seen(500, "Weapon Violence", "Weapons"),  # level 3, another frame: rolled up to Violence
+        seen(0, "Alcohol", ""),  # one frame only
+        seen(0, "Smoking", "Drugs & Tobacco", 70.0),  # below the confidence floor
+        seen(500, "Smoking", "Drugs & Tobacco", 72.0),
+        # One frame reports a label and its parent (as Rekognition does): still one sighting.
+        seen(1000, "Explicit", "", 83.5),
+        seen(1000, "Explicit Sexual Activity", "Explicit", 83.5),
     ]
 
     assert moderation_signals(labels) == {"Violence": 90.0}
@@ -226,24 +230,31 @@ def test_the_request_sends_the_proxy_the_signals_and_a_cached_system_prompt() ->
         }
     }
     assert "Sintel searches for the dragon" in text["text"] and '"moderation":{"Violence":92.0}' in text["text"]
-    assert sent["system"][1] == {"cachePoint": {"type": "default"}}
+    # No cache point: with one, Nova 2 Lite reported most of a title's video tokens as cache reads or writes.
+    assert sent["system"] == [{"text": system_prompt()}]
     assert sent["toolConfig"]["toolChoice"] == {"tool": {"name": TOOL}}
     assert sent["inferenceConfig"] == {"maxTokens": 4000, "temperature": 0.0}
-    assert "\n641\tAnimation & Anime\n" in system_prompt()
-    assert set(tool_spec()["toolSpec"]["inputSchema"]["json"]["required"]) == {
-        "cat",
-        "keywords",
-        "moods",
-        "brand_safety",
-        "synopsis",
-    }
+    schema = tool_spec()["toolSpec"]["inputSchema"]["json"]
+    assert set(schema["required"]) == {"genres", "keywords", "moods", "brand_safety", "synopsis"}
+    assert schema["properties"]["genres"]["items"]["enum"] == genres()
+    assert "641" not in system_prompt()  # no example id, no taxonomy list: the model copied the list's order
+    assert "- high: graphic violence" in system_prompt()
+    assert "(moderation categories: Violence, Visually Disturbing)" in system_prompt()  # as MODERATION_TIERS
     text_only = request(model_id="m", video_uri=None, bucket_owner=None, signals=signals(), max_tokens=10)
     assert [list(block) for block in text_only["messages"][0]["content"]] == [["text"]]
 
 
+def test_the_genres_are_the_ctv_genres_with_a_category_id() -> None:
+    vocabulary = genres()
+
+    assert {"Action", "Animation", "Drama", "Fantasy", "Sci-Fi", "Thriller"} <= set(vocabulary)
+    assert "News" not in vocabulary  # its id, 1020, is a descriptive vector, not a category
+    assert vocabulary == sorted(vocabulary)
+
+
 def test_the_answer_is_checked_and_the_riskier_tier_wins() -> None:
     raw = {
-        "cat": ["641", "invented", "Fantasy", "art", "641"],
+        "genres": ["animation", "Invented", "Action", "Adventure", "Fantasy"],
         "keywords": ["  Dragon ", "dragon", "Coming of Age"],
         "moods": ["Epic", "gloomy", "sad"],
         "brand_safety": "low",
@@ -252,23 +263,23 @@ def test_the_answer_is_checked_and_the_riskier_tier_wins() -> None:
 
     checked = description(raw, moderation_tier=BrandSafety.HIGH)
 
-    assert checked.cat == ("641", "335")
+    assert checked.cat == ("641", "325")  # three genres at most; Action and Adventure are both 325
     assert checked.keywords == ("dragon", "coming of age")
     assert checked.moods == (Mood.EPIC, Mood.SAD)
     assert checked.brand_safety is BrandSafety.HIGH  # moderation saw violence the model did not rate
     assert len(checked.synopsis) <= 300 and checked.synopsis.endswith("…")
-    assert checked.dropped == ("cat:invented", "cat:art", "mood:gloomy")  # "Fantasy" is 335 by its name
+    assert checked.dropped == ("genre:Invented", "mood:gloomy")
     assert description({"brand_safety": "floor"}, moderation_tier=BrandSafety.LOW).brand_safety is BrandSafety.FLOOR
     assert description({"brand_safety": "weird"}, moderation_tier=None).brand_safety is None
 
 
 def test_the_answer_is_the_forced_tool_call() -> None:
     response = {
-        "output": {"message": {"content": [{"text": "thinking"}, {"toolUse": {"name": TOOL, "input": {"cat": []}}}]}},
+        "output": {"message": {"content": [{"text": "x"}, {"toolUse": {"name": TOOL, "input": {"genres": []}}}]}},
         "stopReason": "tool_use",
     }
 
-    assert answer(response) == {"cat": []}
+    assert answer(response) == {"genres": []}
     with pytest.raises(ValueError, match="did not call"):
         answer({"output": {"message": {"content": [{"text": "no"}]}}, "stopReason": "end_turn"})
 
@@ -323,11 +334,11 @@ def test_the_proxy_job_is_one_small_mp4() -> None:
 
 
 def test_the_cost_per_content_hour() -> None:
-    assert per_hour(tuple(Analysis)) == Decimal("18.91")
-    assert per_hour((Analysis.TRANSCRIPT, Analysis.SHOTS, Analysis.MODERATION)) == Decimal("9.91")
-    assert per_hour(()) == Decimal("0.55")  # the proxy and the model call always run
-    assert video_tokens(10_000) == 2_880  # Nova 2 Lite's own table: 10 s, 10 frames
-    assert video_tokens(7_200_000) == MAX_FRAMES * 288
+    assert per_hour(tuple(Analysis)) == Decimal("18.89")  # an hour-long title (the short sample titles: 19.12)
+    assert per_hour((Analysis.TRANSCRIPT, Analysis.SHOTS, Analysis.MODERATION)) == Decimal("9.89")
+    assert per_hour(()) == Decimal("0.53")  # the proxy and the model call always run
+    assert video_tokens(10_000) == 2_560  # 10 s, 10 frames of 256 tokens at 640 by 360 (measured)
+    assert video_tokens(7_200_000) == MAX_FRAMES * 256
     assert estimate(0, ()) > 0
 
 

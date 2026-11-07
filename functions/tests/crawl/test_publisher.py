@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -236,3 +237,99 @@ def test_other_errors_are_raised_for_a_retry(s3: Stubber, catalog: Stubber) -> N
 def test_unknown_events_are_refused() -> None:
     with pytest.raises(ValueError, match="not a publisher event"):
         handle({"detail-type": "Asset Ready", "detail": {}})
+
+
+UNDERSTOOD = {
+    "pk": "CONTENT#sintel",
+    "sk": "UNDERSTANDING",
+    "v": 1,
+    "content_id": "sintel",
+    "asset_id": "sintel-20261107",
+    "status": "complete",
+    "analyses": ["transcript", "moderation"],
+    "cat": ["335", "647"],
+    "keywords": ["dragon", "quest"],
+    "moods": ["epic"],
+    "brand_safety": "medium",
+    "moderation": ["Violence"],
+    "synopsis": "A girl looks for the dragon she raised.",
+    "language": "en",
+    "shots": 412,
+    "speech_ratio": Decimal("0.31"),
+    "duration_ms": 888_000,
+    "model": "amazon.nova-2-lite-v1:0",
+    "analyzed_at": "2026-11-07T05:48:11Z",
+}
+
+
+def understood_context() -> CatalogContext:
+    from fast_channels.core.understanding import Understanding  # noqa: PLC0415 - only these tests need it
+
+    understanding = Understanding.model_validate({k: v for k, v in UNDERSTOOD.items() if k not in {"pk", "sk"}})
+    return build_context(
+        SINTEL, genre_map=default_genre_map(), publisher_domain=PUBLISHER, updated=NOW, understanding=understanding
+    )
+
+
+@pytest.fixture
+def with_understanding(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNDERSTANDING_ITEMS", "true")
+    settings.cache_clear()
+
+
+@pytest.mark.usefixtures("with_understanding")
+def test_with_understanding_a_title_carries_its_categories_and_keywords(s3: Stubber, catalog: Stubber) -> None:
+    expect_get(catalog, SINTEL, "sintel")
+    catalog.add_response(
+        "get_item",
+        {"Item": dynamo(UNDERSTOOD)},
+        {"TableName": CATALOG, "Key": {"pk": "CONTENT#sintel", "sk": "UNDERSTANDING"}},
+    )
+    expect_head(s3, "catalog/ctx/v1/sintel.json", None)
+    context = understood_context()
+    s3.add_response(
+        "put_object",
+        {},
+        {
+            "Bucket": BUCKET,
+            "Key": "catalog/ctx/v1/sintel.json",
+            "Body": context.model_dump_json().encode(),
+            "ContentType": "application/json",
+            "CacheControl": "max-age=300",
+            "Metadata": {"digest": digest(context)},
+        },
+    )
+
+    assert handle(changed_event("sintel"))["written"] == 1
+    assert context.cat == ["335", "647", "641"] and context.genres == ["641", "335", "325"]
+    assert context.kwarray[-2:] == ["dragon", "quest"]
+
+
+@pytest.mark.usefixtures("with_understanding")
+def test_an_invalid_understanding_item_is_left_out(s3: Stubber, catalog: Stubber) -> None:
+    expect_get(catalog, SINTEL, "sintel")
+    catalog.add_response(
+        "get_item",
+        {"Item": dynamo({**UNDERSTOOD, "cat": ["not-an-id"]})},
+        {"TableName": CATALOG, "Key": {"pk": "CONTENT#sintel", "sk": "UNDERSTANDING"}},
+    )
+    expect_head(s3, "catalog/ctx/v1/sintel.json", digest_of(SINTEL))  # the catalog's own object, unchanged
+
+    assert handle(changed_event("sintel"))["unchanged"] == 1
+
+
+@pytest.mark.usefixtures("with_understanding")
+def test_with_understanding_the_sweep_reads_both_items(s3: Stubber, catalog: Stubber) -> None:
+    catalog.add_response(
+        "scan",
+        {"Items": [dynamo(UNDERSTOOD), dynamo(catalog_item(SINTEL))]},
+        {
+            "TableName": CATALOG,
+            "FilterExpression": "sk IN (:meta, :understanding)",
+            "ExpressionAttributeValues": {":meta": "META", ":understanding": "UNDERSTANDING"},
+        },
+    )
+    expect_head(s3, "catalog/ctx/v1/sintel.json", digest(understood_context()))
+    s3.add_response("list_objects_v2", {"Contents": [{"Key": "catalog/ctx/v1/sintel.json"}]}, None)
+
+    assert handle({"sweep": True}) == {"written": 0, "unchanged": 1, "deleted": 0, "invalid": 0}

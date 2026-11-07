@@ -51,8 +51,18 @@ All notable changes to this project are documented here. The format follows
     the riskier of the model's and the moderation labels'. The result is the title's `UNDERSTANDING` item beside its
     catalog item (`contracts/content-understanding.schema.json`), announced by `Content Understood`.
   - It fails open: a failed analysis or model call leaves the item `partial`.
-  - About 18.90 US dollars per content hour with every analysis on, once per title; `modules.understanding.analyses`
-    turns analyses off (about 9.90 without labels and technical cues).
+  - The item's categories are the title's genres: the model names IAB CTV genres, mapped to Content Taxonomy 3.1 as
+    the catalog's genre tags are. Asked for ids from the whole taxonomy, Nova 2 Lite copied the list's order.
+  - With the crawl module, the item's categories lead the catalog context object's `cat`, its keywords join
+    `kwarray` and its language fills an empty `language`, so bidders receive them in `app.content`. The bidder
+    simulator's `sim-bid-request` line shows `app.content`'s `cat` and `kwarray` (overlay O5).
+  - The describe task's eval suite (`make eval TASK=understanding.describe`) runs the four sample titles' live signals
+    and excerpts of their pictures through the real prompt. Its checks include the expected genre among the first
+    three categories and no clearly wrong one. Nova 2 Lite's record is committed.
+  - The `fastm`, `fastci` and `fastciads` stages turn the module on with `core.understanding.REGISTRY_DEFAULT`.
+  - About 18.90 US dollars per content hour with every analysis on, once per title (measured on the sample
+    titles, all under 16 minutes, 19.12); `modules.understanding.analyses` turns analyses off (about 9.90 without
+    labels and technical cues).
   - It stands in for Elemental Inference, which has no VOD analysis (`OPTIMIZATION(aws): EI-VOD`).
 - **Guests get a playback ticket** (`identity`): `POST /playback/guest`, with no token.
   - The body may carry the consent platform's GPP string and sections, and `gpc`; the browser's `Sec-GPC: 1` counts

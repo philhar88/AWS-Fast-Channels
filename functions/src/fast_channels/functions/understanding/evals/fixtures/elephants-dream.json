@@ -1,0 +1,151 @@
+{
+ "content_id": "elephants-dream",
+ "title": "Elephants Dream",
+ "source": "https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov",
+ "license": "CC BY 2.5 — © Orange Open Movie Project | elephantsdream.org",
+ "duration_ms": 654000,
+ "windows_s": [
+  60,
+  250,
+  400
+ ],
+ "signals": {
+  "duration_ms": 653820,
+  "analyses": [
+   "transcript",
+   "shots",
+   "technical_cues",
+   "labels",
+   "moderation"
+  ],
+  "language": "en",
+  "speech_ratio": 0.251,
+  "transcript": "At the left we can see, we can see the the the at the right we can see the, the, the hat snarlers and everything is safe, perfectly safe. Emo, emo. Yeah. fucking. Are you heard Ish. I don't think so. You, hm, I'm OK. Get up, emo. It's not safe here. Let's go. What's next? You'll, you'll see. You'll see Emo, this way. Follow me. I. You. It. S Hurry now. Listen, listen, listen. Yes, yes. You're not paying attention. Oh, I just want to answer the phone. Emo, look, I mean, listen. You have to learn to listen. This is not some game. You, I, I, I mean, we, we could easily die out here. Listen. Listen to the sounds of the machine. Listen to your breathing. Mm Well, don't you ever get tired of this? Tired, yeah? You know, the machine is like, like clockwork. One move out of place and you're ground to a poult. But isn't there like pulpeho. Is that what you want, pulp? Emo, your goal in life. Pope. Emo, close your eyes. Why, now. OK. Good. What do you see at your left side, Emo? Well, Uh, nothing really. No, nothing at all, really. And, and at your right, what do you see at your right side, Emo? The same brook. Yeah, exactly the same, nothing. Great. Listen, Prue, do you hear that? Can we go here? There, it isn't safe, either. No but, trust me, it's not. Well, maybe I could go, no. But no, no. Any further questions, Emo? No. Emo, yeah. Emo, why? Emo, why? Why can't you see the beauty of this place? The way it works, how, how perfect it is. No, Prue, I don't see. I don't see because there's nothing there. And why should I trust my life to something that isn't there? What can you tell me that? Emo, answer me. Bru You're a sick man. Stay away from me. No, emo, it's a trap. It's a trap at the left side you can see the Hanging Gardens of. Hey, how's that for a trap? we On the right side you can see, but guess what? The colossus overrode us. No, the Colossusum brought us, and it is here just for you, Brooke, just for you. It is fair. I'm telling you, emo, it, it is, it is.",
+  "shots": 167,
+  "mean_shot_s": 3.9,
+  "cues": {
+   "Content": 1,
+   "EndCredits": 1,
+   "OpeningCredits": 1
+  },
+  "credits_at_s": 566.1,
+  "labels": [
+   {
+    "name": "Person",
+    "seconds": 440.5
+   },
+   {
+    "name": "Adult",
+    "seconds": 295.1
+   },
+   {
+    "name": "Head",
+    "seconds": 282.3
+   },
+   {
+    "name": "Male",
+    "seconds": 238.0
+   },
+   {
+    "name": "Man",
+    "seconds": 200.5
+   },
+   {
+    "name": "Face",
+    "seconds": 186.9
+   },
+   {
+    "name": "Performer",
+    "seconds": 118.9
+   },
+   {
+    "name": "Solo Performance",
+    "seconds": 114.9
+   },
+   {
+    "name": "Text",
+    "seconds": 81.6
+   },
+   {
+    "name": "Female",
+    "seconds": 64.8
+   },
+   {
+    "name": "Woman",
+    "seconds": 59.4
+   },
+   {
+    "name": "Outdoors",
+    "seconds": 41.7
+   },
+   {
+    "name": "Boy",
+    "seconds": 36.7
+   },
+   {
+    "name": "Angry",
+    "seconds": 29.5
+   },
+   {
+    "name": "Nature",
+    "seconds": 24.5
+   },
+   {
+    "name": "Teen",
+    "seconds": 21.2
+   },
+   {
+    "name": "Indoors",
+    "seconds": 20.1
+   },
+   {
+    "name": "Alien",
+    "seconds": 19.6
+   },
+   {
+    "name": "Letter",
+    "seconds": 19.5
+   },
+   {
+    "name": "Lighting",
+    "seconds": 19.5
+   },
+   {
+    "name": "Happy",
+    "seconds": 17.0
+   },
+   {
+    "name": "Child",
+    "seconds": 15.0
+   },
+   {
+    "name": "Utility Pole",
+    "seconds": 13.5
+   },
+   {
+    "name": "Shouting",
+    "seconds": 12.5
+   },
+   {
+    "name": "Body Part",
+    "seconds": 10.3
+   }
+  ],
+  "moderation": {
+   "Visually Disturbing": 87.2
+  }
+ },
+ "expect": {
+  "categories_any": [
+   "641",
+   "643",
+   "335",
+   "652"
+  ],
+  "categories_none": [
+   "332",
+   "648",
+   "651"
+  ]
+ }
+}

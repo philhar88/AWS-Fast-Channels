@@ -61,6 +61,7 @@ class CrawlStack(Stack):
                 self, "Alerts", self.format_arn(service="sns", resource=alert_topic_name(config.prefix))
             ),
             publisher_domain=config.modules.crawl.publisher_domain,
+            understanding=config.modules.understanding.enabled,
             log_retention=config.observability.log_retention,
             removal_policy=config.removal_policy,
         )

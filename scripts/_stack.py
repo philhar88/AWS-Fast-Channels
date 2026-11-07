@@ -50,6 +50,7 @@ class Module(StrEnum):
     IDENTITY = "Identity"
     SELLING = "Selling"
     VIEWER = "Viewer"
+    UNDERSTANDING = "Understanding"
 
 
 type StackKind = Plane | Module
@@ -111,6 +112,7 @@ MODULE_OUTPUT_KEYS: Final[dict[Module, tuple[str, ...]]] = {
     ),
     Module.CRAWL: ("CatalogContextBucketName", "CatalogContextBaseUrl", "CatalogContextPublisherName"),
     Module.IDENTITY: ("UserPoolId", "UserPoolClientId", "PlaybackApiUrl", "RedeemUrl", "IdentityTable", "Region"),
+    Module.UNDERSTANDING: ("UnderstandingStateMachineArn", "UnderstandingBucketName"),
 }
 """Outputs of each module stack."""
 

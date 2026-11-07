@@ -12,13 +12,16 @@ The schema of ``v1`` never changes in place: MediaTailor cache entries cannot be
 import hashlib
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Final, Literal, Self
+from typing import TYPE_CHECKING, Final, Literal, Self
 from urllib.parse import quote
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from fast_channels.core.catalog import CONTENT_ID_PATTERN, ContentItem, ContentType, is_domain
 from fast_channels.core.crawl.taxonomy import CT31, MAX_GENRES, GenreMap
+
+if TYPE_CHECKING:
+    from fast_channels.core.understanding import Understanding
 
 CONTEXT_VERSION: Final = 1
 CONTEXT_PREFIX: Final = f"catalog/ctx/v{CONTEXT_VERSION}/"
@@ -96,7 +99,12 @@ def context_key(content_id: str) -> str:
 
 
 def build_context(
-    item: ContentItem, *, genre_map: GenreMap, publisher_domain: str | None, updated: datetime
+    item: ContentItem,
+    *,
+    genre_map: GenreMap,
+    publisher_domain: str | None,
+    updated: datetime,
+    understanding: Understanding | None = None,
 ) -> CatalogContext:
     """The context object of ``item``.
 
@@ -106,6 +114,9 @@ def build_context(
         publisher_domain: the publisher's domain, the registry of the catalog's own content ids in ``cids``; None
             leaves the content id in ``id`` only.
         updated: when the object is written; any time zone, stored as UTC seconds.
+        understanding: the title's ``UNDERSTANDING`` item (the understanding module), if it has one. Its categories
+            lead ``cat`` (the genres follow, at most three in all; ``genres`` stays the catalog's), its keywords
+            follow the catalog's in ``kwarray``, and its spoken language fills ``language`` when the catalog has none.
 
     Raises:
         ValueError: ``publisher_domain`` is not a domain, ``updated`` is naive, or the object would exceed the
@@ -117,6 +128,10 @@ def build_context(
         raise ValueError("updated must be timezone-aware")
     resolved = genre_map.resolve(item.genres)
     genres = [genre.id for genre in resolved.genres]
+    understood_cat = list(understanding.cat) if understanding else []
+    cat = _unique([*understood_cat, *genres])[:MAX_GENRES]
+    understood_keywords = list(understanding.keywords) if understanding else []
+    language = item.language or (understanding.language if understanding else None)
     title, series = _text(item.title), _text(item.series_title)
     rating = _text(item.rating)
     length = None if item.duration_ms is None else (item.duration_ms + 500) // 1000
@@ -129,27 +144,27 @@ def build_context(
         type=item.content_type or "",
         genre=resolved.genres[0].name if resolved.genres else "",
         genres=genres,
-        cat=genres,
+        cat=cat,
         contentrating=rating,
         len=length,
-        language=item.language or "",
+        language=language or "",
         prodq=item.prodq,
         producer=(
             Producer(name=_text(item.producer_name), domain=item.producer_domain or "")
             if item.producer_name or item.producer_domain
             else None
         ),
-        kwarray=_unique([*resolved.other_tags, *map(_text, item.keywords or ())]),
+        kwarray=_unique([*resolved.other_tags, *map(_text, item.keywords or ()), *understood_keywords]),
         cids=_content_ids(item, publisher_domain),
         title_q=_quoted(title, OUTPUT_MAX_CHARS),
         series_q=_quoted(series, OUTPUT_MAX_CHARS),
         hdr=header(
             item.content_id,
             genres=genres,
-            cat=genres,
+            cat=cat,
             rating=rating,
             length=length,
-            language=item.language,
+            language=language,
             prodq=item.prodq,
         ),
         updated=updated.astimezone(UTC).replace(microsecond=0),

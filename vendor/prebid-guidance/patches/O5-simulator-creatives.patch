@@ -4,8 +4,8 @@ The shipped video creatives are 5, 15 and 30 s progressive 360x360 MP4s that all
 cannot fill a CTV pod stitched into an HLS ladder. When video_creatives.json sits beside the handler, its list
 replaces the shipped one: 30.03 s HLS creatives preconditioned on the channel ladder, each with its own crid and
 advertiser domain, and their burl/nurl. The handler also logs one line per request for the contract tests: the header
-names it received (never their values), how many X-Forwarded-For entries arrived, and device.ip and device.ipv6 as the
-request body carries them.
+names it received (never their values), how many X-Forwarded-For entries arrived, device.ip and device.ipv6 as the
+request body carries them, and app.content's cat and kwarray (catalog metadata, never viewer data).
 
 diff --git a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py b/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
 --- a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
@@ -25,7 +25,7 @@ diff --git a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
  
  def lambda_handler(event, _):
      try:
-@@ -68,6 +76,20 @@
+@@ -68,6 +76,23 @@
  
      # Parse incoming bid request to build a matching response
      bid_request = parse_bid_request(event)
@@ -35,6 +35,7 @@ diff --git a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
 +    headers = event.get("headers") or {}
 +    forwarded = ",".join(str(value) for name, value in headers.items() if str(name).lower() == "x-forwarded-for")
 +    device = (bid_request or {}).get("device") or {}
++    content = ((bid_request or {}).get("app") or {}).get("content") or {}
 +    logger.info(json.dumps({
 +        "evt": "sim-bid-request",
 +        "imps": len((bid_request or {}).get("imp") or []),
@@ -42,11 +43,13 @@ diff --git a/source/loadtest/bidder_simulator/lambdas/loadtest_bidder/handler.py
 +        "xff_entries": len([entry for entry in forwarded.split(",") if entry.strip()]),
 +        "device_ip": device.get("ip"),
 +        "device_ipv6": device.get("ipv6"),
++        "content_cat": content.get("cat"),
++        "content_kwarray": content.get("kwarray"),
 +    }))
      if bid_request:
          bid_response = build_dynamic_response(bid_request)
      else:
-@@ -126,12 +148,14 @@
+@@ -126,12 +151,14 @@
                  "impid": imp_id,
                  "price": creative['price'],
                  "adm": creative['adm'],

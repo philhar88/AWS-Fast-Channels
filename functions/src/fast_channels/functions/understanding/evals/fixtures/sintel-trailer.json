@@ -1,0 +1,148 @@
+{
+ "content_id": "sintel-trailer",
+ "title": "Sintel (trailer)",
+ "source": "https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4",
+ "license": "CC BY 3.0 — © Blender Foundation | durian.blender.org",
+ "duration_ms": 52000,
+ "windows_s": [
+  0
+ ],
+ "signals": {
+  "duration_ms": 52219,
+  "analyses": [
+   "transcript",
+   "shots",
+   "technical_cues",
+   "labels",
+   "moderation"
+  ],
+  "language": "en",
+  "speech_ratio": 0.154,
+  "transcript": "What brings you to the land of the gatekeepers? I'm searching for someone. A dangerous quest for a lone hunter. I've been alone for as long as I can remember.",
+  "shots": 22,
+  "mean_shot_s": 2.3,
+  "cues": {
+   "BlackFrames": 1,
+   "Content": 1,
+   "EndCredits": 1
+  },
+  "credits_at_s": 40.3,
+  "labels": [
+   {
+    "name": "Person",
+    "seconds": 22.5
+   },
+   {
+    "name": "Adult",
+    "seconds": 16.1
+   },
+   {
+    "name": "Head",
+    "seconds": 15.5
+   },
+   {
+    "name": "Face",
+    "seconds": 10.5
+   },
+   {
+    "name": "Female",
+    "seconds": 10.5
+   },
+   {
+    "name": "Woman",
+    "seconds": 10.5
+   },
+   {
+    "name": "Outdoors",
+    "seconds": 9.5
+   },
+   {
+    "name": "Nature",
+    "seconds": 9.5
+   },
+   {
+    "name": "Male",
+    "seconds": 6.0
+   },
+   {
+    "name": "Man",
+    "seconds": 5.5
+   },
+   {
+    "name": "Logo",
+    "seconds": 5.5
+   },
+   {
+    "name": "Desert",
+    "seconds": 4.5
+   },
+   {
+    "name": "Text",
+    "seconds": 3.5
+   },
+   {
+    "name": "City",
+    "seconds": 2.5
+   },
+   {
+    "name": "Road",
+    "seconds": 2.5
+   },
+   {
+    "name": "Street",
+    "seconds": 2.5
+   },
+   {
+    "name": "Urban",
+    "seconds": 2.5
+   },
+   {
+    "name": "Advertisement",
+    "seconds": 2.0
+   },
+   {
+    "name": "Poster",
+    "seconds": 2.0
+   },
+   {
+    "name": "War",
+    "seconds": 2.0
+   },
+   {
+    "name": "Weather",
+    "seconds": 2.0
+   },
+   {
+    "name": "Alley",
+    "seconds": 1.5
+   },
+   {
+    "name": "Bride",
+    "seconds": 1.5
+   },
+   {
+    "name": "Sad",
+    "seconds": 1.5
+   },
+   {
+    "name": "Wedding",
+    "seconds": 1.5
+   }
+  ],
+  "moderation": {}
+ },
+ "expect": {
+  "categories_any": [
+   "641",
+   "335",
+   "325"
+  ],
+  "categories_none": [
+   "332",
+   "648",
+   "651",
+   "645",
+   "646"
+  ]
+ }
+}

@@ -176,6 +176,8 @@ class Settings:
     """The analyses the understanding workflow is configured to run (``modules.understanding.analyses``)."""
     models_counter_table: str = field(default_factory=lambda: _env("MODELS_COUNTER_TABLE"))
     """The model registry's daily spend counters (``<prefix>-models``)."""
+    understanding_items: bool = field(default_factory=lambda: _env("UNDERSTANDING_ITEMS") == "true")
+    """The crawl publisher reads each title's ``UNDERSTANDING`` item too (the understanding module is on)."""
     alert_topic_arn: str = field(default_factory=lambda: _env("ALERT_TOPIC_ARN"))
     """The deployment's alert topic, told when a model task's daily cap is reached."""
 

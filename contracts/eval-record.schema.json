@@ -91,7 +91,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the model registry on, synth refuses a task whose eval names no passing record for its model family and settings (effort, thinking, max_tokens). Required checks by task: scheduler.plan: scenario_standard, scenario_hard; recommender: schema_valid, faithfulness, policy_violations, cost_per_rail; recommender.cohort: schema_valid, faithfulness, policy_violations, cost_per_rail. The recommender's (schema_valid, faithfulness, policy_violations, cost_per_rail) include the deterministic faithfulness check: each tile's reason cites only facts of the input.",
+  "description": "evals/records/<task>/<key>.json, written by make eval TASK=<task> MODEL=<id> and committed. With the model registry on, synth refuses a task whose eval names no passing record for its model family and settings (effort, thinking, max_tokens). Required checks by task: scheduler.plan: scenario_standard, scenario_hard; recommender: schema_valid, faithfulness, policy_violations, cost_per_rail; recommender.cohort: schema_valid, faithfulness, policy_violations, cost_per_rail; understanding.describe: schema_valid, categories_valid, expected_categories, no_wrong_categories, moderation_agreement, cost_per_hour. The recommender's (schema_valid, faithfulness, policy_violations, cost_per_rail) include the deterministic faithfulness check: each tile's reason cites only facts of the input.",
   "properties": {
     "task": {
       "description": "The task the suite tests.",

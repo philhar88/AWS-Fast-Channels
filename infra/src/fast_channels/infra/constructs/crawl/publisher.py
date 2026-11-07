@@ -55,6 +55,8 @@ class ContextPublisher(Construct):
         event_bus: the deployment's bus.
         alert_topic: topic of the dead-letter alarm.
         publisher_domain: ``modules.crawl.publisher_domain``; None leaves it out of the objects.
+        understanding: also read each title's ``UNDERSTANDING`` item (``modules.understanding`` is on): its
+            categories and keywords join the object.
         log_retention, removal_policy: of the function's log group and the dead-letter queue.
 
     Attributes:
@@ -74,6 +76,7 @@ class ContextPublisher(Construct):
         alert_topic: sns.ITopic,
         publisher_domain: str | None,
         log_retention: logs.RetentionDays,
+        understanding: bool = False,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
         super().__init__(scope, id)
@@ -89,6 +92,7 @@ class ContextPublisher(Construct):
                 "LIBRARY_TABLE": data.library_table.table_name,
                 "CATALOG_CONTEXT_BUCKET": bucket.bucket_name,
                 **({"PUBLISHER_DOMAIN": publisher_domain} if publisher_domain else {}),
+                **({"UNDERSTANDING_ITEMS": "true"} if understanding else {}),
             },
             timeout=TIMEOUT,
             log_retention=log_retention,
