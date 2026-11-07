@@ -6,7 +6,8 @@ its own ``Asset Ready``; on a stage that analysed an earlier run's pattern, the 
 this run's asset (``"force": true``). It writes the pattern's catalog title for the crawl checks, sends one break of
 the pattern through the guidance's edge as MediaTailor would, reads the bidder simulator's ``sim-bid-request`` line
 of that auction, and removes the title, its object and the item at the end (so that the next run analyses its own
-pattern). A run analyses about 70 seconds of video: well under a US dollar.
+pattern). For the auction it starts the stage's first IaC channel and stops it after: the census gate runs Prebid
+Server only while a channel is on air. A run analyses about 70 seconds of video: well under a US dollar.
 
 On a long-lived stage, whose ingest bucket takes only the sample titles, ``--understood <content_id>`` uses that
 catalog title's READY encode instead: nothing is uploaded, the title is analysed only if it has no item yet, and its
@@ -23,6 +24,7 @@ from _stack import Module, Plane, Stage
 from botocore.exceptions import ClientError
 from harness import CONTENT_ID, wait_for
 from harness_demand import DemandEdge
+from harness_pods import wait_until_ready
 
 from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl.catalog_context import context_key
@@ -37,7 +39,7 @@ from fast_channels.functions.tools.catalog import catalog_item
 from fast_channels.functions.tools.library_store import Asset, AssetStatus, asset_key
 
 if TYPE_CHECKING:
-    from harness import Channel
+    from harness import Channel, Tools
     from mypy_boto3_dynamodb.service_resource import Table
 
 pytestmark = pytest.mark.e2e
@@ -203,14 +205,34 @@ def test_the_catalog_context_carries_the_understanding(
     assert published["language"] == (meta["language"] or understood.language or "")  # the catalog's first
 
 
-def test_a_bidders_request_carries_the_understanding(
-    stage: Stage, title: tuple[str, Asset, bool], published: dict[str, Any], understood: Understanding, run_id: str
-) -> None:
-    """One contextual break of the pattern through the guidance's edge: the PDS patches ``app.content`` from its copy
-    of the catalog, and the bidder simulator logs the request's categories and keywords (overlay O5)."""
+@pytest.fixture(scope="module")
+def warm(stage: Stage, channel: Channel, tools: Tools) -> Iterator[DemandEdge]:
+    """The guidance's edge with warm Prebid Server tasks. The census gate runs them only while a channel is on air,
+    so the stage's first IaC channel is started for the auction and stopped after."""
     if stage.status(Module.PDS) is None:
         pytest.skip(f"stage {stage.prefix} has no Pds stack (deploy-demand)")
     edge = DemandEdge(stage.prefix, stage.session)
+    if not edge.deployed:
+        pytest.skip(f"stage {stage.prefix} has no demand module deployed (make deploy-demand)")
+    tools("channels___start_channel", channel=channel.name)
+    try:
+        wait_until_ready(stage, edge)
+        yield edge
+    finally:
+        tools("channels___stop_channel", channel=channel.name)
+
+
+def test_a_bidders_request_carries_the_understanding(
+    stage: Stage,
+    title: tuple[str, Asset, bool],
+    published: dict[str, Any],
+    understood: Understanding,
+    warm: DemandEdge,
+    run_id: str,
+) -> None:
+    """One contextual break of the title through the guidance's edge: the PDS patches ``app.content`` from its copy
+    of the catalog, and the bidder simulator logs the request's categories and keywords (overlay O5)."""
+    edge = warm
     percent = int(sidecar_environment(edge, stage)["CRAWL_HOLDOUT_PERCENT"])
     sid = enriched_session(run_id, percent)
     logs = stage.session.client("logs", region_name=stage.region)
