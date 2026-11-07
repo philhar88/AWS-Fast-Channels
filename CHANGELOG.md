@@ -22,6 +22,36 @@ All notable changes to this project are documented here. The format follows
   - v1 ships the operations agent's envelope: it restarts each always-on channel at most once an hour, and stopping,
     creating or deleting a channel needs a human. The default lists no always-on channel. The envelope is not signed
     yet.
+- **The rail recommender's deterministic core and its eval suite** (`recs`, M10a part 1; [ADR-0027](docs/adr/0027-llm-rail-recommender.md), Proposed).
+  - `fast_channels.core.recs` holds the deterministic parts:
+    - the router that runs before any model call;
+    - the candidates, which are the next 24 hours of the guides filtered by rating ceiling and child-directed
+      channel;
+    - the catalog cards, with content understanding when it exists;
+    - the stable prompt and output schema;
+    - the validator and the faithfulness check;
+    - a Python port of the viewer's rule-based rail, kept identical to `rail.ts` by
+      `contracts/fixtures/rail/program-rail.json`.
+  - `make eval TASK=recommender MODEL=<id>` runs 12 golden cases, three times each, on a fixed 36-title fixture,
+    and writes the eval record. The committed `haiku-5-5-disabled-4k` record passed:
+    - every rail was valid and served;
+    - 91% of the reasons were faithful as written, and an Opus judge sample found 95%;
+    - no violation was served;
+    - every golden expectation was met;
+    - $0.0004 a rail, with a 2.5 s median.
+
+### Changed
+
+- **The recommender runs with thinking disabled** ([ADR-0027](docs/adr/0027-llm-rail-recommender.md) amends
+  [ADR-0029](docs/adr/0029-per-task-model-registry.md)).
+  - The default is now Claude Haiku 5.5 with thinking disabled, effort low and `max_tokens` 4,000. It was thinking on
+    with 8,000.
+  - With thinking on, structured output spent the budget and returned no rail. The budget that avoids this costs three
+    times as much and is four times slower.
+- **The model spend counter and price list are in `fast_channels.core.model_spend`** (#158), so Lambda functions can
+  use them.
+  - Nova 2 Lite has list prices.
+  - The agent's `caps` module keeps its API.
 
 ## [4.1.1] - 2026-11-06
 

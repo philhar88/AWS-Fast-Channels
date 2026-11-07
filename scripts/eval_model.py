@@ -1,4 +1,5 @@
-"""Model conformance suite: can this model run the FAST scheduling agent? (SPEC §6, models-ui.md §2).
+"""Model conformance suites: can this model run the FAST scheduling agent (SPEC §6, models-ui.md §2), or the rail
+recommender (``--task recommender``, DESIGN §15)?
 
 Runs the standard and hard scheduling scenarios through the real agent and scores every run. A model should pass
 every run before it goes into ``ALLOWED_MODELS`` or the ModelSpec parameter; the exit status is 0 only then.
@@ -16,10 +17,16 @@ Examples:
         --gateway-url https://<id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp \\
         --token-file ~/.fast/token --channel <prefix>-agent-eval
     uv run scripts/eval_model.py --rescore evals-results/20261016T120000Z
+    uv run scripts/eval_model.py --task recommender --model-id us.anthropic.claude-haiku-5-5 --judge 8
 
 The default target is a local fake tool server (no AWS resources besides Bedrock). With ``--gateway-url`` the
 tools are the deployed ones, called with the operator access token in ``--token-file``: use a sandbox channel
 and a catalog that contains the eval titles.
+
+The recommender suite (``fast_channels.functions.recs.evals``) runs golden persona cases on a fixed fixture through
+the real prompt, Converse request and validator; only Bedrock is called. Its settings come from cdk.json's
+``recommender`` entry if there is one, else from the entry ``modules.recs`` deploys (``core.recs.REGISTRY_DEFAULT``).
+``--judge N`` adds an Opus judge sample of N rails.
 """
 
 import argparse
@@ -36,6 +43,7 @@ from typing import Final
 from fast_channels.agent.evals.runner import RunRecord, Target, rescore, run_suite, save, summarise
 from fast_channels.agent.evals.scenarios import SCENARIOS
 from fast_channels.agent.model import Effort, ModelSpec
+from fast_channels.core import recs
 from fast_channels.core.model_registry import (
     SCHEDULER_TASK,
     EvalCheck,
@@ -45,16 +53,25 @@ from fast_channels.core.model_registry import (
     record_key,
     record_path,
 )
+from fast_channels.functions.recs import model
+from fast_channels.functions.recs.evals import suite
 
 REPO: Final = Path(__file__).resolve().parents[1]
 RECORDS: Final = REPO / "evals" / "records"
-SUITES: Final = {SCHEDULER_TASK: "scheduler conformance v1 (fake Gateway tools): standard, hard"}
-"""The tasks with a conformance suite here; the recommender's ships with its module (Phase 2)."""
+SUITES: Final = {
+    SCHEDULER_TASK: "scheduler conformance v1 (fake Gateway tools): standard, hard",
+    recs.TASK: "recommender conformance v1 (golden cases, fixture catalog)",
+}
+"""The tasks with a conformance suite."""
+DEFAULTS: Final = {recs.TASK: recs.REGISTRY_DEFAULT}
+"""Registry entries a module deploys when cdk.json names none."""
 
 
 def task_settings(task: str, model_id: str, cdk_json: Path = REPO / "cdk.json") -> TaskSettings:
     """``task``'s registry settings in cdk.json, with ``model_id`` as its model."""
     tasks = json.loads(cdk_json.read_text())["context"]["fast-channels"]["modules"]["models"]["tasks"]
+    if task not in tasks and task in DEFAULTS:
+        return TaskSettings.model_validate({**DEFAULTS[task], "model": model_id})
     if task not in tasks:
         raise SystemExit(f"cdk.json has no model-registry task {task!r} (modules.models.tasks: {sorted(tasks)})")
     return TaskSettings.model_validate({**tasks[task], "model": model_id})
@@ -136,7 +153,13 @@ def main() -> int:
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
     parser.add_argument("--out", type=Path, default=Path("evals-results"), help="results directory")
     parser.add_argument("--rescore", nargs="+", type=Path, metavar="DIR", help="re-score saved runs and exit")
+    parser.add_argument("--judge", type=int, default=0, metavar="N", help="recommender: Opus judge sample of N rails")
     args = parser.parse_args()
+
+    if args.task == recs.TASK:
+        if len(args.model_id) != 1:
+            parser.error("--task evaluates one --model-id")
+        return recommender(task_settings(args.task, args.model_id[0]), args)
 
     if args.rescore:
         records = rescore(args.rescore)
@@ -174,6 +197,30 @@ def main() -> int:
             print(f"eval record ({'passed' if record.passed else 'FAILED'}): {write_record(record, args.records)}")
     print(summarise(records))
     return 0 if all(record.result["pass"] for record in records) else 1
+
+
+def recommender(settings: TaskSettings, args: argparse.Namespace) -> int:
+    """Run the recommender suite and write its eval record; 0 only if it passed."""
+
+    def progress(run: suite.Run) -> None:
+        print(f"  {run.case} #{run.run}: {run.failure or 'ok'} {run.missed or ''}", file=sys.stderr)
+
+    client = model.runtime(args.region)
+    results = suite.run_suite(
+        settings, settings.model, client=client, runs=args.runs, workers=args.workers, progress=progress
+    )
+    judged, judge_cost = suite.judge(results, args.judge, client=client) if args.judge else (None, Decimal(0))
+    directory = args.out / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-recommender"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "runs.jsonl").write_text("".join(json.dumps(r.summary()) + "\n" for r in results))
+    record = suite.record(settings, results, runs=args.runs, judged=judged, extra_cost=judge_cost)
+    print(f"results: {directory}", file=sys.stderr)
+    for check in record.checks:
+        print(f"  {'pass' if check.passed else 'FAIL'}  {check.name:<20} {check.value!s:<10} {check.threshold}")
+    for miss, count in suite.misses(results).most_common():
+        print(f"  missed {count}x  {miss}")
+    print(f"eval record ({'passed' if record.passed else 'FAILED'}): {write_record(record, args.records)}")
+    return 0 if record.passed else 1
 
 
 if __name__ == "__main__":
