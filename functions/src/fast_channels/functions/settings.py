@@ -165,6 +165,16 @@ class Settings:
     """ARN of the identity module's KMS HMAC key, which the ``vid`` is computed with."""
     redeem_window_ms: int = field(default_factory=lambda: int(_env("REDEEM_WINDOW_MS") or 0))
     """``modules.identity.redeem_window_seconds`` in milliseconds: from mint to the latest redeem of a ticket."""
+    understanding_bucket: str = field(default_factory=lambda: _env("UNDERSTANDING_BUCKET"))
+    """The understanding module's bucket: analysis proxies (``proxies/``) and raw results (``results/``)."""
+    understanding_task: str = field(default_factory=lambda: _env("UNDERSTANDING_TASK"))
+    """The model-registry task of the understanding module's describe step (``understanding.describe``)."""
+    understanding_analyses: tuple[str, ...] = field(default_factory=lambda: _csv("UNDERSTANDING_ANALYSES"))
+    """The analyses the understanding workflow is configured to run (``modules.understanding.analyses``)."""
+    models_counter_table: str = field(default_factory=lambda: _env("MODELS_COUNTER_TABLE"))
+    """The model registry's daily spend counters (``<prefix>-models``)."""
+    alert_topic_arn: str = field(default_factory=lambda: _env("ALERT_TOPIC_ARN"))
+    """The deployment's alert topic, told when a model task's daily cap is reached."""
 
     @property
     def app(self) -> str:

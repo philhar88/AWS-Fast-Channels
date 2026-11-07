@@ -222,6 +222,26 @@
           "$ref": "#/$defs/DesiredStateRendered"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "source",
+        "detail-type",
+        "detail"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^fast-channels\\..+$"
+        },
+        "detail-type": {
+          "const": "Content Understood"
+        },
+        "detail": {
+          "$ref": "#/$defs/ContentUnderstood"
+        }
+      }
     }
   ],
   "$defs": {
@@ -456,6 +476,45 @@
         "correlation_id"
       ],
       "title": "ChannelAlert",
+      "type": "object"
+    },
+    "ContentUnderstood": {
+      "description": "A title was analysed (understanding module): its ``UNDERSTANDING`` item in the catalog table is new or\nchanged. The module also puts ``Catalog Item Changed`` for the title, so the crawl module republishes it.",
+      "properties": {
+        "content_id": {
+          "description": "The title's catalog id.",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Content Id",
+          "type": "string"
+        },
+        "asset_id": {
+          "description": "The encode that was analysed.",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "status": {
+          "description": "partial: an analysis or the model step failed.",
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "correlation_id": {
+          "description": "The analysis's workflow execution.",
+          "title": "Correlation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content_id",
+        "asset_id",
+        "status",
+        "correlation_id"
+      ],
+      "title": "ContentUnderstood",
       "type": "object"
     },
     "DesiredStateRendered": {

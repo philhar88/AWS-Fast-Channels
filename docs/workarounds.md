@@ -62,6 +62,7 @@ listed here.
 | `W-2 4.14` | AppConfig authorizes some actions on the application's and the environment's ARNs too (undocumented). | The promote grants name those ARNs. | `infra/.../release/controller.py` (`_grant_pointer`) | Narrow to the documented resources. |
 | `W-2 4.12` | CloudWatch Logs decrypts a log group encrypted with a customer managed key for any IAM reader, without `kms:Decrypt`. | An explicit IAM deny of the log reads on the siblings' log group for every role but its readers. | `infra/.../release/guards.py` (`LOG_READ_ACTIONS`) | If the key gates readers, the deny can go. |
 | `W-2 4.11` | AWS Budgets actions reject daily budgets. | A monthly budget at 31 times the daily cap; the token counter enforces the day. | `infra/.../models/caps.py` (`BUDGET_DAYS`) | A daily budget with the action; delete `BUDGET_DAYS`. |
+| `EI-VOD` | AWS Elemental Inference analyses live video only: it has no API for a file or a VOD asset. | The understanding module stands in for it, once per title: a MediaConvert proxy, Transcribe, Rekognition Video and a Bedrock video model (registry task `understanding.describe`) write the title's `UNDERSTANDING` item ([understanding.md](understanding.md)). | `core/.../understanding/`, `functions/.../understanding/steps.py`, `infra/.../understanding/workflow.py` | Replace the proxy, the Rekognition analyses and the model call with Elemental Inference's VOD analysis behind the same item contract; Transcribe can stay for the speech. |
 
 ## The Prebid Server guidance and open-source dependencies
 

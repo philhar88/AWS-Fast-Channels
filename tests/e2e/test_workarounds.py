@@ -10,10 +10,11 @@ from typing import Final
 REPO: Final = Path(__file__).resolve().parents[2]
 DOC: Final = REPO / "docs" / "workarounds.md"
 LIMITATIONS: Final = REPO / "docs" / "limitations.md"
-ID: Final = r"W-2 (?:\d+\.\d+|FR-\d+)|W-\d+|FINDINGS [A-Za-z0-9-]+"
+ID: Final = r"W-2 (?:\d+\.\d+|FR-\d+)|W-\d+|FINDINGS [A-Za-z0-9-]+|EI-VOD"
+"""A report item (``W-2 1.31``), a whole report (``W-11``), a build finding, or a missing AWS feature (``EI-VOD``)."""
 MARKER: Final = re.compile(rf"OPTIMIZATION\((?:aws|oss)\): (?P<id>{ID})(?=[ :,.)]|$)")
 ROW_ID: Final = re.compile(rf"`(?P<id>{ID})`")
-ITEM_ID: Final = re.compile(r"`(?P<id>(?:W-\d+|FINDINGS)(?: [^`]+)?)`")
+ITEM_ID: Final = re.compile(r"`(?P<id>(?:W-\d+|FINDINGS|EI-VOD)(?: [^`]+)?)`")
 """An item id of docs/limitations.md: a report and, for the reports with several items, the item (``W-2 1.31``,
 ``W-11 item 9``, ``W-8 A10 cancel``)."""
 

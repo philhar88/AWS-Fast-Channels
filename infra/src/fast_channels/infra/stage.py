@@ -32,6 +32,7 @@ from fast_channels.infra.stacks.ops import OpsStack
 from fast_channels.infra.stacks.pds import PdsStack
 from fast_channels.infra.stacks.release import ReleaseStack
 from fast_channels.infra.stacks.selling import SellingStack
+from fast_channels.infra.stacks.understanding import UnderstandingStack
 from fast_channels.infra.stacks.viewer import ViewerStack
 
 if TYPE_CHECKING:
@@ -148,6 +149,8 @@ class FastChannelsStage(Stage):
             self.crawl.add_stack_dependency(self.data)
             self.crawl.add_stack_dependency(self.media)
 
+        self.understanding = self._understanding(config, stacks)
+
         self.identity: IdentityStack | None = None
         if config.modules.identity.enabled:
             self.identity = IdentityStack(self, "Identity", config=config, **stacks)
@@ -176,6 +179,24 @@ class FastChannelsStage(Stage):
         Aspects.of(self).add(FunctionLogGroups(log_groups))
         for key, value in tags.items():
             Tags.of(self).add(key, value)
+
+    def _understanding(self, config: FastChannelsConfig, stacks: dict[str, Any]) -> UnderstandingStack | None:
+        """The understanding workflow, after Data, Media and Models (its task's profile and registry entry)."""
+        if not config.modules.understanding.enabled or self.models is None:
+            return None
+        understanding = UnderstandingStack(
+            self,
+            "Understanding",
+            config=config,
+            data=self.data.exports,
+            media=self.media.exports,
+            models=self.models.exports,
+            **stacks,
+        )
+        understanding.add_stack_dependency(self.data)
+        understanding.add_stack_dependency(self.media, "The workflow starts on the bus's Asset Ready events")
+        understanding.add_stack_dependency(self.models, "The describe step reads its model registry entry")
+        return understanding
 
     def _viewer(self, config: FastChannelsConfig, stacks: dict[str, Any]) -> ViewerStack | None:
         """The reference viewer, after Identity (its viewer pool and playback API)."""

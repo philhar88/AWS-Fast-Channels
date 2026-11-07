@@ -168,6 +168,7 @@ Version 4.0.0 adds optional modules for ad monetization and its operations. Each
 | `pds` | The Pod Decision Service, a sidecar in each Prebid Server task: what each ad request may share with third parties, which ads fill the pod, and an own book of direct lines and house ads with reservations and delivery | `ops`, `demand` |
 | `release` | The Release Controller for monetized playback configurations: sibling configurations with MediaTailor Functions, a smoke gate, gradual promotion with unattended rollback, origin-secret rotation and ad prefetch | `ops`, `demand`, `pds` |
 | `crawl` | Show-level content metadata (IAB Tech Lab Content Taxonomy 3.1) in ad requests, with an uplift holdout | `pds`, `release` |
+| `understanding` | Content understanding once per title: categories, keywords, moods, brand safety and a synopsis from Transcribe, Rekognition Video and a video model | `models` |
 | `identity` (unreleased) | Signed-in viewers: a Cognito viewer pool and single-use opaque playback tickets, bound to one session each | `release` |
 
 [docs/modules.md](docs/modules.md) gives each module's complexity and cost (stacks, IAM roles, cost per hour idle
@@ -281,7 +282,7 @@ lists what a teardown leaves behind.
 | [Observability](docs/observability.md) | Logging and tracing matrix, correlation contract, trace script, alarms, Transaction Search |
 | [Operations](docs/operations.md) | Configuration reference, deploy and destroy, users, quotas, costs, security, troubleshooting |
 | [Optional modules](docs/modules.md) | The ad-monetization and operations modules: complexity and cost per module, turning them on, capacity, fail-safe behaviour, account-level limits |
-| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md), [Viewer identity](docs/identity.md) | The `demand`, `pds`, `release`, `crawl` and `identity` modules |
+| [Demand](docs/demand.md), [Pod Decision Service](docs/pds.md), [Release Controller](docs/release-controller.md), [Content enrichment](docs/content-enrichment.md), [Viewer identity](docs/identity.md), [Content understanding](docs/understanding.md) | The `demand`, `pds`, `release`, `crawl`, `identity` and `understanding` modules |
 | [Known limitations and product suggestions](docs/limitations.md) | What we found in the AWS services and open-source projects the reference uses: what each item means for a deployment, what the repository does about it, and what we suggest to the product |
 | [Workarounds to remove](docs/workarounds.md) | The AWS product behaviour we work around, where each workaround lives and what to delete when AWS fixes it |
 | [Reference viewer](docs/viewer.md) | The `viewer` module: demo personas, a rail of recommended channels, ticketed playback and the "why these ads" panel; its 10-minute demo script |
