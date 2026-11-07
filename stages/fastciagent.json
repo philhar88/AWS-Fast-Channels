@@ -15,8 +15,17 @@
       "envelope": {
         "always_on": [
           "{prefix}-demo"
-        ]
-      }
+        ],
+        "programmed": [
+          "{prefix}-demo"
+        ],
+        "agents": {
+          "programming": {
+            "enabled": true
+          }
+        }
+      },
+      "devops_agent": true
     }
   }
 }

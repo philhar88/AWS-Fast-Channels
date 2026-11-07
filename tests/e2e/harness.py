@@ -294,6 +294,73 @@ def machine_token(http: httpx.Client, *, domain: str, client_id: str, client_sec
     return str(response.json()["access_token"])
 
 
+MCP_VERSION: Final = "2025-06-18"
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayResult:
+    """A ``tools/call`` answer of the Gateway: the tool's JSON payload, or the JSON-RPC error."""
+
+    is_error: bool
+    payload: dict[str, Any] | None
+    error: dict[str, Any] | None = None
+
+    @property
+    def code(self) -> str | None:
+        """The tools' error envelope code (``ENVELOPE``, ``VALIDATION``, ...), if the call failed with one."""
+        error = (self.payload or {}).get("error") if (self.payload or {}).get("ok") is False else None
+        return str(error.get("code")) if isinstance(error, dict) else None
+
+
+def _rpc_body(response: httpx.Response) -> dict[str, Any]:
+    """The JSON-RPC message of a streamable-HTTP answer: a JSON body, or the last ``data:`` event of an SSE one."""
+    if response.headers.get("content-type", "").startswith("text/event-stream"):
+        data = [line.removeprefix("data:").strip() for line in response.text.splitlines() if line.startswith("data:")]
+        if not data:
+            raise AssertionError(f"no event in the Gateway's stream: {response.text[:300]}")
+        found: dict[str, Any] = json.loads(data[-1])
+        return found
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def gateway_call(http: httpx.Client, *, url: str, token: str, tool: str, arguments: dict[str, Any]) -> GatewayResult:
+    """``tools/call`` straight to the Gateway's MCP endpoint, with ``token``: what a caller holding an agent's machine
+    token can do without the agent's runner (``initialize``, then the call)."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": MCP_VERSION,
+    }
+    hello = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"protocolVersion": MCP_VERSION, "capabilities": {}, "clientInfo": {"name": "e2e", "version": "1"}},
+    }
+    timeout = httpx.Timeout(30.0, read=330.0)
+    started = http.post(url, json=hello, headers=headers, timeout=timeout)
+    if started.is_error:
+        raise AssertionError(f"initialize -> {started.status_code}: {started.text[:300]}")
+    if session := started.headers.get("mcp-session-id"):
+        headers["Mcp-Session-Id"] = session
+    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
+    response = http.post(url, json=call, headers=headers, timeout=timeout)
+    if response.status_code >= httpx.codes.INTERNAL_SERVER_ERROR:
+        raise AssertionError(f"tools/call {tool} -> {response.status_code}: {response.text[:300]}")
+    message = _rpc_body(response)
+    if "error" in message:
+        return GatewayResult(is_error=True, payload=None, error=message["error"])
+    result = message.get("result") or {}
+    text = "\n".join(block.get("text", "") for block in result.get("content", []) if block.get("type") == "text")
+    try:
+        payload = json.loads(text) if text else None
+    except ValueError:
+        payload = {"text": text}
+    return GatewayResult(is_error=bool(result.get("isError")), payload=payload if isinstance(payload, dict) else None)
+
+
 def ask_agent(http: httpx.Client, *, invoke_url: str, token: str, prompt: str) -> list[dict[str, Any]]:
     """One AG-UI run in a new conversation; its events. Platform failures arrive as an SSE RUN_ERROR too, with
     HTTP 401/403, so the body is read whatever the status."""

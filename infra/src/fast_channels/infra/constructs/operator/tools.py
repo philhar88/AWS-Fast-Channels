@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
-from aws_cdk import ArnFormat, Duration, RemovalPolicy, Stack
+from aws_cdk import ArnFormat, Aws, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
@@ -19,9 +19,12 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_scheduler as scheduler
 from constructs import Construct
 
+from fast_channels.core.ledger import ledger_table
 from fast_channels.core.naming import agent_namespace
+from fast_channels.core.pds.snapshot import SNAPSHOT_KEY
 from fast_channels.core.tags import TAG_APP
 from fast_channels.functions.tools.registry import TARGETS, ToolSpec, load
+from fast_channels.functions.tools.sales import PROPOSALS_CHAIN
 from fast_channels.infra import nag
 from fast_channels.infra.arns import arn
 from fast_channels.infra.constructs.functions import FastFunction
@@ -48,6 +51,7 @@ _DESCRIPTIONS: Final = {
     "schedule": "Agent tools: channel schedules (plan, publish, EPG)",
     "channels": "Agent tools: linear channels and their playback configurations",
     "encoding": "Agent tools: encoding ladders and their kits",
+    "sales": "Agent tools: the own book's pacing, and proposals about its lines (agents module)",
 }
 _TIMEOUTS: Final = {
     "schedule": Duration.minutes(5),  # publish creates programs one by one at <= 3 TPS (channel-assembly.md)
@@ -75,10 +79,20 @@ ENVIRONMENT: Final = {
         "SCHEDULER_ROLE_ARN",
     ),
     "encoding": ("LIBRARY_TABLE", "PROVISION_STATE_MACHINE_ARN", "MEDIACONVERT_QUEUE_ARN"),
+    "sales": ("PDS_TABLE", "PDS_CONFIG_BUCKET", "LEDGER_TABLE"),
 }
 """Environment variables (besides ``FAST_PREFIX``) of each target's function, as its tool module reads them."""
 GUIDE_WRITERS: Final = frozenset({"schedule", "channels"})
 """Targets whose tools rewrite a channel's EPG feeds (``tools._guide.write_guide``)."""
+
+
+@dataclass(frozen=True, slots=True)
+class OwnBook:
+    """What the ``sales`` target reads: the PDS's table (its lines' budget shards) and the published snapshot's
+    bucket (its lines), both the Data stack's with ``modules.pds``."""
+
+    table: str
+    config_bucket: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +129,7 @@ class AgentTools(Construct):
         log_retention, removal_policy: of the function log groups.
         tools: tool specs by target; defaults to the registry.
         epg_break_ids: the guide writers put each break's event id and UPID in the EPG feeds (ops module).
+        own_book: the PDS's own book, which a ``sales`` target in ``tools`` reads (the agents module's sales agent).
 
     Attributes:
         targets: one :class:`ToolTarget` per registry target.
@@ -138,9 +153,10 @@ class AgentTools(Construct):
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
         tools: Mapping[str, Sequence[ToolSpec[Any, Any]]] | None = None,
         epg_break_ids: bool = False,
+        own_book: OwnBook | None = None,
     ) -> None:
         super().__init__(scope, id)
-        self._prefix, self._data, self._media = prefix, data, media
+        self._prefix, self._data, self._media, self._own_book = prefix, data, media, own_book
         self._stack = Stack.of(self)
         self.auto_stop_group = scheduler.ScheduleGroup(
             self, "AutoStop", schedule_group_name=f"{prefix}-auto-stop", removal_policy=RemovalPolicy.DESTROY
@@ -178,6 +194,15 @@ class AgentTools(Construct):
             "MAX_AGENT_CHANNELS": str(max_agent_channels),
             "SCHEDULER_GROUP": self.auto_stop_group.schedule_group_name,
             "SCHEDULER_ROLE_ARN": self.auto_stop_role.role_arn,
+            **(
+                {
+                    "PDS_TABLE": own_book.table,
+                    "PDS_CONFIG_BUCKET": own_book.config_bucket,
+                    "LEDGER_TABLE": ledger_table(prefix),
+                }
+                if own_book
+                else {}
+            ),
         }
         grants: Mapping[str, Callable[[FastFunction], None]] = {
             "catalog": self._grant_catalog,
@@ -186,6 +211,7 @@ class AgentTools(Construct):
             "schedule": self._grant_schedule,
             "channels": self._grant_channels,
             "encoding": self._grant_encoding,
+            "sales": self._grant_sales,
         }
         specs = tools if tools is not None else registry_tools()
         self.functions: dict[str, FastFunction] = {}
@@ -367,6 +393,16 @@ class AgentTools(Construct):
 
     # --- helpers -----------------------------------------------------------------------------------------------
 
+    def _grant_sales(self, fn: FastFunction) -> None:
+        if self._own_book is None:
+            raise ValueError("the sales target reads the PDS own book: AgentTools(own_book=...)")
+        grant_own_book_reads(fn, self._own_book)
+        fn.allow(
+            ["dynamodb:PutItem"],
+            [arn(self, "dynamodb", "table", ledger_table(self._prefix))],
+            conditions={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": [PROPOSALS_CHAIN]}},
+        )
+
     def _table(self, fn: FastFunction, table: dynamodb.ITableV2, *, write: bool) -> None:
         """Item access to ``table`` and its ``GSI1`` (no ``index/*``, no ``DescribeTable``)."""
         actions = [*_TABLE_READ, *(_TABLE_WRITE if write else ())]
@@ -385,6 +421,16 @@ class AgentTools(Construct):
     def _tagged(self) -> dict[str, Any]:
         """Requests must tag what they create with this deployment's ``fast:app`` (CONTRACTS §E)."""
         return {"StringEquals": {f"aws:RequestTag/{TAG_APP}": self._prefix}}
+
+
+def grant_own_book_reads(fn: FastFunction, own_book: OwnBook) -> None:
+    """Read the published PDS snapshot and the lines' budget shards (``BUDGET#<line>``), nothing else."""
+    fn.allow(["s3:GetObject"], [f"arn:{Aws.PARTITION}:s3:::{own_book.config_bucket}/{SNAPSHOT_KEY}"])
+    fn.allow(
+        ["dynamodb:GetItem"],
+        [arn(fn, "dynamodb", "table", own_book.table)],
+        conditions={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["BUDGET#*"]}},
+    )
 
 
 def _mt(*actions: str) -> list[str]:

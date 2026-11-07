@@ -11,6 +11,7 @@ from aws_cdk import aws_logs as logs
 from pydantic import BaseModel
 
 from fast_channels.core.adload import AdLoadPolicy
+from fast_channels.core.agents.envelope import Role
 from fast_channels.core.ladder import Ladder
 from fast_channels.core.model_registry import Effort, ModeEffort
 from fast_channels.core.monetization.bundle import ROLLOUTS, RolloutTier
@@ -878,3 +879,53 @@ def test_child_directed_channels_are_monetized_ones(load_config: Load) -> None:
         }
     )
     assert config.modules.release.child_directed == ("fastm-demo",)
+
+
+AGENTS: dict[str, Any] = {**modules_on("ops", "agents")}
+"""The agents module with what it needs."""
+
+
+def test_the_agents_envelope_names_iac_channels_with_one_writer_each(load_config: Load) -> None:
+    autopilot = [{"name": "fast-demo", "autopilot_cron": "cron(0 */6 * * ? *)"}]
+    envelope = {"always_on": ["{prefix}-news"], "programmed": ["{prefix}-demo"]}
+
+    message = config_error(
+        load_config, with_shipped(**AGENTS, **{"channels.iac": autopilot, "modules.agents.envelope": envelope})
+    )
+
+    assert "fast-channels.modules.agents.envelope: 'fast-news' is not an IaC channel" in message
+    assert (
+        "'fast-demo' has an autopilot_cron; the programming agent and the autopilot would both schedule it" in message
+    )
+
+
+def test_the_sales_agent_needs_the_pds_own_book(load_config: Load) -> None:
+    sales = {"agents": {"sales": {"enabled": True}}}
+
+    message = config_error(load_config, with_shipped(**AGENTS, **{"modules.agents.envelope": sales}))
+    config = load_config(
+        with_shipped(**AGENTS, **modules_on("demand", "pds"), **{"modules.agents.envelope": sales}), region="us-east-1"
+    )
+
+    assert "the sales agent paces the PDS own book's lines; modules.pds is off" in message
+    assert config.modules.agents.envelope.enabled() == [Role.OPERATIONS, Role.SALES]
+
+
+def test_a_programmed_channel_without_an_autopilot_is_the_programming_agents(load_config: Load) -> None:
+    envelope = {"programmed": ["{prefix}-demo"], "agents": {"programming": {"enabled": True}}}
+
+    config = load_config(with_shipped(**AGENTS, **{"modules.agents.envelope": envelope}), region="us-east-1")
+
+    resolved = config.modules.agents.envelope.resolved(config.prefix)
+    publish = resolved.agents[Role.PROGRAMMING].grant("schedule___publish")
+    assert resolved.programmed == ("fast-demo",) and Role.PROGRAMMING in resolved.enabled()
+    assert publish is not None and publish.lead_minutes == 120
+
+
+def test_the_devops_agent_runs_only_where_aws_offers_it(load_config: Load) -> None:
+    devops = {**AGENTS, "modules.agents.devops_agent": True}
+
+    message = config_error(load_config, with_shipped(**devops), region="sa-east-1")
+
+    assert "fast-channels.modules.agents.devops_agent: AWS DevOps Agent is not in sa-east-1" in message
+    assert load_config(with_shipped(**devops), region="eu-west-1").modules.agents.devops_agent

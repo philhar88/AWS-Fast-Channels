@@ -25,6 +25,18 @@ TOPOLOGIES = {
         "eu-west-1",
     ),
     "media-only": ({"agent.enabled": False}, "eu-central-1"),
+    "agents-roster-and-devops-agent": (
+        {
+            **{f"modules.{name}.enabled": True for name in ("ops", "demand", "pds", "agents")},
+            "modules.agents.devops_agent": True,
+            "modules.agents.envelope": {
+                "always_on": ["{prefix}-demo"],
+                "programmed": ["{prefix}-demo"],
+                "agents": {"programming": {"enabled": True}, "sales": {"enabled": True}},
+            },
+        },
+        "us-east-1",
+    ),
     "models-with-budgets-elsewhere": (
         {
             **GLOBAL_MODELS,

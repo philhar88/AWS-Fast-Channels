@@ -58,6 +58,8 @@ def snapshot_base(config: FastChannelsConfig) -> SnapshotBase:
             budget=line.budget,
             per_session=line.caps.per_session,
             tier0=line.tier0,
+            starts=line.starts,
+            ends=line.ends,
         )
         for line in config.modules.pds.demo_lines
     )

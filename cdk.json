@@ -184,6 +184,7 @@
           "enabled": false,
           "envelope": {
             "always_on": [],
+            "programmed": [],
             "agents": {
               "operations": {
                 "enabled": true,
@@ -194,7 +195,8 @@
                     "channels": [
                       "{always_on}"
                     ],
-                    "per_hour": 1
+                    "per_hour": 1,
+                    "lead_minutes": null
                   }
                 ],
                 "actions_per_hour": 6,
@@ -208,21 +210,51 @@
               "programming": {
                 "enabled": false,
                 "level": "L2",
-                "grants": [],
-                "actions_per_hour": 10,
+                "grants": [
+                  {
+                    "tool": "schedule___plan",
+                    "channels": [
+                      "{programmed}"
+                    ],
+                    "per_hour": null,
+                    "lead_minutes": null
+                  },
+                  {
+                    "tool": "schedule___publish",
+                    "channels": [
+                      "{programmed}"
+                    ],
+                    "per_hour": 6,
+                    "lead_minutes": 120
+                  }
+                ],
+                "actions_per_hour": 12,
                 "spend_usd_per_day": "0",
-                "needs_human": []
+                "needs_human": [
+                  "schedule___remove_programs",
+                  "schedule___update_brief",
+                  "channels___create_channel",
+                  "channels___delete_channel"
+                ]
               },
               "sales": {
                 "enabled": false,
                 "level": "L1",
-                "grants": [],
+                "grants": [
+                  {
+                    "tool": "sales___propose",
+                    "channels": [],
+                    "per_hour": 12,
+                    "lead_minutes": null
+                  }
+                ],
                 "actions_per_hour": 10,
                 "spend_usd_per_day": "0",
                 "needs_human": []
               }
             }
-          }
+          },
+          "devops_agent": false
         },
         "understanding": {
           "enabled": false,

@@ -22,11 +22,20 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Self
 
 from aws_cdk import RemovalPolicy
 from aws_cdk import aws_logs as logs
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from fast_channels.core.ad_server import AdServer
 from fast_channels.core.adload import CONTROL_TIERS, TIER_PATTERN, AdLoadPolicy
-from fast_channels.core.agents.envelope import Envelope
+from fast_channels.core.agents.envelope import Envelope, Role
 from fast_channels.core.demand import QUALIFIER_MAX
 from fast_channels.core.demo_demand import DemoRole, crids
 from fast_channels.core.ladder import Ladder
@@ -668,6 +677,16 @@ class DemoLine(_Section):
     caps: LineCaps = LineCaps()
     tier0: bool = False
     """A guaranteed line: placed first in a pod, ahead of any bid."""
+    starts: AwareDatetime | None = None
+    """Start of its flight (UTC); ``null``: started. With ``ends``, the line has a pace (the sales agent's)."""
+    ends: AwareDatetime | None = None
+    """End of its flight (UTC, exclusive); ``null``: serves until its budget is spent."""
+
+    @model_validator(mode="after")
+    def _flight(self) -> Self:
+        if self.starts is not None and self.ends is not None and self.ends <= self.starts:
+            raise ValueError(f"demo line {self.id}: its flight ends before it starts")
+        return self
 
 
 MAX_AD_LOAD_TIERS: Final = 8
@@ -929,9 +948,14 @@ class AgentsModule(_Module):
     envelope and its caps, records every tool call and every refusal in the ledger (chain ``agents/<role>``) and
     escalates a refusal to the alert topic."""
     envelope: Envelope = Envelope()
-    """The autonomy envelope v1 (``core.agents.envelope``): the always-on channels, and per agent its level, the tools
-    it may call unattended (with their channels and per-hour caps), its actions an hour and the tools that need a
-    human. Not signed in v1; each deploy records its version in the ledger."""
+    """The autonomy envelope v1 (``core.agents.envelope``): the always-on and programmed channels, and per agent its
+    level, the tools it may call unattended (with their channels, per-hour caps and publish lead), its approval-gated
+    actions an hour and the tools that need a human. Not signed in v1; each deploy records its version in the
+    ledger."""
+    devops_agent: bool = False
+    """Opt in to AWS DevOps Agent: an Agent Space over this deployment's account with a read-only role, for
+    investigations and advice (it never acts). Idle it costs nothing; its investigations and other tasks are billed
+    per agent-second, 0.0083 US dollars (docs/agents.md#the-devops-agent)."""
 
 
 class UnderstandingModule(_Module):
@@ -981,6 +1005,16 @@ class RecsModule(_Module):
             raise ValueError(f"cohorts are <device>-<language> (e.g. web-en), got {bad}")
         return cohorts
 
+
+DEVOPS_AGENT_REGIONS: Final = (
+    "us-east-1",
+    "us-west-2",
+    "ap-southeast-2",
+    "ap-northeast-1",
+    "eu-central-1",
+    "eu-west-1",
+)
+"""Where AWS DevOps Agent runs (its user guide's supported Regions, 2026-11)."""
 
 _MODULE_NEEDS: Final = {
     "demand": ("ops",),
@@ -1176,6 +1210,42 @@ class FastChannelsConfig(_Section):
             )
         return None
 
+    def _agents_problems(self, where: str, iac: list[str], region: str | None = None) -> list[str]:
+        """The agents module's rules: the operator plane, IaC channels, one writer per channel, the sales agent's
+        own book."""
+        modules, problems = self.modules, list[str]()
+        if not self.agent.enabled:
+            problems.append(
+                f"{where}.agents: the roster runs on the operator plane's Runtime and Gateway; agent.enabled is false"
+            )
+        envelope = modules.agents.envelope.resolved(self.prefix)
+        named = (
+            set(envelope.always_on)
+            | set(envelope.programmed)
+            | {channel for agent in envelope.agents.values() for grant in agent.grants for channel in grant.channels}
+        )
+        problems += [
+            f"{where}.agents.envelope: {name!r} is not an IaC channel (channels.iac: {iac})"
+            for name in sorted(named - set(iac))
+        ]
+        problems += [
+            f"{where}.agents.envelope.programmed: {channel.name!r} has an autopilot_cron; the programming agent "
+            "and the autopilot would both schedule it (one writer per channel)"
+            for channel in self.channels.iac
+            if channel.name in envelope.programmed and channel.autopilot_cron
+        ]
+        if (sales := envelope.agents.get(Role.SALES)) is not None and sales.enabled and not modules.pds.enabled:
+            problems.append(
+                f"{where}.agents.envelope.agents.sales: the sales agent paces the PDS own book's lines; "
+                "modules.pds is off"
+            )
+        if modules.agents.devops_agent and region and region not in DEVOPS_AGENT_REGIONS:
+            problems.append(
+                f"{where}.agents.devops_agent: AWS DevOps Agent is not in {region} (it is in "
+                f"{', '.join(DEVOPS_AGENT_REGIONS)})"
+            )
+        return problems
+
     def _module_problems(self, region: str | None) -> list[str]:
         """Rules between a module and the rest of the configuration (rules among modules: :class:`ModulesConfig`).
         Model ids are compared with ``{geo}`` resolved for ``region``: a section left at its defaults keeps it."""
@@ -1202,19 +1272,7 @@ class FastChannelsConfig(_Section):
                 "which removal=destroy needs; use governance or removal=retain"
             )
         if modules.agents.enabled:
-            if not self.agent.enabled:
-                problems.append(
-                    f"{where}.agents: the roster runs on the operator plane's Runtime and Gateway; agent.enabled "
-                    "is false"
-                )
-            envelope = modules.agents.envelope.resolved(self.prefix)
-            named = set(envelope.always_on) | {
-                channel for agent in envelope.agents.values() for grant in agent.grants for channel in grant.channels
-            }
-            problems += [
-                f"{where}.agents.envelope: {name!r} is not an IaC channel (channels.iac: {iac})"
-                for name in sorted(named - set(iac))
-            ]
+            problems += self._agents_problems(where, iac, region)
         if modules.selling.enabled:
             allowed = [resolve_geo(model, region) if region else model for model in self.agent.allowed_models]
             if (model := modules.selling.buyer_model) not in allowed:

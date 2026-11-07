@@ -59,6 +59,8 @@ class LedgerKind(StrEnum):
     """A new version of the autonomy envelope (§19.3)."""
     AGENT = "agent"
     """An agent's tool call, approval, refusal or escalation under the envelope (M9, ADR-0023)."""
+    PROPOSAL = "proposal"
+    """A proposed change to an own-book line, for a human to decide (``sales___propose``, M9)."""
     TEST = "test"
     """Synthetic records written to check the ledger (``scripts/ledger_verify.py --write``)."""
 
