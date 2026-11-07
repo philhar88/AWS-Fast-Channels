@@ -14,8 +14,8 @@ export interface ViewerBackend {
   readonly config: ViewerConfig;
   signIn(username: string, password: string): Promise<Tokens>;
   refresh(refreshToken: string): Promise<Tokens>;
-  /** The URL of one new session of `channel` (a ticket when `accessToken` is given). */
-  open(channel: ViewerChannel, accessToken: (() => Promise<string>) | undefined, signal: AbortSignal): Promise<Source>;
+  /** The URL of one new session of `channel` (a ticket when `accessToken` is given; the kids twin for `kids`). */
+  open(channel: ViewerChannel, accessToken: (() => Promise<string>) | undefined, signal: AbortSignal, profile?: "kids"): Promise<Source>;
   /** The signed-in viewer's consent, or `null` when they have recorded none. */
   consent(accessToken: string, signal?: AbortSignal): Promise<ConsentRecord | null>;
   setConsent(accessToken: string, choice: ConsentChoice): Promise<ConsentRecord>;
@@ -29,8 +29,8 @@ export function awsBackend(config: ViewerConfig): ViewerBackend {
     config,
     signIn: (username, password) => signIn(config.region, config.userPoolClientId, username, password),
     refresh: (refreshToken) => refreshTokens(config.region, config.userPoolClientId, refreshToken),
-    open: (channel, accessToken, signal) =>
-      openChannel(channel, { playbackUrl: config.playbackUrl, planBaseUrl: config.planBaseUrl, accessToken }, signal),
+    open: (channel, accessToken, signal, profile) =>
+      openChannel(channel, { playbackUrl: config.playbackUrl, planBaseUrl: config.planBaseUrl, accessToken, ...(profile ? { profile } : {}) }, signal),
     consent: (accessToken, signal) => readConsent(consentUrlOf(config.playbackUrl), accessToken, signal),
     setConsent: (accessToken, choice) => writeConsent(consentUrlOf(config.playbackUrl), accessToken, choice),
     epg: (channel, signal) => fetchEpg(config.epgBaseUrl, channel, signal),

@@ -18,6 +18,7 @@ from fast_channels.core.monetization.bundle import (
     root_stem,
 )
 from fast_channels.core.monetization.functions import Hook, ps_ctl
+from fast_channels.core.monetization.playback import SiblingRole
 
 
 def test_phase_one_bundle(bundle: Bundle, kit: SimpleNamespace) -> None:
@@ -159,3 +160,27 @@ def test_rollouts() -> None:
     assert [t.value for t in RolloutTier] == ["demo", "standard", "large"]
     for rollout in ROLLOUTS.values():
         assert validators.check_rollout(rollout) == []
+
+
+def test_kids_pairs_give_each_general_channel_kids_twins(kit: SimpleNamespace) -> None:
+    channels = [
+        ChannelInput(name="fastm-demo", video_content_source_url=kit.CA_URL),
+        ChannelInput(name="fastm-kids", video_content_source_url=kit.CA_URL, child_directed=True),
+        ChannelInput(name="fastm-lab", video_content_source_url=kit.CA_URL, lab=True),
+    ]
+    bundle = kit.make_bundle(channels=channels, kids_pairs=True, ticketed=True)
+    assert validators.validate_bundle(bundle) == []
+    letters = {c.name: [s.letter for s in bundle.siblings if s.channel == c.name] for c in channels}
+    assert letters == {
+        "fastm-demo": ["a", "b", "k", "l", "z"],
+        "fastm-kids": ["a", "b", "z"],
+        "fastm-lab": ["a", "b", "z"],
+    }
+    by_name = {s.name: s for s in bundle.siblings}
+    for name in ("fastm-demo-p-k", "fastm-demo-p-l", "fastm-kids-p-a", "fastm-kids-p-b"):
+        sibling = by_name[name]
+        assert '"id":"fast-pod-kids"' in (sibling.playback.body or ""), name
+        assert "X-Fast-T" not in (sibling.playback.headers or {}), "KIDS has no viewer id: never ticketed"
+    assert "X-Fast-T" in (by_name["fastm-demo-p-a"].playback.headers or {})
+    assert by_name["fastm-demo-p-k"].role is SiblingRole.KIDS
+    assert [s.letter for s in kit.make_bundle().siblings] == ["a", "b", "z"], "off by default"

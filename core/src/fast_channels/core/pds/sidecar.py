@@ -17,6 +17,7 @@ wrapper adds a DynamoDB gateway endpoint whose policy admits only the sidecar's 
 (:func:`dynamodb_endpoint_statements`): the guidance itself calls no DynamoDB.
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -265,6 +266,7 @@ def sidecar(
     crawl: dict[str, str] | None = None,
     catalog_context_bucket: str | None = None,
     identity: bool = False,
+    child_directed: Sequence[str] = (),
 ) -> Sidecar:
     """The sidecar of stage ``prefix``.
 
@@ -282,6 +284,8 @@ def sidecar(
         catalog_context_bucket: with the crawl module on, its catalog-context bucket.
         identity: the identity module is on: the sidecar reads and binds tickets in ``<prefix>-identity``
             (``IDENTITY_TABLE``, ``fast_channels.pds.bindings``).
+        child_directed: the child-directed monetized channels (``modules.release.child_directed``): every break of
+            their siblings is KIDS (``CHILD_DIRECTED_CHANNELS``).
     """
     environment = {
         "FAST_PREFIX": prefix,
@@ -297,6 +301,7 @@ def sidecar(
         **(crawl or {}),
         **({"CATALOG_CONTEXT_BUCKET": catalog_context_bucket} if catalog_context_bucket else {}),
         **({"IDENTITY_TABLE": identity_table(prefix)} if identity else {}),
+        **({"CHILD_DIRECTED_CHANNELS": ",".join(child_directed)} if child_directed else {}),
     }
     return Sidecar(
         image=image,

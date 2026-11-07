@@ -12,9 +12,11 @@ export interface Persona {
   readonly id: string;
   readonly name: string;
   readonly bio: string;
-  /** Sign-in username; `null` for a guest. */
+  /** Sign-in username; `null` for a guest and a kids profile. */
   readonly email: string | null;
   readonly signIn: SignIn;
+  /** A kids profile's account: the persona whose sign-in it uses; `null` otherwise. */
+  readonly account?: string | null;
   /** Declared genres, most liked first, in the catalog's genre vocabulary: the rail's seed. */
   readonly genres: readonly string[];
 }

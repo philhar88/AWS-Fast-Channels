@@ -20,6 +20,8 @@ export interface Source {
   readonly anonymous?: string;
   /** MediaTailor's session id when the source knows it up front (mock mode); otherwise the player reads it. */
   readonly sid?: string;
+  /** A KIDS session: a kids profile's or a child-directed channel's, which plays with no ticket. */
+  readonly kids?: boolean;
 }
 
 /** A failed mint: the API's error code (`not_released`, `unknown_channel`, …) and HTTP status. */
@@ -43,14 +45,20 @@ export function mintTicket(
   channel: string,
   signal?: AbortSignal,
   fetchImpl: typeof fetch = fetch,
+  profile?: "kids",
 ): Promise<{ url: string; cid: string }> {
   return postTicket(
     playbackUrl,
     { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    { channel },
+    { channel, ...(profile ? { profile } : {}) },
     signal,
     fetchImpl,
   );
+}
+
+/** Whether a minted URL carries a ticket: a kids profile's and a child-directed channel's carry none (KIDS). */
+export function ticketed(url: string): boolean {
+  return new URL(url).searchParams.has("ads.t");
 }
 
 /** `POST <playbackUrl>/guest {channel, gpc?}` (the identity module's `POST /playback/guest`), with no token. */
@@ -106,6 +114,8 @@ export interface SourceOptions {
   readonly accessToken?: () => Promise<string>;
   /** A guest's Global Privacy Control signal; the browser's own by default. */
   readonly gpc?: boolean;
+  /** `kids`: the signed-in account's kids profile, which plays the channel's kids twin. */
+  readonly profile?: "kids";
   readonly fetchImpl?: typeof fetch;
 }
 
@@ -126,9 +136,9 @@ export async function openChannel(channel: ViewerChannel, options: SourceOptions
   const signedIn = options.accessToken;
   try {
     const ticket = signedIn
-      ? await mintTicket(options.playbackUrl, await signedIn(), channel.name, signal, fetchImpl)
+      ? await mintTicket(options.playbackUrl, await signedIn(), channel.name, signal, fetchImpl, options.profile)
       : await guestTicket(options.playbackUrl, channel.name, options.gpc ?? globalPrivacyControl(), signal, fetchImpl);
-    return { url: ticket.url, cid: ticket.cid };
+    return ticketed(ticket.url) ? { url: ticket.url, cid: ticket.cid } : { url: ticket.url, kids: true };
   } catch (error) {
     if (signal?.aborted) {
       throw error;

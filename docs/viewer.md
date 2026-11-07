@@ -78,7 +78,7 @@ seed script and the PDS.
 | Luis Moreno | `luis@personas.example.com` | animation, surreal | `standard` |
 | Priya Shah | `priya@personas.example.com` | fantasy, adventure | `standard` |
 | Sam Lee | `sam@personas.example.com` | animation, sci-fi | `standard` |
-| Mia (kids profile) | not in this release | animation | none |
+| Mia (kids profile) | Marcus's sign-in | animation | none |
 | Guest | no sign-in | none | none |
 
 - **Sign-in** is Cognito `InitiateAuth` with `USER_PASSWORD_AUTH` on the identity module's public client, called
@@ -90,6 +90,10 @@ seed script and the PDS.
   app.
 - **A guest** never signs in: each play mints a guest ticket (`POST <playback API>playback/guest`), whose sessions
   are CONTEXTUAL on the control plan, and opted out when the browser sends Global Privacy Control.
+- **A kids profile** (Mia) signs in with its account's sign-in (Marcus's) and plays every channel as the kids
+  profile: `POST /playback` with `profile: "kids"` answers the kids twin, KIDS with no ticket; the session panel
+  says "KIDS, no ticket" and there is no "why these ads" panel, because a KIDS session has no viewer id. A
+  child-directed channel plays the same way for everyone.
 - **Privacy choices** (`#/privacy`, in the persona menu): a signed-in viewer records whether they opt out of sale and
   sharing and whether they give the video-privacy consent (`PUT <playback API>consent`). Until they choose, their
   breaks are SAFE, own-book and house ads only, and the home page says so. `scripts/seed_personas.py` records the
@@ -191,7 +195,6 @@ is warm ([modules.md](modules.md#how-each-module-fails-safe)). Open the app's UR
 
 ## Limits
 
-- No kids profile in this release.
 - The rail is the genre baseline, not a recommender: it uses no viewing history and is not measured.
 - The panel reads at most 400 records of a session from the last six hours.
 - The app shows a tier only while `ad_panel` is on, and only to the viewer it belongs to.

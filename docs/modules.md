@@ -234,7 +234,7 @@ operations signal, never air time.
 | `pds` | The sidecar exits | ECS restarts it in place. Meanwhile the module's calls are refused, and it falls back as above |
 | `pds` | `/select` is missing or failing | The module renders a house-only pod (`SELECT_FALLBACK`), or the kit's house ads without one (`HOUSE_CONFIG`). A paid line never airs without a reservation |
 | `release` | A deployment would change the policy of a running channel | The deployment fails before anything changes, and the channel keeps airing |
-| `release` | A release fails its smoke test or soak, its pointer deployment rolls back, or the candidate alarm fires | Runbook R1 remaps the sibling to its last good Function tree, and the playback plan names the stable sibling again |
+| `release` | A release fails its smoke test or soak, its pointer deployment rolls back, or the candidate alarm fires | Runbook R1 remaps the sibling, and its kids twin, to its last good Function tree, and the playback plan names the stable sibling again |
 | `release` | No monetized channel runs and there is no lab channel to start | The release stays applied and is not promoted (`release.hold` in the ledger) |
 | `release` | A sibling has a RECURRING prefetch schedule | It gets no SINGLE schedule, and `<prefix>-release-prefetch` fires. Its breaks are requested in real time, like every break the prefetcher leaves alone ([release-controller.md](release-controller.md#prefetch)) |
 | `release` | An origin-secret rotation fails part-way | Both of the gate's values stay admitted, so the siblings keep sending one it accepts. `<prefix>-release-rotation-failed` notifies the alert topic |

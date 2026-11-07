@@ -65,7 +65,7 @@ house ads, no third party, no viewer data. If `/select` fails, the module render
 | PSEUDONYMOUS | Authenticated, no sale/share opt-out | No ids; genre and category, never the title |
 | CONTEXTUAL | Guests, ticketless sessions, invalid or replayed tickets, opted-out viewers | No ids, no user data, coarse geo; show-level content metadata; GPP where known |
 | SAFE | A signed-in viewer with no consent recorded, a stale one, or a store that failed for over 60 s; probe sessions | Nothing: own book and house ads only (house ads only for probes) |
-| KIDS | A kids playback configuration (`…-p-k`, `…-p-l`) or a child-directed channel | Nothing: COPPA set, house ads and creatives approved for children only |
+| KIDS | A kids playback configuration (`…-p-k`, `…-p-l`) or any sibling of a child-directed channel (`modules.release.child_directed`, the sidecar's `CHILD_DIRECTED_CHANNELS`) | Nothing: COPPA set, house ads and creatives approved for children only |
 
 The PDS resolves a break's mode in this order (`fast_channels.core.pds.policy.resolve`):
 

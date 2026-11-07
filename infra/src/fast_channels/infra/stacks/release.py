@@ -52,7 +52,7 @@ def contributions(config: FastChannelsConfig, *, pbs_origin: str) -> list[Bundle
     crawl, demand = config.modules.crawl, config.modules.demand
     found: list[BundleContribution] = [CrawlContribution()] if crawl.enabled and crawl.pre_ads else []
     if demand.ad_server is not AdServer.NONE:
-        found.append(AdServerContribution(pbs_origin=pbs_origin))
+        found.append(AdServerContribution(pbs_origin=pbs_origin, kids_channels=config.modules.release.child_directed))
     return found
 
 
@@ -142,7 +142,8 @@ class ReleaseStack(Stack):
         }
         bus = events.EventBus.from_event_bus_name(self, "Bus", f"{prefix}-fast-channels")
         siblings = [sibling.name for sibling in self.rendered.bundle.siblings]
-        pair = [s.name for s in self.rendered.bundle.siblings if s.role is SiblingRole.GENERAL]
+        # The candidate alarm watches the pair and the kids twins, which are released and rolled back with it.
+        pair = [s.name for s in self.rendered.bundle.siblings if s.role in {SiblingRole.GENERAL, SiblingRole.KIDS}]
         self.sibling_alarms = ConfigurationAlarms(self, "SiblingAlarms", configurations=siblings, topic=topic)
         watched = [*siblings, *([names.lab_check(prefix)] if config.lab_channel else [])]
         self.markers = MarkerDetector(self, "Markers", log_group=self.logs.log_group, siblings=watched, topic=topic)

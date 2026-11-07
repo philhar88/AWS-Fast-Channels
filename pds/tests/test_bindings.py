@@ -19,6 +19,7 @@ from fast_channels.core.identity.ticket import ticket_row
 from fast_channels.core.pds.models import Mode, PolicyRequest, Reason
 from fast_channels.core.pds.policy import Consent, resolve
 from fast_channels.core.pds.snapshot import Snapshot, SnapshotBase, build, demo_demand
+from fast_channels.functions.settings import settings
 from fast_channels.pds import policy
 from fast_channels.pds.bindings import CONSENT_FRESH_S, CONSENT_STALE_S, Bindings
 
@@ -294,3 +295,17 @@ def test_a_guest_ticket_is_contextual_with_its_gpp_string_and_reads_no_consent(t
     assert mode(inputs) == (Mode.CONTEXTUAL, Reason.BOUND)
     assert (inputs.viewer.vid, inputs.viewer.cid, inputs.viewer.gpp) == (None, "cid-2", "DBAA")
     assert counting.keys == [f"T#{TICKET}"], "a guest has no consent row to read"
+
+
+def test_a_child_directed_channels_sibling_reads_no_binding(
+    table: tuple[Any, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, name = table
+    monkeypatch.setenv("CHILD_DIRECTED_CHANNELS", "fastm-kids")
+    settings.cache_clear()
+    try:
+        counting = _Counting(client)
+        assert Bindings(name, counting, clock=Clock()).inputs(request(pc="fastm-kids-p-a")).identity is Reason.UNKNOWN
+        assert counting.keys == [], "the mode is KIDS whatever the binding says"
+    finally:
+        settings.cache_clear()

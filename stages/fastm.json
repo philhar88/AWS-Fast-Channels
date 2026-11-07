@@ -5,6 +5,12 @@
     "log_retention_days": 7,
     "as_run": "shared"
   },
+  "channels": {
+    "iac": [
+      {"name": "{prefix}-demo", "ladder": "standard", "outputs": ["hls"], "tier": "BASIC", "autopilot_cron": null, "brief": null},
+      {"name": "{prefix}-kids", "ladder": "standard", "outputs": ["hls"], "tier": "BASIC", "autopilot_cron": null, "brief": null}
+    ]
+  },
   "modules": {
     "ops": {
       "enabled": true,
@@ -48,8 +54,13 @@
     "release": {
       "enabled": true,
       "channels": [
-        "{prefix}-demo"
+        "{prefix}-demo",
+        "{prefix}-kids"
       ],
+      "child_directed": [
+        "{prefix}-kids"
+      ],
+      "kids_pairs": true,
       "strategy": "demo"
     },
     "crawl": {

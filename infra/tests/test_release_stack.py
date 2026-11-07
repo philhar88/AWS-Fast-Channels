@@ -705,3 +705,39 @@ def test_template_snapshot(
     d = deployment(RELEASE, extra=EXTRA)
 
     assert normalized(d.template(d.stage.release)) == snapshot_json
+
+
+KIDS = {
+    **RELEASE,
+    "channels.iac": [{"name": "{prefix}-demo"}, {"name": "{prefix}-kids"}],
+    "modules.release.channels": ["{prefix}-demo", "{prefix}-kids"],
+    "modules.release.child_directed": ["{prefix}-kids"],
+    "modules.release.kids_pairs": True,
+    "modules.identity.enabled": True,
+}
+
+
+def test_kids_twins_join_the_candidate_alarm_and_a_child_directed_channel_serves_kids(
+    deployment: GetDeployment,
+) -> None:
+    d = deployment(KIDS, extra=EXTRA)
+    assert d.stage.release is not None
+    siblings = {s.name: s for s in d.stage.release.rendered.bundle.siblings}
+    assert {"fastm-demo-p-k", "fastm-demo-p-l"} <= set(siblings)
+    assert not {"fastm-kids-p-k", "fastm-lab-p-k"} & set(siblings), "no twins on a kids channel or the lab channel"
+    for name in ("fastm-demo-p-k", "fastm-kids-p-a", "fastm-kids-p-b", "fastm-kids-p-z"):
+        assert '"id":"fast-pod-kids"' in (siblings[name].playback.body or ""), name
+    assert "X-Fast-T" not in (siblings["fastm-kids-p-a"].playback.headers or {}), "a kids channel takes no ticket"
+    template = d.template(d.stage.release)
+    alarms = {a["AlarmName"] for a in resources(template, "AWS::CloudWatch::Alarm").values()}
+    assert {"fastm-demo-p-k-presessioninithook-errors", "fastm-demo-p-l-function-errors"} <= alarms
+    [candidate] = resources(template, "AWS::CloudWatch::CompositeAlarm").values()
+    rule = json.dumps(candidate["AlarmRule"])
+    assert "FastmDemoPK" in rule and "FastmDemoPL" in rule, "the twins roll back with the pair"
+    assert d.stage.identity is not None
+    [mint] = [
+        f
+        for f in resources(d.template(d.stage.identity), "AWS::Lambda::Function").values()
+        if f.get("Handler") == "fast_channels.functions.identity.mint.handler"
+    ]
+    assert mint["Environment"]["Variables"]["CHILD_DIRECTED_CHANNELS"] == "fastm-kids"

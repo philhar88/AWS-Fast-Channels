@@ -839,6 +839,7 @@ class DemandStage:
             crawl=crawl_environment(self.config),
             catalog_context_bucket=values.get(pds_names.Parameter.CATALOG_CONTEXT_BUCKET.value),
             identity=self.config.modules.identity.enabled,
+            child_directed=self.config.modules.release.child_directed if self.config.modules.release.enabled else (),
         )
 
     def deploy_guidance(self, image: str, with_sidecar: Sidecar | None = None) -> None:

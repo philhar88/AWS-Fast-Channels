@@ -71,6 +71,16 @@ All notable changes to this project are documented here. The format follows
   - A new privacy-choices page (`#/privacy`) records the two choices; the home page says when a viewer has none.
   - hls.js sends Common Media Client Data as a query parameter, which the CDN's access logs already parse into their
     `cmcd-*` fields.
+- **Kids profiles and child-directed channels** (`release`, `identity`, `pds`).
+  - `modules.release.kids_pairs` gives each monetized channel the kids twins `-p-k` and `-p-l`. They name the kids
+    stored request, take no ticket, and follow the pair `a`/`b` through releases, promotions and rollbacks; their
+    alarms join `<prefix>-release-candidate`, and the playback plan names the stable sibling's twin (`kids`).
+  - `POST /playback {channel, profile: "kids"}` answers the kids twin's URL with no ticket and no `vid`; a channel
+    without twins answers 409 `no_kids_configuration`.
+  - `modules.release.child_directed` lists the monetized channels that are child-directed: every sibling names the
+    kids stored request, no ticket is minted for them, and every break is KIDS.
+  - The reference viewer signs Mia in on Marcus's account and plays her kids profile.
+  - `stages/fastm.json` and `stages/fastci.json` add the child-directed channel `{prefix}-kids` and the kids twins.
 
 ### Changed
 
@@ -100,7 +110,12 @@ All notable changes to this project are documented here. The format follows
   'fast_channels.core'`), and every console, autopilot and agent run failed. The agent package now depends on the
   core package, and a test installs each bundled package (agent, functions, PDS) alone and imports every one of its
   modules, besides checking that each closure holds every workspace package its code imports.
-
+- **A child-directed channel's breaks were never KIDS at the Pod Decision Service** (`pds`). The bundle gave its
+  siblings the kids stored request, but nothing told the sidecar which channels are child-directed, so `/policy`
+  answered CONTEXTUAL: it added the third-party bidders and set `regs.coppa` back to 0. No shipped configuration had
+  a child-directed channel, because none could be configured until `modules.release.child_directed`. The sidecar now
+  gets them (`CHILD_DIRECTED_CHANNELS`) and answers KIDS for every sibling of such a channel, and validator R-P5
+  refuses a kids sibling that names another stored request.
 
 ## [4.1.1] - 2026-11-06
 

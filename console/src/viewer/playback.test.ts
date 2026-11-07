@@ -94,6 +94,16 @@ describe("openChannel", () => {
     ).resolves.toEqual({ url: V3, anonymous: "no ticket: not_released; no playback plan" });
   });
 
+  it("opens a kids profile on the kids twin with no ticket", async () => {
+    const twin = "https://cdn.example/v1/master/h/fastm-demo-p-k/hls.m3u8";
+    const fetchImpl = backend(() => json(200, { url: twin, cid: "01K", expires_in: null }));
+    await expect(
+      openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, accessToken: token, profile: "kids", fetchImpl }),
+    ).resolves.toEqual({ url: twin, kids: true });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ channel: "fastm-demo", profile: "kids" });
+  });
+
   it("stops on an authorization failure instead of hiding it", async () => {
     const fetchImpl = backend(() => json(403, { message: "Forbidden" }));
     await expect(openChannel(DEMO, { playbackUrl: MINT, planBaseUrl: PLAN, accessToken: token, fetchImpl })).rejects.toBeInstanceOf(

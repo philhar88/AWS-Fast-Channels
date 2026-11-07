@@ -17,7 +17,7 @@ contributors supply. :func:`decide` runs the whole chain.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from ipaddress import IPv4Address
@@ -91,6 +91,17 @@ def is_kids_configuration(pc: str) -> bool:
     """Whether ``pc`` is a kids sibling (``…-p-k`` or ``…-p-l``)."""
     head, sep, sibling = pc.rpartition("-p-")
     return bool(head and sep) and sibling in KIDS_SIBLINGS
+
+
+def channel_of(pc: str) -> str | None:
+    """The channel of sibling configuration ``pc`` (``<channel>-p-<letter>``), or None."""
+    head, sep, _ = pc.rpartition("-p-")
+    return head if head and sep else None
+
+
+def is_kids(pc: str, child_directed: Collection[str] = ()) -> bool:
+    """Whether a break on ``pc`` is KIDS: a kids sibling, or any sibling of a ``child_directed`` channel."""
+    return is_kids_configuration(pc) or channel_of(pc) in child_directed
 
 
 def resolve(

@@ -96,6 +96,7 @@ class ViewerConfig:
                     "bio": persona.bio,
                     "email": persona.email,
                     "signIn": persona.sign_in.value,
+                    "account": persona.account,
                     "genres": list(persona.genres),
                 }
                 for persona in self.personas

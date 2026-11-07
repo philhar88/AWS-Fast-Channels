@@ -21,20 +21,26 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from harness import Player, wait_for
-from harness_pods import Viewer
+from harness_pods import Logs, Viewer, ipv4_client, json_object, prebid_tasks, record_pattern, warmups
 
+from fast_channels.core.demand import warmup_project
 from fast_channels.core.identity.consent import key as consent_key
 from fast_channels.core.identity.names import PERSONA_ATTRIBUTE, Parameter, demo_users_secret, parameter_name
 from fast_channels.core.identity.ticket import TICKET
 from fast_channels.core.identity.vid import viewer_id
+from fast_channels.core.monetization import names
+from fast_channels.core.monetization.release import PlaybackPlan
+from fast_channels.core.pds.names import sidecar_log_group
 
 if TYPE_CHECKING:
     from _stack import Stage
+    from harness_demand import DemandEdge
 
 TICKET_PARAMETER: Final = "ads.t"
 TIMEOUT: Final = httpx.Timeout(15.0)
@@ -118,12 +124,13 @@ def sign_in(stage: Stage, persona: str) -> str:
     return tokens(stage, *credentials(stage, persona))["AccessToken"]
 
 
-def mint(stage: Stage, token: str, channel: str) -> dict[str, Any]:
-    """``POST /playback`` for ``channel``: ``{"url", "cid", "expires_in"}``. Raises on any answer but 200."""
+def mint(stage: Stage, token: str, channel: str, *, profile: str | None = None) -> dict[str, Any]:
+    """``POST /playback`` for ``channel`` (``profile="kids"``: the account's kids profile): ``{"url", "cid",
+    "expires_in"}``. Raises on any answer but 200."""
     response = httpx.post(
         parameter(stage, Parameter.PLAYBACK_URL),
         headers={"Authorization": f"Bearer {token}"},
-        json={"channel": channel},
+        json={"channel": channel, **({"profile": profile} if profile else {})},
         timeout=TIMEOUT,
     )
     response.raise_for_status()
@@ -205,3 +212,51 @@ def join(stage: Stage, http: httpx.Client, token: str, channel: str) -> tuple[Vi
         failures.append(response.status_code)
         time.sleep(5)
     raise AssertionError(f"no session after {JOIN_ATTEMPTS} tickets: {failures}")
+
+
+READY_TIMEOUT_S: Final = 1500
+"""Census lag, Prebid Server's scale-out and warm-up, with room (as ``test_14``)."""
+RECORDS_TIMEOUT_S: Final = 300
+
+
+def playback_plan(stage: Stage, channel: str) -> PlaybackPlan:
+    """The channel's playback plan, read through the CDN as a player reads it."""
+    ssm = stage.session.client("ssm", region_name=stage.region)
+    cdn = ssm.get_parameter(Name=names.parameter_name(stage.prefix, names.Parameter.CDN_BASE_URL))["Parameter"]
+    with ipv4_client(timeout=10.0) as http:
+        response = http.get(f"{cdn['Value'].rstrip('/')}/{names.plan_key(channel)}")
+    response.raise_for_status()
+    return PlaybackPlan.model_validate_json(response.text)
+
+
+def wait_until_ready(stage: Stage, edge: DemandEdge) -> None:
+    """Until Prebid Server runs and every running task's warm-up succeeded (the PDS is its sidecar)."""
+    ecs, codebuild = stage.session.client("ecs"), stage.session.client("codebuild")
+
+    def ready() -> bool | None:
+        tasks = prebid_tasks(ecs, cluster=edge.cluster, service=edge.service)
+        warmed = warmups(codebuild, warmup_project(stage.prefix), tasks)
+        return (bool(tasks) and len(warmed) == len(tasks) and set(warmed.values()) == {"SUCCEEDED"}) or None
+
+    wait_for(ready, timeout=READY_TIMEOUT_S, interval=20, what="a warm Prebid Server")
+
+
+def decision_records(
+    stage: Stage, sessions: dict[str, Viewer], since: datetime, record: str
+) -> dict[str, list[dict[str, Any]]]:
+    """Every role's ``record`` lines (``pds.policy``, ``pds.select``), read again until each session has one or the
+    timeout passed."""
+    logs = Logs(stage.session.client("logs", region_name=stage.region), start_ms=int(since.timestamp() * 1000))
+    roles = {session.sid: role for role, session in sessions.items()}
+    found: dict[str, list[dict[str, Any]]] = {}
+
+    def complete() -> bool | None:
+        events = logs.events(sidecar_log_group(stage.prefix), record_pattern(record, roles))
+        found.clear()
+        for event in events:
+            if (line := json_object(event["message"])) is not None:
+                found.setdefault(roles[line["sid"]], []).append(line)
+        return set(found) == set(sessions) or None
+
+    wait_for(complete, timeout=RECORDS_TIMEOUT_S, interval=15, what=f"every session's {record} records")
+    return found

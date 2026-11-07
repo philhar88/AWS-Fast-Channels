@@ -311,6 +311,10 @@ AGENTS_STAGE = "fastciagent"
 """The agent roster's stage (M9): the module and ops, with its demo channel always-on (the roster's e2e)."""
 
 
+KIDS_STAGES = frozenset({"fastm", "fastci"})
+"""Stages with the child-directed channel ``<prefix>-kids`` and the kids twins (M4)."""
+
+
 @pytest.mark.parametrize("name", STAGES)
 def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> None:
     config = shipped_with(stage_overrides(name))
@@ -328,7 +332,14 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
         assert on == set(ModulesConfig.model_fields) - {"selling", "understanding"}
         assert config.modules.agents.envelope.always_on == (), "their tests stop channels: none may be restarted"
     if name != AGENTS_STAGE:  # no demand
-        assert config.modules.release.channels == (f"{name}-demo",)
+        if name not in KIDS_STAGES:
+            assert config.modules.release.channels == (f"{name}-demo",)
+        else:  # the monetized channel with kids twins, and a child-directed channel (M4)
+            assert config.modules.release.channels == (f"{name}-demo", f"{name}-kids")
+            assert (config.modules.release.child_directed, config.modules.release.kids_pairs) == (
+                (f"{name}-kids",),
+                True,
+            )
         assert config.modules.demand.simulator == "lambda"  # needs no VPC of its own
     assert config.modules.ops.ledger_retention_days == 1  # so that the stage can be destroyed the next day
 
@@ -378,7 +389,8 @@ def test_a_stage_under_another_prefix_expands_it() -> None:
     config = shipped_with(stage_overrides("fastci", "--prefix", "fastcipr7"))
 
     assert (config.prefix, config.channels.iac[0].name) == ("fastcipr7", "fastcipr7-demo")
-    assert config.modules.release.channels == ("fastcipr7-demo",)
+    assert config.modules.release.channels == ("fastcipr7-demo", "fastcipr7-kids")
+    assert config.modules.release.child_directed == ("fastcipr7-kids",)
 
 
 @pytest.mark.parametrize(
@@ -448,6 +460,7 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         {
             "prefix": "fastm",
             "observability": stage["observability"],  # the stage reads the shared as-run router (not a module)
+            "channels": stage["channels"],  # and has a second, child-directed channel (not a module)
             **{f"modules.{name}": stage["modules"][name] for name in on},
         }
     )

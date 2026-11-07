@@ -117,7 +117,8 @@ def test_the_mint_reads_plans_puts_and_reads_rows_and_macs_only(identity: Templa
         if f["Properties"]["Handler"] == "fast_channels.functions.identity.mint.handler"
     ]
     variables = mint["Environment"]["Variables"]
-    assert variables["RELEASE_CHANNELS"] == "fastm-demo" and variables["REDEEM_WINDOW_MS"] == "120000"
+    assert variables["RELEASE_CHANNELS"] == "fastm-demo,fastm-kids" and variables["REDEEM_WINDOW_MS"] == "120000"
+    assert variables["CHILD_DIRECTED_CHANNELS"] == "fastm-kids"
     granted = {
         a for s in _statements(identity) for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])
     }

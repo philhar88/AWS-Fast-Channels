@@ -154,6 +154,25 @@ The Pod Decision Service reads the record on every break of the viewer's bound s
 change reaches the next break within that. If the read fails, an answer read under a minute ago still counts; after
 that the break is SAFE.
 
+## Kids
+
+A kids profile has no sign-in or viewer id of its own. The viewer app signs in on the profile's account and asks for
+the profile on every play:
+
+```json
+{"channel": "<monetized channel name>", "profile": "kids"}
+```
+
+The answer is the playback plan's kids twin (`<channel>-p-k` or `-p-l`, `modules.release.kids_pairs`), **with no
+ticket**: the URL is the plan's, `cid` is the request's correlation id, and `expires_in` is `null`. A channel without
+kids twins answers 409 `no_kids_configuration`. A **child-directed channel** (`modules.release.child_directed`)
+answers its plan's URL with no ticket to everyone, from `POST /playback` and `POST /playback/guest` alike.
+
+Nothing about the viewer travels: the mint computes no `vid` and writes no row. The configuration makes the session
+KIDS, never a client flag: the Pod Decision Service treats every break on a kids twin or on any sibling of a
+child-directed channel as KIDS, without a ticket lookup (`CHILD_DIRECTED_CHANNELS` in the sidecar's environment).
+KIDS sets `regs.coppa`, adds no bidder, and the pod holds house ads and creatives approved for children only.
+
 ## What the mint computes
 
 Everything is computed server-side; the request body names only the channel (and a guest's privacy signals).

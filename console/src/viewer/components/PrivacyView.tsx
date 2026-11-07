@@ -56,9 +56,9 @@ function useConsent(): [Loaded, (record: ConsentRecord) => void] {
 
 /** On the home page: a signed-in viewer who has not chosen yet is told so, with a link to choose. */
 export function ConsentNotice() {
-  const { accessToken } = useViewer();
+  const { accessToken, persona } = useViewer();
   const [loaded] = useConsent();
-  if (!accessToken || loaded.state !== "ready" || loaded.record !== null) {
+  if (!accessToken || persona?.signIn === "kids_profile" || loaded.state !== "ready" || loaded.record !== null) {
     return null;
   }
   return (
@@ -71,12 +71,22 @@ export function ConsentNotice() {
 /** `#/privacy`: the signed-in viewer's two choices (identity module, `PUT /consent`); a guest's browser signal. */
 export function PrivacyView() {
   const backend = useViewerBackend();
-  const { accessToken } = useViewer();
+  const { accessToken, persona } = useViewer();
   const [loaded, saved] = useConsent();
   const [choice, setChoice] = useState<ConsentChoice | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  if (persona?.signIn === "kids_profile") {
+    return (
+      <Container header={<Header variant="h1">Privacy choices</Header>}>
+        <SpaceBetween size="s">
+          <Box>A kids profile's breaks are always KIDS: no viewer id, COPPA set, house ads only. There is nothing to choose.</Box>
+          <Link href={viewerHref({ view: "home" })}>Back</Link>
+        </SpaceBetween>
+      </Container>
+    );
+  }
   if (!accessToken) {
     return (
       <Container header={<Header variant="h1">Privacy choices</Header>}>

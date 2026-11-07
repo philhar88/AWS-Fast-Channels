@@ -2,7 +2,8 @@
 
 The answer comes from ``fast_channels.core.pds.policy.decide`` with the current snapshot (``state.store``) and, with
 the identity module, the ticket's binding (``bindings``): a bound viewer's break follows their privacy mode, any
-other session's is CONTEXTUAL with the reason; probes are SAFE, kids configurations KIDS. With the crawl module on,
+other session's is CONTEXTUAL with the reason; probes are SAFE; kids configurations and every sibling of a
+child-directed channel (``CHILD_DIRECTED_CHANNELS``) KIDS. With the crawl module on,
 its patch contributor (``functions.crawl.patch``) adds the title's ``app.content``. The module waits
 ``modules.pds.policy_timeout_ms`` for the answer; anything but a 200 with a known schema leaves the stored request
 alone (own book and house, no third party). Before the sidecar has a snapshot it answers 503 at once
@@ -18,10 +19,11 @@ from aws_lambda_powertools import Logger
 from pydantic import ValidationError
 
 from fast_channels.core.pds.models import PolicyRequest
-from fast_channels.core.pds.policy import ANONYMOUS, decide
+from fast_channels.core.pds.policy import ANONYMOUS, channel_of, decide
 from fast_channels.core.pds.records import policy_record
 from fast_channels.core.pds.snapshot import EMPTY
 from fast_channels.functions.crawl.patch import contributor
+from fast_channels.functions.settings import settings
 from fast_channels.pds import state
 from fast_channels.pds.bindings import bindings
 from fast_channels.pds.http import INTERNAL, NO_SNAPSHOT, REFUSED, Answer, refused_fields
@@ -74,6 +76,7 @@ def _answer(request: PolicyRequest, started: float) -> Answer:
         identity=binding.identity if binding else None,
         viewer=binding.viewer if binding else ANONYMOUS,
         consent=binding.consent if binding else None,
+        kids_channel=channel_of(request.pc) in settings().child_directed_channels,
         contributors=contributors(),
     )
     viewers().note(request.decision_id, decision)

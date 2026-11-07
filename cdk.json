@@ -140,6 +140,8 @@
         "release": {
           "enabled": false,
           "channels": [],
+          "child_directed": [],
+          "kids_pairs": false,
           "strategy": "demo",
           "lab_channel": true,
           "probe_sibling": true,

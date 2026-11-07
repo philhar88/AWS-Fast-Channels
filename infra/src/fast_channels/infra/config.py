@@ -785,6 +785,14 @@ class ReleaseModule(_Module):
     """IaC channels to monetize (names from ``channels.iac``; ``{prefix}`` is replaced as there). Their channel policy
     also admits the sibling configurations ``<channel>-p-?``. Adding a channel widens its policy once, and the
     deployment refuses that while the channel runs: stop it first."""
+    child_directed: tuple[str, ...] = ()
+    """Monetized channels (of ``channels``) that are child-directed: every break of theirs is KIDS (COPPA set, house
+    and kid-approved direct ads only, no third-party bidder), their siblings name the kids stored request, and no
+    playback ticket is minted for them. ``{prefix}`` is replaced as in ``channels``."""
+    kids_pairs: bool = False
+    """Give each other monetized channel (not the lab channel) the kids twins ``<channel>-p-k`` and ``-p-l``, which
+    follow the pair ``a``/``b`` through releases, promotions and rollbacks: a kids profile plays them
+    (``POST /playback`` with ``profile: "kids"``), and every break there is KIDS. About 14 more alarms per channel."""
     strategy: ReleaseStrategy = ReleaseStrategy.DEMO
     """``demo`` (a simulated audience: 10% steps over 30 minutes), ``standard`` (up to 20,000 concurrent viewers: 10%
     steps over 3 hours) or ``large`` (exponential steps over 4 hours)."""
@@ -798,10 +806,16 @@ class ReleaseModule(_Module):
     once they have passed)."""
     prefetch: ReleasePrefetch = ReleasePrefetch()
 
-    @field_validator("channels")
+    @field_validator("channels", "child_directed")
     @classmethod
     def _unique_channels(cls, channels: tuple[str, ...]) -> tuple[str, ...]:
         return _unique(channels)
+
+    @model_validator(mode="after")
+    def _child_directed_are_monetized(self) -> Self:
+        if extra := [c for c in self.child_directed if c not in self.channels]:
+            raise ValueError(f"child_directed: {extra} are not in channels {list(self.channels)}")
+        return self
 
 
 class CrawlModule(_Module):
@@ -1232,8 +1246,8 @@ def eval_records() -> tuple[Path, ...]:
 
 
 def _expand_prefix(data: dict[str, Any]) -> None:
-    """Replace ``{prefix}`` in IaC channel names and in the channels the release module monetizes, so one default
-    channel works for every deployment prefix."""
+    """Replace ``{prefix}`` in IaC channel names and in the channels the release module monetizes (and its
+    child-directed ones), so one default channel works for every deployment prefix."""
     prefix = data.get("prefix")
     if not isinstance(prefix, str):
         return
@@ -1243,10 +1257,11 @@ def _expand_prefix(data: dict[str, Any]) -> None:
             channel["name"] = channel["name"].replace("{prefix}", prefix)
     modules = data.get("modules")
     release = modules.get("release") if isinstance(modules, dict) else None
-    if isinstance(release, dict) and isinstance(release.get("channels"), list):
-        release["channels"] = [
-            name.replace("{prefix}", prefix) if isinstance(name, str) else name for name in release["channels"]
-        ]
+    for key in ("channels", "child_directed"):
+        if isinstance(release, dict) and isinstance(release.get(key), list):
+            release[key] = [
+                name.replace("{prefix}", prefix) if isinstance(name, str) else name for name in release[key]
+            ]
 
 
 def _decode(value: Any) -> Any:

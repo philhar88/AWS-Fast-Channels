@@ -11,9 +11,9 @@ A ticket bound to a signed-in viewer then needs their consent: the row ``C#<vid>
 break within that. A read that fails keeps a kept answer up to :data:`CONSENT_STALE_S` seconds old; after that, and for
 a missing, malformed or stale row, the break is SAFE. A guest's ticket carries its mode and needs no read.
 
-A missing or malformed ticket, a probe and a kids configuration make no call. A lookup that fails (a throttle, a
-timeout) makes the break SAFE: it may be a signed-in viewer's, so no third party is asked
-(``core.identity.binding.LOOKUP_FAILED``). Counts go to the sidecar's metrics: ``BindingLookups`` by reason,
+A missing or malformed ticket, a probe, a kids configuration and a child-directed channel's sibling make no call. A
+lookup that fails (a throttle, a timeout) makes the break SAFE: it may be a signed-in viewer's, so no third party is
+asked (``core.identity.binding.LOOKUP_FAILED``). Counts go to the sidecar's metrics: ``BindingLookups`` by reason,
 ``BindingErrors``, ``BindingSelfRedeems``, ``BindingReplays``, ``ConsentLookups`` by consent and ``ConsentErrors``.
 """
 
@@ -41,7 +41,7 @@ from fast_channels.core.identity.binding import (
 from fast_channels.core.identity.consent import UNKNOWN, ConsentRecord, StoredConsent
 from fast_channels.core.identity.ticket import key
 from fast_channels.core.pds.models import Reason
-from fast_channels.core.pds.policy import is_kids_configuration, ticket_status
+from fast_channels.core.pds.policy import is_kids, ticket_status
 from fast_channels.functions.settings import settings
 from fast_channels.pds import state
 from fast_channels.pds.telemetry import counters
@@ -76,7 +76,7 @@ class Bindings:
         """The policy's identity, viewer and consent for ``request``."""
         if (status := ticket_status(request.t)) is not None:
             return PolicyInputs(status)
-        if request.probe or is_kids_configuration(request.pc):
+        if request.probe or is_kids(request.pc, settings().child_directed_channels):
             return PolicyInputs(Reason.UNKNOWN)  # the mode is SAFE or KIDS whatever the binding says
         try:
             binding = self._binding(request)
