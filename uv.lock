@@ -837,6 +837,7 @@ dependencies = [
     { name = "aws-opentelemetry-distro" },
     { name = "bedrock-agentcore" },
     { name = "boto3" },
+    { name = "fast-channels-core" },
     { name = "pydantic" },
     { name = "strands-agents" },
 ]
@@ -847,6 +848,7 @@ requires-dist = [
     { name = "aws-opentelemetry-distro", specifier = ">=0.21" },
     { name = "bedrock-agentcore", specifier = ">=1.25.2,<2" },
     { name = "boto3", specifier = ">=1.42" },
+    { name = "fast-channels-core", editable = "core" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "strands-agents", specifier = ">=1.61,<2" },
 ]
