@@ -170,6 +170,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **A release's smoke test on the lab channel works on prefixes of 7 or more characters.** Its role could invoke
+  only `FastChannels-<prefix>-Operator-*`. CloudFormation shortens a generated function name's stack part to as
+  few as 25 characters, so a 7-character prefix's tool functions are named `FastChannels-<prefix>-Operato-…`
+  and the invocation was denied. With no monetized channel running, the release then failed and rolled back.
+  The role now invokes `FastChannels-<prefix>-*`, held to the Operator stack's functions by their
+  `aws:cloudformation:stack-name` tag. A test checks every Lambda grant on a name pattern with the longest
+  prefix.
 - **The agents' caps were taken only by the runner** until the Gateway's request interceptor (M9's third pull
   request): a caller holding an agent's machine token could have called the Gateway directly past a cap. The
   interceptor now takes the caps on the call itself, and the runner only reads them.

@@ -79,7 +79,16 @@ class SmokeSettings:
     decision_log_group: str
     tool_functions: str = ""
     tool_function_prefix: str = ""
-    """Name prefix of the agent tool functions (``FastChannels-<prefix>-Operator-``), whose invocation is granted."""
+    """Name prefix of the stage's functions (``FastChannels-<prefix>-``). CloudFormation shortens a generated function
+    name's stack part to as few as 25 characters, so the Operator stack's own name cannot be matched (fastcid's tools
+    are ``FastChannels-fastcid-Operato-…``); the prefix, at most 24 characters, always is."""
+    tool_stack: str = ""
+    """The Operator stack (``FastChannels-<prefix>-Operator``): the grant holds to the functions CloudFormation tagged
+    with it (``aws:cloudformation:stack-name``)."""
+
+
+STACK_NAME_TAG: Final = "aws:ResourceTag/aws:cloudformation:stack-name"
+"""The condition key of the tag CloudFormation puts on every function it creates: its stack's name."""
 
 
 class ReleaseController(Construct):
@@ -218,7 +227,9 @@ class ReleaseController(Construct):
             self.smoke.allow(
                 ["lambda:InvokeFunction"],
                 [arn(self, "lambda", "function", f"{smoke.tool_function_prefix}*", colon=True)],
-                why="the agent tools that schedule, start and stop the lab channel",
+                why="the agent tools that schedule, start and stop the lab channel: the Operator stack's functions, by "
+                "its stack-name tag (CloudFormation shortens their names)",
+                conditions={"StringEquals": {STACK_NAME_TAG: smoke.tool_stack}},
             )
         self._grant(ledger_table, media_bucket, log_destination_arn, origin_secret_region)
         self._grant_pointer(pointer)

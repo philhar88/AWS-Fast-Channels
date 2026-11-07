@@ -3751,8 +3751,13 @@
             },
             {
               "Action": "lambda:InvokeFunction",
+              "Condition": {
+                "StringEquals": {
+                  "aws:ResourceTag/aws:cloudformation:stack-name": "FastChannels-fastm-Operator"
+                }
+              },
               "Effect": "Allow",
-              "Resource": "arn:aws:lambda:us-east-1:123456789012:function:FastChannels-fastm-Operator-*"
+              "Resource": "arn:aws:lambda:us-east-1:123456789012:function:FastChannels-fastm-*"
             },
             {
               "Action": "mediatailor:GetPlaybackConfiguration",
