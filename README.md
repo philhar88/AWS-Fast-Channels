@@ -287,6 +287,7 @@ lists what a teardown leaves behind.
 | [Workarounds to remove](docs/workarounds.md) | The AWS product behaviour we work around, where each workaround lives and what to delete when AWS fixes it |
 | [Reference viewer](docs/viewer.md) | The `viewer` module: demo personas, a rail of recommended channels, ticketed playback and the "why these ads" panel; its 10-minute demo script |
 | [The agent roster](docs/agents.md) | The `agents` module: agents that operate the stage as machine principals inside an autonomy envelope, Cedar and the runner as its enforcement points, the ledger and escalation |
+| [Rail recommender](docs/recs.md) | The `recs` module: `GET /rail`, a model-ranked rail per signed-in viewer behind a deterministic router, candidates and validator, cohort rails, the rule-based fallback and the recommender's eval |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |
 | [Decision records](docs/adr/README.md) | Why the architecture is the way it is |
 | [Console](console/README.md), [Agent](agent/README.md) | Component READMEs |

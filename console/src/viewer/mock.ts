@@ -11,6 +11,8 @@ import type { ViewerBackend } from "./backend";
 import type { Persona, ViewerChannel, ViewerConfig } from "./config";
 import type { ConsentRecord } from "./consent";
 import type { Source } from "./playback";
+import { programRail } from "./rail";
+import type { RailAnswer } from "./railClient";
 
 const CDN = new URL("/mock/cdn", window.location.href).href;
 const STANDARD_POD = `${CDN}/channel/hls.m3u8`;
@@ -42,6 +44,7 @@ export const MOCK_VIEWER_CONFIG: ViewerConfig = {
   epgBaseUrl: `${CDN}/epg`,
   planBaseUrl: `${CDN}/plan/playback`,
   adPanelUrl: "https://panel.example/",
+  railUrl: "https://rail.example/rail",
   channels: CHANNELS,
   personas: MOCK_PERSONAS,
 };
@@ -131,6 +134,38 @@ function mockDecisions(persona: Persona | undefined, sid: string): SessionDecisi
   return { sid, breaks: [decision] };
 }
 
+/** The recommender's answer in mock mode: the rule-based rail's picks with model-like reasons; Ben, pinned to the
+ * holdout, gets the rule-based rail. */
+function mockRail(persona: Persona | undefined, now = Date.now()): RailAnswer {
+  const guides = CHANNELS.map((channel) => ({ channel, epg: mockViewerEpg(channel.name, now) }));
+  const holdout = persona?.id === "ben";
+  const tiles = programRail(persona?.genres ?? [], guides, now).map((tile) => ({
+    content_id: tile.program.content_id ?? tile.program.name,
+    title: tile.program.title,
+    channel: tile.channel.name,
+    program: tile.program.name,
+    start: tile.program.start,
+    end: tile.program.end,
+    on_now: tile.onNow,
+    reason: holdout
+      ? `You like ${tile.matched.join(" and ")}`
+      : `A ${tile.matched.join(" and ")} pick, as you like it`,
+    evidence: ["declared_genre"],
+  }));
+  return {
+    strategy: holdout ? "baseline" : "llm",
+    reason: holdout ? "holdout" : "model",
+    title: holdout ? "Up next for you" : "Recommended for you",
+    tiles,
+    lineage: holdout ? null : { model: "us.anthropic.claude-haiku-5-5", prompt_version: "recs-v1", built_at: new Date(now).toISOString() },
+  };
+}
+
+/** The kids lineup in mock mode: nothing in the sample catalog is rated for children. */
+function mockKidsRail(): RailAnswer {
+  return { strategy: "kids", reason: "kids", title: "For kids", tiles: [], lineage: null };
+}
+
 export function mockViewerBackend(): ViewerBackend {
   let mints = 0;
   const consents = new Map<string, ConsentRecord>();
@@ -170,5 +205,7 @@ export function mockViewerBackend(): ViewerBackend {
     },
     epg: (channel) => Promise.resolve(mockViewerEpg(channel)),
     decisions: (sid, accessToken) => Promise.resolve(mockDecisions(personaOfToken(accessToken), sid)),
+    rail: (accessToken, query) =>
+      Promise.resolve(query.profile === "kids" ? mockKidsRail() : mockRail(personaOfToken(accessToken))),
   };
 }

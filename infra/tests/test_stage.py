@@ -443,12 +443,14 @@ MODULE_STACKS = {
     "Crawl": "FastChannels-fastm-Crawl",
     "Identity": "FastChannels-fastm-Identity",
     "Viewer": "FastChannels-fastm-Viewer",
+    "Recs": "FastChannels-fastm-Recs",
 }
-"""Stacks of merged modules kept off in the comparison (``crawl``, ``identity`` and ``viewer``, whose needs would turn
-every module on) ..."""
-MODULE_CHANGES = ("Media",)
-"""... and the shared stacks they change: crawl adds its catalog-context bucket and route to Media. Their own tests
-pin those changes down (``test_crawl.py::test_the_module_changes_nothing_else_in_the_media_stack``)."""
+"""Stacks of merged modules kept off in the comparison (``crawl``, ``identity``, ``viewer`` and ``recs``, whose needs
+would turn every module on) ..."""
+MODULE_CHANGES = ("Media", "Models", "Ops")
+"""... and the shared stacks they change: crawl adds its catalog-context bucket and route to Media; recs adds the
+``recommender`` task to Models and makes it the default of the ``recs`` flag in Ops. Their own tests pin those
+changes down (``test_crawl.py::test_the_module_changes_nothing_else_in_the_media_stack``, ``test_recs.py``)."""
 
 
 def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeployment, normalized: Any) -> None:

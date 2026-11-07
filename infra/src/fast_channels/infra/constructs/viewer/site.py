@@ -70,6 +70,8 @@ class ViewerConfig:
     """The channels with monetized playback configurations (``modules.release.channels``): they play on tickets."""
     personas: tuple[Persona, ...]
     """The demo personas; only their public fields are published, never a tier."""
+    rail_url: str | None = None
+    """The recommender's ``GET /rail`` (``modules.recs``); absent from ``config.json`` without the module."""
 
     def document(self) -> dict[str, Any]:
         """The JSON document."""
@@ -101,6 +103,7 @@ class ViewerConfig:
                 }
                 for persona in self.personas
             ],
+            **({"railUrl": self.rail_url} if self.rail_url else {}),
         }
 
 

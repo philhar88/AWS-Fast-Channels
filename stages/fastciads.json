@@ -93,6 +93,9 @@
     },
     "understanding": {
       "enabled": true
+    },
+    "recs": {
+      "enabled": true
     }
   }
 }

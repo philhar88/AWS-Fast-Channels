@@ -67,7 +67,7 @@ row of keys that the next record also carries. `scripts/trace.py` follows them (
 |---|---|---|---|
 | **Viewer** | MediaTailor session id `sid` → `decision_id` = `<sid>.<evid>` → our impression tracker's `d=` → `BEACON_FIRED` → delivery | `sid` in the ADS request and every MediaTailor log; `decision_id` in the PDS's `pds.policy`, `pds.select` and `pds.delivery` records, on our tracker's URL (`d=<sid>.<evid>`, so prefetched breaks join too, which carry no `adBreakCorrelationId`) and in the ledger's money events; delivery in `IMP#`/`FILL#` items and `pds_delivery` | Yes, from the MediaTailor session. The design's viewer id `cid`, minted by a playback API before the session, is not part of v4.0.0, so the chain starts at `sid` |
 | **Rail** | Rail request `rid` → `cid` on the ticket | — | No: the recommender rail is not part of v4.0.0 |
-| **Recommender** | Run id → rail item → Bedrock request id | — | No: the recommender is not part of v4.0.0 |
+| **Recommender** | `vid` → `V#<vid>` `rail_key` → `REQ#<request hash>` → Bedrock request id | The rail state and the built rail in `<prefix>-recs`; the hash, model, prompt version and request id in each rail's `lineage`, which `GET /rail` answers | With `recs` ([recs.md](recs.md)) |
 | **Content** | Ingest `correlation_id` → asset → UPID (`FST3` + content id) → `evid` → `sid` and our tracker | The ingest's logs and the asset (above); the UPID in the program's breaks, the HLS `DATERANGE`, the ADS request (`upid=`) and `pds.policy`; with `crawl`, the title's catalog context object `catalog/ctx/v1/<content id>.json` | Yes |
 | **Change** | Ledger `change_id` → release `fv` = `rNNNN` → playback configuration | `change_id` (a ULID) in the Release Controller's state table, the ledger's `correlation_id` and the siblings' `fast:change` tag; `rNNNN` in the `X-Fast-Fv` header MediaTailor sends, the `fv` of every `pds.policy` record, the siblings' `fast:release` tag and every FunctionId (`<prefix>_…_rNNNN`) | Yes, with `release` |
 
@@ -293,7 +293,7 @@ attribute `freeze` of the flag `ops`:
 | `commercial` | — | off |
 | `demand` | `mode`: `off`, `own_book`, `demo`, `live` | on with `modules.demand.mode` when demand is deployed, else off |
 | `crawl` | — | on |
-| `recs` | `strategy`: `popularity` (the kill switch), `recommender` | `popularity` |
+| `recs` | `strategy`: `popularity` (the kill switch), `recommender` | `recommender` with the recs module ([recs.md](recs.md#operating-it)), else `popularity` |
 | `release` | `promote` | on |
 | `ops` | `act` (off: runbooks do not act in v4.0.0), `freeze` (R9), `restart` (R12), `ca_alerts` (R13), `shed` (R17) | every switch on, `act` off |
 

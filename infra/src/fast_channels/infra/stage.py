@@ -30,6 +30,7 @@ from fast_channels.infra.stacks.models import ModelsStack
 from fast_channels.infra.stacks.operator import OperatorStack
 from fast_channels.infra.stacks.ops import OpsStack
 from fast_channels.infra.stacks.pds import PdsStack
+from fast_channels.infra.stacks.recs import RecsStack
 from fast_channels.infra.stacks.release import ReleaseStack
 from fast_channels.infra.stacks.selling import SellingStack
 from fast_channels.infra.stacks.understanding import UnderstandingStack
@@ -53,7 +54,8 @@ def stage_id(prefix: str) -> str:
 class FastChannelsStage(Stage):
     """Data → Media → Models (if ``modules.models.enabled``) → Operator (if ``agent.enabled``), plus Crawl (if
     ``modules.crawl.enabled``, after Media), Identity (if ``modules.identity.enabled``, after Media), Viewer (if
-    ``modules.viewer.enabled``, after Identity), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
+    ``modules.viewer.enabled``, after Identity and Recs), Recs (if ``modules.recs.enabled``, after Identity and
+    Models), Ops (if ``modules.ops.enabled``, after Data and Media), Edge (in
     us-east-1, when ``env.region`` is another region; named ``<stage>-Edge-<region>``), AccountBaseline (the
     account's Transaction Search, only with ``account_baseline``), DemandEdge (in us-east-1) and DemandBuild (if
     ``modules.demand.enabled``; the Prebid Server guidance itself deploys as its own app, docs/demand.md), Demand
@@ -156,6 +158,7 @@ class FastChannelsStage(Stage):
             self.identity = IdentityStack(self, "Identity", config=config, **stacks)
             self.identity.add_stack_dependency(self.media, "The mint reads /<prefix>/release/media-bucket")
 
+        self.recs = self._recs(config, stacks)
         self.viewer = self._viewer(config, stacks)
 
         self.edge: EdgeStack | None = None
@@ -198,8 +201,31 @@ class FastChannelsStage(Stage):
         understanding.add_stack_dependency(self.models, "The describe step reads its model registry entry")
         return understanding
 
+    def _recs(self, config: FastChannelsConfig, stacks: dict[str, Any]) -> RecsStack | None:
+        """The rail recommender, after Identity (the viewer pool, the vid key, the consent rows) and Models (the
+        ``recommender`` task)."""
+        if not config.modules.recs.enabled or self.identity is None or self.models is None:
+            return None
+        recs = RecsStack(
+            self,
+            "Recs",
+            config=config,
+            data=self.data.exports,
+            media=self.media.exports,
+            models=self.models.exports,
+            **stacks,
+        )
+        recs.add_stack_dependency(self.data)
+        recs.add_stack_dependency(self.media)
+        recs.add_stack_dependency(self.models, "The builder reads the recommender task's registry entry")
+        recs.add_stack_dependency(self.identity, "It reads the viewer pool and the vid key from /<prefix>/identity/*")
+        if self.ops is not None:
+            recs.add_stack_dependency(self.ops, "The rail API reads the flag's AppConfig ids from /<prefix>/release/*")
+        return recs
+
     def _viewer(self, config: FastChannelsConfig, stacks: dict[str, Any]) -> ViewerStack | None:
-        """The reference viewer, after Identity (its viewer pool and playback API)."""
+        """The reference viewer, after Identity (its viewer pool and playback API) and Recs (``GET /rail``), if
+        deployed."""
         if not config.modules.viewer.enabled or self.identity is None:
             return None
         viewer = ViewerStack(self, "Viewer", config=config, media=self.media.exports, **stacks)
@@ -207,6 +233,8 @@ class FastChannelsStage(Stage):
         viewer.add_stack_dependency(
             self.identity, "It reads the viewer pool and the playback API from /<prefix>/identity/*"
         )
+        if self.recs is not None:
+            viewer.add_stack_dependency(self.recs, "It reads GET /rail from /<prefix>/recs/rail-url")
         return viewer
 
     def _modules(self, config: FastChannelsConfig, env: Environment, stacks: dict[str, Any]) -> None:
