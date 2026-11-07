@@ -400,7 +400,7 @@ A judge sample runs before any default flip. Swapping the model of a task with v
 The understanding module's describe task has one too: `make eval TASK=understanding.describe MODEL=<id>` runs the
 four sample titles' live signals and excerpts of their pictures through a video model
 ([understanding.md](understanding.md#the-eval-suite)). Its record reports `schema_valid`, `categories_valid`,
-`expected_categories`, `no_wrong_categories`, `moderation_agreement` and `cost_per_hour`.
+`expected_categories`, `no_wrong_categories`, `moderation_agreement`, `brand_safety_expected` and `cost_per_hour`.
 
 ### Conformance suite and bringing your own model
 

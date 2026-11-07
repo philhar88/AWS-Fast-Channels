@@ -129,7 +129,8 @@
     "seconds": 1.5
    }
   ],
-  "moderation": {}
+  "moderation": {},
+  "moderation_labels": {}
  },
  "expect": {
   "categories_any": [
@@ -143,6 +144,7 @@
    "651",
    "645",
    "646"
-  ]
+  ],
+  "brand_safety": "low"
  }
 }

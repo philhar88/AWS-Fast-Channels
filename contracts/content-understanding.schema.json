@@ -127,11 +127,11 @@
         }
       ],
       "default": null,
-      "description": "The riskier of the model's tier and the tier of the moderation labels; null when neither ran."
+      "description": "A GARM-style risk tier, the riskier of the model's and the moderation labels'; null when neither ran."
     },
     "moderation": {
       "default": [],
-      "description": "Top-level moderation categories found (Rekognition's taxonomy), the evidence of the tier.",
+      "description": "Top-level moderation categories seen (Rekognition's taxonomy): where the evidence of the tier lies.",
       "items": {
         "type": "string"
       },

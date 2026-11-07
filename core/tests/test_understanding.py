@@ -24,9 +24,11 @@ from fast_channels.core.understanding.proxy import analysis_variant, proxy_job
 from fast_channels.core.understanding.record import categories
 from fast_channels.core.understanding.signals import (
     EXCERPT_MAX_CHARS,
+    Sighting,
     Signals,
     excerpt,
     label_signals,
+    moderation_labels,
     moderation_signals,
     segment_signals,
     transcript_signals,
@@ -195,9 +197,81 @@ def test_the_moderation_tier_needs_the_analysis() -> None:
 
     assert Signals(duration_ms=1, analyses=()).moderation_tier is None
     assert Signals(duration_ms=1, analyses=ran).moderation_tier is BrandSafety.LOW
-    assert Signals(duration_ms=1, analyses=ran, moderation={"Violence": 90}).moderation_tier is BrandSafety.HIGH
+    # Signals of an older collector carry the top-level categories only.
+    assert Signals(duration_ms=1, analyses=ran, moderation={"Violence": 90}).moderation_tier is BrandSafety.MEDIUM
     assert Signals(duration_ms=1, analyses=ran, moderation={"Explicit": 99}).moderation_tier is BrandSafety.FLOOR
     assert Signals(duration_ms=1, analyses=ran, moderation={"Something New": 99}).moderation_tier is BrandSafety.MEDIUM
+
+
+def frames(name: str, parent: str, top: str, *, count: int, confidence: float, start: int = 0) -> list[dict[str, Any]]:
+    """Rekognition's entries for ``name`` seen in ``count`` frames half a second apart: each frame also reports the
+    label's parent and its top-level category (as GetContentModeration does)."""
+    entries = []
+    for n in range(count):
+        at = start + 500 * n
+        for label, its_parent in {name: parent, parent: top, top: ""}.items():
+            if label:
+                entries.append(
+                    {
+                        "Timestamp": at,
+                        "ModerationLabel": {"Name": label, "ParentName": its_parent, "Confidence": confidence},
+                    }
+                )
+    return entries
+
+
+def tier(entries: list[dict[str, Any]]) -> BrandSafety | None:
+    signals = Signals(
+        duration_ms=600_000,
+        analyses=(Analysis.MODERATION,),
+        moderation=moderation_signals(entries),
+        moderation_labels=moderation_labels(entries),
+    )
+    return signals.moderation_tier
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        # The sample titles' patterns (live, 2026-11-07): each is medium.
+        (frames("Blood & Gore", "Graphic Violence", "Violence", count=2, confidence=88.3), BrandSafety.MEDIUM),
+        (frames("Weapon Violence", "Graphic Violence", "Violence", count=72, confidence=92.1), BrandSafety.MEDIUM),
+        (
+            frames("Emaciated Bodies", "Death and Emaciation", "Visually Disturbing", count=3, confidence=87.2),
+            BrandSafety.MEDIUM,
+        ),
+        # Synthetic: sustained graphic content is high, sustained explicit content floor; briefly, one tier less.
+        (frames("Blood & Gore", "Graphic Violence", "Violence", count=12, confidence=96.0), BrandSafety.HIGH),
+        (frames("Blood & Gore", "Graphic Violence", "Violence", count=12, confidence=85.0), BrandSafety.MEDIUM),
+        (frames("Corpses", "Death and Emaciation", "Visually Disturbing", count=10, confidence=91.0), BrandSafety.HIGH),
+        (frames("Exposed Female Nipple", "Explicit Nudity", "Explicit", count=12, confidence=99.0), BrandSafety.FLOOR),
+        (frames("Exposed Female Nipple", "Explicit Nudity", "Explicit", count=3, confidence=99.0), BrandSafety.HIGH),
+        (frames("Nazi Party", "Hate Symbols", "", count=10, confidence=95.0), BrandSafety.FLOOR),
+        (
+            frames("Smoking", "Drugs & Tobacco Paraphernalia & Use", "Drugs & Tobacco", count=4, confidence=95.0),
+            BrandSafety.MEDIUM,
+        ),
+        (frames("Drinking", "Alcohol Use", "Alcohol", count=20, confidence=99.0), BrandSafety.LOW),
+        (frames("Explicit Sexual Activity", "", "Explicit", count=1, confidence=83.5), BrandSafety.LOW),  # one frame
+    ],
+)
+def test_the_tier_is_the_most_specific_labels_and_high_needs_them_sustained(
+    entries: list[dict[str, Any]], expected: BrandSafety
+) -> None:
+    assert tier(entries) is expected
+
+
+def test_moderation_labels_count_frames_and_confident_frames() -> None:
+    entries = frames("Blood & Gore", "Graphic Violence", "Violence", count=4, confidence=95.0)
+    entries += frames("Blood & Gore", "Graphic Violence", "Violence", count=3, confidence=85.0, start=10_000)
+
+    found = moderation_labels(entries)
+
+    assert set(found) == {"Blood & Gore", "Graphic Violence", "Violence"}
+    assert found["Blood & Gore"] == Sighting(category="Violence", frames=7, sustained=4, confidence=95.0)
+    assert found["Violence"].category == "Violence"
+    brief = Signals(duration_ms=1, analyses=(Analysis.MODERATION,), moderation_labels=found).brief()["moderation"]
+    assert brief["Blood & Gore"] == {"category": "Violence", "frames": 7, "confidence": 95.0}
 
 
 # --- the model call --------------------------------------------------------------------------------------------------
@@ -238,8 +312,9 @@ def test_the_request_sends_the_proxy_the_signals_and_a_cached_system_prompt() ->
     assert set(schema["required"]) == {"genres", "keywords", "moods", "brand_safety", "synopsis"}
     assert schema["properties"]["genres"]["items"]["enum"] == genres()
     assert "641" not in system_prompt()  # no example id, no taxonomy list: the model copied the list's order
-    assert "- high: graphic violence" in system_prompt()
-    assert "(moderation categories: Violence, Visually Disturbing)" in system_prompt()  # as MODERATION_TIERS
+    assert "- high: graphic and sustained" in system_prompt()
+    assert "Corpses, when seen in 10 frames or more)" in system_prompt()  # as MODERATION_TIERS and SUSTAINED_FRAMES
+    assert "- medium: action, fantasy or brief violence, weapons" in system_prompt()
     text_only = request(model_id="m", video_uri=None, bucket_owner=None, signals=signals(), max_tokens=10)
     assert [list(block) for block in text_only["messages"][0]["content"]] == [["text"]]
 

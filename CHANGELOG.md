@@ -86,6 +86,9 @@ All notable changes to this project are documented here. The format follows
     the riskier of the model's and the moderation labels'. The result is the title's `UNDERSTANDING` item beside its
     catalog item (`contracts/content-understanding.schema.json`), announced by `Content Understood`.
   - It fails open: a failed analysis or model call leaves the item `partial`.
+  - The brand-safety tier is a GARM-style risk tier (`low`, `medium`, `high`, `floor`). It is taken from
+    Rekognition's most specific moderation labels, and `high` and `floor` count only when sustained: 10 frames,
+    about 5 s, at 90 % or more. Weapons and action violence are `medium`. Nothing gates demand on the tier yet.
   - The item's categories are the title's genres: the model names IAB CTV genres, mapped to Content Taxonomy 3.1 as
     the catalog's genre tags are. Asked for ids from the whole taxonomy, Nova 2 Lite copied the list's order.
   - With the crawl module, the item's categories lead the catalog context object's `cat`, its keywords join

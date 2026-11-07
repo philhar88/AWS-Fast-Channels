@@ -133,6 +133,26 @@
   ],
   "moderation": {
    "Visually Disturbing": 87.2
+  },
+  "moderation_labels": {
+   "Death and Emaciation": {
+    "category": "Visually Disturbing",
+    "frames": 3,
+    "sustained": 0,
+    "confidence": 87.2
+   },
+   "Emaciated Bodies": {
+    "category": "Visually Disturbing",
+    "frames": 3,
+    "sustained": 0,
+    "confidence": 87.2
+   },
+   "Visually Disturbing": {
+    "category": "Visually Disturbing",
+    "frames": 3,
+    "sustained": 0,
+    "confidence": 87.2
+   }
   }
  },
  "expect": {
@@ -146,6 +166,7 @@
    "332",
    "648",
    "651"
-  ]
+  ],
+  "brand_safety": "medium"
  }
 }

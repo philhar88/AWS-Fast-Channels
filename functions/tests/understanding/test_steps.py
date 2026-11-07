@@ -335,7 +335,11 @@ def describe_event(**signals: Any) -> dict[str, Any]:
             "speech_ratio": 0.4,
             "transcript": "Where is my dragon?",
             "shots": 120,
-            "moderation": {"Violence": 91.0},
+            "moderation": {"Violence": 96.0},
+            "moderation_labels": {
+                "Violence": {"category": "Violence", "frames": 14, "sustained": 12, "confidence": 96.0},
+                "Blood & Gore": {"category": "Violence", "frames": 14, "sustained": 12, "confidence": 96.0},
+            },
             **signals,
         },
         "failed": [],
@@ -397,7 +401,7 @@ def test_the_model_describes_the_title_and_the_item_is_complete(
     assert stored["cat"] == ["641", "335"]
     assert stored["keywords"] == ["dragon", "quest"]
     assert stored["moods"] == ["epic", "sad"]
-    assert stored["brand_safety"] == "high"  # moderation saw violence
+    assert stored["brand_safety"] == "high"  # moderation saw sustained blood and gore, the model rated it low
     assert stored["moderation"] == ["Violence"]
     assert stored["model"] == "amazon.nova-2-lite-v1:0"
     assert stored["status"] == "complete" and stored["language"] == "en"

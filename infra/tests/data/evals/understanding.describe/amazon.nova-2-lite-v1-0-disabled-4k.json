@@ -14,6 +14,7 @@
     {"name": "expected_categories", "passed": true, "value": 1.0, "threshold": ">= 0.80"},
     {"name": "no_wrong_categories", "passed": true, "value": 1.0, "threshold": ">= 0.90"},
     {"name": "moderation_agreement", "passed": true, "value": 1.0, "threshold": ">= 0.90"},
+    {"name": "brand_safety_expected", "passed": true, "value": 1.0, "threshold": ">= 0.80"},
     {"name": "cost_per_hour", "passed": true, "value": 0.1, "threshold": "<= 0.50"}
   ],
   "cost_usd": "0",

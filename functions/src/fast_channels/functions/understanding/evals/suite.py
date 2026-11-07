@@ -14,6 +14,7 @@ most 25 MB). Only Bedrock is called. The checks:
 | ``expected_categories`` | calls whose first three categories (what bidders see) hold an expected one: 0.80 |
 | ``no_wrong_categories`` | calls whose categories hold none of the case's clearly wrong ones: 0.90 |
 | ``moderation_agreement`` | calls whose own tier is at most one step below the moderation labels': 0.90 |
+| ``brand_safety_expected`` | calls whose item tier (the worse of the model's and the labels') is the case's: 0.80 |
 | ``moods_valid`` | the model's moods that are in the vocabulary: 0.90 |
 | ``cost_per_hour`` | the mean upper-bound cost of an hour-long title (see :func:`upper_cost`): at most $0.50 |
 """
@@ -44,13 +45,14 @@ WINDOW_S: Final = 60
 """Each excerpt window; three make a clip of three minutes (180 frames: the model samples one a second)."""
 INLINE_MAX_BYTES: Final = 25 * 1024 * 1024
 """Bedrock's limit on a video sent inline."""
-SUITE: Final = "understanding describe conformance v1: the sample titles' signals and excerpts"
+SUITE: Final = "understanding describe conformance v2: the sample titles' signals and excerpts, expected tiers"
 THRESHOLDS: Final = {
     "schema_valid": 0.99,
     "categories_valid": 0.90,
     "expected_categories": 0.80,
     "no_wrong_categories": 0.90,
     "moderation_agreement": 0.90,
+    "brand_safety_expected": 0.80,
     "moods_valid": 0.90,
 }
 COST_PER_HOUR_MAX: Final = Decimal("0.50")
@@ -66,6 +68,8 @@ class Expect(BaseModel):
     """At least one of these Content Taxonomy 3.1 ids among the first three checked categories, which the catalog
     context object carries to bidders."""
     categories_none: tuple[str, ...] = ()
+    brand_safety: BrandSafety | None = None
+    """The item's tier the title should get: the worse of the model's and the moderation labels'."""
     """Content Taxonomy 3.1 ids that are clearly wrong for the title (Documentary for a fantasy film)."""
 
 
@@ -159,6 +163,9 @@ class Run:
     expected: bool = False
     wrong: bool = False
     agrees: bool = False
+    tier: BrandSafety | None = None
+    """The item's tier: the worse of the model's and the moderation labels'."""
+    tier_expected: bool = False
     usage: dict[str, int] = field(default_factory=dict)
     cost_usd: Decimal = Decimal(0)
     """The call's upper-bound cost (:func:`upper_cost`)."""
@@ -176,6 +183,8 @@ class Run:
             "expected": self.expected,
             "wrong": self.wrong,
             "agrees": self.agrees,
+            "tier": self.tier,
+            "tier_expected": self.tier_expected,
             "usage": self.usage,
             "cost_usd": str(self.cost_usd),
             "output": self.output,
@@ -218,6 +227,8 @@ def run_case(case: Case, index: int, *, settings: TaskSettings, model_id: str, c
     run.wrong = bool(set(checked.cat) & set(case.expect.categories_none))
     floor = case.signals.moderation_tier or BrandSafety.LOW
     run.agrees = checked.brand_safety is not None and checked.brand_safety.rank >= floor.rank - 1
+    run.tier = description(raw, moderation_tier=case.signals.moderation_tier).brand_safety
+    run.tier_expected = case.expect.brand_safety is None or run.tier is case.expect.brand_safety
     return run
 
 
@@ -265,6 +276,7 @@ def checks(results: Sequence[Run]) -> tuple[EvalCheck, ...]:
         "expected_categories": share(sum(r.expected for r in results), len(results)),
         "no_wrong_categories": share(sum(r.schema_valid and not r.wrong for r in results), len(results)),
         "moderation_agreement": share(sum(r.agrees for r in results), len(results)),
+        "brand_safety_expected": share(sum(r.schema_valid and r.tier_expected for r in results), len(results)),
         "moods_valid": share(sum(r.valid_moods for r in results), sum(len(r.raw_moods) for r in results)),
     }
     found = [
