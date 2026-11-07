@@ -42,6 +42,13 @@ def closure(package: str) -> set[str]:
     return {line.strip().removeprefix("./") for line in exported.splitlines() if line.startswith("./")}
 
 
+def workspace_packages(requirements: Path) -> list[str]:
+    """The workspace packages (``./<dir>`` lines) of an export, by project name: uv reuses its cached build of a local
+    package until its ``pyproject.toml`` changes, so each is rebuilt from its sources (as ``bundling`` does)."""
+    directories = [line.strip() for line in requirements.read_text().splitlines() if line.startswith("./")]
+    return [tomllib.loads((REPO_ROOT / d / "pyproject.toml").read_text())["project"]["name"] for d in directories]
+
+
 def modules(directory: str) -> list[str]:
     """Every module of the workspace package in ``directory`` (``fast_channels.<name>...``)."""
     root = REPO_ROOT / directory / "src"
@@ -98,7 +105,8 @@ def test_a_bundled_packages_closure_installed_alone_imports_every_module(package
     subprocess.run([uv(), *EXPORT, "--package", package, "--output-file", str(requirements)], check=True, cwd=REPO_ROOT)
     target = tmp_path / "bundle"
     install = [uv(), "pip", "install", "--no-sources", "--quiet", "--python", sys.executable, "--target", str(target)]
-    subprocess.run([*install, "--requirement", str(requirements)], check=True, cwd=REPO_ROOT)
+    refresh = [arg for name in workspace_packages(requirements) for arg in ("--refresh-package", name)]
+    subprocess.run([*install, *refresh, "--requirement", str(requirements)], check=True, cwd=REPO_ROOT)
     names = modules(BUNDLED[package])
     program = (
         f"import importlib, sys\nsys.path[:0] = [{str(target)!r}]\n"
