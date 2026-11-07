@@ -170,6 +170,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The probe no longer reports a channel off air in the minute after it starts.** A just-started channel's
+  playlist keeps media sequence 0 while it fills its window, and the probe failed every run in that minute
+  ("the media sequence stayed at 0"). Seen in the v4.2.0 release gate, with canary runs 34-36 s after a
+  start. The probe now checks that the newest segment advances: the media sequence plus the segments listed.
 - **A release's smoke test on the lab channel works on prefixes of 7 or more characters.** Its role could invoke
   only `FastChannels-<prefix>-Operator-*`. CloudFormation shortens a generated function name's stack part to as
   few as 25 characters, so a 7-character prefix's tool functions are named `FastChannels-<prefix>-Operato-…`

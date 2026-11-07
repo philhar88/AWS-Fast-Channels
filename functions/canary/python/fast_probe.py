@@ -4,8 +4,10 @@ Every five minutes while the census counts a running channel (``CENSUS_PARAMETER
 of ``CHANNELS`` (``{"<channel>": "<SSAI multivariant playlist URL>"}``) as a viewer would:
 
 - the multivariant playlist resolves and lists a variant;
-- the variant's media sequence advances between two polls a target duration and a half apart (the channel is on
-  air: two failed runs in a row start runbook R12);
+- the variant's newest segment advances between two polls a target duration and a half apart (the channel is on
+  air: two failed runs in a row start runbook R12). The newest segment's number is the media sequence plus the
+  segments listed: a channel that has just started keeps media sequence 0 while its playlist fills its window
+  (about a minute), so its sequence alone does not move;
 - the newest segment resolves (its first kilobyte);
 - every ``EXT-X-DATERANGE`` has an ``ID`` and a ``START-DATE`` that parses.
 
@@ -63,6 +65,11 @@ def media_sequence(playlist: str) -> int:
     return int(match.group(1))
 
 
+def newest(playlist: str, listed: int) -> int:
+    """The media sequence number of the newest of the ``listed`` segments of ``playlist``."""
+    return media_sequence(playlist) + listed - 1
+
+
 def target_duration(playlist: str) -> int:
     match = re.search(r"^#EXT-X-TARGETDURATION:(\d+)", playlist, re.MULTILINE)
     return int(match.group(1)) if match else 6
@@ -90,18 +97,20 @@ def probe(channel: str, url: str) -> dict[str, Any]:
     if not listed:
         raise ProbeError(f"{channel}: the multivariant playlist lists no variant")
     variant_url, first = fetch(listed[0])
-    before = media_sequence(first.decode())
-    wait = min(target_duration(first.decode()) * 1.5, MAX_WAIT_S)
+    earlier = first.decode()
+    before = media_sequence(earlier)
+    wait = min(target_duration(earlier) * 1.5, MAX_WAIT_S)
     time.sleep(wait)
     variant_url, second = fetch(listed[0])
     playlist = second.decode()
     after = media_sequence(playlist)
-    if after <= before:
-        raise ProbeError(f"{channel}: the media sequence stayed at {before} for {wait:.0f} s (off air?)")
-    newest = segments(variant_url, playlist)
-    if not newest:
+    listed_now = segments(variant_url, playlist)
+    if not listed_now:
         raise ProbeError(f"{channel}: the media playlist lists no segment")
-    _, head = fetch(newest[-1], first_bytes=1024)
+    was = newest(earlier, len(segments(variant_url, earlier)))
+    if newest(playlist, len(listed_now)) <= was:
+        raise ProbeError(f"{channel}: no new segment for {wait:.0f} s (the newest stayed at {was}; off air?)")
+    _, head = fetch(listed_now[-1], first_bytes=1024)
     if not head:
         raise ProbeError(f"{channel}: the newest segment is empty")
     ranges = dateranges(playlist)
