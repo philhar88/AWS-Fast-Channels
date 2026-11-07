@@ -19,6 +19,7 @@ from fast_channels.infra.constructs.operator.console import CONSOLE_DIST, Consol
 from fast_channels.infra.constructs.operator.deliveries import AgentTelemetry
 from fast_channels.infra.constructs.operator.gateway import AgentGateway
 from fast_channels.infra.constructs.operator.identity import OperatorIdentity, managed_login_url
+from fast_channels.infra.constructs.operator.roster import AgentRoster
 from fast_channels.infra.constructs.operator.runtime import RegistryTask, SchedulerAgent
 from fast_channels.infra.constructs.operator.tools import AgentTools
 
@@ -51,7 +52,8 @@ class OperatorStack(Stack):
     Attributes:
         identity, tools, gateway, agent, console: the operator constructs; autopilot is ``None`` when no IaC
         channel has an ``autopilot_cron``; budget is the scheduler task's AWS Budgets action with
-        ``modules.models.budgets_action`` and a daily cap, else ``None``.
+        ``modules.models.budgets_action`` and a daily cap, else ``None``; roster is the agent roster with
+        ``modules.agents``, else ``None``.
 
     Raises:
         ValueError: ``data.memory`` is missing.
@@ -77,6 +79,8 @@ class OperatorStack(Stack):
         traces = config.observability.transaction_search is not TransactionSearchMode.OFF
         domain_prefix = f"{prefix}-{self.account}"
         crons = {channel.name: channel.autopilot_cron for channel in config.channels.iac if channel.autopilot_cron}
+        envelope = config.modules.agents.envelope.resolved(prefix) if config.modules.agents.enabled else None
+        roles = envelope.enabled() if envelope else []
 
         self.console = OperatorConsole(
             self,
@@ -92,6 +96,7 @@ class OperatorStack(Stack):
             callback_urls=[self.console.url],
             console_dev_url=config.agent.console_dev_url,
             autopilot=bool(crons) or config.agent.machine_client,
+            agents=roles,
             admin_email=config.agent.admin_email,
             removal_policy=removal,
         )
@@ -118,6 +123,7 @@ class OperatorStack(Stack):
             targets=self.tools.targets,
             agent_channel_prefix=agent_namespace(prefix),
             autopilot_channels=tuple(crons),
+            agents={role: envelope.agents[role] for role in roles} if envelope else None,
         )
         model_task = None
         if models is not None:
@@ -187,10 +193,24 @@ class OperatorStack(Stack):
                 removal_policy=removal,
                 alert_topic=media.alert_topic,
             )
+        self.roster: AgentRoster | None = None
+        if envelope is not None:
+            self.roster = AgentRoster(
+                self,
+                "Roster",
+                prefix=prefix,
+                envelope=envelope,
+                identity=self.identity,
+                runtime_invoke_url=self.agent.invoke_url,
+                alert_topic=media.alert_topic,
+                log_retention=retention,
+                removal_policy=removal,
+            )
         AgentGateway.protect(
             self.agent.runtime,
             *(function.function for function in self.tools.functions.values()),
             *([self.autopilot.function.function] if self.autopilot else []),
+            *(runner.function for runner in (self.roster.runners.values() if self.roster else ())),
         )
         self.console.publish(
             ConsoleConfig(
@@ -237,5 +257,10 @@ class OperatorStack(Stack):
         }
         if self.identity.autopilot_client is not None:
             outputs["AutopilotClientId"] = self.identity.autopilot_client.user_pool_client_id
+        if self.roster is not None:
+            outputs["AgentsTable"] = self.roster.table.table_name
+            for role, runner in self.roster.runners.items():
+                outputs[f"{role.value.title()}AgentRunner"] = runner.function.function_name
+                outputs[f"{role.value.title()}AgentClientId"] = self.identity.agent_clients[role].user_pool_client_id
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)

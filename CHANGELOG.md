@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The `agents` module (off by default; needs `ops`): the agent roster inside an autonomy envelope v1**
+  ([docs/agents.md](docs/agents.md), [ADR-0023](docs/adr/0023-machine-principals.md) amendment).
+  - Each agent of the roster that the envelope turns on is a machine principal of the operator plane, with its own
+    Cognito client.
+  - `modules.agents.envelope` says what each agent may do unattended: its level, the tools it may call with their
+    channels and per-hour caps, its actions an hour, and what always needs a human.
+  - The Gateway's Cedar policies are generated from the envelope. Each agent's runner answers its approval-gated
+    calls from the envelope and takes the caps in one conditional DynamoDB transaction (two concurrent restarts
+    under a cap of one: one approved).
+  - Every decision and tool call goes to the ledger chain `agents/<role>`, and every deployed envelope to
+    `agents/envelope`. A refusal is escalated to the alert topic.
+  - v1 ships the operations agent's envelope: it restarts each always-on channel at most once an hour, and stopping,
+    creating or deleting a channel needs a human. The default lists no always-on channel. The envelope is not signed
+    yet.
+
 ## [4.1.1] - 2026-11-06
 
 A patch release: unplayed line ads give their budget back after 10 to 15 minutes, the as-run sweep counts a break

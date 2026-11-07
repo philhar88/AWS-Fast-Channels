@@ -23,6 +23,7 @@ from typing import Any, Final
 
 from aws_cdk import Token
 
+from fast_channels.core.agents.envelope import SCOPES, AgentEnvelope, Level, Role
 from fast_channels.functions.tools.registry import Access, Approval, ToolSpec
 
 
@@ -67,6 +68,16 @@ class CedarPolicy:
     "Overly Restrictive" (agentcore.md §6.2)."""
 
 
+@dataclass(frozen=True, slots=True)
+class AgentPrincipal:
+    """An agent of the roster (``modules.agents``): its role, its Cognito client and its part of the envelope
+    (resolved for the deployment)."""
+
+    role: Role
+    client_id: str
+    envelope: AgentEnvelope
+
+
 def gateway_policies(
     tools: Iterable[ToolSpec[Any, Any]],
     *,
@@ -74,6 +85,7 @@ def gateway_policies(
     agent_channel_prefix: str,
     autopilot_client_id: str | None = None,
     autopilot_channels: Sequence[str] = (),
+    agents: Sequence[AgentPrincipal] = (),
 ) -> list[CedarPolicy]:
     """The Gateway's Cedar policies for ``tools``.
 
@@ -85,10 +97,11 @@ def gateway_policies(
             when there is no autopilot, which leaves out every autopilot policy.
         autopilot_channels: the channels the autopilot schedules, the only ones it may plan and publish on; none for
             a machine client without an autopilot (``agent.machine_client``), which may then call READ tools only.
+        agents: the roster's agents (:func:`agent_policies`).
 
     Raises:
-        ValueError: an :data:`AUTOPILOT_TOOLS` entry that is not a registered tool, or a value that would break out
-            of a Cedar string literal.
+        ValueError: an :data:`AUTOPILOT_TOOLS` entry or an envelope tool that is not a registered tool, or a value
+            that would break out of a Cedar string literal.
     """
     specs = list(tools)
     gateway = _literal(gateway_arn)
@@ -109,6 +122,8 @@ def gateway_policies(
     ]
     if autopilot_client_id is not None:
         policies += _autopilot_policies(specs, gateway, _literal(autopilot_client_id), autopilot_channels)
+    for agent in agents:
+        policies += agent_policies(specs, gateway, agent)
     destructive = [
         s.qualified_name
         for s in specs
@@ -176,6 +191,70 @@ def _autopilot_policies(
                 name="forbid_autopilot_confirm",
                 description="Autopilot client: no approval-gated tool except schedule publishing",
                 statement=_statement("forbid", gated, gateway, when=autopilot),
+                forbid=True,
+            )
+        )
+    return policies
+
+
+def agent_policies(specs: Sequence[ToolSpec[Any, Any]], gateway: str, agent: AgentPrincipal) -> list[CedarPolicy]:
+    """An agent's policies, generated from its envelope (``core.agents.envelope``): READ tools; each granted tool,
+    on its channels only when it is channel-scoped; and a forbid of every other WRITE or DESTRUCTIVE tool, of every
+    tool that needs a human, and, at L1 (propose only), of every approval-gated tool. The runner answers the
+    approval-gated calls from the same envelope, with its caps (the other enforcement point)."""
+    specs = list(specs)
+    names = {spec.qualified_name: spec for spec in specs}
+    envelope = agent.envelope
+    if missing := sorted({grant.tool for grant in envelope.grants} - set(names)):
+        raise ValueError(f"the {agent.role.value} agent's envelope grants unknown tools {missing}")
+    if unknown := sorted(set(envelope.needs_human) - set(names)):
+        raise ValueError(f"the {agent.role.value} agent's envelope lists unknown tools {unknown}")
+    role, principal = agent.role.value, _is(_literal(agent.client_id))
+    reads = [spec.qualified_name for spec in specs if spec.access is Access.READ]
+    policies = [
+        CedarPolicy(
+            name=f"permit_{role}_read",
+            description=f"The {role} agent: READ tools",
+            statement=_statement("permit", reads, gateway, when=principal),
+            forbid=False,
+        )
+    ]
+    for grant in envelope.grants:
+        if names[grant.tool].access is Access.READ:
+            continue
+        when = principal
+        if grant.tool in SCOPES and not grant.channels:
+            continue  # its channels resolved to none (no always-on channel): it stays forbidden
+        if grant.channels:
+            field, pattern = SCOPES[grant.tool]
+            matches = " || ".join(
+                f'context.input.{field} like "{pattern.format(channel=_literal(channel))}"'
+                for channel in grant.channels
+            )
+            when = f"{principal} && context.input has {field} && ({matches})"
+        scope = f" on {', '.join(grant.channels)}" if grant.channels else ""
+        policies.append(
+            CedarPolicy(
+                name=f"permit_{role}_{grant.tool.partition('___')[2]}",
+                description=f"The {role} agent: {grant.tool}{scope} (its envelope)",
+                statement=_statement("permit", [grant.tool], gateway, when=when),
+                forbid=False,
+            )
+        )
+    granted = {grant.tool for grant in envelope.grants if grant.channels or grant.tool not in SCOPES}
+    if envelope.level is Level.L1:
+        granted -= {tool for tool in granted if names[tool].approval is Approval.CONFIRM}
+    forbidden = sorted(
+        name
+        for name, spec in names.items()
+        if (spec.access is not Access.READ and name not in granted) or name in envelope.needs_human
+    )
+    if forbidden:
+        policies.append(
+            CedarPolicy(
+                name=f"forbid_{role}",
+                description=f"The {role} agent: no tool outside its envelope",
+                statement=_statement("forbid", forbidden, gateway, when=principal),
                 forbid=True,
             )
         )

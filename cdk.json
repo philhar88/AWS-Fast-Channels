@@ -176,6 +176,50 @@
         "viewer": {
           "enabled": false,
           "ad_panel": false
+        },
+        "agents": {
+          "enabled": false,
+          "envelope": {
+            "always_on": [],
+            "agents": {
+              "operations": {
+                "enabled": true,
+                "level": "L2",
+                "grants": [
+                  {
+                    "tool": "channels___start_channel",
+                    "channels": [
+                      "{always_on}"
+                    ],
+                    "per_hour": 1
+                  }
+                ],
+                "actions_per_hour": 6,
+                "spend_usd_per_day": "0",
+                "needs_human": [
+                  "channels___stop_channel",
+                  "channels___create_channel",
+                  "channels___delete_channel"
+                ]
+              },
+              "programming": {
+                "enabled": false,
+                "level": "L2",
+                "grants": [],
+                "actions_per_hour": 10,
+                "spend_usd_per_day": "0",
+                "needs_human": []
+              },
+              "sales": {
+                "enabled": false,
+                "level": "L1",
+                "grants": [],
+                "actions_per_hour": 10,
+                "spend_usd_per_day": "0",
+                "needs_human": []
+              }
+            }
+          }
         }
       }
     },

@@ -63,6 +63,12 @@
     "viewer": {
       "enabled": true,
       "ad_panel": true
+    },
+    "agents": {
+      "enabled": true,
+      "envelope": {
+        "always_on": []
+      }
     }
   }
 }

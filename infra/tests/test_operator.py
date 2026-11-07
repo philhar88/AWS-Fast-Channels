@@ -18,6 +18,7 @@ from aws_cdk.assertions import Template
 from cdk_nag import AwsSolutionsChecks, ServerlessChecks
 from pydantic import BaseModel
 
+from fast_channels.core.agents.envelope import Envelope, Role
 from fast_channels.functions.tools.registry import Access, Approval, ToolSpec, all_tools, confirm_tools
 from fast_channels.infra.config import FastChannelsConfig
 from fast_channels.infra.constructs.alerts import alert_topic
@@ -1056,3 +1057,147 @@ def test_start_channel_may_skip_missed_programs_on_every_deployment_channel(ever
 
     assert "program/fast-*/*" in allowed("mediatailor:DeleteProgram")
     assert "epg/*" in allowed("s3:PutObject")
+
+
+# --- the agent roster (M9) ------------------------------------------------------------------------------------------
+
+AGENTS = {
+    "modules.ops.enabled": True,
+    "modules.agents.enabled": True,
+    "modules.agents.envelope": {"always_on": ["fast-demo"]},
+}
+
+
+def _agent_policies(envelope: Envelope, role: Role = Role.OPERATIONS) -> dict[str, cedar.CedarPolicy]:
+    principal = cedar.AgentPrincipal(role, "agent123", envelope.resolved("fast").agents[role])
+    policies = cedar.agent_policies(all_tools(), "arn:aws:bedrock-agentcore:us-east-1:1:gateway/g", principal)
+    return {p.name: p for p in policies}
+
+
+def test_cedar_for_an_agent_follows_its_envelope() -> None:
+    """Parity: the agent may call READ tools and its grants (scoped to their channels), and every other tool that is
+    not READ, or that needs a human, is forbidden."""
+    envelope = Envelope(always_on=("fast-demo",))
+    policies = _agent_policies(envelope)
+    agent = envelope.resolved("fast").agents[Role.OPERATIONS]
+    reads = {s.qualified_name for s in all_tools() if s.access is Access.READ}
+    writes = {s.qualified_name for s in all_tools() if s.access is not Access.READ}
+
+    assert set(policies) == {"permit_operations_read", "permit_operations_start_channel", "forbid_operations"}
+    assert _actions(policies["permit_operations_read"].statement) == reads
+    start = policies["permit_operations_start_channel"].statement
+    assert _actions(start) == {grant.tool for grant in agent.grants}
+    assert start.endswith(
+        'principal.getTag("client_id") == "agent123" && context.input has channel && '
+        '(context.input.channel like "fast-demo") };'
+    )
+    forbidden = _actions(policies["forbid_operations"].statement)
+    assert forbidden == (writes - {grant.tool for grant in agent.grants}) | set(agent.needs_human)
+    assert policies["forbid_operations"].forbid
+    assert all('principal.getTag("client_id") == "agent123"' in p.statement for p in policies.values())
+
+
+def test_cedar_forbids_a_propose_only_agent_every_gated_tool() -> None:
+    envelope = Envelope.model_validate(
+        {
+            "agents": {
+                "sales": {
+                    "enabled": True,
+                    "level": "L1",
+                    "grants": [{"tool": "schedule___publish", "channels": ["fast-demo"]}],
+                }
+            }
+        }
+    )
+    policies = _agent_policies(envelope, Role.SALES)
+
+    assert "schedule___publish" in _actions(policies["forbid_sales"].statement)
+
+
+def test_cedar_refuses_an_envelope_with_an_unknown_tool() -> None:
+    envelope = Envelope.model_validate({"agents": {"operations": {"enabled": True, "grants": [{"tool": "x___y"}]}}})
+
+    with pytest.raises(ValueError, match=r"grants unknown tools \['x___y'\]"):
+        _agent_policies(envelope)
+
+
+@pytest.fixture(scope="module")
+def roster(dist: Path) -> Plane:
+    return build({**EVERYTHING, **AGENTS}, dist=dist)
+
+
+def test_each_agent_is_a_machine_client_the_gateway_and_runtime_accept(roster: Plane) -> None:
+    template = roster.template
+    clients = {
+        name: c["Properties"]
+        for name, c in resources(template, "AWS::Cognito::UserPoolClient").items()
+        if name.startswith("IdentityUsersAgentOperations")
+    }
+
+    [(name, client)] = clients.items()
+    assert client["AllowedOAuthFlows"] == ["client_credentials"] and client["GenerateSecret"] is True
+    for resource in (*resources(template, "AWS::BedrockAgentCore::Gateway").values(), only_runtime(template)):
+        allowed = resource["Properties"]["AuthorizerConfiguration"]["CustomJWTAuthorizer"]["AllowedClients"]
+        assert {"Ref": name} in allowed
+    named = {p["Properties"]["Name"] for p in resources(template, "AWS::BedrockAgentCore::Policy").values()}
+    assert {"fast_tools_permit_operations_read", "fast_tools_forbid_operations"} <= named
+
+
+def test_the_runner_holds_the_envelope_and_may_touch_only_its_caps_chain_and_topic(roster: Plane) -> None:
+    template = roster.template
+    [(name, runner)] = [
+        (k, f["Properties"])
+        for k, f in resources(template, "AWS::Lambda::Function").items()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.runner.handler"
+    ]
+    env = runner["Environment"]["Variables"]
+    envelope = Envelope.model_validate_json(env["ENVELOPE"])
+
+    assert env["ROLE"] == "operations"
+    assert envelope.version == Envelope(always_on=("fast-demo",)).resolved("fast").version
+    assert (env["AGENTS_TABLE"], env["LEDGER_TABLE"]) == ("fast-agents", "fast-ledger")
+    assert runner["Timeout"] == 900
+    role = runner["Role"]["Fn::GetAtt"][0]
+    [allowed] = [
+        p["Properties"]["PolicyDocument"]["Statement"]
+        for p in resources(template, "AWS::IAM::Policy").values()
+        if p["Properties"]["Roles"] == [{"Ref": role}]
+    ]
+    by_action = {a: s for s in allowed for a in as_list(s["Action"])}
+    assert by_action["dynamodb:UpdateItem"]["Condition"] == {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["CAP#operations*"]}
+    }
+    assert by_action["dynamodb:PutItem"]["Condition"] == {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["agents/operations"]}
+    }
+    assert "sns:Publish" in by_action and "cognito-idp:DescribeUserPoolClient" in by_action
+    assert name.startswith("RosterOperationsRunner")
+
+
+def test_the_caps_table_expires_its_counters_and_the_envelope_is_recorded_on_deploy(roster: Plane) -> None:
+    template = roster.template
+    tables = [t["Properties"] for t in resources(template, "AWS::DynamoDB::GlobalTable").values()]
+    [caps] = [t for t in tables if t.get("TableName") == "fast-agents"]
+
+    assert caps["TimeToLiveSpecification"] == {"AttributeName": "ttl", "Enabled": True}
+    assert len(resources(template, "Custom::Trigger")) == 1
+    [record] = [
+        f["Properties"]
+        for f in resources(template, "AWS::Lambda::Function").values()
+        if f["Properties"].get("Handler") == "fast_channels.functions.agents.envelope_record.handler"
+    ]
+    assert "ENVELOPE" in record["Environment"]["Variables"]
+
+
+def test_without_the_agents_module_there_is_no_roster(template: Template, named_outputs: Any) -> None:
+    handlers = {f["Properties"].get("Handler") for f in resources(template, "AWS::Lambda::Function").values()}
+
+    assert not {h for h in handlers if h and ".agents." in h}
+    assert not [k for k in named_outputs(template) if "Agent" in k and k != "AutopilotClientId"]
+
+
+def test_cedar_without_an_always_on_channel_forbids_every_restart() -> None:
+    policies = _agent_policies(Envelope())
+
+    assert "permit_operations_start_channel" not in policies
+    assert "channels___start_channel" in _actions(policies["forbid_operations"].statement)

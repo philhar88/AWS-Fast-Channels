@@ -285,6 +285,7 @@ lists what a teardown leaves behind.
 | [Known limitations and product suggestions](docs/limitations.md) | What we found in the AWS services and open-source projects the reference uses: what each item means for a deployment, what the repository does about it, and what we suggest to the product |
 | [Workarounds to remove](docs/workarounds.md) | The AWS product behaviour we work around, where each workaround lives and what to delete when AWS fixes it |
 | [Reference viewer](docs/viewer.md) | The `viewer` module: demo personas, a rail of recommended channels, ticketed playback and the "why these ads" panel; its 10-minute demo script |
+| [The agent roster](docs/agents.md) | The `agents` module: agents that operate the stage as machine principals inside an autonomy envelope, Cedar and the runner as its enforcement points, the ledger and escalation |
 | [Migrating from v2](docs/migration-from-v2.md) | What changed and how to move from the SAM-based v2 |
 | [Decision records](docs/adr/README.md) | Why the architecture is the way it is |
 | [Console](console/README.md), [Agent](agent/README.md) | Component READMEs |

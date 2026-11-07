@@ -1,7 +1,7 @@
 """Cognito identity of the operator plane: operator users and groups, the console and autopilot app clients."""
 
 from collections.abc import Sequence
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_cognito as cognito
@@ -9,6 +9,9 @@ from constructs import Construct
 
 from fast_channels.infra import nag
 from fast_channels.infra.constructs.operator.cedar import Group
+
+if TYPE_CHECKING:
+    from fast_channels.core.agents.envelope import Role
 
 RESOURCE_SERVER: Final = "fast-channels"
 INVOKE_SCOPE: Final = "agent.invoke"
@@ -43,6 +46,9 @@ class OperatorIdentity(Construct):
       mint autopilot tokens and plan and publish schedules on the autopilot's channels. Deny
       ``cognito-idp:DescribeUserPoolClient`` on this pool to every other principal (SCP or permissions boundary)
       where read-only AWS access is broader than schedule control.
+    - ``agent_clients`` (``modules.agents``): one confidential machine client per agent of the roster, like the
+      autopilot's: its ``client_id`` is the agent's principal in the Gateway's Cedar policies (ADR-0023), and
+      the same caution about ``DescribeUserPoolClient`` applies to each.
 
     Args:
         domain_prefix: managed login domain prefix, unique in the region
@@ -51,6 +57,7 @@ class OperatorIdentity(Construct):
         console_dev_url: a local dev server origin (e.g. :data:`LOCAL_CONSOLE_URL`) to accept as well; any process
             listening there on an operator's machine could receive their authorization codes.
         autopilot: create the autopilot's machine client (some channel has an ``autopilot_cron``).
+        agents: the roster's agents to create a machine client for (``modules.agents``).
         admin_email: email of the first ``fast-admins`` user, who receives a temporary password; ``None`` creates
             no user.
         removal_policy: what happens to the user pool (and its users) when the stack is deleted.
@@ -58,6 +65,7 @@ class OperatorIdentity(Construct):
     Attributes:
         user_pool, console_client, domain: the Cognito resources.
         autopilot_client: the autopilot's client, ``None`` without ``autopilot``.
+        agent_clients: each agent's client, by role.
         clients: the app clients whose tokens the Gateway and the Runtime accept.
         domain_url: ``https://<prefix>.auth.<region>.amazoncognito.com`` (no trailing slash).
         token_endpoint: OAuth 2.0 token endpoint of the domain.
@@ -72,6 +80,7 @@ class OperatorIdentity(Construct):
         callback_urls: Sequence[str],
         console_dev_url: str | None = None,
         autopilot: bool = False,
+        agents: Sequence[Role] = (),
         admin_email: str | None = None,
         removal_policy: RemovalPolicy = RemovalPolicy.DESTROY,
     ) -> None:
@@ -140,9 +149,22 @@ class OperatorIdentity(Construct):
                 enable_token_revocation=True,
                 prevent_user_existence_errors=True,
             )
+        self.agent_clients: dict[Role, cognito.UserPoolClient] = {
+            role: self.user_pool.add_client(
+                f"Agent{role.value.title()}",
+                generate_secret=True,
+                o_auth=cognito.OAuthSettings(flows=cognito.OAuthFlows(client_credentials=True), scopes=[agent_scope]),
+                supported_identity_providers=[cognito.UserPoolClientIdentityProvider.COGNITO],
+                access_token_validity=Duration.minutes(60),
+                enable_token_revocation=True,
+                prevent_user_existence_errors=True,
+            )
+            for role in agents
+        }
         self.clients: list[cognito.IUserPoolClient] = [
             self.console_client,
             *([self.autopilot_client] if self.autopilot_client else []),
+            *self.agent_clients.values(),
         ]
         self.domain = self._managed_login(domain_prefix)
         self.domain_url = managed_login_url(domain_prefix, Stack.of(self).region)

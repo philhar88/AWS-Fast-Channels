@@ -57,6 +57,8 @@ class LedgerKind(StrEnum):
     """A runbook action (§18.8)."""
     ENVELOPE = "envelope"
     """A new version of the autonomy envelope (§19.3)."""
+    AGENT = "agent"
+    """An agent's tool call, approval, refusal or escalation under the envelope (M9, ADR-0023)."""
     TEST = "test"
     """Synthetic records written to check the ledger (``scripts/ledger_verify.py --write``)."""
 
