@@ -161,6 +161,16 @@ ids through IAB Tech Lab's CTV Genre Mapping, in
 - Tags with no CTV genre, such as `live-action` or `trailer`, are not genres: they go to `kwarray` with the catalog's
   `keywords`.
 
+With the [understanding module](understanding.md) on, the publisher also reads each title's `UNDERSTANDING` item,
+which describes the title from its own pictures and speech:
+
+- `cat` leads with the item's categories, then the genres, at most three in all without repeats. `genres` and
+  `genre` stay the catalog's.
+- `kwarray` adds the item's keywords after the catalog's tags and keywords.
+- `language` falls back to the spoken language that Transcribe found when the catalog names none.
+- A title is published again when its item is written (`Catalog Item Changed`), and a title without an item, or with
+  an item that fails validation, is published from the catalog alone.
+
 The taxonomy files are © IAB Technology Laboratory, Inc., licensed under CC BY 3.0; the source commit, checksums and
 changes are in [`ATTRIBUTION.md`](../core/src/fast_channels/core/crawl/taxonomy/ATTRIBUTION.md).
 

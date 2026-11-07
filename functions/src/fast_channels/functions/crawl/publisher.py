@@ -15,7 +15,7 @@ catalog metadata only, never session, player or viewer data.
 """
 
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
@@ -29,6 +29,8 @@ from fast_channels.core.catalog import ContentItem
 from fast_channels.core.crawl.catalog_context import CACHE_CONTROL, CONTEXT_PREFIX, build_context, context_key, digest
 from fast_channels.core.crawl.taxonomy import default_genre_map
 from fast_channels.core.events import DETAIL_TYPES, CatalogItemChanged, SchedulePublished
+from fast_channels.core.understanding import ITEM_SK, Understanding
+from fast_channels.core.understanding import item_key as understanding_key
 from fast_channels.functions import aws
 from fast_channels.functions.media_library import CHANNEL_PREFIX, program_sk
 from fast_channels.functions.settings import settings
@@ -110,27 +112,44 @@ def plan_titles(published: SchedulePublished) -> list[str]:
 
 
 def publish(content_id: str, *, updated: datetime) -> Outcome:
-    """Bring the object of ``content_id`` in line with its catalog item."""
+    """Bring the object of ``content_id`` in line with its catalog item (and, with the understanding module, its
+    ``UNDERSTANDING`` item)."""
     item = _catalog().get_item(Key=_catalog_key(content_id)).get("Item")
-    return reconcile(content_id, store.plain(item) if item else None, updated=updated)
+    understood = None
+    if item and settings().understanding_items:
+        understood = _catalog().get_item(Key=understanding_key(content_id)).get("Item")
+    return reconcile(
+        content_id,
+        store.plain(item) if item else None,
+        understanding=store.plain(understood) if understood else None,
+        updated=updated,
+    )
 
 
 def sweep(*, updated: datetime) -> Counter[Outcome]:
     """Publish every catalog title, then delete the objects of titles no longer in the catalog."""
     outcomes: Counter[Outcome] = Counter()
     titles: set[str] = set()
-    for item in _catalog_items():
+    items, understood = _catalog_items()
+    for item in items:
         content_id = str(item.get("content_id", ""))
         titles.add(content_id)
-        outcomes[reconcile(content_id, item, updated=updated)] += 1
+        outcomes[reconcile(content_id, item, understanding=understood.get(content_id), updated=updated)] += 1
     for content_id in _published_ids():
         if content_id not in titles:
             outcomes[reconcile(content_id, None, updated=updated)] += 1
     return outcomes
 
 
-def reconcile(content_id: str, item: Mapping[str, Any] | None, *, updated: datetime) -> Outcome:
-    """Write the object of ``item`` if its content changed, or delete it when ``item`` is None."""
+def reconcile(
+    content_id: str,
+    item: Mapping[str, Any] | None,
+    *,
+    updated: datetime,
+    understanding: Mapping[str, Any] | None = None,
+) -> Outcome:
+    """Write the object of ``item`` if its content changed, or delete it when ``item`` is None. ``understanding`` is
+    the title's ``UNDERSTANDING`` item; one that does not validate is left out, and the object is built without it."""
     config = settings()
     s3, key = aws.client("s3"), context_key(content_id)
     if item is None:
@@ -143,6 +162,7 @@ def reconcile(content_id: str, item: Mapping[str, Any] | None, *, updated: datet
             genre_map=default_genre_map(),
             publisher_domain=config.publisher_domain or None,
             updated=updated,
+            understanding=_understanding(content_id, understanding),
         )
     except ValueError as error:  # pydantic's ValidationError included
         logger.error("catalog item not published", extra={"content_id": content_id, "error": str(error)[:1000]})
@@ -182,14 +202,41 @@ def _catalog_key(content_id: str) -> dict[str, str]:
     return {"pk": f"CONTENT#{content_id}", "sk": "META"}
 
 
-def _catalog_items() -> Iterator[dict[str, Any]]:
-    """Every title of the reference catalog (all scan pages), with plain numbers."""
-    request: dict[str, Any] = {"FilterExpression": "sk = :meta", "ExpressionAttributeValues": {":meta": "META"}}
+def _understanding(content_id: str, item: Mapping[str, Any] | None) -> Understanding | None:
+    """The title's understanding, or None when it has none or its item does not validate (logged)."""
+    if not item:
+        return None
+    try:
+        return Understanding.model_validate({k: v for k, v in item.items() if k not in {"pk", "sk"}})
+    except ValueError as error:
+        logger.warning("understanding item left out", extra={"content_id": content_id, "error": str(error)[:500]})
+        return None
+
+
+def _catalog_items() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Every title of the reference catalog (all scan pages), with plain numbers, and, with the understanding module,
+    every ``UNDERSTANDING`` item by content id."""
+    with_understanding = settings().understanding_items
+    request: dict[str, Any] = (
+        {
+            "FilterExpression": "sk IN (:meta, :understanding)",
+            "ExpressionAttributeValues": {":meta": "META", ":understanding": ITEM_SK},
+        }
+        if with_understanding
+        else {"FilterExpression": "sk = :meta", "ExpressionAttributeValues": {":meta": "META"}}
+    )
+    items: list[dict[str, Any]] = []
+    understood: dict[str, dict[str, Any]] = {}
     while True:
         page = _catalog().scan(**request)
-        yield from (store.plain(item) for item in page.get("Items", []))
+        for raw in page.get("Items", []):
+            item = store.plain(raw)
+            if item.get("sk") == ITEM_SK:
+                understood[str(item.get("content_id", ""))] = item
+            else:
+                items.append(item)
         if not (start := page.get("LastEvaluatedKey")):
-            return
+            return items, understood
         request["ExclusiveStartKey"] = start
 
 

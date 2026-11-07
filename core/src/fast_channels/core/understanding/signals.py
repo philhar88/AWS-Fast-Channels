@@ -21,7 +21,8 @@ TOP_LABELS: Final = 25
 LABEL_MIN_CONFIDENCE: Final = 80.0
 MODERATION_MIN_CONFIDENCE: Final = 80.0
 MODERATION_MIN_SIGHTINGS: Final = 2
-"""A category counts only when seen at least twice at that confidence: one frame is too often a false positive."""
+"""A category counts only when seen in at least two frames at that confidence: one frame is too often a false
+positive."""
 SPEECH_GAP_S: Final = 1.0
 """Words closer than this belong to one stretch of speech."""
 
@@ -185,19 +186,22 @@ def label_signals(labels: Iterable[Mapping[str, Any]], *, top: int = TOP_LABELS)
 
 
 def moderation_signals(labels: Iterable[Mapping[str, Any]]) -> dict[str, float]:
-    """Top-level moderation categories seen at least :data:`MODERATION_MIN_SIGHTINGS` times at
-    :data:`MODERATION_MIN_CONFIDENCE` or more, with their highest confidence, from ``GetContentModeration``."""
-    entries = [entry.get("ModerationLabel") or {} for entry in labels]
-    parents = {str(e["Name"]): str(e.get("ParentName") or "") for e in entries if e.get("Name")}
-    sightings: Counter[str] = Counter()
+    """Top-level moderation categories seen in at least :data:`MODERATION_MIN_SIGHTINGS` frames at
+    :data:`MODERATION_MIN_CONFIDENCE` or more, with their highest confidence, from ``GetContentModeration``.
+
+    A frame reports a label and each of its parents (``Explicit`` and ``Explicit Sexual Activity`` at one timestamp),
+    so a sighting is a distinct timestamp, not an entry."""
+    found = [(entry.get("Timestamp", index), entry.get("ModerationLabel") or {}) for index, entry in enumerate(labels)]
+    parents = {str(e["Name"]): str(e.get("ParentName") or "") for _, e in found if e.get("Name")}
+    frames: defaultdict[str, set[Any]] = defaultdict(set)
     confidence: dict[str, float] = {}
-    for entry in entries:
+    for timestamp, entry in found:
         if not entry.get("Name") or float(entry.get("Confidence") or 0) < MODERATION_MIN_CONFIDENCE:
             continue
         top = _top_level(str(entry["Name"]), parents)
-        sightings[top] += 1
+        frames[top].add(timestamp)
         confidence[top] = max(confidence.get(top, 0.0), round(float(entry["Confidence"]), 1))
-    return {name: confidence[name] for name in sorted(confidence) if sightings[name] >= MODERATION_MIN_SIGHTINGS}
+    return {name: confidence[name] for name in sorted(confidence) if len(frames[name]) >= MODERATION_MIN_SIGHTINGS}
 
 
 def _top_level(name: str, parents: Mapping[str, str]) -> str:

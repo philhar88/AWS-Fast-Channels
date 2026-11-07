@@ -102,14 +102,19 @@ class UnderstandingWorkflow(Construct):
             minimum_tls_version=1.2,
             removal_policy=removal_policy,
             auto_delete_objects=removal_policy == RemovalPolicy.DESTROY,
-            server_access_logs_bucket=data.logs_bucket,
-            server_access_logs_prefix="s3/understanding/",
-            target_object_key_format=s3.TargetObjectKeyFormat.partitioned_prefix(s3.PartitionDateSource.EVENT_TIME),
             lifecycle_rules=[
                 s3.LifecycleRule(id="expire-proxies", prefix="proxies/", expiration=Duration.days(PROXY_DAYS)),
                 s3.LifecycleRule(id="expire-results", prefix="results/", expiration=Duration.days(RESULTS_DAYS)),
                 s3.LifecycleRule(id="abort-uploads", abort_incomplete_multipart_upload_after=Duration.days(1)),
             ],
+        )
+        nag.acknowledge(
+            self.bucket,
+            {
+                nag.S3_SERVER_ACCESS_LOGS: "Only the workflow writes and reads it, through its own roles and the jobs "
+                "it starts, which its execution history records; objects expire after 1 and 30 days. The Data "
+                "stack's logs bucket accepts server access logs from its own buckets only."
+            },
         )
         self.queue = mediaconvert.CfnQueue(
             self,

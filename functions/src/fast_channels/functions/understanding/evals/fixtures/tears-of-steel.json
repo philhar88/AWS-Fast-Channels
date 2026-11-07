@@ -1,0 +1,151 @@
+{
+ "content_id": "tears-of-steel",
+ "title": "Tears of Steel",
+ "source": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+ "license": "CC BY 3.0 — © Blender Foundation | mango.blender.org",
+ "duration_ms": 734000,
+ "windows_s": [
+  60,
+  300,
+  480
+ ],
+ "signals": {
+  "duration_ms": 734168,
+  "analyses": [
+   "transcript",
+   "shots",
+   "technical_cues",
+   "labels",
+   "moderation"
+  ],
+  "language": "en",
+  "speech_ratio": 0.155,
+  "transcript": "Like. We have main engine start 4321. You're a jerk, Tom. Look, Celia, we have to follow our passions. You have your robotics, and I just want to be awesome in space. Why don't you just admit that you're freaked out by my robot hand? I'm not freaked out by it's All right, fine, I'm freaked out. I'm having nightmares that I'm being chased by these giant robotic claws. We're done. We're done. Robot's memory synced and locked. This is pretty freaky. Shouldn't you be down there? I heard you guys talking last night. It's not my fault, you know. Oh. Are you ready? Of course you're ready. You're a rock star. How's it looking, Barley? We should have about 10 minutes. Well, that's perfect. We're only one. All systems go, yeah, you go. Oh. That's nice. Nothing to worry about. To. Tom. There she is, now. You love her. She's your passion, be, be tender to her. Be honest. Be tender. Remind her what love is. Um. And action. Memory override in progress. You're a jerk off. Oops, sorry, sorry. Look, Celia, We have to follow our passions. You have your robotics. And I just want to be awesome in space. Get her to come in. 2 minutes left. 2 minutes. You. Why don't you just admit that you're freaked out by my robot hand. Listen, Celia, I was young. And a dick, but there's no reason to destroy the world. Why does he do this? We already tried that one. You broke my heart. I know you forgot me on Earth. I know. I should just brush you. I'm I'm, I'm sorry Good ad-lib. Not my fault. This time. Wait on set. We're out of time. We're out of time. Memory overrate it 90%. Captain, we have to abort. The world's changed, Celia. Maybe we can too. Memory override complete. You know There's a lesson to be learned from this. It could have gone worse",
+  "shots": 152,
+  "mean_shot_s": 4.8,
+  "cues": {
+   "Content": 2,
+   "EndCredits": 1,
+   "OpeningCredits": 3
+  },
+  "credits_at_s": 589.5,
+  "labels": [
+   {
+    "name": "Person",
+    "seconds": 537.9
+   },
+   {
+    "name": "Head",
+    "seconds": 442.0
+   },
+   {
+    "name": "Adult",
+    "seconds": 419.8
+   },
+   {
+    "name": "Male",
+    "seconds": 392.6
+   },
+   {
+    "name": "Face",
+    "seconds": 335.7
+   },
+   {
+    "name": "Man",
+    "seconds": 313.5
+   },
+   {
+    "name": "Female",
+    "seconds": 138.2
+   },
+   {
+    "name": "Woman",
+    "seconds": 128.5
+   },
+   {
+    "name": "Indoors",
+    "seconds": 66.1
+   },
+   {
+    "name": "Interior Design",
+    "seconds": 60.1
+   },
+   {
+    "name": "War",
+    "seconds": 55.6
+   },
+   {
+    "name": "Weapon",
+    "seconds": 53.0
+   },
+   {
+    "name": "Boy",
+    "seconds": 46.8
+   },
+   {
+    "name": "Gun",
+    "seconds": 44.4
+   },
+   {
+    "name": "Happy",
+    "seconds": 39.0
+   },
+   {
+    "name": "Shooting",
+    "seconds": 38.1
+   },
+   {
+    "name": "Teen",
+    "seconds": 38.0
+   },
+   {
+    "name": "Smile",
+    "seconds": 36.5
+   },
+   {
+    "name": "Sad",
+    "seconds": 36.4
+   },
+   {
+    "name": "Smoke",
+    "seconds": 34.4
+   },
+   {
+    "name": "Body Part",
+    "seconds": 30.5
+   },
+   {
+    "name": "Text",
+    "seconds": 27.0
+   },
+   {
+    "name": "Baby",
+    "seconds": 24.2
+   },
+   {
+    "name": "Hand",
+    "seconds": 23.6
+   },
+   {
+    "name": "Outdoors",
+    "seconds": 20.7
+   }
+  ],
+  "moderation": {
+   "Violence": 99.9
+  }
+ },
+ "expect": {
+  "categories_any": [
+   "652",
+   "325"
+  ],
+  "categories_none": [
+   "332",
+   "648",
+   "651",
+   "641",
+   "645"
+  ]
+ }
+}

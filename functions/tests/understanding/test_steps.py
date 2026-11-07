@@ -376,7 +376,7 @@ def test_the_model_describes_the_title_and_the_item_is_complete(
         "converse",
         converse_response(
             {
-                "cat": ["641", "335", "made-up"],
+                "genres": ["Animation", "Fantasy", "made-up"],
                 "keywords": ["Dragon", "quest"],
                 "moods": ["epic", "sad"],
                 "brand_safety": "low",

@@ -18,6 +18,7 @@ Examples:
         --token-file ~/.fast/token --channel <prefix>-agent-eval
     uv run scripts/eval_model.py --rescore evals-results/20261016T120000Z
     uv run scripts/eval_model.py --task recommender --model-id us.anthropic.claude-haiku-5-5 --judge 8
+    uv run scripts/eval_model.py --task understanding.describe --model-id us.amazon.nova-2-lite-v1:0
 
 The default target is a local fake tool server (no AWS resources besides Bedrock). With ``--gateway-url`` the
 tools are the deployed ones, called with the operator access token in ``--token-file``: use a sandbox channel
@@ -27,6 +28,11 @@ The recommender suite (``fast_channels.functions.recs.evals``) runs golden perso
 the real prompt, Converse request and validator; only Bedrock is called. Its settings come from cdk.json's
 ``recommender`` entry if there is one, else from the entry ``modules.recs`` deploys (``core.recs.REGISTRY_DEFAULT``).
 ``--judge N`` adds an Opus judge sample of N rails.
+
+The understanding describe suite (``fast_channels.functions.understanding.evals``) sends each sample title's live
+signals and an excerpt of its pictures, cut from the title's public source with ffmpeg (cached under ``--cache``),
+through the real prompt, forced tool call and checks; only Bedrock is called. Its settings come from cdk.json's
+``understanding.describe`` entry if there is one, else from ``core.understanding.REGISTRY_DEFAULT``.
 """
 
 import argparse
@@ -40,10 +46,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final
 
+import boto3
+from botocore.config import Config
+
 from fast_channels.agent.evals.runner import RunRecord, Target, rescore, run_suite, save, summarise
 from fast_channels.agent.evals.scenarios import SCENARIOS
 from fast_channels.agent.model import Effort, ModelSpec
-from fast_channels.core import recs
+from fast_channels.core import recs, understanding
 from fast_channels.core.model_registry import (
     SCHEDULER_TASK,
     EvalCheck,
@@ -55,15 +64,17 @@ from fast_channels.core.model_registry import (
 )
 from fast_channels.functions.recs import model
 from fast_channels.functions.recs.evals import suite
+from fast_channels.functions.understanding.evals import suite as understanding_suite
 
 REPO: Final = Path(__file__).resolve().parents[1]
 RECORDS: Final = REPO / "evals" / "records"
 SUITES: Final = {
     SCHEDULER_TASK: "scheduler conformance v1 (fake Gateway tools): standard, hard",
     recs.TASK: "recommender conformance v1 (golden cases, fixture catalog)",
+    understanding.TASK: understanding_suite.SUITE,
 }
 """The tasks with a conformance suite."""
-DEFAULTS: Final = {recs.TASK: recs.REGISTRY_DEFAULT}
+DEFAULTS: Final = {recs.TASK: recs.REGISTRY_DEFAULT, understanding.TASK: understanding.REGISTRY_DEFAULT}
 """Registry entries a module deploys when cdk.json names none."""
 
 
@@ -154,12 +165,22 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=Path("evals-results"), help="results directory")
     parser.add_argument("--rescore", nargs="+", type=Path, metavar="DIR", help="re-score saved runs and exit")
     parser.add_argument("--judge", type=int, default=0, metavar="N", help="recommender: Opus judge sample of N rails")
+    parser.add_argument(
+        "--cache",
+        type=Path,
+        default=REPO / "build" / "evals" / "understanding",
+        help="understanding.describe: where the excerpts are cut to",
+    )
     args = parser.parse_args()
 
     if args.task == recs.TASK:
         if len(args.model_id) != 1:
             parser.error("--task evaluates one --model-id")
         return recommender(task_settings(args.task, args.model_id[0]), args)
+    if args.task == understanding.TASK:
+        if len(args.model_id) != 1:
+            parser.error("--task evaluates one --model-id")
+        return describe(task_settings(args.task, args.model_id[0]), args)
 
     if args.rescore:
         records = rescore(args.rescore)
@@ -219,6 +240,29 @@ def recommender(settings: TaskSettings, args: argparse.Namespace) -> int:
         print(f"  {'pass' if check.passed else 'FAIL'}  {check.name:<20} {check.value!s:<10} {check.threshold}")
     for miss, count in suite.misses(results).most_common():
         print(f"  missed {count}x  {miss}")
+    print(f"eval record ({'passed' if record.passed else 'FAILED'}): {write_record(record, args.records)}")
+    return 0 if record.passed else 1
+
+
+def describe(settings: TaskSettings, args: argparse.Namespace) -> int:
+    """Run the understanding describe suite and write its eval record; 0 only if it passed."""
+
+    def progress(run: understanding_suite.Run) -> None:
+        print(
+            f"  {run.case} #{run.run}: {run.failure or 'ok'} genres={run.raw_genres} ${run.cost_usd}", file=sys.stderr
+        )
+
+    config = Config(read_timeout=300, connect_timeout=5, retries={"mode": "adaptive", "max_attempts": 4})
+    client = boto3.client("bedrock-runtime", region_name=args.region, config=config)
+    results = understanding_suite.run_suite(
+        settings, settings.model, client=client, cache=args.cache, runs=args.runs, progress=progress
+    )
+    directory = args.out / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-understanding"
+    understanding_suite.write_runs(directory, results)
+    record = understanding_suite.record(settings, results, runs=args.runs)
+    print(f"results: {directory}", file=sys.stderr)
+    for check in record.checks:
+        print(f"  {'pass' if check.passed else 'FAIL'}  {check.name:<22} {check.value!s:<10} {check.threshold}")
     print(f"eval record ({'passed' if record.passed else 'FAILED'}): {write_record(record, args.records)}")
     return 0 if record.passed else 1
 

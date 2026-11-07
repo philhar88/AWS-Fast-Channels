@@ -22,6 +22,7 @@ from fast_channels.core.crawl.catalog_context import (
     header,
 )
 from fast_channels.core.crawl.taxonomy import default_genre_map
+from fast_channels.core.understanding import Understanding
 
 REPO = Path(__file__).resolve().parents[2]
 PUBLISHER = "example.com"
@@ -237,3 +238,31 @@ def test_the_model_enforces_the_contract() -> None:
 def test_object_keys() -> None:
     assert CONTEXT_PREFIX == "catalog/ctx/v1/" and CACHE_CONTROL == "max-age=300"
     assert context_key("tears-of-steel") == "catalog/ctx/v1/tears-of-steel.json"
+
+
+def test_a_titles_understanding_leads_cat_and_adds_keywords() -> None:
+    """With the understanding module, the understood categories lead ``cat`` (three at most, the genres after), the
+    keywords follow the catalog's, and the spoken language fills a missing one; ``genres`` stays the catalog's."""
+    understood = Understanding.model_validate(
+        {
+            "content_id": "tears-of-steel",
+            "asset_id": "tears-of-steel-1",
+            "status": "complete",
+            "analyses": ["transcript", "labels"],
+            "cat": ["640", "652"],
+            "keywords": ["robots", "live-action"],
+            "language": "en",
+            "duration_ms": 734_000,
+            "model": "amazon.nova-2-lite-v1:0",
+            "analyzed_at": UPDATED,
+        }
+    )
+    plain = build(SAMPLES["tears-of-steel"])
+    enriched = build(SAMPLES["tears-of-steel"].model_copy(update={"language": None}), understanding=understood)
+
+    assert enriched.genres == plain.genres == ["652", "325"]
+    assert enriched.cat == ["640", "652", "325"]
+    assert enriched.kwarray == ["live-action", "robots"]
+    assert enriched.language == "en"
+    assert ";c=640,652,325;" in enriched.hdr and enriched.hdr.endswith(";la=en;pq=1")
+    assert build(SAMPLES["tears-of-steel"], understanding=None) == plain

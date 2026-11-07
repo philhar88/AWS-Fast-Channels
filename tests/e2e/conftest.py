@@ -86,6 +86,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="test_14_demand_pods: cut the delivery function's subscription to the siblings' ADS log over the second "
         "break, so that its impressions can only be counted from the CDN's logs (W-2 1.32); about 20 minutes more",
     )
+    parser.addoption(
+        "--understood",
+        metavar="CONTENT_ID",
+        help="test_27_understanding: use this catalog title's READY encode instead of uploading the test pattern, "
+        "for a long-lived stage; analyse it only if it has no item, and keep its item, catalog title and object",
+    )
 
 
 def pytest_report_header(config: pytest.Config) -> str:

@@ -11,6 +11,8 @@
   "checks": [
     {"name": "schema_valid", "passed": true, "value": 1.0, "threshold": ">= 0.99"},
     {"name": "categories_valid", "passed": true, "value": 1.0, "threshold": ">= 0.90"},
+    {"name": "expected_categories", "passed": true, "value": 1.0, "threshold": ">= 0.80"},
+    {"name": "no_wrong_categories", "passed": true, "value": 1.0, "threshold": ">= 0.90"},
     {"name": "moderation_agreement", "passed": true, "value": 1.0, "threshold": ">= 0.90"},
     {"name": "cost_per_hour", "passed": true, "value": 0.1, "threshold": "<= 0.50"}
   ],

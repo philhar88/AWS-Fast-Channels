@@ -1,0 +1,57 @@
+{
+  "task": "understanding.describe",
+  "key": "amazon.nova-2-lite-v1-0-disabled-4k",
+  "model": "us.amazon.nova-2-lite-v1:0",
+  "effort": "low",
+  "thinking": "disabled",
+  "max_tokens": 4000,
+  "suite": "understanding describe conformance v1: the sample titles' signals and excerpts (4 titles)",
+  "runs": 3,
+  "passed": true,
+  "checks": [
+    {
+      "name": "schema_valid",
+      "passed": true,
+      "value": 1.0,
+      "threshold": ">= 0.99"
+    },
+    {
+      "name": "categories_valid",
+      "passed": true,
+      "value": 1.0,
+      "threshold": ">= 0.90"
+    },
+    {
+      "name": "expected_categories",
+      "passed": true,
+      "value": 1.0,
+      "threshold": ">= 0.80"
+    },
+    {
+      "name": "no_wrong_categories",
+      "passed": true,
+      "value": 1.0,
+      "threshold": ">= 0.90"
+    },
+    {
+      "name": "moderation_agreement",
+      "passed": true,
+      "value": 1.0,
+      "threshold": ">= 0.90"
+    },
+    {
+      "name": "moods_valid",
+      "passed": true,
+      "value": 1.0,
+      "threshold": ">= 0.90"
+    },
+    {
+      "name": "cost_per_hour",
+      "passed": true,
+      "value": 0.0909,
+      "threshold": "<= 0.50"
+    }
+  ],
+  "cost_usd": "0.164353",
+  "recorded_at": "2026-11-07T07:51:32.158392Z"
+}

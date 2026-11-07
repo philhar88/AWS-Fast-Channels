@@ -202,7 +202,8 @@
               }
             },
             "POWERTOOLS_METRICS_NAMESPACE": "FastChannels",
-            "POWERTOOLS_SERVICE_NAME": "crawl.publisher"
+            "POWERTOOLS_SERVICE_NAME": "crawl.publisher",
+            "UNDERSTANDING_ITEMS": "true"
           }
         },
         "Handler": "fast_channels.functions.crawl.publisher.handler",

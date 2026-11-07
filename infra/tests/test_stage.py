@@ -16,8 +16,10 @@ from aws_cdk import aws_ssm as ssm
 from aws_cdk.assertions import Template
 
 from fast_channels.core.naming import check_prefix
+from fast_channels.core.understanding import REGISTRY_DEFAULT as UNDERSTANDING_DEFAULT
+from fast_channels.core.understanding import TASK as UNDERSTANDING_TASK
 from fast_channels.infra.app import build
-from fast_channels.infra.config import ConfigError, FastChannelsConfig, ModulesConfig
+from fast_channels.infra.config import ConfigError, FastChannelsConfig, ModelTask, ModulesConfig, resolve_geo
 from fast_channels.infra.stage import FastChannelsStage, stage_id
 
 type GetDeployment = Callable[..., Any]
@@ -328,9 +330,10 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
         assert on == {"ops", "agents"}
         assert config.modules.agents.envelope.resolved(name).always_on == (f"{name}-demo",)
     else:  # every module but selling, whose creatives their demo lines serve
-        # understanding joins the stages with its model task's eval record (M12, second PR)
-        assert on == set(ModulesConfig.model_fields) - {"selling", "understanding"}
+        assert on == set(ModulesConfig.model_fields) - {"selling"}
         assert config.modules.agents.envelope.always_on == (), "their tests stop channels: none may be restarted"
+        default = {**UNDERSTANDING_DEFAULT, "model": resolve_geo(UNDERSTANDING_DEFAULT["model"], "us-east-1")}
+        assert config.modules.models.tasks[UNDERSTANDING_TASK] == ModelTask.model_validate(default)
     if name != AGENTS_STAGE:  # no demand
         if name not in KIDS_STAGES:
             assert config.modules.release.channels == (f"{name}-demo",)
@@ -431,7 +434,7 @@ def test_unusable_stages_fail_before_any_command_runs(
     assert (captured.out, expected in captured.err) == ("", True), captured.err
 
 
-MERGED_MODULES = ("models", "ops", "release", "demand", "agents")
+MERGED_MODULES = ("models", "ops", "release", "demand", "agents", "understanding")
 """Modules whose code is merged; a module's pull request adds it here, with tests of what it synthesizes."""
 NEEDED_MODULES = ("pds",)
 """Modules a merged one needs on (``release`` needs ``pds``) whose code is not merged yet: they add nothing, so the
@@ -461,6 +464,7 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
             "prefix": "fastm",
             "observability": stage["observability"],  # the stage reads the shared as-run router (not a module)
             "channels": stage["channels"],  # and has a second, child-directed channel (not a module)
+            "agent": stage["agent"],  # it allows its understanding task's video model (not a module)
             **{f"modules.{name}": stage["modules"][name] for name in on},
         }
     )
@@ -476,6 +480,7 @@ def test_fastm_synthesizes_only_what_the_merged_modules_add(deployment: GetDeplo
         "Operator": "FastChannels-fastm-Operator",
         "DemandEdge": "FastChannels-fastm-DemandEdge",
         "DemandBuild": "FastChannels-fastm-DemandBuild",
+        "Understanding": "FastChannels-fastm-Understanding",
     }
     assert names(fastm) == names(merged) | MODULE_STACKS
     modules_on = {stack.node.id: stack for stack in fastm.stacks}
