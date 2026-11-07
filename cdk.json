@@ -234,6 +234,11 @@
           "holdout_percent": 10,
           "cohorts": ["web-en"],
           "refresh_hours": 20
+        },
+        "creatives": {
+          "enabled": false,
+          "moderation": true,
+          "min_confidence": 80
         }
       }
     },

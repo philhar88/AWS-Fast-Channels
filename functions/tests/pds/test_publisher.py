@@ -14,6 +14,7 @@ from botocore.response import StreamingBody
 from botocore.stub import ANY, Stubber
 from pydantic import ValidationError
 
+from fast_channels.core.creatives.registry import ReadyCreatives, RegisteredCreative
 from fast_channels.core.demo_demand import DEMO_CREATIVES, demo_index, demo_index_key
 from fast_channels.core.pds.book import Book, Line
 from fast_channels.core.pds.snapshot import (
@@ -406,3 +407,57 @@ def test_the_run_publishes_the_booked_lines_and_their_budgets(
 
     assert result["lines"] == {"direct-1": ["direct1"], "adcp-buy-1-1": ["direct2"]}
     assert budgeted == [("direct-1", "adcp-buy-1-1")]
+
+
+CREATIVES_KEY = "creatives/ready.json"
+REGISTERED = "cr-0123456789ab"
+READY = ReadyCreatives(
+    ladder_version=LADDER,
+    creatives=(
+        RegisteredCreative(
+            crid=REGISTERED,
+            creative_id=f"{REGISTERED}-x",
+            hls_uri=f"{CDN}/ads/s/{REGISTERED}-x/main.m3u8",
+            duration_ms=30030,
+            width=1920,
+            height=1080,
+            advertiser="Acme Outdoor",
+            adomain="acme-outdoor.example",
+        ),
+    ),
+)
+
+
+def test_the_run_bids_the_registrys_ready_creatives_for_the_lines_that_serve_them(
+    s3: Stubber, ssm: Stubber, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDS_BOOKED_LINES_KEY", BOOKED_KEY)
+    monkeypatch.setenv("PDS_CREATIVES_KEY", CREATIVES_KEY)
+    settings.cache_clear()
+    serve(monkeypatch, ranges())
+    booked = BOOKED.model_copy(update={"creatives": (REGISTERED,), "adomain": "acme-outdoor.example"})
+    document = PublishedLines(lines=(booked,)).model_dump_json().encode()
+    s3.add_response("get_object", body(document), {"Bucket": BUCKET, "Key": BOOKED_KEY})
+    s3.add_response("get_object", body(READY.model_dump_json().encode()), {"Bucket": BUCKET, "Key": CREATIVES_KEY})
+    published(s3, None)
+    kit(s3, ssm)
+    written(s3)
+    monkeypatch.setattr(publisher, "set_budgets", lambda client, **kw: {})
+
+    result = publisher.handler({}, Context())
+
+    assert result["lines"] == {"direct-1": ["direct1"], "adcp-buy-1-1": [REGISTERED]}
+
+
+def test_no_ready_creatives_yet_is_none(s3: Stubber) -> None:
+    s3.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    assert publisher.ready_creatives(BUCKET, CREATIVES_KEY) is None
+
+
+def test_the_book_marks_registered_creatives(s3: Stubber, ssm: Stubber) -> None:
+    kit(s3, ssm)
+    line = BOOKED.model_copy(update={"creatives": (REGISTERED,)})
+    own = publisher.own_book(
+        LINED.model_copy(update={"lines": (LINE, line)}), None, prefix="fastm", media_bucket=MEDIA, registered=READY
+    )
+    assert [(c.crid, c.registered) for c in own.creatives] == [("direct1", False), (REGISTERED, True)]

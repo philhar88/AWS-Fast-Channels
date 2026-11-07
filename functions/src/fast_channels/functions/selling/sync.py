@@ -5,8 +5,9 @@ synchronously, so the seller's database never leaves its VPC and this function n
 
 - ``{"action": "products"}`` answers the products (``core.selling.products``): the monetized channels with the
   catalog's genres, read from the catalog table at each call. The bridge stores them in the seller.
-- ``{"action": "sync", "buys": [...]}`` maps the tenant's buys to lines, keeping each live line's creative. When the
-  lines changed it writes them to the PDS config bucket (``lines/booked.json``) and runs the snapshot publisher, which
+- ``{"action": "sync", "buys": [...]}`` maps the tenant's buys to lines, keeping each live line's creative; with the
+  creatives module, a buy is served with its brand's READY creative (``creatives/ready.json``). When the lines
+  changed it writes them to the PDS config bucket (``lines/booked.json``) and runs the snapshot publisher, which
   publishes them with their budgets; the sidecars read the new snapshot within 30 seconds. It answers each buy's
   delivery, from its lines' budget shards (``delivered``), which the bridge writes where the seller's
   ``get_media_buy_delivery`` reads it.
@@ -21,6 +22,7 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict
 
+from fast_channels.core.creatives.registry import ReadyCreatives
 from fast_channels.core.pds.delivery import BUDGET_SHARDS, budget_key
 from fast_channels.core.pds.snapshot import PublishedLines
 from fast_channels.core.selling.booking import Buy, booked_lines, delivery
@@ -78,6 +80,17 @@ def current(bucket: str, key: str) -> PublishedLines:
     return PublishedLines.model_validate_json(body)
 
 
+def registered(bucket: str, key: str) -> dict[str, tuple[str, ...]]:
+    """The creatives module's READY creatives by brand domain (none before it published any)."""
+    try:
+        body = aws.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as error:
+        if error.response["Error"]["Code"] in {"NoSuchKey", "404"}:
+            return {}
+        raise
+    return ReadyCreatives.model_validate_json(body).by_brand()
+
+
 def delivered(table: str, lines: Sequence[Line]) -> dict[str, Decimal]:
     """What each line's budget shards delivered, summed (a line with no shard yet is left out)."""
     keys = [item_key(budget_key(line.id, shard)) for line in lines for shard in range(BUDGET_SHARDS)]
@@ -109,7 +122,10 @@ def sync(buys: Sequence[Buy], terms: Terms, *, now: datetime) -> dict[str, Any]:
     """The booked lines published when they changed, and each booked buy's delivery."""
     config = settings()
     before = current(config.pds_config_bucket, config.pds_booked_lines_key)
-    booking = booked_lines(buys, products=terms.products(()), pool=terms.creatives, current=before.lines, now=now)
+    brands = registered(config.pds_config_bucket, config.pds_creatives_key) if config.pds_creatives_key else {}
+    booking = booked_lines(
+        buys, products=terms.products(()), pool=terms.creatives, registered=brands, current=before.lines, now=now
+    )
     changed = booking.lines != before.lines
     if changed:
         publish(config.pds_config_bucket, config.pds_booked_lines_key, booking.lines, config.pds_publisher_function)

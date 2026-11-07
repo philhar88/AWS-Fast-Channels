@@ -8,10 +8,11 @@ buy's delivery (:func:`delivery`). One package is one line:
 - **advertiser and brand**: the buy's advertiser and its brand's domain (``adomain``);
 - **budget, CPM and flight**: the package's budget and fixed CPM, the buy's start and end;
 - **channel**: the channel of the package's product, the only one the line airs on;
-- **creative**: one of the stage's configured direct demo creatives (``modules.selling.creatives``), held while the
-  buy runs. ``OPTIMIZATION(aws): W-10 item 6``: the AWS reference buyer has no creative tasks, so a buy carries no
-  creative of its own and stays ``pending_creatives`` at the seller. A buyer's own creative also needs the creative
-  readiness pipeline, which the repository does not have yet.
+- **creative**: with the creatives module, a READY creative registered for the buy's brand (``core.creatives``),
+  held while the buy runs; else one of the stage's configured direct demo creatives (``modules.selling.creatives``).
+  ``OPTIMIZATION(aws): W-10 item 6``: the AWS reference buyer has no creative tasks, so a buy carries no creative of
+  its own and stays ``pending_creatives`` at the seller; the brand's creatives are registered by an operator
+  (``scripts/creatives.py``), and the demo creative is the fallback.
 
 A buy is served while it is in a serving state and not paused, before its end. A package without a fixed USD CPM, a
 budget, a known product or a free creative is not served; :class:`Booking` says why.
@@ -19,7 +20,7 @@ budget, a known product or a free creative is not served; :class:`Booking` says 
 
 import hashlib
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
@@ -112,25 +113,64 @@ def _is_domain(value: str | None) -> bool:
     return bool(value) and re.fullmatch(DOMAIN_PATTERN, value or "") is not None
 
 
+def _assign(
+    wanted: Sequence[tuple[str, str]],
+    held: Mapping[str, str],
+    pool: Sequence[str],
+    brands: Mapping[str, Sequence[str]],
+) -> dict[str, str]:
+    """A creative for each wanted (line id, brand), in booking order, none twice: a line keeps its brand's
+    registered creative; else it takes a free one of its brand; else it keeps its pool creative; else it takes a free
+    one of the pool. A line left out gets none."""
+    assigned: dict[str, str] = {}
+    taken: set[str] = set()
+
+    def kept(line: str, among: Sequence[str]) -> str | None:
+        return crid if (crid := held.get(line)) in among else None
+
+    def free(among: Sequence[str]) -> str | None:
+        return next((crid for crid in among if crid not in taken), None)
+
+    rounds: tuple[Callable[[str, str], str | None], ...] = (
+        lambda line, brand: kept(line, brands.get(brand, ())),
+        lambda _, brand: free(brands.get(brand, ())),
+        lambda line, _: kept(line, pool),
+        lambda _line, _brand: free(pool),
+    )
+    for pick in rounds:
+        for line, brand in wanted:
+            if line not in assigned and (crid := pick(line, brand)) is not None and crid not in taken:
+                assigned[line] = crid
+                taken.add(crid)
+    return assigned
+
+
 def booked_lines(
     buys: Iterable[Buy],
     *,
     products: Sequence[ProductSpec],
     pool: Sequence[str],
+    registered: Mapping[str, Sequence[str]] | None = None,
     current: Iterable[Line] = (),
     now: datetime,
 ) -> Booking:
     """The lines of the served packages of ``buys``.
 
+    Each line serves one creative, which no other line serves: its brand's registered creative if one is free, else
+    one of the ``pool``. A line keeps its creative while its buy runs, but moves from the pool to its brand's own
+    creative as soon as one is free.
+
     Args:
         buys: the tenant's media buys.
         products: the seller's products (a package's product gives its line's channel).
-        pool: the creatives booked lines may serve, one line each.
-        current: the lines published before: a line keeps its creative while its buy runs.
+        pool: the demo creatives booked lines may serve.
+        registered: the READY registered creatives by brand domain (the creatives module's; none without it).
+        current: the lines published before.
         now: the time of the sync.
     """
     channel = {product.product_id: product.channel for product in products}
-    held = {line.id: line.creatives[0] for line in current if line.creatives and line.creatives[0] in pool}
+    brands = registered or {}
+    held = {line.id: line.creatives[0] for line in current if line.creatives}
     wanted: list[tuple[str, Buy, Package]] = []
     unserved: dict[str, Unserved] = {}
     for buy in sorted(buys, key=lambda b: (b.created_at, b.media_buy_id)):
@@ -148,13 +188,11 @@ def booked_lines(
                 unserved[key] = Unserved.BRAND
             else:
                 wanted.append((line_id(buy.media_buy_id, index), buy, package))
-    kept = {id_: held[id_] for id_, _, _ in wanted if id_ in held}
-    free = [crid for crid in pool if crid not in kept.values()]
+    assigned = _assign([(id_, str(buy.brand)) for id_, buy, _ in wanted], held, pool, brands)
     lines: list[Line] = []
     packages: dict[str, tuple[str, str]] = {}
     for id_, buy, package in wanted:
-        crid = kept.get(id_) or (free.pop(0) if free else None)
-        if crid is None:
+        if (crid := assigned.get(id_)) is None:
             unserved[f"{buy.media_buy_id}/{package.package_id}"] = Unserved.CREATIVE
             continue
         assert package.cpm is not None and package.budget is not None  # checked above

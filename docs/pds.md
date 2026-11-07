@@ -129,7 +129,7 @@ one with neither "Mobile" nor a tablet token, which many TV boxes send.
 | Eligibility | Own book only in SAFE, KIDS, or when the module applied no policy; in KIDS only house ads and creatives approved for children; house ads only on probe sessions. A house ad is an own-book bid marked house: the mark from any other bidder is ignored. Usable VAST (InLine or Wrapper) with a known duration; a declared `dur` must agree with it (rounded half up) and a missing one is taken from it; the slot must accept it (`rqddurs`). A `crid`, and an `adomain` unless it is a house ad. No creative the session saw in its recent breaks. At or above the floor, except house ads (fillers) and tier-0 lines (contracted) |
 | Value | Tier-0 lines first (sponsorships, guaranteed lines, PG deals). Then paid bids by accepted net value, `price / 1000 × accept_ratio(bidder) − c_ins` with `c_ins` = $0.0005 per insertion. Where the viewer's tier prices ad load (λ > 0, [Ad load by tier](#ad-load-by-tier)), every sold ad, tier-0 lines included, must beat λ, and house ads do not fill. House ads fill the rest; they are never sold |
 | Placement | Each bid stays in its own imp's slot. Best candidates first; one is placed if its slot is free, it repeats no creative, advertiser domain or IAB category already in the pod (across bidders; house ads only never repeat a creative), Σ `dur` ≤ `poddur` and Σ VAST durations ≤ the break still hold, and the pod holds fewer ads than the tier's `max_ads` (else the bid's outcome is `ad_load`) |
-| Standalones | Per winner, the best remaining candidate of the same slot and duration. MediaTailor's ad buffet plays it in that slot if the winner fails, for example a creative it has not transcoded yet. The pod stays within the break even if every winner that has a standalone fails |
+| Standalones | Per winner, the best remaining candidate of the same slot and duration. MediaTailor's ad buffet plays it in that slot if the winner fails, for example a creative it has not transcoded yet. The pod stays within the break even if every winner that has a standalone fails. A registered creative of the creatives module, not yet WARM, is no standalone and wins its slot only with one behind it: a first sight skips it in every session of a synchronized break. Without one it is `unbacked`, and the pod is selected again (`OPTIMIZATION(aws): W-2 FR-2`, [workarounds](workarounds.md)) |
 | Leftover | Slots nothing fills are not returned. Channel Assembly's break slate plays them; at a personalization threshold of 121 s MediaTailor keeps the partial pod |
 | Minimum load | A tier never empties a pod: when its rules leave nothing, the pod is the control plan's, with at most one ad (`ad_load.reason` `min_load`) |
 | Short avails | An avail under 30 s (the tail of a break a session joined late) gets an empty pod |
@@ -222,14 +222,16 @@ imp it bids every ad below whose duration, rounded half up, is one of the slot's
 | Bids | Price | Marks |
 |---|---|---|
 | The house ads of the default ladder's kit (`ads/<ladder>/vast.xml`), as `house1`, `house2` | $0.01, so any paid bid wins | `ext.fast.house: true` and no `adomain`: fillers, never sold |
-| The creatives of each line with budget left: in demo mode `modules.pds.demo_lines`, on the kit's demo creatives `direct1` and `direct2` | The line's CPM | `adomain`, `cat` and `ext.fast.line`; a tier-0 line also its deal id `fast-<line>`, which the pod rules place first |
+| The creatives of each line with budget left: in demo mode `modules.pds.demo_lines`, on the kit's demo creatives `direct1` and `direct2`; with the creatives module, the registry's READY creatives the lines serve ([creatives.md](creatives.md)) | The line's CPM | `adomain`, `cat` and `ext.fast.line`; a tier-0 line also its deal id `fast-<line>`, which the pod rules place first |
 
 - Each `adm` is an inline VAST 4.2 ad of the preconditioned creative on the CDN, with no impression and no `burl`.
   Prebid Server sends bidders neither the session nor the break, so the own book cannot build our tracker; the fast-ctv
   module puts it on every ad it renders.
 - A request with no ad to bid gets an HTTP 204.
 - The lines, the kit's creatives and the house ads are in the snapshot. The publisher reads the default ladder from
-  `/<prefix>/pds/ladder-version` at every run, so a new ladder's kit is bid within the hour.
+  `/<prefix>/pds/ladder-version` at every run, so a new ladder's kit is bid within the hour. With the creatives
+  module it also reads the READY creatives (`creatives/ready.json`) and keeps those on that ladder, each marked
+  `registered`.
 - Like the bidder simulator's creatives, the own book's are the default ladder's: monetize channels on that ladder.
 - A line is bid until its budget is reserved: the sidecar reads the lines' budget shards every 5 seconds, off the
   request path, and leaves out a line that no shard can take one more impression from, or whose shards it cannot

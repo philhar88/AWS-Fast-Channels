@@ -13,7 +13,7 @@ is accepted: with its module's last change or once the module passes its end-to-
 | [0002](0002-l2-constructs-over-solutions-constructs.md) | Stable L2 constructs over AWS Solutions Constructs | Accepted, amended by 0020; L1 list amended for the modules |
 | [0003](0003-native-rendition-profiles-no-object-lambda.md) | Rendition profiles are static encode manifests, no S3 Object Lambda | Accepted, amended by 0016 |
 | [0004](0004-tracing-without-the-xray-sdk.md) | Tracing without the AWS X-Ray SDK | Accepted |
-| [0005](0005-preconditioned-ads.md) | Preconditioned ads (no MediaTailor transcoding) by default | Accepted, amended by 0016 and 0017 |
+| [0005](0005-preconditioned-ads.md) | Preconditioned ads (no MediaTailor transcoding) by default | Accepted, amended by 0016, 0017 and the creatives module |
 | [0006](0006-one-cmaf-encode-per-asset.md) | One CMAF encode per asset, ladder version as the unit of compatibility | Superseded by 0016 |
 | [0007](0007-sigv4-channel-origin-no-cdn-shield.md) | SigV4-only Channel Assembly origin; no CDN-shielded mode in v3.0 | Accepted |
 | [0008](0008-ad-break-alignment.md) | Ad breaks on segment boundaries; frame-accurate cue points, ESAM when off the segment grid | Accepted, amended by 0016 and 0017 |

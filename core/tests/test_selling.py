@@ -147,6 +147,46 @@ def test_a_held_creative_outside_the_pool_is_given_up() -> None:
     assert line.creatives == ("direct1",)
 
 
+REGISTERED = {"acme-outdoor.example": ("cr-0123456789ab",), "other.example": ("cr-000000000002",)}
+
+
+def test_a_buy_is_served_with_its_brands_registered_creative_and_the_pool_is_the_fallback() -> None:
+    acme, other_brand = buy("buy_a", minutes=1), buy("buy_b", minutes=2, brand="unregistered.example")
+    booking = booked_lines([acme, other_brand], products=PRODUCTS, pool=("direct2",), registered=REGISTERED, now=NOW)
+    assert [(line.id, line.creatives) for line in booking.lines] == [
+        ("adcp-buy-a-1", ("cr-0123456789ab",)),
+        ("adcp-buy-b-1", ("direct2",)),
+    ]
+
+
+def test_a_line_moves_from_the_pool_to_its_brands_creative_once_one_is_ready() -> None:
+    before = booked_lines([buy()], products=PRODUCTS, pool=("direct2",), now=NOW).lines
+    assert before[0].creatives == ("direct2",)
+    [line] = booked_lines(
+        [buy()], products=PRODUCTS, pool=("direct2",), registered=REGISTERED, current=before, now=NOW
+    ).lines
+    assert line.creatives == ("cr-0123456789ab",)
+
+
+def test_a_brands_creative_serves_one_line_and_stays_with_it() -> None:
+    first, second = buy("buy_a", minutes=1), buy("buy_b", minutes=2)
+    booking = booked_lines([first, second], products=PRODUCTS, pool=("direct2",), registered=REGISTERED, now=NOW)
+    assert [line.creatives for line in booking.lines] == [("cr-0123456789ab",), ("direct2",)]
+    # buy_b was booked later but holds nothing of its brand's: buy_a keeps the brand's creative.
+    after = booked_lines(
+        [second, first], products=PRODUCTS, pool=("direct2",), registered=REGISTERED, current=booking.lines, now=NOW
+    )
+    assert {line.id: line.creatives for line in after.lines} == {
+        "adcp-buy-a-1": ("cr-0123456789ab",),
+        "adcp-buy-b-1": ("direct2",),
+    }
+    # Withdrawn (suspended, or not READY on the ladder), it is given up for the pool.
+    [line, _] = booked_lines(
+        [first, second], products=PRODUCTS, pool=("direct1", "direct2"), current=after.lines, now=NOW
+    ).lines
+    assert line.creatives == ("direct1",)
+
+
 @pytest.mark.parametrize(
     ("media_buy_id", "expected"),
     [("buy_595f4386", "adcp-buy-595f4386-2"), ("MB--x", "adcp-mb-x-2"), ("b" * 60, None)],

@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Any, Final
 from aws_cdk import CfnOutput, Duration, Stack
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.creatives import names as creatives_names
 from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import source_location_name
 from fast_channels.core.pds.names import Parameter as PdsParameter
@@ -29,6 +31,7 @@ from fast_channels.infra.constructs.events import FastEventBus
 from fast_channels.infra.constructs.identity.edge import EdgeRebuild, edge_error_alarm
 from fast_channels.infra.constructs.observability import MediaObservability
 from fast_channels.infra.exports import ChannelExports, MediaExports
+from fast_channels.infra.grants import allow
 
 if TYPE_CHECKING:
     from constructs import Construct
@@ -144,6 +147,8 @@ class MediaStack(Stack):
             log_retention=retention,
             removal_policy=removal,
         )
+        if config.modules.creatives.enabled:
+            self._admit_creatives(prefix)
         self.ladders = {
             name: EncodingLadder(
                 self,
@@ -294,6 +299,17 @@ class MediaStack(Stack):
         linear.node.add_dependency(kit)  # its filler slate and VAST pod
         self.reaper.run_after_deleting(linear)  # a filler slate in use cannot be deleted (observed)
         return linear
+
+    def _admit_creatives(self, prefix: str) -> None:
+        """Let the ingest pipeline read the creatives module's quarantined sources: Prepare probes a source with its
+        own credentials, and MediaConvert reads it with its role. The bucket is named, not referenced: the Creatives
+        stack, deployed beside the guidance, is synthesized only with the guidance's network."""
+        sources = s3.Bucket.from_bucket_name(
+            self, "CreativeSources", creatives_names.quarantine_bucket(prefix, self.account, self.region)
+        ).arn_for_objects(f"{creatives_names.INCOMING}*")
+        why = "The creatives module's sources, incoming/<crid>/"
+        self.pipeline.prepare.allow(["s3:GetObject"], [sources], why=why)
+        allow(self.pipeline.role, ["s3:GetObject"], [sources], why=why)
 
     def _release_parameters(self, config: FastChannelsConfig, data: DataExports, content_base_url: str) -> None:
         """What the release module's stack, deployed beside the guidance, reads from this one: SSM parameters, not

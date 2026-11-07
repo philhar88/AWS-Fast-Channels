@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Advertisers' own creatives in the own book (`modules.creatives`, off by default;
+  [docs/creatives.md](docs/creatives.md), ADR-0005 amended).** A registry (`<prefix>-creatives`) and a readiness
+  state machine take a creative from registration to READY:
+  - its source (a local MP4, or an https MP4 or VAST document) goes to a quarantine bucket of its own, never the
+    ingest bucket;
+  - Amazon Rekognition moderates it, and a person approves or rejects what it flags;
+  - the stage's own ingest pipeline conditions it to the default ladder (`kind: ad`), as for the kit's house ads;
+  - a ladder-conformance check (variants, resolution, codec, `BANDWIDTH`, a duration on the 30.03 s grid) admits it;
+  - READY creatives go to the own book through the snapshot publisher.
+
+  A registered creative not yet WARM wins its slot only where a standalone backs it (ad buffet), and is never a
+  standalone (`unbacked` otherwise; `OPTIMIZATION(aws): W-2 FR-2`); the module as a whole works around W-2 FR-3.
+  With `selling`, a buy booked for a brand is served with the brand's READY creative, the demo creative being the
+  fallback. `scripts/creatives.py` registers, reviews, suspends and resumes creatives (`OPTIMIZATION(aws): W-10
+  item 6`). The `fastm`, `fastci`, `fastciads` and `fastcisell` stages turn it on;
+  `tests/e2e/test_24_creatives.py` proves it end to end.
+
 - **The `agents` module (off by default; needs `ops`): the agent roster inside an autonomy envelope v1**
   ([docs/agents.md](docs/agents.md), [ADR-0023](docs/adr/0023-machine-principals.md) amendment).
   - Each agent of the roster that the envelope turns on is a machine principal of the operator plane, with its own

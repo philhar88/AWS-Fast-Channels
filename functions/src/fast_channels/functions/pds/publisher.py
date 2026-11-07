@@ -10,10 +10,12 @@ floor, the own book's lines) plus:
   ``/<prefix>/pds/ladder-version`` (the Media stack's) at every run, so a new ladder is bid within the hour.
 
 With the selling module, the lines of the buys booked over AdCP (``PDS_BOOKED_LINES_KEY`` in the config bucket, which
-its sync function writes) follow the deployment's.
+its sync function writes) follow the deployment's. With the creatives module, the registry's READY creatives on the
+default ladder (``PDS_CREATIVES_KEY``, which its readiness function writes) join the kit's, for the lines that serve
+them.
 
 It runs when the stack deploys and every hour (AWS changes its ranges without notice; the origin-facing ones rarely),
-and, with the selling module, whenever the booked lines change.
+and whenever the selling module's booked lines or the creatives module's READY creatives change.
 An unchanged snapshot is not written again. When ip-ranges.json cannot be read, or holds no origin-facing network, the
 networks of the current snapshot are kept; when the kit cannot be read, its creatives are.
 
@@ -29,6 +31,7 @@ from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
+from fast_channels.core.creatives.registry import ReadyCreatives
 from fast_channels.core.demo_demand import DemoIndex, demo_index_key
 from fast_channels.core.pds.book import Book, Creative, book, house_creatives
 from fast_channels.core.pds.names import Parameter, parameter_name
@@ -134,14 +137,36 @@ def kit(media_bucket: str, ladder_version: str, *, demo: bool) -> tuple[tuple[Cr
         return house, None
 
 
-def own_book(base: SnapshotBase, published: Snapshot | None, *, prefix: str, media_bucket: str) -> Book:
-    """The own book on the default ladder: the lines of ``base`` with the kit's creatives, or the published
-    snapshot's creatives when the kit cannot be read."""
+def ready_creatives(bucket: str, key: str) -> ReadyCreatives | None:
+    """The creatives module's READY creatives (None until it published any).
+
+    Raises:
+        ClientError: the object cannot be read.
+        pydantic.ValidationError: it is not a valid document: the run fails and the published snapshot stays.
+    """
+    try:
+        return ReadyCreatives.model_validate_json(_read(bucket, key))
+    except ClientError as error:
+        if error.response["Error"]["Code"] in {"NoSuchKey", "404"}:
+            return None
+        raise
+
+
+def own_book(
+    base: SnapshotBase,
+    published: Snapshot | None,
+    *,
+    prefix: str,
+    media_bucket: str,
+    registered: ReadyCreatives | None = None,
+) -> Book:
+    """The own book on the default ladder: the lines of ``base`` with the kit's creatives and the ``registered`` ones
+    on that ladder, or the published snapshot's creatives when the kit cannot be read."""
     try:
         parameter = parameter_name(prefix, Parameter.LADDER_VERSION)
         ladder = aws.client("ssm").get_parameter(Name=parameter)["Parameter"]["Value"]
         house, index = kit(media_bucket, ladder, demo=bool(base.lines))
-        return book(base.lines, ladder_version=ladder, house=house, index=index)
+        return book(base.lines, ladder_version=ladder, house=house, index=index, registered=registered)
     except (ClientError, ValueError) as error:
         logger.warning("the kit is unavailable", extra={"error": type(error).__name__, "detail": str(error)[:300]})
     if published is None:
@@ -187,12 +212,17 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     base = SnapshotBase.model_validate_json(config.pds_snapshot_base)
     if config.pds_booked_lines_key:
         base = with_lines(base, published_lines(config.pds_config_bucket, config.pds_booked_lines_key))
+    registered = (
+        ready_creatives(config.pds_config_bucket, config.pds_creatives_key) if config.pds_creatives_key else None
+    )
     now = datetime.now(UTC)
     snapshot, written = publish(
         config.pds_config_bucket,
         base,
         now=now,
-        own=lambda published: own_book(base, published, prefix=config.prefix, media_bucket=config.media_bucket),
+        own=lambda published: own_book(
+            base, published, prefix=config.prefix, media_bucket=config.media_bucket, registered=registered
+        ),
     )
     # After the snapshot: a budget fault fails the run (and the deploy) without holding back the rest of it.
     budgets = set_budgets(

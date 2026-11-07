@@ -55,7 +55,7 @@ buyer agent ──A2A 1.0──▶ seller (Prebid Sales Agent) ──▶ its dat
    | `budget`, `cpm` | the package's budget and fixed CPM |
    | `starts`, `ends` | the buy's flight |
    | `channels` | the channel of the package's product |
-   | `creatives` | a configured demo creative ([below](#creatives)) |
+   | `creatives` | the brand's READY creative with the creatives module, else a configured demo creative ([below](#creatives)) |
 
    When the lines change it writes them to the PDS config bucket (`lines/booked.json`) and runs the snapshot
    publisher, which adds them to the deployment's lines and gives each its budget shards. The sidecars read the new
@@ -92,8 +92,12 @@ kit's direct demo creatives (`modules.selling.creatives`, `direct1` and `direct2
 runs. A stage serves at most as many booked packages at once as it lists creatives, and none of them may be a demo
 line's. The creatives exist only in `modules.demand.mode: demo`, which the module therefore needs.
 
-A buyer's own creative also needs the reference creative agent beside the seller (for `preview_creative`) and a
-creative readiness pipeline that preconditions it for MediaTailor. Neither is built.
+With the creatives module ([creatives.md](creatives.md)), an operator registers a brand's own creatives
+(`scripts/creatives.py`). Once a creative is READY, a buy booked for its brand (the request's `brand.domain`) is
+served with it, held by the line while the buy runs; a line that serves a demo creative moves to its brand's creative
+at the next sync. The demo creatives stay the fallback. The buy still stays `pending_creatives` at the seller: the creative never went through
+AdCP. A buyer agent's own `sync_creatives` also needs the reference creative agent beside the seller (for
+`preview_creative`), which is not built.
 
 ## Delivery back to the buyer
 
@@ -162,7 +166,7 @@ Agent) where it lives, and listed with the repository's other workarounds in [wo
 | `W-10` item 1 | The reference buyer's `create_media_buy` refuses without an approved `check_governance`, even with no governance agent | The governance agent is deployed with the buyer | `infra/.../selling/agents.py` | Make the governance agent optional |
 | `W-10` item 2 | The reference buyer's A2A runtime fails every turn without a sessions table | The module creates `<prefix>-buyer-sessions` | `infra/.../selling/agents.py` | Drop the table |
 | `W-10` items 3 and 4 | `deploy_all.py` escapes a permissions boundary, and the agents are not published as images | The stage builds the pinned upstream code and deploys the agents with its own CDK | `infra/.../selling/agents.py`, `infra/.../selling/image_build.py`, `vendor/agentic-selling` | Deploy the published images or constructs |
-| `W-10` item 6 | The reference buyer has no creative tasks | Booked buys serve the kit's demo creatives and stay `pending_creatives` | `core/.../selling/booking.py` | Serve the buyer's creatives (with a readiness pipeline) |
+| `W-10` item 6 | The reference buyer has no creative tasks | An operator registers the brand's creatives with the creatives module, and booked buys serve them, else the kit's demo creatives; buys stay `pending_creatives` | `core/.../selling/booking.py`, `scripts/creatives.py` | Take the buyer's creatives from `sync_creatives` |
 | `W-8` A7 | Single-tenant mode blocks `create_media_buy` until SSO is set up | `ADCP_MULTI_TENANT=true` | `infra/.../selling/seller.py` | Single-tenant |
 | `W-8` A8 | The seller rebuilds `@target-uri` from `X-Forwarded-Proto`, which the load balancer sets to `http` | CloudFront sends `Fly-Forwarded-Proto: https` | `infra/.../selling/seller.py` | Drop the header |
 | `W-8` A9 | Testing mode still dials the public reference creative agent | `CREATIVE_AGENT_URL` names a host that cannot resolve | `infra/.../selling/seller.py` | Drop the setting |
@@ -174,7 +178,7 @@ Agent) where it lives, and listed with the repository's other workarounds in [wo
 
 - **Real money or certification.** The seller is a testing-mode sandbox. Listing it with a storefront, or AdCP
   certification, is an owner's decision (W-8 part B).
-- **Buyer creatives** ([above](#creatives)).
+- **Creatives from the buyer agent** over AdCP ([above](#creatives)): an operator registers them.
 - **Guaranteed products, forecasts, targeting beyond the channel and flight.** Products are non-guaranteed, a line
   airs on its product's channel only and caps nothing per session.
 - **Signed requests.** The buyer authenticates with a bearer token; the seller's RFC 9421 posture is advertised but

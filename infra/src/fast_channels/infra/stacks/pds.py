@@ -9,6 +9,7 @@ from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.creatives.names import READY_KEY
 from fast_channels.core.pds import names
 from fast_channels.core.pds.book import Line
 from fast_channels.core.pds.delivery import release_after
@@ -141,14 +142,15 @@ class PdsStack(Stack):
             log_retention=retention,
             removal_policy=removal,
             booked_lines_key=BOOKED_LINES_KEY if config.modules.selling.enabled else None,
+            creatives_key=READY_KEY if config.modules.creatives.enabled else None,
         )
-        if config.modules.selling.enabled:
+        if config.modules.selling.enabled or config.modules.creatives.enabled:
             ssm.StringParameter(
                 self,
                 "PublisherFunctionParameter",
                 parameter_name=names.parameter_name(prefix, names.Published.PUBLISHER_FUNCTION),
                 string_value=self.publisher.function.function.function_name,
-                description="Read by the selling module's stack: its sync function runs the publisher",
+                description="Read by the selling and creatives modules' stacks: they run the publisher",
             )
         crawl = config.modules.crawl
         # The sidecar's log group, which the guidance stack creates: its pds.policy and pds.select records.

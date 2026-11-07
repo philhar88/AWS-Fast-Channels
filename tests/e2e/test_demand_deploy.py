@@ -240,8 +240,10 @@ def test_the_pds_and_release_stacks_deploy_after_the_demand_stack(stage: _demand
     assert stage.beside_stacks() == [
         "FastChannels-fastcix/Demand",
         "FastChannels-fastcix/Pds",
+        "FastChannels-fastcix/Creatives",
         "FastChannels-fastcix/Release",
     ]
+    assert stage.creatives_stack == "FastChannels-fastcix-Creatives"
 
 
 def _stack(name: str, outputs: dict[str, str]) -> dict[str, Any]:
@@ -319,7 +321,11 @@ def test_a_release_stack_the_module_no_longer_has_is_deleted(fastci: Any) -> Non
         update={"release": fastci.modules.release.model_copy(update={"enabled": False})}
     )
     stage = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
-    assert stage.beside_stacks() == ["FastChannels-fastcix/Demand", "FastChannels-fastcix/Pds"]
+    assert stage.beside_stacks() == [
+        "FastChannels-fastcix/Demand",
+        "FastChannels-fastcix/Pds",
+        "FastChannels-fastcix/Creatives",
+    ]
     cloudformation = Stubber(stage.client("cloudformation"))
     name = {"StackName": "FastChannels-fastcix-Release"}
     cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
@@ -327,6 +333,23 @@ def test_a_release_stack_the_module_no_longer_has_is_deleted(fastci: Any) -> Non
     cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
     with cloudformation:
         stage.check_release_state()
+    cloudformation.assert_no_pending_responses()
+
+
+def test_a_creatives_stack_the_module_no_longer_has_is_deleted(fastci: Any, stage: _demand.DemandStage) -> None:
+    stage.check_creatives_state()  # on: nothing to do (no AWS call)
+    modules = fastci.modules.model_copy(
+        update={"creatives": fastci.modules.creatives.model_copy(update={"enabled": False})}
+    )
+    off = _demand.DemandStage(fastci.model_copy(update={"modules": modules}), "fastci", session())
+    assert "FastChannels-fastcix/Creatives" not in off.beside_stacks()
+    cloudformation = Stubber(off.client("cloudformation"))
+    name = {"StackName": "FastChannels-fastcix-Creatives"}
+    cloudformation.add_response("describe_stacks", {"Stacks": [_stack(name["StackName"], {})]}, name)
+    cloudformation.add_response("delete_stack", {}, name)
+    cloudformation.add_client_error("describe_stacks", "ValidationError", "Stack does not exist", expected_params=name)
+    with cloudformation:
+        off.check_creatives_state()
     cloudformation.assert_no_pending_responses()
 
 
@@ -689,6 +712,69 @@ def test_a_deleted_user_pool_is_not_residue(stage: _demand.DemandStage, stub: An
         "describe_user_pool", "ResourceNotFoundException", expected_params={"UserPoolId": "us-east-1_abc"}
     )
     cognito.add_response("describe_user_pool", {"UserPool": {"Id": "us-east-1_abc"}}, {"UserPoolId": "us-east-1_abc"})
+
+    assert stage.gone(arn, REGION)
+    assert not stage.gone(arn, REGION)
+
+
+@pytest.mark.parametrize(
+    ("service", "arn", "operation", "params", "found", "missing"),
+    [
+        (
+            "dynamodb",
+            "arn:aws:dynamodb:us-east-1:123456789012:table/fastcii-creatives",
+            "describe_table",
+            {"TableName": "fastcii-creatives"},
+            {"Table": {"TableName": "fastcii-creatives"}},
+            "ResourceNotFoundException",
+        ),
+        (
+            "stepfunctions",
+            "arn:aws:states:us-east-1:123456789012:stateMachine:fastcii-creatives",
+            "describe_state_machine",
+            {"stateMachineArn": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcii-creatives"},
+            {
+                "stateMachineArn": "arn:aws:states:us-east-1:123456789012:stateMachine:fastcii-creatives",
+                "name": "fastcii-creatives",
+                "definition": "{}",
+                "roleArn": "arn:aws:iam::123456789012:role/r",
+                "type": "STANDARD",
+                "creationDate": "2026-11-07T00:00:00Z",
+            },
+            "StateMachineDoesNotExist",
+        ),
+        (
+            "s3",
+            "arn:aws:s3:::fastcii-creatives-123456789012-us-east-1",
+            "head_bucket",
+            {"Bucket": "fastcii-creatives-123456789012-us-east-1"},
+            {},
+            "404",
+        ),
+        (
+            "cloudfront",
+            "arn:aws:cloudfront::123456789012:distribution/E2EXAMPLE12345",
+            "get_distribution",
+            {"Id": "E2EXAMPLE12345"},
+            {"ETag": "E2EXAMPLE"},
+            "NoSuchDistribution",
+        ),
+    ],
+)
+def test_the_creatives_modules_deleted_resources_are_not_residue(
+    stage: _demand.DemandStage,
+    stub: Any,
+    service: str,
+    arn: str,
+    operation: str,
+    params: dict[str, str],
+    found: dict[str, Any],
+    missing: str,
+) -> None:
+    """The tagging index outlives a deleted table, state machine or bucket for a while."""
+    client = stub(service)
+    client.add_client_error(operation, missing, expected_params=params)
+    client.add_response(operation, found, params)
 
     assert stage.gone(arn, REGION)
     assert not stage.gone(arn, REGION)

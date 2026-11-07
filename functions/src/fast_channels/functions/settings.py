@@ -115,6 +115,19 @@ class Settings:
     """The snapshot publisher's function, which the selling module's sync runs when the booked lines change."""
     selling_products: str = field(default_factory=lambda: _env("SELLING_PRODUCTS"))
     """JSON of the selling module's product terms (``functions.selling.sync.Terms``)."""
+    pds_creatives_key: str = field(default_factory=lambda: _env("PDS_CREATIVES_KEY"))
+    """The config bucket's object of the registry's READY creatives (creatives module), which the publisher adds to
+    the own book and the selling module's sync books; unset without the module."""
+    creatives_table: str = field(default_factory=lambda: _env("CREATIVES_TABLE"))
+    """The creatives module's registry (``<prefix>-creatives``)."""
+    creatives_quarantine_bucket: str = field(default_factory=lambda: _env("CREATIVES_QUARANTINE_BUCKET"))
+    """The creatives module's quarantine bucket of source files."""
+    creatives_ladder: str = field(default_factory=lambda: _env("CREATIVES_LADDER"))
+    """JSON of the ladder creatives are conditioned to (the stage's default ladder, ``core.ladder.Ladder``)."""
+    creatives_moderation: bool = field(default_factory=lambda: _env("CREATIVES_MODERATION") == "true")
+    """Whether Amazon Rekognition moderates each creative before it is conditioned."""
+    creatives_min_confidence: float = field(default_factory=lambda: float(_env("CREATIVES_MIN_CONFIDENCE") or 80))
+    """The moderation label confidence (percent) at which a creative goes to a person's review."""
     lake_workgroup: str = field(default_factory=lambda: _env("LAKE_WORKGROUP"))
     """The lake's Athena workgroup (``<prefix>-lake``), which the delivery function's CDN-log runs query in."""
     cdn_log_table: str = field(default_factory=lambda: _env("CDN_LOG_TABLE"))

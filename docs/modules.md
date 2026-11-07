@@ -8,6 +8,7 @@ FAST Channels v3.0.0 airs channels with preconditioned house ads. The optional m
 - a release process for monetized playback configurations, with ad prefetch;
 - a per-task model registry;
 - agentic selling over AdCP: a buyer agent books the own book (v4.1.0, [selling.md](selling.md));
+- advertisers' own creatives, moderated, conditioned to the ladder and served by the own book once READY (unreleased, [creatives.md](creatives.md));
 - the operations they need: a lake, a hash-chained ledger, detectors, runbooks and a probe.
 
 Since v4.0.0, `identity` adds signed-in viewers, whose single-use playback tickets carry who they are to the decision
@@ -44,6 +45,7 @@ a deployment is v3.0.0's, which snapshot tests of every shipped template check (
 | `viewer` | A reference viewer app for the demo: personas sign in to the viewer pool, get a rule-based rail of recommended channels, and play each channel on a playback ticket of their own. With `ad_panel`, a demo-only "why these ads" panel shows each break's privacy mode, tier, ad-load policy and pod from the PDS's decision records | `identity` | `FastChannels-<prefix>-Viewer` | — | [viewer.md](viewer.md); [ADR-0028](adr/0028-reference-viewer-on-its-own-origin.md) |
 | `agents` | The agent roster under an autonomy envelope. Each agent is a machine principal (a Cognito client) that runs the scheduler agent's Runtime unattended. The Gateway's Cedar policies and a runner both follow the envelope: what each agent may do, on which channels, how often, and what needs a human. Every action and refusal is in the ledger, and a refusal is escalated to the alert topic. v1: the operations agent restarts always-on channels | `ops`; `agent.enabled` | — | Operator: the agents' clients, Cedar policies, runners and caps' table | [agents.md](agents.md); [ADR-0023](adr/0023-machine-principals.md) |
 | `recs` | The rail recommender. `GET /rail` answers a signed-in viewer's "Recommended for you" rail, which Claude Haiku 5.5 (the `recommender` registry task, thinking disabled) picks and explains from deterministic candidates and a validator. Rails are built asynchronously, never at request time. A router before any model call sends kids, opted-out viewers, viewers without consent, the 10% holdout and first sessions elsewhere. Hourly cohort rails serve guests, and the rule-based rail serves every model error, timeout or cap, with the reason | `models`, `identity` | `FastChannels-<prefix>-Recs` | Models: the `recommender` task. Ops: `recs.strategy` defaults to the recommender. Viewer: the app shows the rail | [recs.md](recs.md); [ADR-0027](adr/0027-llm-rail-recommender.md) |
+| `creatives` | Advertisers' own creatives. A registry, Amazon Rekognition moderation (a person reviews what it flags), conditioning to the stage's default ladder by the stage's own ingest pipeline, a ladder-conformance check, and READY creatives bid by the own book, each only where a standalone backs its slot. With `selling`, a buy booked for a brand is served with that brand's READY creative. An operator script registers them | `pds` | With `make deploy-demand`: `FastChannels-<prefix>-Creatives` beside the guidance | Media: the ingest pipeline may read the module's quarantine bucket. Pds: the publisher adds the READY creatives. Selling: its sync reads them | [creatives.md](creatives.md) |
 
 ## Complexity and cost per module
 
@@ -65,6 +67,7 @@ teardown times are the median stack deletions of the development stages in Octob
 | `agents` | `ops` | none; changes Operator | 3: a runner per agent, the envelope's record and the deploy trigger | under $0.01: two alarms per agent, an on-demand table | a few Bedrock calls and Runtime seconds per triggered run | with Operator, in `make destroy` |
 | `understanding` | `models` | Understanding | 7 | $0: one alarm | $0; about $18.90 per content hour once per title, with every analysis on ([understanding.md](understanding.md#cost)) | Understanding, in `make destroy` |
 | `recs` | `models`, `identity` | Recs; changes Models, Ops and Viewer | 3: the two functions and the schedule | $0: an on-demand table, a schedule and functions; one alarm ($0.10 a month) | about $0.0004–0.0008 per model rail, at most one per signed-in adult viewer-day, and 24 cohort rails a day per cohort; the rail API's Lambda and API Gateway per request | Recs 1–2 min, in `make destroy` |
+| `creatives` | `pds` | Creatives; changes Media, Pds and Selling | 3 | $0: an on-demand table, an empty bucket, a state machine and a function | $0 | Creatives 1 min, in `make destroy-demand` |
 | Ad server (experimental) | `demand`, `release` | The `mock` ad server in Demand; the Prebid Cache function's concurrency in the guidance | a few | about $0.17 ($124 a month) while enabled | — | with `demand` |
 
 With every module on, a stage holds about 145 IAM roles, against 45 for v3.0.0's three stacks. With the guidance
@@ -120,7 +123,7 @@ The repository ships four stages:
 - `fastm`, for development, with every module on but `selling`;
 - `fastci`, for the end-to-end tests, the same;
 - `fastciads`, which is `fastci` with the experimental `mock` ad server;
-- `fastcisell`, with `selling` and the modules it needs, and no demo lines (their creatives serve booked buys).
+- `fastcisell`, with `selling`, `creatives` and the modules they need, and no demo lines (their creatives serve booked buys).
 
 All four use the shared as-run router ([below](#account-level-limits-and-teardown-residue)).
 
@@ -166,7 +169,7 @@ DemandEdge (us-east-1), DemandBuild         (demand; no dependency)
    Cache function its provisioned concurrency.
 4. The SSM contract `/<prefix>/demand/*`.
 5. The rendered Prebid Server configuration: what differs is uploaded and read back.
-6. Demand, then Pds, then Release, then Selling (its images are built first, on an arm64 project).
+6. Demand, then Pds, Creatives, Release, then Selling (its images are built first, on an arm64 project).
 7. One run of each census gate.
 8. The smoke test.
 
@@ -175,7 +178,8 @@ See [demand.md](demand.md#deploy-and-destroy) for the details.
 Destroy in reverse:
 
 ```bash
-make destroy-demand STAGE=fastm   # Selling, Release, Pds, Demand, the guidance and what it retains, DemandEdge/-Build
+make destroy-demand STAGE=fastm   # Selling, Release, Creatives, Pds, Demand, the guidance and what it retains,
+                                  # DemandEdge/-Build
 make destroy STAGE=fastm          # the repository's stacks
 uv run python scripts/ledger_verify.py purge --prefix fastm --apply   # with ops: the Object-Locked ledger archive
 ```
@@ -261,6 +265,9 @@ operations signal, never air time.
 | `recs` | The model call fails, times out, is refused at the cap, or returns a rail the validator rejects | The viewer gets the rule-based rail, with the reason in the answer (`model_error`, `timeout`, `cap`, `invalid`), for an hour; then the next request tries again |
 | `recs` | `GET /rail` is unreachable | The viewer app ranks its own rule-based rail (rail.ts), the same rail the API would serve |
 | `recs` | `recs.strategy` is `popularity` (the kill switch) | Every request gets the rule-based rail; no model call is made |
+| `creatives` | A step fails (a source that is not a usable https MP4 or VAST, moderation, an encode) | The creative is FAILED, with the error in its history, and is never bid. Register it again to retry |
+| `creatives` | A creative is off the ladder or off the 30.03 s grid | It is REJECTED with the measured values, and is never bid |
+| `creatives` | No standalone can back a registered creative's slot | That creative is left out of the pod (`unbacked`) and the pod is selected again; with `selling`, a buy without a READY creative of its brand is served with a demo creative |
 | `models` | The SSM entry is missing, invalid or names another model or profile | The agent runs on its entry as deployed and logs a warning |
 | `models` | A task's day reaches its `daily_cap_usd` | Runs and model calls are refused with `MODEL_CAP_REACHED`, and the alert topic is told once that day. The cap is a breaker against a runaway, about ten times expected use |
 | `models` | The spend counter is unreachable | Calls go ahead and the agent logs a warning |
@@ -290,6 +297,7 @@ These are us-east-1 list prices, rounded. Lines marked *measured* come from runs
 | `recs` | One alarm ($0.10 a month); the table, the functions and the hourly schedule cost nothing while idle | Per model rail about $0.0004 at list prices (*measured* in its eval record, Claude Haiku 5.5 with thinking disabled), and up to three times that with a cold prompt cache; identical requests share one call. Per request, a Lambda invocation, a KMS `GenerateMac` and two or three DynamoDB reads |
 | `selling` | About $60 a month while deployed: the seller's Fargate task (1 vCPU, 2 GB, arm64, about $0.04 an hour), its `db.t4g.micro` database ($0.016 an hour and 20 GB), its internal load balancer ($0.0225 an hour), the governance agent's KMS key ($1 a month) and three secrets | Per booking, the buyer agent's Bedrock tokens and AgentCore Runtime time (one turn of about 30 seconds with Claude Haiku 5.5) |
 | `agents` | Two alarms per agent ($0.20 a month) and an on-demand table; the runners run only when triggered | Per triggered run, a few Bedrock calls through the scheduler agent's task and its Runtime time |
+| `creatives` | Nothing measurable: an on-demand table, a state machine, a function and a quarantine bucket whose sources expire after 30 days | Per creative, Rekognition video moderation ($0.10 a minute: about $0.05 for a 30 s spot) and one encode of three renditions (about $0.03); the own book bids it like any line ad |
 
 *Measured* runs:
 

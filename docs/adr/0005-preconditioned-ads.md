@@ -1,7 +1,7 @@
 # 0005 — Preconditioned ads (no MediaTailor transcoding) by default
 
-**Status:** Accepted, amended by [0016](0016-plain-hls-ts-avc-aac-basic-tier.md) and
-[0017](0017-ssai-only-frame-accurate-cues-with-esam.md)
+**Status:** Accepted, amended by [0016](0016-plain-hls-ts-avc-aac-basic-tier.md),
+[0017](0017-ssai-only-frame-accurate-cues-with-esam.md) and the creatives module (2026-11-07, below)
 
 ## Context
 MediaTailor normally transcodes ad creatives to match the content. With the first v3.0.0 ladder (AV1 + HEVC + AVC
@@ -27,3 +27,21 @@ encoded on the content's own ladder does by construction.
 ## Consequences
 Your own ad server must return creatives encoded for the channel's ladder (or use the external mode). The first break
 that sees a new creative shows slate while MediaTailor imports it.
+
+## Amendment (2026-11-07): advertisers' own creatives, preconditioned the same way
+
+The optional creatives module ([creatives.md](../creatives.md)) extends the kit's rule to advertisers' creatives:
+
+- **Conditioning.** A registered creative is encoded by the same ingest pipeline and job template as the content and
+  the kit (`kind: ad` on the default ladder), so it matches the ladder by construction, and Finalize writes its
+  `ads/<ladder>/<creative_id>/` copy as for a house ad. Its source waits in a quarantine bucket of its own, never in
+  the ingest bucket, whose upload rule ingests any video as content.
+- **Conformance.** Before the own book may bid a creative, a check confirms what MediaTailor does not: variant count,
+  resolution, codec and `BANDWIDTH` against the ladder, and a duration on the 30.03 s grid. MediaTailor stitches an
+  off-ladder streaming file by nearest match and never falls back to its progressive file.
+- **First sight.** A first sight still costs the whole synchronized break, so a registered creative that is not yet
+  WARM wins its slot only where a standalone backs it (ad buffet: a standalone replaced every first-sight-failed ad
+  in its slot). On prefetched configurations the import runs at retrieval, before the break.
+- **Truncation.** The transcode truncation that motivated this ADR is a CMAF multi-codec effect: on the TS AVC ladder
+  of [0016](0016-plain-hls-ts-avc-aac-basic-tier.md), transcoded 30.03 s and 15.015 s ads kept their full video
+  duration in every rendition.

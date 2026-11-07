@@ -23,7 +23,7 @@ import time
 import tomllib
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -39,6 +39,7 @@ from botocore.exceptions import ClientError
 
 from fast_channels.core import demand as names
 from fast_channels.core.ad_server import POD_CACHE_CONTEXT, AdServer, PodCacheFunction
+from fast_channels.core.creatives import names as creatives_names
 from fast_channels.core.demand import NETWORK_CONTEXT, SIMULATOR_CODE_PREFIX, DemandNetwork, Parameter, Subnet
 from fast_channels.core.demo_demand import DemoIndex, DemoRole, demo_index_key, simulator_creatives
 from fast_channels.core.ladder import Ladder
@@ -170,6 +171,16 @@ EC2_DESCRIBE: Final = {
 }
 """EC2 resource types the tagging index keeps listing for a while after they are deleted: the describe call (which
 fails with ``*.NotFound``, or returns nothing) that tells."""
+DESCRIBE: Final[dict[str, tuple[str, str, str, Callable[[str], str]]]] = {
+    "cognito-idp": ("cognito-idp", "describe_user_pool", "UserPoolId", lambda arn: arn.rsplit("/", 1)[1]),
+    "dynamodb": ("dynamodb", "describe_table", "TableName", lambda arn: arn.rsplit("/", 1)[1]),
+    "states": ("stepfunctions", "describe_state_machine", "stateMachineArn", lambda arn: arn),
+    "s3": ("s3", "head_bucket", "Bucket", lambda arn: arn.rsplit(":", 1)[1]),
+    "cloudfront": ("cloudfront", "get_distribution", "Id", lambda arn: arn.rsplit("/", 1)[1]),
+}
+"""Other services whose deleted resources the tagging index lists for a while (the selling module's pool, tables and
+the seller's distribution, the creatives module's registry, state machine and quarantine): (client, the describe call,
+its parameter, the parameter's value of an ARN). The call fails once the resource is gone."""
 TAGS: Final = {"fast:owner": "iac", names.MODULE_TAG: names.MODULE}
 """Tags of everything the demand module deploys, besides ``fast:app``."""
 _LOCK_GROUPS: Final = {"main", "local", "dev"}
@@ -888,14 +899,19 @@ class DemandStage:
     def selling_stack(self) -> str:
         return f"{self.stage_id}-Selling"
 
+    @property
+    def creatives_stack(self) -> str:
+        return f"{self.stage_id}-Creatives"
+
     def beside_stacks(self) -> list[str]:
-        """The repository's stacks that need the guidance's network, in deploy order: Demand, then Pds, Release and
-        Selling if their modules are on (the release bundle names the guidance's CloudFront domain; the seller runs
-        in the guidance's VPC)."""
+        """The repository's stacks that need the guidance's network, in deploy order: Demand, then Pds, Creatives,
+        Release and Selling if their modules are on (the release bundle names the guidance's CloudFront domain; the
+        seller runs in the guidance's VPC; the creatives run the PDS's publisher)."""
         modules = self.config.modules
         return (
             [f"{self.stage_id}/Demand"]
             + ([f"{self.stage_id}/Pds"] if modules.pds.enabled else [])
+            + ([f"{self.stage_id}/Creatives"] if modules.pds.enabled and modules.creatives.enabled else [])
             + ([f"{self.stage_id}/Release"] if modules.release.enabled else [])
             + ([f"{self.stage_id}/Selling"] if modules.selling.enabled else [])
         )
@@ -1057,6 +1073,7 @@ class DemandStage:
         network = self.network(key)
         self.check_pds_state()
         self.check_release_state()
+        self.check_creatives_state()
         selling = self.selling_context()
         log(f"deploying {', '.join(self.beside_stacks())}")
         run(
@@ -1105,6 +1122,13 @@ class DemandStage:
             raise DemandError(
                 f"no SSM parameter {name}: run `make deploy` with modules.release.enabled first"
             ) from None
+
+    def check_creatives_state(self) -> None:
+        """Without ``modules.creatives.enabled`` (or the PDS it publishes to), a Creatives stack left from before is
+        deleted. With it, the Media stack must have been deployed with it on (``make deploy``), which lets the ingest
+        pipeline read the module's quarantine bucket."""
+        if not (self.config.modules.creatives.enabled and self.config.modules.pds.enabled):
+            self.delete_stack(self.client("cloudformation"), self.creatives_stack)
 
     def start_census_gate(self) -> str:
         """Run the census gate once with the census's last count, so a stage deployed without running channels
@@ -1617,6 +1641,7 @@ class DemandStage:
         for stack in (
             self.selling_stack,
             self.release_stack,
+            self.creatives_stack,
             self.pds_stack,
             self.demand_stack,
             names.guidance_stack(self.prefix),
@@ -1698,6 +1723,7 @@ class DemandStage:
         for stack in (
             self.selling_stack,
             self.release_stack,
+            self.creatives_stack,
             self.pds_stack,
             self.demand_stack,
             names.guidance_stack(self.prefix),
@@ -1722,7 +1748,13 @@ class DemandStage:
                     {"Key": "fast:app", "Values": [self.prefix]},
                     {
                         "Key": names.MODULE_TAG,
-                        "Values": [names.MODULE, pds_names.MODULE, release_names.MODULE, selling_names.MODULE],
+                        "Values": [
+                            names.MODULE,
+                            pds_names.MODULE,
+                            release_names.MODULE,
+                            selling_names.MODULE,
+                            creatives_names.MODULE,
+                        ],
                     },
                 ]
             ):
@@ -1763,9 +1795,9 @@ class DemandStage:
                     return self.ec2_gone(arn, region)
                 case "ecs":
                     return self.ecs_gone(arn, region)
-                case "cognito-idp":  # the selling module's token issuer: the index outlives a deleted pool
-                    pool = arn.rsplit("/", 1)[1]
-                    self.client("cognito-idp", region).describe_user_pool(UserPoolId=pool)
+                case _ if service in DESCRIBE:
+                    client, operation, parameter, value = DESCRIBE[service]
+                    getattr(self.client(client, region), operation)(**{parameter: value(arn)})
                     return False
         except ClientError:
             return True
