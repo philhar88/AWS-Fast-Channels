@@ -80,7 +80,7 @@ Building the registry (M13-01 to M13-03) measured two more facts:
 - The counter adds one conditional DynamoDB write per run and per model call, a few milliseconds each.
 - Strands keys some defaults on the model id string (prompt caching, tool-result status, context window), so with
   an AIP the agent sets them from the underlying model.
-- Candidate AWS defects found on the gateway route, and the undocumented daily-budget limit of Budgets actions, go
-  to the owner's AWS letters, not into code. The gateway defects are: Messages answering 200 with an error body;
+- Candidate AWS defects found on the gateway route, and the undocumented daily-budget limit of Budgets actions, are
+  recorded in [limitations.md](../limitations.md). The gateway defects are: Messages answering 200 with an error body;
   rate-limit model keys resolved after the rule pin; token limits letting too much through; an undocumented 10×
   output burndown for Haiku and Sonnet 5.5.
