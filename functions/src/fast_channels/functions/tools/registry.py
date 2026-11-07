@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 TARGETS: Final = ("catalog", "library", "origins", "schedule", "channels", "encoding")
 """Gateway targets, in the order they are documented. Each maps to ``fast_channels.functions.tools.<target>``."""
+MODULE_TARGETS: Final = ("sales",)
+"""Gateway targets a module adds (the agents module's sales agent, with ``modules.pds``); not in :func:`all_tools`."""
 
 SEPARATOR: Final = "___"
 CORRELATION_FIELD: Final = "correlation_id"
@@ -107,7 +109,7 @@ class ToolError(Exception):
         }
 
 
-_REGISTRY: dict[str, dict[str, ToolSpec[Any, Any]]] = {target: {} for target in TARGETS}
+_REGISTRY: dict[str, dict[str, ToolSpec[Any, Any]]] = {target: {} for target in (*TARGETS, *MODULE_TARGETS)}
 
 
 def tool[I: BaseModel, O: BaseModel](
@@ -119,7 +121,7 @@ def tool[I: BaseModel, O: BaseModel](
     description the model sees, so keep docstrings precise and action-oriented.
     """
     if target not in _REGISTRY:
-        raise ValueError(f"unknown tool target {target!r}; expected one of {TARGETS}")
+        raise ValueError(f"unknown tool target {target!r}; expected one of {(*TARGETS, *MODULE_TARGETS)}")
 
     def register(func: ToolHandler[I, O]) -> ToolHandler[I, O]:
         hints = get_type_hints(func)

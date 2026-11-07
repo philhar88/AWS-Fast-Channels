@@ -119,7 +119,11 @@ def _descriptions(node: dict[str, Any]) -> Iterator[tuple[str, str]]:
         yield from _descriptions(child.get("items", {}))
 
 
-@pytest.mark.parametrize("spec", list(registry.all_tools()), ids=lambda spec: spec.qualified_name)
+@pytest.mark.parametrize(
+    "spec",
+    [*registry.all_tools(), *(spec for target in registry.MODULE_TARGETS for spec in registry.load(target).values())],
+    ids=lambda spec: spec.qualified_name,
+)
 def test_every_registry_input_is_documented_for_the_model(spec: registry.ToolSpec[Any, Any]) -> None:
     schema = gateway_tool_schema(spec)
     assert "\n" not in schema["description"]

@@ -1,15 +1,18 @@
 """The autonomy envelope v1 (DESIGN-v2.2 §19.3, ADR-0023): what each agent of the roster may do on its own.
 
 The envelope is configuration (``modules.agents.envelope``). For each agent of the roster it lists the tools the agent
-may call unattended (each with the channels it may act on and how often), how many actions it may take an hour, and
-the tools that always need a human. Two enforcement points follow it, so an action outside the envelope is refused
-even if one of them fails:
+may call unattended (each with the channels it may act on, how often, and how far ahead a schedule change must
+start), how many approval-gated actions it may take an hour, and the tools that always need a human. Three
+enforcement points follow it, so an action outside the envelope is refused even if one of them fails:
 
 - the Gateway's Cedar policies, generated from it per agent principal (``infra.constructs.operator.cedar``): a tool
   call outside the agent's grants is denied;
+- the Gateway's request interceptor (``functions.agents.interceptor``), which sees the caller's validated token: an
+  agent's call outside :func:`verdict` is refused before it reaches the tool, and an action inside takes one unit of
+  each of its caps in one conditional DynamoDB transaction, so no caller, however it reaches the Gateway, exceeds a
+  cap or a publish lead;
 - the agent runner (``functions.agents.runner``), which answers every approval-gated call of an unattended run with
-  :func:`verdict` and counts it against the agent's caps in one conditional DynamoDB update per window, so concurrent
-  runs cannot exceed a cap.
+  the same verdict and a read of the caps, so the usual refusal is recorded before the call is made.
 
 Every action and every refusal is recorded in the ledger, under the envelope's :attr:`Envelope.version`; a refusal is
 escalated to a human. v1 is not signed (a KMS signature by the owner is a follow-up, §19.3): its version is the
@@ -32,9 +35,13 @@ TOOL_PATTERN: Final = r"^[a-z]+___[a-z_]+$"
 """A Gateway tool's qualified name, ``<target>___<name>``."""
 ALWAYS_ON: Final = "{always_on}"
 """In a grant's ``channels``: the envelope's always-on channels."""
+PROGRAMMED: Final = "{programmed}"
+"""In a grant's ``channels``: the channels the programming agent keeps scheduled."""
 PREFIX: Final = "{prefix}"
 WINDOW: Final = timedelta(hours=1)
 """The caps' window: ``per_hour`` and ``actions_per_hour`` count approved actions in each UTC hour."""
+LEADS: Final = ("schedule___publish",)
+"""Tools whose change starts at a known time (a plan's start), which a grant's ``lead_minutes`` bounds."""
 SCOPES: Final[Mapping[str, tuple[str, str]]] = {
     "channels___start_channel": ("channel", "{channel}"),
     "channels___stop_channel": ("channel", "{channel}"),
@@ -93,14 +100,23 @@ class Grant(BaseModel):
     per_hour: int | None = Field(
         default=None, ge=0, description="At most this many approved calls per channel in each UTC hour; none: no cap."
     )
+    lead_minutes: int | None = Field(
+        default=None,
+        ge=0,
+        description="The change must start at least this many minutes after the call (a published plan's start); "
+        "none: any time. Only for the tools of LEADS.",
+    )
 
     @model_validator(mode="after")
     def _scoped(self) -> Self:
         # A channel-scoped grant whose channels are empty (an empty {always_on} once resolved) permits nothing: the
         # verdict refuses it and Cedar has no permit for it, so its per-channel cap is never reached. It must stay
-        # valid, because the runner and the deploy's envelope record read the resolved document back.
+        # valid, because the runner, the interceptor and the deploy's envelope record read the resolved document
+        # back.
         if self.channels and self.tool not in SCOPES:
             raise ValueError(f"{self.tool} names no channel: a grant of it cannot list channels")
+        if self.lead_minutes is not None and self.tool not in LEADS:
+            raise ValueError(f"{self.tool} has no start the envelope can bound: lead_minutes is only for {LEADS}")
         return self
 
 
@@ -112,7 +128,9 @@ class AgentEnvelope(BaseModel):
     enabled: bool = False
     level: Level = Level.L2
     grants: tuple[Grant, ...] = ()
-    actions_per_hour: int = Field(default=10, ge=0, description="Approved actions in each UTC hour, all tools.")
+    actions_per_hour: int = Field(
+        default=10, ge=0, description="Approved approval-gated actions in each UTC hour, all tools."
+    )
     spend_usd_per_day: Decimal = Field(
         default=Decimal(0), ge=0, description="US dollars the agent may commit a day (v1 has no tool that spends)."
     )
@@ -147,6 +165,30 @@ def _operations() -> AgentEnvelope:
     )
 
 
+PUBLISH_LEAD_MINUTES: Final = 120
+"""The programming agent publishes only plans that start at least 2 hours ahead; nearer edits are a human's (L3)."""
+
+
+def _programming() -> AgentEnvelope:
+    return AgentEnvelope(
+        grants=(
+            Grant(tool="schedule___plan", channels=(PROGRAMMED,)),
+            Grant(tool="schedule___publish", channels=(PROGRAMMED,), per_hour=6, lead_minutes=PUBLISH_LEAD_MINUTES),
+        ),
+        actions_per_hour=12,
+        needs_human=(
+            "schedule___remove_programs",
+            "schedule___update_brief",
+            "channels___create_channel",
+            "channels___delete_channel",
+        ),
+    )
+
+
+def _sales() -> AgentEnvelope:
+    return AgentEnvelope(level=Level.L1, grants=(Grant(tool="sales___propose", per_hour=12),))
+
+
 class Envelope(BaseModel):
     """The autonomy envelope v1 (module docstring)."""
 
@@ -157,20 +199,29 @@ class Envelope(BaseModel):
         description="Channels that should always be on air (``{prefix}`` is expanded): the operations agent restarts "
         "them when they stop (R12). Y2: always-on channels start themselves.",
     )
+    programmed: tuple[str, ...] = Field(
+        default=(),
+        description="Channels the programming agent keeps scheduled (``{prefix}`` is expanded): when one's runway "
+        "is under 6 hours it plans and publishes blocks at least 2 hours ahead (R6). A programmed channel has no "
+        "autopilot schedule: one writer per channel.",
+    )
     agents: dict[Role, AgentEnvelope] = Field(
         default_factory=lambda: {
             Role.OPERATIONS: _operations(),
-            Role.PROGRAMMING: AgentEnvelope(),
-            Role.SALES: AgentEnvelope(level=Level.L1),
+            Role.PROGRAMMING: _programming(),
+            Role.SALES: _sales(),
         }
     )
 
     def resolved(self, prefix: str) -> Envelope:
-        """The envelope as enforced on deployment ``prefix``: ``{prefix}`` and ``{always_on}`` expanded."""
+        """The envelope as enforced on deployment ``prefix``: ``{prefix}``, ``{always_on}`` and ``{programmed}``
+        expanded."""
         always_on = tuple(dict.fromkeys(name.replace(PREFIX, prefix) for name in self.always_on))
+        programmed = tuple(dict.fromkeys(name.replace(PREFIX, prefix) for name in self.programmed))
+        groups = {ALWAYS_ON: always_on, PROGRAMMED: programmed}
 
         def channels(names: Sequence[str]) -> tuple[str, ...]:
-            expanded = (always_on if name == ALWAYS_ON else (name.replace(PREFIX, prefix),) for name in names)
+            expanded = (groups.get(name, (name.replace(PREFIX, prefix),)) for name in names)
             return tuple(dict.fromkeys(name for group in expanded for name in group))
 
         agents = {
@@ -179,7 +230,7 @@ class Envelope(BaseModel):
             )
             for role, agent in self.agents.items()
         }
-        return Envelope(always_on=always_on, agents=agents)
+        return Envelope(always_on=always_on, programmed=programmed, agents=agents)
 
     def enabled(self) -> list[Role]:
         """The roster's agents that are on, in roster order."""
@@ -204,7 +255,10 @@ class Refusal(StrEnum):
     NEEDS_HUMAN = "needs_human"
     NOT_GRANTED = "not_granted"
     OUT_OF_SCOPE = "out_of_scope"
+    LEAD = "lead"
     CAP = "cap"
+    UNCHECKED = "unchecked"
+    """The envelope could not be checked (a read failed): refused, never allowed unchecked."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,24 +300,42 @@ def scoped_channel(tool: str, arguments: Mapping[str, Any], channels: Sequence[s
     return next((c for c in channels if like(value, pattern.format(channel=c))), None)
 
 
-def verdict(envelope: Envelope, role: Role, tool: str, arguments: Mapping[str, Any], *, now: datetime) -> Verdict:
-    """Whether ``role`` may call ``tool`` with ``arguments`` unattended, and the caps an approval takes.
-
-    ``envelope`` must be :meth:`Envelope.resolved`. The caps are checked, and taken, by the runner's counter: this
-    only says which ones apply.
-    """
-    agent = envelope.agents.get(role)
+def _refusal(agent: AgentEnvelope | None, role: Role, tool: str, *, gated: bool) -> Verdict | None:
+    """Why ``role`` may not call ``tool`` at all, whatever its arguments; None when its grant decides."""
     if agent is None or not agent.enabled:
         return Verdict(False, f"the {role.value} agent is off", Refusal.DISABLED)
     if tool in agent.needs_human:
         return Verdict(False, f"{tool} always needs a human", Refusal.NEEDS_HUMAN)
-    if agent.level is Level.L1:
+    if gated and agent.level is Level.L1:
         return Verdict(False, f"the {role.value} agent only proposes ({agent.level.value})", Refusal.PROPOSE_ONLY)
-    grant = agent.grant(tool)
-    if grant is None:
+    if agent.grant(tool) is None:
         return Verdict(False, f"{tool} is not in the {role.value} agent's envelope", Refusal.NOT_GRANTED)
+    return None
+
+
+def verdict(
+    envelope: Envelope,
+    role: Role,
+    tool: str,
+    arguments: Mapping[str, Any],
+    *,
+    now: datetime,
+    gated: bool = True,
+    starts: datetime | None = None,
+) -> Verdict:
+    """Whether ``role`` may call ``tool`` with ``arguments`` unattended, and the caps the action takes.
+
+    ``envelope`` must be :meth:`Envelope.resolved`. ``gated``: the tool is approval-gated (CONFIRM), which a
+    propose-only agent may never call and which counts against ``actions_per_hour``. ``starts``: when the change
+    starts (a plan's start), for a grant with ``lead_minutes``; unknown, the call is refused. The caps are checked,
+    and taken, by the caps' counter (``functions.agents.caps``): this only says which ones apply.
+    """
+    agent = envelope.agents.get(role)
+    grant = agent.grant(tool) if agent is not None else None
+    if (refused := _refusal(agent, role, tool, gated=gated)) is not None or agent is None or grant is None:
+        return refused or Verdict(False, f"{tool} is not in the {role.value} agent's envelope", Refusal.NOT_GRANTED)
     window = window_of(now)
-    caps = [Cap(f"CAP#{role.value}", agent.actions_per_hour, window)]
+    caps = [Cap(f"CAP#{role.value}", agent.actions_per_hour, window)] if gated else []
     channel = None
     if tool in SCOPES:  # a channel-scoped tool: only on the grant's channels (none left: on no channel)
         channel = scoped_channel(tool, arguments, grant.channels)
@@ -277,4 +349,15 @@ def verdict(envelope: Envelope, role: Role, tool: str, arguments: Mapping[str, A
             caps.append(Cap(f"CAP#{role.value}#{tool}#{channel}", grant.per_hour, window))
     elif grant.per_hour is not None:
         caps.append(Cap(f"CAP#{role.value}#{tool}", grant.per_hour, window))
+    if grant.lead_minutes is not None:
+        earliest = now + timedelta(minutes=grant.lead_minutes)
+        if starts is None or starts < earliest:
+            when = "an unknown time" if starts is None else f"{starts:%Y-%m-%dT%H:%M:%SZ}"
+            return Verdict(
+                False,
+                f"{tool}: the change starts at {when}, less than {grant.lead_minutes} minutes ahead; nearer "
+                "changes need a human",
+                Refusal.LEAD,
+                channel,
+            )
     return Verdict(True, f"{tool} is inside the {role.value} agent's envelope", channel=channel, caps=tuple(caps))

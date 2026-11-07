@@ -1,4 +1,5 @@
-"""DynamoDB Local (``pds/dynamodb_local``) with the agents' and ledger tables, for the agents function tests."""
+"""DynamoDB Local (``pds/dynamodb_local``) with the agents', ledger and library tables, for the agents function
+tests."""
 
 import sys
 import uuid
@@ -22,6 +23,7 @@ class AgentTables:
     agents: str
     ledger: str
     endpoint: str
+    library: str = ""
 
     def table(self, name: str) -> Any:
         """A table resource on DynamoDB Local (what ``functions.aws.table`` gives the ledger's ``append``)."""
@@ -40,6 +42,18 @@ class AgentTables:
             entries += [{k: next(iter(v.values())) for k, v in item.items()} for item in page["Items"]]
         return entries
 
+    def store_plan(self, plan_id: str, *, start_ms: int, expires_at: int) -> None:
+        """A stored plan, as ``schedule___plan`` writes it (``CHANNEL#<channel>`` / ``PLAN#<plan_id>``)."""
+        channel = plan_id.rpartition(".")[0]
+        self.table(self.library).put_item(
+            Item={
+                "pk": f"CHANNEL#{channel}",
+                "sk": f"PLAN#{plan_id}",
+                "plan": {"channel": channel, "start_ms": start_ms},
+                "expires_at": expires_at,
+            }
+        )
+
     def counts(self) -> dict[str, int]:
         """Each cap item's count, by ``<pk>@<sk>``."""
         items = self.client.scan(TableName=self.agents, ConsistentRead=True)["Items"]
@@ -48,10 +62,10 @@ class AgentTables:
 
 @pytest.fixture
 def agent_tables(dynamodb_endpoint: str) -> AgentTables:
-    """Fresh agents (caps) and ledger tables."""
+    """Fresh agents (caps), ledger and library (plans) tables."""
     client = local_client(dynamodb_endpoint)
     suffix = uuid.uuid4().hex[:8]
-    agents, ledger = f"agents-{suffix}", f"ledger-{suffix}"
-    client.create_table(TableName=agents, **_keys())
-    client.create_table(TableName=ledger, **_keys())
-    return AgentTables(client=client, agents=agents, ledger=ledger, endpoint=dynamodb_endpoint)
+    agents, ledger, library = f"agents-{suffix}", f"ledger-{suffix}", f"library-{suffix}"
+    for name in (agents, ledger, library):
+        client.create_table(TableName=name, **_keys())
+    return AgentTables(client=client, agents=agents, ledger=ledger, endpoint=dynamodb_endpoint, library=library)

@@ -1,19 +1,25 @@
-"""The agent runner: approvals answered from the envelope and its caps, every call ledgered, refusals escalated."""
+"""The agent runner: approvals answered from the envelope and a read of its caps, every call ledgered, refusals
+(and a propose-only agent's proposals) escalated, triggers turned into runs only when there is something to do."""
 
 import dataclasses
 import json
-import threading
+import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from fast_channels.core.agents.envelope import Envelope, Refusal, Role
+from fast_channels.core.agents.envelope import Cap, Envelope, Refusal, Role, window_of
+from fast_channels.core.pds.book import Line
+from fast_channels.core.pds.pacing import pacing
 from fast_channels.functions import aws
-from fast_channels.functions.agents import envelope_record, runner
+from fast_channels.functions.agents import envelope_record, runner, sales
+from fast_channels.functions.agents.caps import take
 from fast_channels.functions.autopilot import AutopilotSettings, RunOutcome
 from fast_channels.functions.settings import settings as function_settings
+from fast_channels.functions.tools.registry import ToolError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -61,6 +67,7 @@ def settings(tables: AgentTables, role: Role = Role.OPERATIONS) -> runner.Runner
         ),
         envelope=ENVELOPE,
         table=tables.agents,
+        library_table=tables.library,
         ledger_table=tables.ledger,
         alert_topic=TOPIC,
         prefix="fast",
@@ -174,8 +181,14 @@ def test_a_restart_inside_the_envelope_is_approved_and_every_call_ledgered(
     assert all(detail["envelope"] == ENVELOPE.version for _, _, detail in recorded)
     assert recorded[1][2]["channel"] == "fast-demo" and recorded[2][2]["outcome"] == "done"
     assert not topic.published
-    window = datetime.now(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
-    assert tables.counts()[f"CAP#operations#{START}#fast-demo@{window}"] == 1
+    assert tables.counts() == {}, "the runner only reads the caps: the Gateway's interceptor takes them"
+
+
+def gateway_took(tables: AgentTables, *keys: str, limit: int = 1) -> None:
+    """The caps a call let through by the Gateway's interceptor took (``take_caps=True``)."""
+    window = window_of(datetime.now(UTC))
+    for key in keys:
+        assert take(tables.client, tables.agents, [Cap(key, limit, window)]) is None
 
 
 def test_a_second_restart_within_the_hour_is_refused_and_escalated(
@@ -183,6 +196,8 @@ def test_a_second_restart_within_the_hour_is_refused_and_escalated(
 ) -> None:
     tables, topic = stage
     for correlation in ("census-1", "census-2"):
+        if correlation == "census-2":  # the first restart reached the Gateway, which took its caps
+            gateway_took(tables, f"CAP#operations#{START}#fast-demo")
         scripted(
             monkeypatch,
             [
@@ -272,28 +287,71 @@ def test_a_failed_run_is_escalated_with_its_error(
     assert [action for action, _, _ in ledger(tables)] == ["agent.escalate"]
 
 
-def test_two_concurrent_restarts_approve_exactly_one(stage: tuple[AgentTables, Topic]) -> None:
+def test_the_runner_reads_the_caps_and_never_takes_them(stage: tuple[AgentTables, Topic]) -> None:
     tables, _ = stage
-    cfg = settings(tables)
-    barrier = threading.Barrier(2)
-    decisions: list[runner.Decision] = []
-    lock = threading.Lock()
+    cfg, now = settings(tables), datetime.now(UTC)
+    ask = {"tool": START, "arguments": {"channel": "fast-demo"}}
+
+    first, again = runner.decide(cfg, ask, now=now), runner.decide(cfg, ask, now=now)
+    gateway_took(tables, f"CAP#operations#{START}#fast-demo")
+    after = runner.decide(cfg, ask, now=now)
+
+    assert first.approved and again.approved, "concurrent approvals race to the Gateway, whose take is atomic"
+    assert not after.approved and after.refusal is Refusal.CAP
+    assert sum(tables.counts().values()) == 1
+
+
+def test_a_call_the_interceptor_refused_is_not_escalated_again(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tables, topic = stage
+    refused = {"ok": False, "error": {"code": "ENVELOPE", "message": "Outside your autonomy envelope: cap"}}
+    scripted(
+        monkeypatch,
+        [
+            events(
+                *started("c1", START, {"channel": "fast-demo"}),
+                approval("c1", START, {"channel": "fast-demo"}),
+                FINISHED,
+            ),
+            events(result("c1", refused), said("The Gateway refused it."), FINISHED),
+        ],
+    )
+
+    found = handle(tables, monkeypatch, request())
+
+    assert found["calls"] == [(START, "envelope")] and found["intercepted"] == [START]
+    assert not found["escalated"] and not topic.published, "the interceptor recorded and escalated it"
+
+
+PROGRAMMED = Envelope(
+    programmed=("{prefix}-demo",),
+    agents={
+        **Envelope().agents,
+        Role.PROGRAMMING: Envelope().agents[Role.PROGRAMMING].model_copy(update={"enabled": True}),
+    },
+).resolved("fast")
+PUBLISH = "schedule___publish"
+
+
+@pytest.mark.parametrize(("ahead", "approved"), [(timedelta(minutes=30), False), (timedelta(hours=3), True)])
+def test_a_publish_is_approved_only_when_its_plan_starts_two_hours_ahead(
+    stage: tuple[AgentTables, Topic], ahead: timedelta, approved: bool
+) -> None:
+    tables, _ = stage
+    cfg = dataclasses.replace(settings(tables, Role.PROGRAMMING), envelope=PROGRAMMED)
     now = datetime.now(UTC)
+    tables.store_plan(
+        "fast-demo.0a1b", start_ms=int((now + ahead).timestamp() * 1000), expires_at=int(time.time()) + 3600
+    )
 
-    def restart() -> None:
-        barrier.wait()
-        decision = runner.decide(cfg, {"tool": START, "arguments": {"channel": "fast-demo"}}, now=now)
-        with lock:
-            decisions.append(decision)
+    decision = runner.decide(cfg, {"tool": PUBLISH, "arguments": {"plan_id": "fast-demo.0a1b"}}, now=now)
+    missing = runner.decide(cfg, {"tool": PUBLISH, "arguments": {"plan_id": "fast-demo.ffff"}}, now=now)
 
-    threads = [threading.Thread(target=restart) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
-
-    assert sorted(d.approved for d in decisions) == [False, True]
-    assert [d.refusal for d in decisions if not d.approved] == [Refusal.CAP]
+    assert decision.approved is approved
+    if not approved:
+        assert decision.refusal is Refusal.LEAD and "120 minutes" in decision.reason
+    assert not missing.approved and missing.refusal is Refusal.LEAD, "a plan with no known start is refused"
 
 
 def test_the_sales_agent_only_proposes(stage: tuple[AgentTables, Topic]) -> None:
@@ -409,3 +467,180 @@ def test_without_an_always_on_channel_a_census_trigger_starts_no_run(stage: tupl
     cfg = dataclasses.replace(settings(tables), envelope=Envelope().resolved("fast"))
 
     assert runner.request_of(cfg, census(0)) == "no channel is always-on"
+
+
+TICK: dict[str, Any] = {
+    "id": "tick-1",
+    "detail-type": "Scheduled Event",
+    "source": "aws.events",
+    "time": "2026-11-07T10:00:00Z",
+    "detail": {},
+}
+
+
+@dataclass
+class Schedules:
+    """``GetChannelSchedule`` of Channel Assembly: one program ending ``ends`` ahead per channel (None: nothing)."""
+
+    ends: dict[str, timedelta | None]
+
+    def get_paginator(self, name: str) -> Schedules:
+        assert name == "get_channel_schedule"
+        return self
+
+    def paginate(self, *, ChannelName: str, DurationMinutes: str) -> list[dict[str, Any]]:  # noqa: N803
+        assert DurationMinutes == "1440"
+        ahead = self.ends[ChannelName]
+        if ahead is None:
+            return [{"Items": []}]
+        start = datetime.now(UTC) + ahead - timedelta(minutes=30)
+        program = {"ScheduleEntryType": "PROGRAM", "ApproximateStartTime": start, "ApproximateDurationSeconds": 1800}
+        slate = {**program, "ScheduleEntryType": "FILLER_SLATE", "ApproximateStartTime": start + timedelta(hours=9)}
+        return [{"Items": [program, slate]}]
+
+
+@pytest.mark.parametrize("ahead", [None, timedelta(hours=1)])
+def test_a_short_runway_starts_a_programming_run_two_hours_ahead(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch, ahead: timedelta | None
+) -> None:
+    tables, _ = stage
+    monkeypatch.setattr(aws, "client", lambda service: Schedules({"fast-demo": ahead}))
+    cfg = dataclasses.replace(settings(tables, Role.PROGRAMMING), envelope=PROGRAMMED)
+
+    found = runner.request_of(cfg, TICK)
+
+    assert isinstance(found, runner.RunRequest)
+    assert found.channel == "fast-demo" and found.correlation_id == "tick-1"
+    assert "runbook R6" in found.prompt and "(pass it as start)" in found.prompt
+    assert "at least 120 minutes from now" in found.prompt
+    runway = found.facts["channels"]["fast-demo"]  # type: ignore[index, call-overload]
+    assert runway["runway_minutes"] < 6 * 60  # type: ignore[index, call-overload]
+
+
+def test_a_long_runway_or_no_programmed_channel_starts_no_run(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tables, _ = stage
+    monkeypatch.setattr(aws, "client", lambda service: Schedules({"fast-demo": timedelta(hours=7)}))
+    cfg = dataclasses.replace(settings(tables, Role.PROGRAMMING), envelope=PROGRAMMED)
+    nothing = dataclasses.replace(cfg, envelope=Envelope().resolved("fast"))
+
+    assert "reaches 6:00:00 ahead" in str(runner.request_of(cfg, TICK))
+    assert runner.request_of(nothing, TICK) == "no channel is programmed"
+    assert runner.request_of(settings(tables), TICK) == "the operations agent has no tick trigger"
+
+
+def line(spent: str) -> tuple[Line, Decimal]:
+    now = datetime.now(UTC)
+    found = Line(
+        id="direct-1",
+        advertiser="Direct Advertiser 1",
+        adomain="direct1.example",
+        creatives=("direct1",),
+        cpm=Decimal(8),
+        budget=Decimal(100),
+        starts=now - timedelta(days=1),
+        ends=now + timedelta(days=9),
+    )
+    return found, Decimal(100) - Decimal(spent)
+
+
+@pytest.mark.parametrize(("spent", "runs"), [("60", True), ("10", False)])
+def test_an_off_pace_line_starts_a_sales_run(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch, spent: str, runs: bool
+) -> None:
+    tables, _ = stage
+    found_line, left = line(spent)
+    monkeypatch.setattr(sales, "pacings", lambda at: ("v1", [pacing(found_line, left, at)]))
+
+    found = runner.request_of(settings(tables, Role.SALES), TICK)
+
+    if runs:
+        assert isinstance(found, runner.RunRequest) and found.channel is None
+        assert "direct-1 (Direct Advertiser 1): overpacing, pace 6.00" in found.prompt
+        assert "sales___propose" in found.prompt and found.facts["snapshot"] == "v1"
+    else:
+        assert "no own-book line is off pace" in str(found)
+
+
+def test_an_unpublished_book_starts_no_sales_run(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tables, _ = stage
+
+    def unpublished(at: datetime) -> tuple[str, list[Any]]:
+        raise ToolError("NOT_FOUND", "no PDS snapshot is published yet")
+
+    monkeypatch.setattr(sales, "pacings", unpublished)
+
+    assert "could not be read" in str(runner.request_of(settings(tables, Role.SALES), TICK))
+
+
+SALES_ON = Envelope(
+    agents={**Envelope().agents, Role.SALES: Envelope().agents[Role.SALES].model_copy(update={"enabled": True})}
+).resolved("fast")
+
+
+def test_a_propose_only_agents_proposal_is_escalated_to_a_human(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tables, topic = stage
+    monkeypatch.setattr(
+        runner, "runner_settings", lambda: dataclasses.replace(settings(tables, Role.SALES), envelope=SALES_ON)
+    )
+    proposal = {"proposal_id": "01J", "line": "direct-1", "action": "change_budget", "value": "60"}
+    scripted(
+        monkeypatch,
+        [
+            events(
+                *started("c0", "sales___line_pacing", {}),
+                result("c0", {"lines": [{"line": "direct-1", "state": "overpacing"}]}),
+                *started("c1", "sales___propose", {"line": "direct-1", "action": "change_budget"}),
+                result("c1", proposal),
+                said("Proposed a lower budget for direct-1."),
+                FINISHED,
+            )
+        ],
+    )
+    sales_request = runner.RunRequest(prompt="direct-1 is overpacing.", correlation_id="tick-1")
+
+    found = runner.handler(sales_request.model_dump(mode="json"), Context())
+
+    assert found["escalated"] and found["proposals"] == 1 and not found["refused"]
+    [message] = topic.published
+    assert "only proposes" in message["Message"] and "change_budget" in message["Message"]
+    [escalation] = [detail for action, _, detail in ledger(tables) if action == "agent.escalate"]
+    assert escalation["proposals"] and escalation["refused"] == []
+
+
+def test_a_programming_run_that_leaves_the_runway_short_is_escalated(
+    stage: tuple[AgentTables, Topic], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent finishes without publishing (it found nothing it would air): the runner reads the runway again and
+    a human hears of it, though nothing was refused."""
+    tables, topic = stage
+    schedules = Schedules({"fast-demo": None})
+    monkeypatch.setattr(aws, "client", lambda service: topic if service == "sns" else schedules)
+    monkeypatch.setattr(
+        runner, "runner_settings", lambda: dataclasses.replace(settings(tables, Role.PROGRAMMING), envelope=PROGRAMMED)
+    )
+    scripted(
+        monkeypatch,
+        [
+            events(
+                *started("c0", "library___find_assets", {"ladder_version": "standard"}),
+                result("c0", {"assets": []}),
+                said("No READY asset I would air; nothing published."),
+                FINISHED,
+            )
+        ],
+    )
+
+    found = runner.handler(TICK, Context())
+
+    assert found["escalated"] and not found["refused"] and not found["error"]
+    assert found["unresolved"] == ["fast-demo: its schedule still ends 0 minutes ahead (runbook R6 needs 360)"]
+    [message] = topic.published
+    assert "left a problem" in message["Message"] and "still ends 0 minutes ahead" in message["Message"]
+    [escalation] = [detail for action, _, detail in ledger(tables) if action == "agent.escalate"]
+    assert escalation["unresolved"] and escalation["facts"]["trigger"] == "tick"

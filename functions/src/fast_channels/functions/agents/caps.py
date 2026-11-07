@@ -2,9 +2,10 @@
 
 Each cap is one item of the agents' table, ``pk`` its key and ``sk`` its window's start, with the count ``n`` and a
 TTL a day after the window. :func:`take` adds one to every cap of an action in a single ``TransactWriteItems``, each
-update conditional on its count being under its limit, so the counts never exceed their limits however many runners
-approve at once: of two concurrent restarts under a cap of one, exactly one is approved. A transaction that lost a
-race with another (``TransactionConflict``) is tried again.
+update conditional on its count being under its limit, so the counts never exceed their limits however many callers
+act at once: of two concurrent restarts under a cap of one, exactly one is let through. A transaction that lost a
+race with another (``TransactionConflict``) is tried again. The Gateway's interceptor takes the caps, on the call
+itself; the runner only reads them (:func:`full`) to decline an action that would be refused anyway.
 """
 
 import time
@@ -64,6 +65,22 @@ def take(client: Any, table: str, caps: Sequence[Cap]) -> Cap | None:
             continue
         return None
     return None  # unreachable: the last attempt returns or raises
+
+
+def full(client: Any, table: str, caps: Sequence[Cap]) -> Cap | None:
+    """The first of ``caps`` with no unit left (strongly consistent reads), or None; takes nothing."""
+    for cap in caps:
+        if cap.limit <= 0:
+            return cap
+        item = client.get_item(
+            TableName=table,
+            Key={"pk": {"S": cap.key}, "sk": {"S": cap.window.isoformat()}},
+            ConsistentRead=True,
+            ProjectionExpression="n",
+        ).get("Item")
+        if item is not None and int(item["n"]["N"]) >= cap.limit:
+            return cap
+    return None
 
 
 def _reasons(error: ClientError) -> list[str] | None:

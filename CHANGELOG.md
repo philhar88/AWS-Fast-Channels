@@ -29,19 +29,36 @@ All notable changes to this project are documented here. The format follows
   ([docs/agents.md](docs/agents.md), [ADR-0023](docs/adr/0023-machine-principals.md) amendment).
   - Each agent of the roster that the envelope turns on is a machine principal of the operator plane, with its own
     Cognito client.
-  - `modules.agents.envelope` says what each agent may do unattended: its level, the tools it may call with their
-    channels and per-hour caps, its actions an hour, and what always needs a human.
-  - The Gateway's Cedar policies are generated from the envelope. Each agent's runner answers its approval-gated
-    calls from the envelope and takes the caps in one conditional DynamoDB transaction (two concurrent restarts
-    under a cap of one: one approved).
+  - `modules.agents.envelope` says what each agent may do unattended:
+    - its level;
+    - the tools it may call, with their channels, per-hour caps and publish lead;
+    - its approval-gated actions an hour;
+    - what always needs a human.
+  - Three enforcement points follow the envelope:
+    - **Cedar.** The Gateway's policies are generated from it.
+    - **The Gateway's request interceptor.** It checks every non-READ call an agent's token makes and takes the
+      caps there, in one conditional DynamoDB transaction (two concurrent restarts under a cap of one: one reaches
+      the tool). A call outside the envelope is refused before it reaches the tool, with or without the runner.
+    - **The runner.** It answers approval-gated calls from the same verdict and a read of the caps.
   - Every decision and tool call goes to the ledger chain `agents/<role>`, and every deployed envelope to
     `agents/envelope`. A refusal is escalated to the alert topic.
-  - The operations agent wakes on the census's `Census Changed` to zero and on the probe's off-air alarm, reads
-    the always-on channels' states first, and starts a stopped one through the channels tool; runbook R12 knows the
-    always-on list too.
-  - v1 ships the operations agent's envelope: it restarts each always-on channel at most once an hour, and stopping,
-    creating or deleting a channel needs a human. The default lists no always-on channel. The envelope is not signed
-    yet.
+  - **The operations agent** (R12) wakes on the census's `Census Changed` to zero and on the probe's off-air alarm.
+    It reads the always-on channels' states first and starts a stopped one, at most once an hour. Stopping,
+    creating or deleting a channel needs a human. Runbook R12 knows the always-on list too.
+  - **The programming agent** (R6) works the envelope's `programmed` channels, each with no autopilot schedule.
+    - It wakes hourly and reads each channel's schedule first.
+    - When one runs out within 6 hours, it plans and publishes blocks that start at least 2 hours ahead.
+    - Nearer edits need a human.
+  - **The sales agent** (L1, with `modules.pds`) works through the Gateway target `sales`:
+    - `sales___line_pacing` reads each own-book line's budget, spend and pace;
+    - `sales___propose` records a proposal in the ledger chain `sales/proposals` and changes nothing.
+
+    It wakes hourly for off-pace lines, and each proposal is escalated to a human. Demo lines can carry a flight
+    (`starts`, `ends`).
+  - **`modules.agents.devops_agent`** (off) adds AWS DevOps Agent: an Agent Space with elevated actions off, a
+    read-only role (the AWS managed access policy, minus support cases) and this account's `monitor` association.
+    It investigates and advises; it never acts.
+  - The default lists no always-on or programmed channel. The envelope is not signed yet.
 - **The `recs` module: a model-ranked rail for each signed-in viewer** (off by default; needs `models` and
   `identity`; [docs/recs.md](docs/recs.md), [ADR-0027](docs/adr/0027-llm-rail-recommender.md)).
   - `GET /rail` answers the viewer's "Recommended for you" rail with how it was made and why. No model runs while
@@ -153,6 +170,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The agents' caps were taken only by the runner** until the Gateway's request interceptor (M9's third pull
+  request): a caller holding an agent's machine token could have called the Gateway directly past a cap. The
+  interceptor now takes the caps on the call itself, and the runner only reads them.
 - **The Operator stack deploys again with the agents module and no always-on channel.** Resolved with
   `always_on: []`, the operations agent's restart grant has no channels but keeps its per-hour cap, and the envelope
   refused that when its document was read back: the deploy's envelope record (`Custom::Trigger` `RosterOnEnvelope`)

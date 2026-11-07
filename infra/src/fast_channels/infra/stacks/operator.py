@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any
 from aws_cdk import CfnOutput, Stack
 from aws_cdk import aws_ssm as ssm
 
+from fast_channels.core.agents.envelope import Role
 from fast_channels.core.model_registry import SCHEDULER_TASK
 from fast_channels.core.monetization import names as release_names
 from fast_channels.core.naming import agent_namespace, agentcore_name
-from fast_channels.functions.tools.registry import confirm_tools
+from fast_channels.core.pds import names as pds_names
+from fast_channels.functions.tools.registry import MODULE_TARGETS, confirm_tools, load
 from fast_channels.infra.config import TransactionSearchMode
 from fast_channels.infra.constructs.alerts import alert_topic_arn
 from fast_channels.infra.constructs.models.caps import TaskBudget
@@ -17,11 +19,12 @@ from fast_channels.infra.constructs.models.profiles import profile_name
 from fast_channels.infra.constructs.operator.autopilot import Autopilot
 from fast_channels.infra.constructs.operator.console import CONSOLE_DIST, ConsoleConfig, OperatorConsole
 from fast_channels.infra.constructs.operator.deliveries import AgentTelemetry
+from fast_channels.infra.constructs.operator.devops_agent import DevOpsAgentSpace
 from fast_channels.infra.constructs.operator.gateway import AgentGateway
 from fast_channels.infra.constructs.operator.identity import OperatorIdentity, managed_login_url
 from fast_channels.infra.constructs.operator.roster import AgentRoster
 from fast_channels.infra.constructs.operator.runtime import RegistryTask, SchedulerAgent
-from fast_channels.infra.constructs.operator.tools import AgentTools
+from fast_channels.infra.constructs.operator.tools import AgentTools, OwnBook, registry_tools
 from fast_channels.infra.constructs.ops.canary import off_air_alarm_name
 
 if TYPE_CHECKING:
@@ -82,6 +85,16 @@ class OperatorStack(Stack):
         crons = {channel.name: channel.autopilot_cron for channel in config.channels.iac if channel.autopilot_cron}
         envelope = config.modules.agents.envelope.resolved(prefix) if config.modules.agents.enabled else None
         roles = envelope.enabled() if envelope else []
+        own_book = (
+            OwnBook(
+                table=pds_names.table_name(prefix),
+                config_bucket=ssm.StringParameter.value_for_string_parameter(
+                    self, pds_names.parameter_name(prefix, pds_names.Parameter.CONFIG_BUCKET)
+                ),
+            )
+            if Role.SALES in roles
+            else None
+        )
 
         self.console = OperatorConsole(
             self,
@@ -114,6 +127,10 @@ class OperatorStack(Stack):
             log_retention=retention,
             removal_policy=removal,
             epg_break_ids=config.modules.ops.enabled,
+            tools={**registry_tools(), **{target: tuple(load(target).values()) for target in MODULE_TARGETS}}
+            if own_book
+            else None,
+            own_book=own_book,
         )
         self.gateway = AgentGateway(
             self,
@@ -206,14 +223,24 @@ class OperatorStack(Stack):
                 alert_topic=media.alert_topic,
                 event_bus=media.event_bus,
                 off_air_alarm=off_air_alarm_name(prefix),
+                gateway=self.gateway.gateway,
+                tools=(spec for target in self.tools.targets for spec in target.tools),
+                library_table=data.library_table.table_name,
+                own_book=own_book,
                 log_retention=retention,
                 removal_policy=removal,
             )
+        self.devops_agent = (
+            DevOpsAgentSpace(self, "DevOpsAgent", prefix=prefix)
+            if config.modules.agents.enabled and config.modules.agents.devops_agent
+            else None
+        )
         AgentGateway.protect(
             self.agent.runtime,
             *(function.function for function in self.tools.functions.values()),
             *([self.autopilot.function.function] if self.autopilot else []),
             *(runner.function for runner in (self.roster.runners.values() if self.roster else ())),
+            *([self.roster.interceptor.function] if self.roster else []),
         )
         self.console.publish(
             ConsoleConfig(
@@ -265,5 +292,8 @@ class OperatorStack(Stack):
             for role, runner in self.roster.runners.items():
                 outputs[f"{role.value.title()}AgentRunner"] = runner.function.function_name
                 outputs[f"{role.value.title()}AgentClientId"] = self.identity.agent_clients[role].user_pool_client_id
+            outputs["AgentInterceptor"] = self.roster.interceptor.function.function_name
+        if self.devops_agent is not None:
+            outputs["DevOpsAgentSpaceId"] = self.devops_agent.space.attr_agent_space_id
         for name, value in outputs.items():
             CfnOutput(self, name, value=value)

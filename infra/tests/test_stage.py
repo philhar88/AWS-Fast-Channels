@@ -15,7 +15,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_ssm as ssm
 from aws_cdk.assertions import Template
 
-from fast_channels.core.agents.envelope import Envelope
+from fast_channels.core.agents.envelope import Envelope, Role
 from fast_channels.core.naming import check_prefix
 from fast_channels.core.understanding import REGISTRY_DEFAULT as UNDERSTANDING_DEFAULT
 from fast_channels.core.understanding import TASK as UNDERSTANDING_TASK
@@ -304,7 +304,11 @@ def shipped_with(overrides: dict[str, str]) -> FastChannelsConfig:
 
 
 def test_shipped_stages() -> None:
-    assert STAGES == stage_args.stage_names() == ["fastci", "fastciads", "fastciagent", "fastcisell", "fastm"]
+    assert (
+        STAGES
+        == stage_args.stage_names()
+        == ["fastci", "fastciads", "fastciagent", "fastcipace", "fastcisell", "fastm"]
+    )
     assert f"^{stage_args.PREFIX.pattern}$" == FastChannelsConfig.model_json_schema()["properties"]["prefix"]["pattern"]
 
 
@@ -312,9 +316,13 @@ SELLING_STAGE = "fastcisell"
 """The agentic-selling stage (M7, and M5's registered creatives): the modules and what they need, with free direct demo
 creatives (no demo lines)."""
 AGENTS_STAGE = "fastciagent"
-"""The agent roster's stage (M9): the module and ops, with its demo channel always-on (the roster's e2e)."""
+"""The agent roster's stage (M9): the module and ops, with its demo channel always-on and programmed, and the DevOps
+Agent opted in (the roster's e2e)."""
 
 
+PACE_STAGE = "fastcipace"
+"""The sales agent's stage (M9): the agents module with the PDS own book and one demo line with a flight, which the
+e2e makes overpace (the demand module needs a prefix of at most 10 characters, so not the roster's stage)."""
 KIDS_STAGES = frozenset({"fastm", "fastci"})
 """Stages with the child-directed channel ``<prefix>-kids`` and the kids twins (M4)."""
 
@@ -329,14 +337,27 @@ def test_stage_files_name_their_prefix_and_turn_every_module_on(name: str) -> No
         assert on == {"ops", "demand", "pds", "release", "selling", "creatives"}
         assert (config.modules.pds.demo_lines, config.modules.selling.creatives) == ((), ("direct1", "direct2"))
     elif name == AGENTS_STAGE:
+        envelope = config.modules.agents.envelope.resolved(name)
         assert on == {"ops", "agents"}
-        assert config.modules.agents.envelope.resolved(name).always_on == (f"{name}-demo",)
+        assert envelope.always_on == envelope.programmed == (f"{name}-demo",)
+        assert envelope.enabled() == [Role.OPERATIONS, Role.PROGRAMMING], "sales needs the PDS: a demand stage"
+        assert config.modules.agents.devops_agent
+    elif name == PACE_STAGE:
+        [line] = config.modules.pds.demo_lines
+        assert on == {"ops", "demand", "pds", "agents"}
+        assert config.modules.agents.envelope.enabled() == [Role.OPERATIONS, Role.SALES]
+        assert line.starts is not None and line.ends is not None, "a line with a flight has a pace"
     else:  # every module but selling, whose creatives their demo lines serve
         assert on == set(ModulesConfig.model_fields) - {"selling"}
-        assert config.modules.agents.envelope.always_on == (), "their tests stop channels: none may be restarted"
+        envelope = config.modules.agents.envelope
+        assert envelope.always_on == (), "their tests stop channels: none may be restarted"
+        assert envelope.programmed == () and envelope.enabled() == [Role.OPERATIONS], "their tests schedule"
+        assert not config.modules.agents.devops_agent
         default = {**UNDERSTANDING_DEFAULT, "model": resolve_geo(UNDERSTANDING_DEFAULT["model"], "us-east-1")}
         assert config.modules.models.tasks[UNDERSTANDING_TASK] == ModelTask.model_validate(default)
-    if name != AGENTS_STAGE:  # no demand
+    if name == PACE_STAGE:  # no release
+        assert config.modules.demand.simulator == "lambda"
+    elif name != AGENTS_STAGE:  # no demand
         if name not in KIDS_STAGES:
             assert config.modules.release.channels == (f"{name}-demo",)
         else:  # the monetized channel with kids twins, and a child-directed channel (M4)
@@ -414,7 +435,7 @@ def test_a_stage_under_another_prefix_expands_it() -> None:
         (
             {},
             ["context", "fastz"],
-            "unknown stage 'fastz': the stages are fastci, fastciads, fastciagent, fastcisell, fastm",
+            "unknown stage 'fastz': the stages are fastci, fastciads, fastciagent, fastcipace, fastcisell, fastm",
         ),
         ({}, ["context", "../cdk"], "unknown stage '../cdk'"),
         ({}, ["context", "fastm", "--prefix", "Fast_M"], "--prefix must match"),
