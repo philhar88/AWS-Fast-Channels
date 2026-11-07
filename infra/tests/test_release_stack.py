@@ -2,6 +2,7 @@
 change monetization; the siblings' encrypted logs; the drift check and the per-sibling alarms."""
 
 import json
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -741,3 +742,64 @@ def test_kids_twins_join_the_candidate_alarm_and_a_child_directed_channel_serves
         if f.get("Handler") == "fast_channels.functions.identity.mint.handler"
     ]
     assert mint["Environment"]["Variables"]["CHILD_DIRECTED_CHANNELS"] == "fastm-kids"
+
+
+LONGEST = "fastcigate"
+"""A prefix of the most characters a stage with demand may have (``core.demand.QUALIFIER_MAX``)."""
+KEPT_OF_A_STACK_NAME = 25
+"""Of the 49 characters a CloudFormation-generated function name gives its stack's name and the logical id,
+CloudFormation keeps at least 25 of the stack's name (measured on a deployed stage with the prefix fastcid: 76
+functions, the shortened ones kept 25, 26 or 28)."""
+FUNCTION_PATTERN = re.compile(r"function:([^\"*]*)\*")
+
+
+def lambda_patterns(template: Template) -> list[tuple[str, dict[str, Any]]]:
+    """(the literal part of the function name, statement) of every Lambda grant on a function-name pattern, in the
+    template's role policies and managed policies (the guidance's deploy policy among them)."""
+    managed = [
+        s
+        for properties in resources(template, "AWS::IAM::ManagedPolicy").values()
+        for s in properties["PolicyDocument"]["Statement"]
+    ]
+    found = []
+    for statement in [s for _, s in statements(template)] + managed:
+        if not any(a.startswith("lambda:") for a in actions(statement)):
+            continue
+        found += [(name, statement) for name in FUNCTION_PATTERN.findall(json.dumps(statement.get("Resource")))]
+    return found
+
+
+def test_the_smoke_test_invokes_the_operator_stacks_tools_by_its_stack_tag(deployment: GetDeployment) -> None:
+    """CloudFormation shortens a long prefix's tool function names (fastcid: ``FastChannels-fastcid-Operato-…``), so
+    the grant names the stage's functions and holds to the Operator stack's by the tag CloudFormation gives them."""
+    d = deployment({**RELEASE, "prefix": LONGEST}, extra=EXTRA)
+    template = d.template(d.stage.release)
+
+    [(name, grant)] = [(n, s) for n, s in lambda_patterns(template) if "lambda:InvokeFunction" in actions(s)]
+
+    assert name == f"FastChannels-{LONGEST}-"
+    assert grant["Condition"] == {
+        "StringEquals": {"aws:ResourceTag/aws:cloudformation:stack-name": f"FastChannels-{LONGEST}-Operator"}
+    }
+
+
+def test_every_function_name_pattern_survives_cloudformations_shortening(deployment: GetDeployment) -> None:
+    """With the longest prefix, every Lambda grant on a name pattern names no more of a function than CloudFormation
+    keeps, and one that spans the stage's stacks is held to one stack by its stack-name tag."""
+    modules = ("ops", "demand", "pds", "release", "crawl", "identity", "viewer", "agents", "creatives")
+    overrides = {
+        **RELEASE,
+        "prefix": LONGEST,
+        **{f"modules.{name}.enabled": True for name in modules},
+        "modules.viewer.ad_panel": True,
+    }
+    d = deployment(overrides, extra=EXTRA)
+
+    patterns = [(s.stack_name, *p) for s in stacks(d) for p in lambda_patterns(d.template(s))]
+
+    assert patterns, "the release module's smoke test has one"
+    for stack, name, statement in patterns:
+        assert len(name) <= KEPT_OF_A_STACK_NAME, f"{stack}: {name}* may miss CloudFormation's shortened names"
+        if name.startswith(f"FastChannels-{LONGEST}-"):
+            condition = statement.get("Condition", {}).get("StringEquals", {})
+            assert "aws:ResourceTag/aws:cloudformation:stack-name" in condition, f"{stack}: {name}* spans the stacks"

@@ -188,7 +188,8 @@ class ReleaseStack(Stack):
                 tool_functions=parameter(names.parameter_name(prefix, names.Parameter.TOOL_FUNCTIONS))
                 if config.agent.enabled
                 else "",
-                tool_function_prefix=f"{stage_id}-Operator-" if config.agent.enabled else "",
+                tool_function_prefix=f"{stage_id}-" if config.agent.enabled else "",
+                tool_stack=f"{stage_id}-Operator" if config.agent.enabled else "",
             ),
             rollout_minutes=self.rendered.bundle.rollout.deployment_duration_in_minutes
             + self.rendered.bundle.rollout.final_bake_time_in_minutes,
