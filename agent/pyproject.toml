@@ -9,7 +9,7 @@ dependencies = [
     "aws-opentelemetry-distro>=0.22.0",
     "bedrock-agentcore>=1.25.2,<2",
     "boto3>=1.43.123",
-    "pydantic>=2.12,<3",
+    "pydantic>=2.14.3,<3",
     "strands-agents>=1.61,<2",
 ]
 
