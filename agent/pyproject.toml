@@ -7,7 +7,7 @@ dependencies = [
     "fast-channels-core",
     "ag-ui-protocol>=1.0,<2",
     "aws-opentelemetry-distro>=0.22.0",
-    "bedrock-agentcore>=1.25.2,<2",
+    "bedrock-agentcore>=1.25.4,<2",
     "boto3>=1.43.123",
     "pydantic>=2.12,<3",
     "strands-agents>=1.61,<2",
